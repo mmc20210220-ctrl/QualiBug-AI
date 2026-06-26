@@ -56,6 +56,8 @@ def build_external_tracker_sync_receipt_ledger(report: dict[str, Any]) -> dict[s
     gate = _as_dict(report.get("external_tracker_sync_payload_gate"))
     results = _as_dict(report.get("external_tracker_sync_results") or report.get("customer_external_tracker_sync_results"))
     payload_ready = bool(gate.get("payload_import_ready"))
+    gate_violations = [item for item in _as_list(gate.get("violations")) if isinstance(item, dict)]
+    gate_violation_kinds = [str(item.get("kind") or "unknown_violation") for item in gate_violations]
 
     jira_results = _results_by_key(results, "jira")
     linear_results = _results_by_key(results, "linear")
@@ -101,6 +103,8 @@ def build_external_tracker_sync_receipt_ledger(report: dict[str, Any]) -> dict[s
                 "requested_state": "Open / Do not mark resolved",
                 "receipt_status": "hold_not_synced",
                 "receipt_rationale": hold.get("hold_reason") or "This item intentionally remains open.",
+                "audit_blocker_ids": hold.get("audit_blocker_ids") or [],
+                "audit_blocker_details": hold.get("audit_blocker_details") or [],
                 "customer_result": {},
             })
 
@@ -134,6 +138,9 @@ def build_external_tracker_sync_receipt_ledger(report: dict[str, Any]) -> dict[s
         "project_id": report.get("project_id") or payloads.get("project_id"),
         "run_lineage_id": payloads.get("run_lineage_id"),
         "payload_gate_status": gate.get("status"),
+        "payload_gate_violation_count": int(gate.get("violation_count") or len(gate_violations)),
+        "payload_gate_violation_kinds": gate_violation_kinds,
+        "payload_gate_violations": gate_violations,
         "sync_receipt_entry_count": len(entries),
         "receipt_status_counts": counts,
         "entries": entries,
