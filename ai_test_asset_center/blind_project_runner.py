@@ -264,6 +264,12 @@ def run_input_only_project(
         discovery = run_real_project_discovery(project, root_path)
     else:
         discovery = {"metrics": {"issue_count": 0}, "items": []}
+    discovery_summary = _summarize_grounded_candidates(grounded)
+    if probe_execution:
+        execution_summary = probe_execution.get("summary") or {}
+        discovery_summary["confirmed_runtime_bugs"] = int(execution_summary.get("validated_candidate_count") or 0)
+        discovery_summary["protected_runtime_candidates"] = int(execution_summary.get("protected_count") or 0)
+        discovery_summary["runtime_evidence_ready"] = int(execution_summary.get("validated_candidate_count") or 0) > 0
     output_dir.mkdir(parents=True, exist_ok=True)
     report = {
         "mode": "input_only_enterprise_docs",
@@ -275,7 +281,7 @@ def run_input_only_project(
         "input_manifest": manifest,
         "project_context_summary": context_summary,
         "onboarding_ok": bool(onboarding.get("ok")),
-        "discovery_summary": _summarize_grounded_candidates(grounded),
+        "discovery_summary": discovery_summary,
         "grounded_candidate_summary": grounded.get("summary"),
         "grounded_probe_execution_summary": (probe_execution or {}).get("summary"),
         "legacy_static_shadow_enabled": legacy_shadow_enabled,
@@ -286,6 +292,8 @@ def run_input_only_project(
             "grounded_candidates": str(output_dir / "grounded_candidates.json"),
             "grounded_candidates_md": str(output_dir / "grounded_candidates.md"),
             "grounded_probe_plan": str(output_dir / "grounded_probe_plan.json"),
+            "runtime_validation_queue": str(output_dir / "runtime_validation_queue.json"),
+            "runtime_validation_queue_md": str(output_dir / "runtime_validation_queue.md"),
             "grounded_probe_execution_report": str(output_dir / "grounded_probe_execution_report.json") if probe_execution else "",
             "grounded_probe_execution_report_md": str(output_dir / "grounded_probe_execution_report.md") if probe_execution else "",
             "grounded_probe_repro_ps1": str(output_dir / "grounded_probe_repro.ps1") if probe_execution else "",

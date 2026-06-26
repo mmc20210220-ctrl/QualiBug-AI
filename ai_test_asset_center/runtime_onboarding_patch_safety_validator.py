@@ -18,6 +18,15 @@ SENSITIVE_KEY_RE = re.compile(r"(?:password|passwd|secret|token|authorization|co
 PROD_HOST_RE = re.compile(r"(?:^|[.-])(?:prod|production|live)(?:[.-]|$)|^www\.", re.I)
 NON_PROD_HINT_RE = re.compile(r"(?:localhost|127\.0\.0\.1|0\.0\.0\.0|staging|stage|test|qa|uat|dev|sandbox|mock|local|preprod)", re.I)
 SUPPORTED_CLEANUP = {"fixture_reset", "auto_delete", "transaction_rollback", "ephemeral_reset", "qualibug_auto_fixture_cleanup", "manual_disposable"}
+SENSITIVE_CONFIG_METADATA_KEYS = {
+    "username_field",
+    "password_field",
+    "token_json_path",
+    "token_path",
+    "token_header_name",
+    "token_header_prefix",
+    "cookie_name",
+}
 
 
 def _walk(value: Any, path: str = "$"):
@@ -96,6 +105,8 @@ def validate_onboarding_patch_safety(report_or_patch: dict[str, Any]) -> dict[st
     for path, value in _walk(patch):
         key_name = path.split(".")[-1].split("[")[0]
         if isinstance(value, str) and SENSITIVE_KEY_RE.search(key_name):
+            if key_name in SENSITIVE_CONFIG_METADATA_KEYS:
+                continue
             if not PLACEHOLDER_RE.search(value):
                 issues.append(_issue(
                     "PATCH-RAW-SECRET",

@@ -463,6 +463,13 @@ def _has_check(ep: ApiEndpoint, check: str) -> bool:
 def _capability_code_from_endpoint(ep: ApiEndpoint) -> str:
     if ep.capability_code:
         return ep.capability_code
+    path_low = ep.path.lower()
+    if "search?q=" in path_low:
+        return "C21"
+    if "list" in path_low and "page_size" in path_low:
+        return "C28"
+    if "search?keyword" in path_low or path_low.rstrip("/").endswith("/search"):
+        return "C30"
     m = re.search(r"/(\d{3})(?:/|$)", ep.path)
     return f"C{int(m.group(1)):02d}" if m else ""
 
@@ -796,6 +803,127 @@ def render_grounded_candidates_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _validation_priority(candidate: dict[str, Any]) -> dict[str, Any]:
+    severity_score = {"P0": 100, "P1": 80, "P2": 45, "P3": 20}.get(str(candidate.get("severity") or "").upper(), 30)
+    risk_score = {
+        "conservation_probe": 24,
+        "state_transition_probe": 22,
+        "idempotency_replay_probe": 22,
+        "async_external_event_probe": 20,
+        "ownership_scope_probe": 18,
+        "auth_boundary_probe": 16,
+        "audit_privacy_probe": 12,
+    }.get(str(candidate.get("risk_type") or ""), 8)
+    policy = str(candidate.get("execution_policy") or "")
+    execution_score = 10 if policy == "read_only_safe" else 4
+    confidence_score = int(float(candidate.get("confidence") or 0) * 20)
+    evidence_count = len(candidate.get("required_evidence") or [])
+    evidence_score = min(evidence_count, 6) * 2
+    endpoint = candidate.get("endpoint") or {}
+    code = str(endpoint.get("capability_code") or "")
+    category_score = 8 if re.fullmatch(r"C\d{2}", code) else 0
+    total = severity_score + risk_score + execution_score + confidence_score + evidence_score + category_score
+    lane = "immediate_readonly" if policy == "read_only_safe" else "sandbox_required"
+    return {
+        "score": total,
+        "lane": lane,
+        "reasons": {
+            "severity_score": severity_score,
+            "risk_score": risk_score,
+            "execution_score": execution_score,
+            "confidence_score": confidence_score,
+            "evidence_score": evidence_score,
+            "category_score": category_score,
+        },
+    }
+
+
+def build_runtime_validation_queue(payload: dict[str, Any], *, limit: int = 80) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for candidate in payload.get("candidates") or []:
+        priority = _validation_priority(candidate)
+        endpoint = candidate.get("endpoint") or {}
+        rows.append({
+            "rank": 0,
+            "candidate_id": candidate.get("candidate_id"),
+            "validation_score": priority["score"],
+            "validation_lane": priority["lane"],
+            "severity": candidate.get("severity"),
+            "confidence": candidate.get("confidence"),
+            "risk_type": candidate.get("risk_type"),
+            "endpoint": endpoint,
+            "execution_policy": candidate.get("execution_policy"),
+            "required_evidence": candidate.get("required_evidence") or [],
+            "priority_reasons": priority["reasons"],
+            "customer_acceptance_gate": {
+                "minimum_evidence": ["request_response_pair", "source_refs", "grounding_basis"],
+                "runtime_confirmation_required": True,
+                "status_before_execution": "candidate_not_customer_signable",
+            },
+        })
+    rows.sort(key=lambda item: (
+        item["validation_lane"] != "immediate_readonly",
+        -int(item["validation_score"]),
+        str(item["risk_type"] or ""),
+        str((item.get("endpoint") or {}).get("path") or ""),
+    ))
+    for idx, row in enumerate(rows, 1):
+        row["rank"] = idx
+    selected = rows[:limit]
+    by_lane = Counter(row["validation_lane"] for row in selected)
+    by_risk = Counter(row["risk_type"] for row in selected)
+    return {
+        "project_id": payload.get("project_id"),
+        "mode": "runtime_validation_priority_queue",
+        "strict_no_peek": True,
+        "candidate_count": len(payload.get("candidates") or []),
+        "queue_limit": limit,
+        "queued_count": len(selected),
+        "summary": {
+            "by_lane": dict(sorted(by_lane.items())),
+            "by_risk_type": dict(by_risk.most_common()),
+            "customer_signable_before_runtime": 0,
+            "runtime_confirmation_required": True,
+        },
+        "queue": selected,
+    }
+
+
+def render_runtime_validation_queue_markdown(queue: dict[str, Any]) -> str:
+    summary = queue.get("summary") or {}
+    lines = [
+        f"# Runtime Validation Queue - {queue.get('project_id') or ''}",
+        "",
+        "## Guardrail",
+        "",
+        "- source: document-grounded candidates only",
+        "- hidden oracle / ground truth: not read",
+        "- customer-signable bugs before runtime: `0`",
+        "",
+        "## Summary",
+        "",
+        f"- queued: `{queue.get('queued_count')}` / candidates: `{queue.get('candidate_count')}`",
+        f"- by lane: `{json.dumps(summary.get('by_lane') or {}, ensure_ascii=False)}`",
+        f"- by risk type: `{json.dumps(summary.get('by_risk_type') or {}, ensure_ascii=False)}`",
+        "",
+        "## Top validation targets",
+        "",
+    ]
+    for row in queue.get("queue") or []:
+        endpoint = row.get("endpoint") or {}
+        lines.extend([
+            f"### #{row.get('rank')} {row.get('candidate_id')} - {row.get('risk_type')}",
+            "",
+            f"- score: `{row.get('validation_score')}` / lane: `{row.get('validation_lane')}`",
+            f"- severity: `{row.get('severity')}` / confidence: `{row.get('confidence')}`",
+            f"- endpoint: `{endpoint.get('method')} {endpoint.get('path')}`",
+            f"- evidence: {', '.join(row.get('required_evidence') or [])}",
+            f"- acceptance: `{(row.get('customer_acceptance_gate') or {}).get('status_before_execution')}`",
+            "",
+        ])
+    return "\n".join(lines)
+
+
 def write_grounded_candidate_outputs(input_dir: str | Path, output_dir: str | Path, *, project_id: str = "", max_candidates: int | None = None) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -803,8 +931,13 @@ def write_grounded_candidate_outputs(input_dir: str | Path, output_dir: str | Pa
     json_path = output / "grounded_candidates.json"
     md_path = output / "grounded_candidates.md"
     probe_path = output / "grounded_probe_plan.json"
+    queue_path = output / "runtime_validation_queue.json"
+    queue_md_path = output / "runtime_validation_queue.md"
+    validation_queue = build_runtime_validation_queue(payload)
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(render_grounded_candidates_markdown(payload), encoding="utf-8")
+    queue_path.write_text(json.dumps(validation_queue, ensure_ascii=False, indent=2), encoding="utf-8")
+    queue_md_path.write_text(render_runtime_validation_queue_markdown(validation_queue), encoding="utf-8")
     probe_path.write_text(json.dumps({
         "project_id": payload.get("project_id"),
         "mode": "document_grounded_probe_plan",
@@ -820,6 +953,7 @@ def write_grounded_candidate_outputs(input_dir: str | Path, output_dir: str | Pa
                 "required_evidence": c.get("required_evidence"),
                 "source_refs": c.get("source_refs") or [],
                 "grounding_basis": c.get("grounding_basis") or {},
+                "validation_priority": _validation_priority(c),
             }
             for c in payload.get("candidates") or []
         ],
@@ -828,5 +962,7 @@ def write_grounded_candidate_outputs(input_dir: str | Path, output_dir: str | Pa
         "grounded_candidates": str(json_path),
         "grounded_candidates_md": str(md_path),
         "grounded_probe_plan": str(probe_path),
+        "runtime_validation_queue": str(queue_path),
+        "runtime_validation_queue_md": str(queue_md_path),
     }
     return payload

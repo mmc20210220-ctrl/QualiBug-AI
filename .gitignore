@@ -18,6 +18,7 @@ outputs/
 benchmark_outputs*/
 workspace/
 platform_outputs/
+platform_inputs/
 platform_workspace/
 reports/
 build/

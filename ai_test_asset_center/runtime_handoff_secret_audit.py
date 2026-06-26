@@ -14,6 +14,11 @@ from typing import Any
 SENSITIVE_KEY_RE = re.compile(r"(?:password|passwd|secret|token|authorization|cookie|api[_-]?key|session)", re.I)
 RAW_SECRET_VALUE_RE = re.compile(r"(?:bearer\s+[a-z0-9._\-]{12,}|basic\s+[a-z0-9+/=]{12,}|sk-[a-z0-9]{12,}|eyj[a-z0-9._\-]{16,})", re.I)
 SAFE_PLACEHOLDER_RE = re.compile(r"(?:<\s*(?:FILL|REDACTED|TODO|REPLACE|SANDBOX)[^>]*>|\*\*\*|redacted|placeholder)", re.I)
+SENSITIVE_METADATA_KEY_RE = re.compile(
+    r"(?:secret_audit|raw_tokens_required|token_header_name|token_header_prefix|token_json_path|token_path|password_field|"
+    r"safe_for_customer|status|count|enabled|required|present|hash|json|md|path|mode|name|prefix)$",
+    re.I,
+)
 
 HANDOFF_SECTIONS = [
     "summary",
@@ -62,6 +67,12 @@ def _preview(value: Any) -> str:
     return text[:8] + "…" + text[-4:]
 
 
+def _is_sensitive_metadata_key(path: str, key: str) -> bool:
+    key_text = str(key or "")
+    path_text = str(path or "")
+    return bool(SENSITIVE_METADATA_KEY_RE.search(key_text) or "secret_audit" in path_text.lower())
+
+
 def audit_commercial_handoff_secrets(report: dict[str, Any]) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     scanned_sections: list[str] = []
@@ -78,7 +89,7 @@ def audit_commercial_handoff_secrets(report: dict[str, Any]) -> dict[str, Any]:
             text = str(value)
             if not text or _is_safe_placeholder(text):
                 continue
-            if SENSITIVE_KEY_RE.search(key) and len(text.strip()) >= 4:
+            if isinstance(value, str) and SENSITIVE_KEY_RE.search(key) and len(text.strip()) >= 4 and not _is_sensitive_metadata_key(path, key):
                 issues.append({
                     "issue_id": "HANDOFF-RAW-SENSITIVE-FIELD",
                     "severity": "P0",

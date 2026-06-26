@@ -1,0 +1,57 @@
+openapi: 3.0.3
+info:
+  title: QualiBug Backend Local Runtime Target
+  version: local
+paths:
+  /run?q=smoke:
+    get:
+      operationId: run_c03_auth_boundary
+      summary: C03 run engine endpoint must require authentication
+      security:
+        - bearerAuth: []
+      responses:
+        "401": { description: Anonymous request rejected }
+        "403": { description: Anonymous request rejected }
+        "200": { description: Engine result for authenticated caller }
+  /graph:
+    get:
+      operationId: graph_c03_auth_boundary
+      summary: C03 tenant graph endpoint must require authentication
+      security:
+        - bearerAuth: []
+      responses:
+        "401": { description: Anonymous request rejected }
+        "403": { description: Anonymous request rejected }
+        "200": { description: Tenant graph }
+  /logs:
+    get:
+      operationId: logs_c31_privacy_boundary
+      summary: C31 diagnostic logs must require an operator role
+      security:
+        - bearerAuth: []
+      responses:
+        "401": { description: Anonymous request rejected }
+        "403": { description: Anonymous request rejected }
+        "200": { description: Diagnostic logs }
+  /metrics:
+    get:
+      operationId: metrics_c31_privacy_boundary
+      summary: C31 diagnostic metrics must require an operator role
+      security:
+        - bearerAuth: []
+      responses:
+        "401": { description: Anonymous request rejected }
+        "403": { description: Anonymous request rejected }
+        "200": { description: Runtime metrics }
+  /health:
+    get:
+      operationId: health_c17_contract
+      summary: C17 health endpoint returns service status
+      responses:
+        "200": { description: Health response }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+

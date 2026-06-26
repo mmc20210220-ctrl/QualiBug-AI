@@ -1,0 +1,5 @@
+{
+  "previous_execution_report": "platform_outputs/local_backend_runtime/input_only_run/grounded_probe_execution_report.before_fix.json",
+  "environment_kind": "local",
+  "base_url": "http://127.0.0.1:8000"
+}

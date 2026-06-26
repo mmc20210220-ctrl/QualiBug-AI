@@ -257,6 +257,27 @@ def cmd_bug_engine_benchmark_blind(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bug_engine_benchmark_v3_score(args: argparse.Namespace) -> int:
+    """Score blind Suite v3 outputs after generation without feeding oracle to the engine."""
+    from benchmark_evaluator.suite_v3 import evaluate_suite_v3
+
+    result = evaluate_suite_v3(
+        suite_root=args.suite_root,
+        outputs_root=args.outputs_root,
+        glob_pattern=args.glob,
+        out_dir=args.out,
+    )
+    print(json.dumps({
+        "mode": result.get("mode"),
+        "metrics": result.get("metrics"),
+        "outputs": {
+            "scorecard_json": str(Path(args.out).resolve() / "suite_v3_scorecard.json"),
+            "scorecard_md": str(Path(args.out).resolve() / "suite_v3_scorecard.md"),
+        },
+    }, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 def cmd_bug_engine_grounded_execute(args: argparse.Namespace) -> int:
     """Execute document-grounded probe plans with strict safety gates."""
     from ai_test_asset_center.grounded_probe_executor import run_grounded_probe_executor
@@ -517,6 +538,13 @@ def build_parser() -> argparse.ArgumentParser:
     bench_blind.add_argument("--project-prefix", default="bench", help="Prefix for generated output project IDs")
     bench_blind.add_argument("--limit", type=int, default=0, help="Optional maximum number of projects to run")
     bench_blind.set_defaults(func=cmd_bug_engine_benchmark_blind)
+
+    bench_v3_score = subparsers.add_parser("bug-engine-benchmark-v3-score", help="Score blind Benchmark Suite v3 outputs after generation without oracle leakage")
+    bench_v3_score.add_argument("--suite-root", required=True, help="Path to Benchmark Suite v3 root")
+    bench_v3_score.add_argument("--outputs-root", default="platform_outputs", help="Root containing qb_v3_* output folders")
+    bench_v3_score.add_argument("--glob", default="qb_v3_*/input_only_run/grounded_candidates.json", help="Glob below outputs-root for grounded_candidates.json")
+    bench_v3_score.add_argument("--out", default="platform_outputs/benchmark_suite_v3_score", help="Output directory for scorecard files")
+    bench_v3_score.set_defaults(func=cmd_bug_engine_benchmark_v3_score)
 
     grounded_exec = subparsers.add_parser("bug-engine-grounded-execute", help="Execute grounded_probe_plan.json with strict safety gates")
     grounded_exec.add_argument("--probe-plan", required=True, help="Path to grounded_probe_plan.json")
