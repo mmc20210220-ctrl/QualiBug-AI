@@ -41,3 +41,25 @@ Latest local validation:
 - write probes with before/after evidence: 114 / 114
 - strong evidence findings: 82
 - high/P1 findings: 25
+
+Full-suite bounded run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\RUN_BENCHMARK_RUNTIME_SUITE_VALIDATION.ps1 -MaxProbesPerProject 40
+```
+
+The suite runner starts the same live target once, iterates all 15 Benchmark
+Suite v3 projects, executes each project's generated `grounded_probe_plan.json`,
+and writes an aggregate report to
+`platform_outputs/benchmark_runtime_suite_v3_full/suite_runtime_validation_summary.json`.
+
+Latest bounded full-suite validation (`-MaxProbesPerProject 20`):
+
+- projects: 15
+- probes: 300
+- runtime confirmed: 270
+- strong evidence findings: 270
+- high/P1 findings: 95
+- protected: 0
+- needs more evidence: 0
+- before/after snapshot requests: 570
