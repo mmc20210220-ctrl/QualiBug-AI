@@ -169,6 +169,10 @@ def build_runtime_evidence_readiness_sla_gate(report: dict[str, Any]) -> dict[st
     if warning_reasons:
         gaps.append(_gap("SLA-WARNINGS", "Preflight warnings reduce confidence", "P2", ", ".join(str(x) for x in warning_reasons[:6]), len(warning_reasons), "Fix warnings to improve evidence quality and reduce manual review."))
 
+    auth_session_verified = bool((checks.get("auth_session_ready") or {}).get("ok"))
+    if not auth_session_verified:
+        gaps.append(_gap("SLA-AUTH-SESSION", "Authenticated session is not verified", "P0", "Static auth headers or missing accounts cannot prove the customer runtime session is usable.", len(high_value), "Provide test accounts or an auth_flow and rerun preflight until auth_session_ready passes."))
+
     avg_quality = round(sum(_quality_score(str(r.get("expected_evidence_quality") or "")) for r in rows) / max(total, 1), 2)
     # Weighted commercial readiness score.  It is intentionally conservative:
     # blocked onboarding and missing P0/P1 strong evidence dominate the result.
@@ -182,14 +186,19 @@ def build_runtime_evidence_readiness_sla_gate(report: dict[str, Any]) -> dict[st
     )
     if blocking_reasons:
         score = min(score, 49.0)
+    if not auth_session_verified:
+        score = min(score, 49.0)
     if remediation.get("p0_action_count"):
         score = min(score, 59.0)
     if not rows:
         score = 0.0
     score_int = int(round(score))
+    commercial_blockers = list(blocking_reasons)
+    if not auth_session_verified:
+        commercial_blockers.append("auth_session_ready")
     level = _sla_level(
         score_int,
-        blocking_reasons,
+        commercial_blockers,
         coverage["p0_p1_runtime_ready_coverage_pct"],
         coverage["p0_p1_strong_evidence_expected_coverage_pct"],
         len([r for r in high_value if r in blocked]),
@@ -197,23 +206,28 @@ def build_runtime_evidence_readiness_sla_gate(report: dict[str, Any]) -> dict[st
     minimum = {
         "non_production_target": bool((checks.get("non_production_target") or {}).get("ok")),
         "base_url_configured": bool((checks.get("base_url_configured") or {}).get("ok")),
+        "auth_session_verified": auth_session_verified,
         "strict_document_grounding": bool((checks.get("probe_plan_grounded") or {}).get("ok")),
         "p0_p1_runtime_ready_coverage_at_least_65_pct": coverage["p0_p1_runtime_ready_coverage_pct"] >= 65.0,
         "p0_p1_strong_evidence_coverage_at_least_50_pct": coverage["p0_p1_strong_evidence_expected_coverage_pct"] >= 50.0,
         "no_blocking_preflight_reasons": not blocking_reasons,
+        "no_minimum_commercial_gate_failures": not commercial_blockers,
         "no_p0_onboarding_actions": not bool(remediation.get("p0_action_count")),
     }
+    minimum_failures = [key for key, ok in minimum.items() if not ok]
 
     return {
         "engine": "runtime_evidence_readiness_sla_gate_v1_phase93e",
         "commercial_readiness_score": score_int,
         "commercial_readiness_level": level,
-        "sla_gate_passed": level in {"commercial_ready", "conditionally_ready"},
-        "customer_acceptance_recommendation": _recommended_action(level, blocking_reasons, gaps),
+        "sla_gate_passed": not minimum_failures and level in {"commercial_ready", "conditionally_ready"},
+        "customer_acceptance_recommendation": _recommended_action(level, commercial_blockers, gaps),
         "minimum_commercial_gate": minimum,
+        "minimum_commercial_gate_failures": minimum_failures,
         "coverage": coverage,
         "evidence_quality_average_score": avg_quality,
         "blocking_reasons": blocking_reasons,
+        "commercial_blocking_reasons": commercial_blockers,
         "warning_reasons": warning_reasons,
         "p0_action_count": int(remediation.get("p0_action_count") or 0),
         "p1_action_count": int(remediation.get("p1_action_count") or 0),
