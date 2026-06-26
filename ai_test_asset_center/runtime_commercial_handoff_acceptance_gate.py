@@ -37,6 +37,9 @@ def validate_commercial_handoff_acceptance(report_or_bundle: dict[str, Any]) -> 
 
     bundle = _as_dict(report_or_bundle.get("commercial_handoff_bundle")) or report_or_bundle
     status = str(bundle.get("status") or "missing_handoff_bundle")
+    summary = _as_dict(bundle.get("executive_summary"))
+    minimum_failures = [str(x) for x in _as_list(summary.get("minimum_commercial_gate_failures")) if str(x)]
+    commercial_blockers = [str(x) for x in _as_list(summary.get("commercial_blocking_reasons")) if str(x)]
     required_artifacts = _required_artifacts(bundle)
     signoff_blockers = _signoff_blockers(bundle)
     missing_paths = [
@@ -55,6 +58,14 @@ def validate_commercial_handoff_acceptance(report_or_bundle: dict[str, Any]) -> 
         violations.append({"violation_id": "HANDOFF-BLOCKED-STATUS", "severity": "P0", "reason": f"Bundle status is {status}."})
     if missing_paths:
         violations.append({"violation_id": "HANDOFF-REQUIRED-ARTIFACT-MISSING", "severity": "P0", "reason": "One or more required handoff artifacts has no declared path.", "items": missing_paths})
+    if minimum_failures:
+        violations.append({
+            "violation_id": "HANDOFF-MINIMUM-COMMERCIAL-GATE-FAILED",
+            "severity": "P0",
+            "reason": "Minimum commercial gate checks failed; the handoff cannot be accepted as commercial runtime-ready.",
+            "minimum_commercial_gate_failures": minimum_failures,
+            "commercial_blocking_reasons": commercial_blockers,
+        })
     for item in signoff_blockers:
         violations.append({"violation_id": "HANDOFF-SIGNOFF-BLOCKER", "severity": "P1", "reason": item.get("text"), "item_id": item.get("item_id"), "owner": item.get("owner")})
 
@@ -71,7 +82,6 @@ def validate_commercial_handoff_acceptance(report_or_bundle: dict[str, Any]) -> 
         acceptance_gate_passed = False
         recommendation = "Resolve handoff blockers before asking the customer to sign off on the commercial runtime package."
 
-    summary = _as_dict(bundle.get("executive_summary"))
     return {
         "engine": "runtime_commercial_handoff_acceptance_gate_v1_phase93k",
         "status": gate_status,
@@ -80,6 +90,8 @@ def validate_commercial_handoff_acceptance(report_or_bundle: dict[str, Any]) -> 
         "project_id": bundle.get("project_id"),
         "commercial_readiness_score": summary.get("commercial_readiness_score"),
         "sla_gate_passed": summary.get("sla_gate_passed"),
+        "minimum_commercial_gate_failures": minimum_failures,
+        "commercial_blocking_reasons": commercial_blockers,
         "required_artifact_count": len(required_artifacts),
         "missing_required_artifact_path_count": len(missing_paths),
         "signoff_blocker_count": len(signoff_blockers),
