@@ -1,0 +1,5 @@
+
+env: production
+workers: 4
+cache: enabled
+queue: in-memory

@@ -1,0 +1,20 @@
+diff --git a/demo_system/api_service.py b/demo_system/api_service.py
+index 1111111..2222222 100644
+--- a/demo_system/api_service.py
++++ b/demo_system/api_service.py
+@@ -36,12 +36,18 @@ class ApiService:
+-        if method == "POST" and path == "/orders":
++        if method == "POST" and path == "/orders":
+             product_id = json.get("product_id")
+             quantity = json.get("quantity")
++            # changed: add stock and quantity business rules for order creation
++            # affected endpoint: /orders
+             if not isinstance(product_id, int) or not isinstance(quantity, int) or quantity < 1:
+                 return self._response(400, {"error_code": "INVALID_ORDER_REQUEST"})
+@@ -54,8 +60,10 @@ class ApiService:
+-        if method == "GET" and path == "/admin/users":
++        if method == "GET" and path == "/admin/users":
++            # changed: strengthen admin permission and role check
++            # affected endpoint: /admin/users
+             if headers.get("X-Role") != "admin":
+                 return self._response(403, {"error_code": "FORBIDDEN"})

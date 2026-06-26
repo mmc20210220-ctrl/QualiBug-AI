@@ -1,0 +1,8 @@
+FAILED tests/generated_api_test.py::test_order_deducts_inventory
+AssertionError: expected product stock 11, got 12
+Request flow:
+POST /api/cart/items product_id=p-1001 quantity=1 -> 200
+POST /api/orders -> 200
+GET /api/products/p-1001 -> stock 12
+Expected: inventory decremented after paid order
+Recent diff: app/services/order.py create_order changed

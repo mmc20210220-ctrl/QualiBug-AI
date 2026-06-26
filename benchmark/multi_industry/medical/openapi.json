@@ -1,0 +1,27 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "medical",
+    "version": "1"
+  },
+  "paths": {
+    "/patients": {
+      "get": {
+        "summary": "患者病历仅授权医生可访问；处方必须医生签发；预约容量不得超卖。",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      },
+      "post": {
+        "summary": "患者病历仅授权医生可访问；处方必须医生签发；预约容量不得超卖。",
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+services:
+  qualibug-pilot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - private.env
+    environment:
+      QUALIBUG_BIND_HOST: 0.0.0.0
+      # Enable public container binding only behind enterprise reverse proxy,
+      # SSO/OIDC and network ACL controls.
+      QUALIBUG_ALLOW_PUBLIC_BIND: "1"
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - qualibug-pilot-data:/var/lib/qualibug
+    restart: unless-stopped
+
+volumes:
+  qualibug-pilot-data:

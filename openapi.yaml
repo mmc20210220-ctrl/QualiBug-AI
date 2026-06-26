@@ -1,0 +1,15 @@
+
+openapi: 3.0.0
+info:
+  title: QualiBug V8 API
+  version: v8
+paths:
+  /run:
+    get:
+      summary: run engine
+  /metrics:
+    get:
+      summary: metrics
+  /graph:
+    get:
+      summary: graph

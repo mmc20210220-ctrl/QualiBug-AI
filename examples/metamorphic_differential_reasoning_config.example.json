@@ -1,0 +1,91 @@
+{
+  "metamorphic_differential_execution_mode": "safe_live",
+  "metamorphic_differential_reasoning": {
+    "max_response_bytes": 3000000,
+    "max_detail_samples": 5,
+    "contracts": [
+      {
+        "path": "/orders",
+        "identity_fields": [
+          "order_id"
+        ],
+        "sample_query": {
+          "region": "cn"
+        },
+        "field_mappings": {
+          "order_id": "订单号",
+          "status": "状态",
+          "amount": "金额"
+        },
+        "filters": [
+          {
+            "parameter": "status",
+            "field": "status",
+            "values": [
+              "paid",
+              "created"
+            ]
+          },
+          {
+            "parameter": "channel",
+            "field": "channel",
+            "values": [
+              "web"
+            ]
+          }
+        ],
+        "pagination": {
+          "page_param": "page",
+          "size_param": "size",
+          "first_page": 1,
+          "page_size": 50,
+          "stable_order_required": true
+        },
+        "sort": {
+          "field_parameter": "sort_by",
+          "direction_parameter": "sort_order",
+          "field": "amount",
+          "asc_value": "asc",
+          "desc_value": "desc"
+        },
+        "detail_path_template": "/orders/{order_id}",
+        "detail_parameter": "order_id",
+        "compare_fields": [
+          "status",
+          "amount",
+          "currency",
+          "customer_id"
+        ],
+        "equivalent_query_pairs": [
+          {
+            "name": "default_first_page",
+            "left_query": {},
+            "right_query": {
+              "page": 1,
+              "size": 50
+            }
+          }
+        ],
+        "temporal_partitions": [
+          {
+            "name": "daily_settlement_window",
+            "from_parameter": "created_from",
+            "to_parameter": "created_to",
+            "boundary_semantics": "left_closed_right_open",
+            "complete_response": true,
+            "windows": [
+              {
+                "from": "2026-06-01T00:00:00Z",
+                "to": "2026-06-02T00:00:00Z"
+              },
+              {
+                "from": "2026-06-02T00:00:00Z",
+                "to": "2026-06-03T00:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

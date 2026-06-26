@@ -1,0 +1,27 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "crm",
+    "version": "1"
+  },
+  "paths": {
+    "/leads": {
+      "get": {
+        "summary": "客户线索只能由归属销售访问；线索 -> 商机 -> 合同；折扣需审批。",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      },
+      "post": {
+        "summary": "客户线索只能由归属销售访问；线索 -> 商机 -> 合同；折扣需审批。",
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    }
+  }
+}

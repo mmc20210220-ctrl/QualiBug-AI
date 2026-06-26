@@ -1,0 +1,311 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://qualibug.ai/schemas/phase92a/evidence_schema.json",
+  "title": "Phase92A Evidence Schema",
+  "description": "Schema for Runtime Probe Evidence → Business Evidence Contract Bridge",
+  "definitions": {
+    "SourcedValue": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "description": "The extracted value"
+        },
+        "source": {
+          "type": "string",
+          "description": "Path where value was extracted from"
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["evidenced", "inferred", "ambiguous", "missing"],
+          "description": "Confidence level of extraction"
+        }
+      },
+      "required": ["value", "source", "confidence"]
+    },
+    "RawProbeEvidence": {
+      "type": "object",
+      "properties": {
+        "run_id": { "type": "string" },
+        "hypothesis_id": { "type": "string" },
+        "flow_id": { "type": "string" },
+        "probe_id": { "type": "string" },
+        "request": { "type": "object" },
+        "response": { "type": "object" },
+        "status_code": { "type": "integer" },
+        "headers": { "type": "object" },
+        "body": { "type": "object" },
+        "timestamp": { "type": "number" },
+        "duration_ms": { "type": "number" },
+        "error": { "type": "string" },
+        "raw_call_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "_preserved": { "type": "boolean" }
+      }
+    },
+    "NormalizedRuntimeEvidence": {
+      "type": "object",
+      "properties": {
+        "request_id": { "$ref": "#/definitions/SourcedValue" },
+        "trace_id": { "$ref": "#/definitions/SourcedValue" },
+        "correlation_id": { "$ref": "#/definitions/SourcedValue" },
+        "idempotency_key": { "$ref": "#/definitions/SourcedValue" },
+        "entity_id": { "$ref": "#/definitions/SourcedValue" },
+        "entity_type": { "$ref": "#/definitions/SourcedValue" },
+        "tenant_id": { "$ref": "#/definitions/SourcedValue" },
+        "owner_id": { "$ref": "#/definitions/SourcedValue" },
+        "actor_id": { "$ref": "#/definitions/SourcedValue" },
+        "resource_path": { "$ref": "#/definitions/SourcedValue" },
+        "method": { "$ref": "#/definitions/SourcedValue" },
+        "before_candidates": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "action_ref": { "$ref": "#/definitions/SourcedValue" },
+        "after_candidates": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "event_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "observer_refs": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "call_chain_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "timing_window": { "type": "object" },
+        "missing_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ENTITY_BINDING_MISSING",
+              "BEFORE_SNAPSHOT_MISSING",
+              "AFTER_SNAPSHOT_MISSING",
+              "CLEANUP_PENDING",
+              "CLEANUP_FAILED",
+              "OBSERVER_CONFLICT",
+              "FIXTURE_AMBIGUOUS",
+              "ASYNC_WINDOW_OPEN",
+              "REPRODUCTION_INCOMPLETE",
+              "INVARIANT_REF_MISSING",
+              "IMPACT_ASSESSMENT_MISSING",
+              "TRACE_CORRUPTED",
+              "SCHEMA_INVALID",
+              "ADVERSARIAL_COUNTERFACTUAL"
+            ]
+          }
+        },
+        "raw_evidence_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "SemanticVerificationEvidence": {
+      "type": "object",
+      "properties": {
+        "semantic_verdict": {
+          "type": "string",
+          "enum": [
+            "SEMANTIC_CONFIRMED",
+            "SEMANTIC_FALSIFIED",
+            "SEMANTIC_INCONCLUSIVE",
+            "SEMANTIC_ERROR",
+            "SEMANTIC_PENDING"
+          ]
+        },
+        "violated_invariant": { "type": "string" },
+        "expected_behavior": { "type": "string" },
+        "observed_behavior": { "type": "string" },
+        "verifier_rule": { "type": "string" },
+        "before_observation": { "type": "object" },
+        "action_observation": { "type": "object" },
+        "after_observation": { "type": "object" },
+        "observer_consensus": { "type": "string" },
+        "counterfactual_result": { "type": "string" },
+        "semantic_confidence": { "type": "number" },
+        "verifier_trace_ref": { "type": "string" },
+        "_original_verdict": { "type": "string" }
+      }
+    },
+    "BusinessEvidenceDraft": {
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string" },
+        "environment_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "hypothesis_id": { "type": "string" },
+        "flow_id": { "type": "string" },
+        "policy_version": { "type": "string" },
+        "entity_binding": {
+          "type": "object",
+          "properties": {
+            "entity_id": { "type": "string" },
+            "entity_type": { "type": "string" },
+            "entity_alias": { "type": "string" },
+            "binding_confidence": { "type": "number" },
+            "source": { "type": "string" }
+          }
+        },
+        "tenant_binding": { "type": "object" },
+        "owner_binding": { "type": "object" },
+        "correlation_binding": { "type": "object" },
+        "before_snapshot_ref": { "type": "string" },
+        "action_evidence_ref": { "type": "string" },
+        "after_snapshot_ref": { "type": "string" },
+        "observer_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "invariant_ref": { "type": "string" },
+        "impact_assessment": { "type": "string" },
+        "reproduction_flow_ref": { "type": "string" },
+        "cleanup_status": {
+          "type": "string",
+          "enum": ["NOT_APPLICABLE", "PENDING", "COMPLETED", "FAILED"]
+        },
+        "cleanup_evidence_ref": { "type": "string" },
+        "runtime_evidence_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "semantic_evidence_ref": { "type": "string" },
+        "missing_requirements": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "enrichment_trace": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "_fabricated": { "type": "boolean" }
+      }
+    },
+    "BusinessFindingContract": {
+      "type": "object",
+      "properties": {
+        "finding_id": { "type": "string" },
+        "hypothesis_id": { "type": "string" },
+        "project_id": { "type": "string" },
+        "environment_id": { "type": "string" },
+        "policy_version": { "type": "string" },
+        "context_artifact_id": { "type": "string" },
+        "raw_runtime_verdict": {
+          "type": "string",
+          "description": "Phase92A Layer 1: Original Stage_verify verdict"
+        },
+        "semantic_verdict": {
+          "type": "string",
+          "enum": [
+            "SEMANTIC_CONFIRMED",
+            "SEMANTIC_FALSIFIED",
+            "SEMANTIC_INCONCLUSIVE",
+            "SEMANTIC_ERROR",
+            "SEMANTIC_PENDING"
+          ],
+          "description": "Phase92A Layer 2: Mapped semantic verdict"
+        },
+        "business_evidence_status": {
+          "type": "string",
+          "enum": [
+            "VALIDATED",
+            "PENDING_ENTITY_BINDING",
+            "PENDING_BEFORE_SNAPSHOT",
+            "PENDING_AFTER_SNAPSHOT",
+            "PENDING_CLEANUP_EVIDENCE",
+            "PENDING_OBSERVER_CONSENSUS",
+            "PENDING_ASYNC_WINDOW",
+            "PENDING_REPRODUCTION",
+            "PENDING_INVARIANT",
+            "PENDING_IMPACT",
+            "GATE_ERROR",
+            "LEGACY_EVIDENCE_INCOMPLETE",
+            "NOT_ENRICHED",
+            "BLOCKED_BY_RUNTIME_EVIDENCE",
+            "BLOCKED_BY_SAFETY"
+          ],
+          "description": "Phase92A Layer 3: Business evidence completeness"
+        },
+        "final_review_status": {
+          "type": "string",
+          "enum": [
+            "NEEDS_MORE_EVIDENCE",
+            "PENDING_REVIEW",
+            "VALIDATED_CANDIDATE",
+            "REJECTED_BY_COUNTERFACTUAL",
+            "REJECTED_BY_SCHEMA",
+            "CONFIRMED_BY_HUMAN",
+            "BLOCKED"
+          ],
+          "description": "Phase92A Layer 4: Final review state"
+        },
+        "title": { "type": "string" },
+        "severity": { "type": "string" },
+        "business_intent": { "type": "string" },
+        "root_cause_candidate": { "type": "string" },
+        "entity_binding": { "type": "object" },
+        "before_snapshot_ref": { "type": "string" },
+        "action_evidence_ref": { "type": "string" },
+        "after_snapshot_ref": { "type": "string" },
+        "observer_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "violated_invariant": { "type": "object" },
+        "cleanup": { "type": "object" },
+        "reproduction": { "type": "object" },
+        "raw_evidence_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "normalized_evidence_ref": { "type": "string" },
+        "semantic_trace_ref": { "type": "string" },
+        "business_contract_ref": { "type": "string" },
+        "runtime_gate_status": {
+          "type": "string",
+          "enum": ["PASSED", "FAILED_UNTRACEABLE", "FAILED_CROSS_PROJECT", "FAILED_MISSING_CALLS", "FAILED_TIMING_ERROR", "NOT_RUN"]
+        },
+        "business_gate_status": {
+          "type": "string",
+          "enum": ["PASSED", "FAILED_ENTITY_BINDING", "FAILED_BEFORE_SNAPSHOT", "FAILED_AFTER_SNAPSHOT", "FAILED_CLEANUP", "FAILED_INVARIANT", "FAILED_OBSERVER_CONFLICT", "FAILED_REPRODUCTION", "NOT_RUN", "PENDING"]
+        },
+        "adversarial_status": { "type": "string" },
+        "schema_status": { "type": "string" },
+        "state_history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": { "type": "string" },
+              "to": { "type": "string" },
+              "reason": { "type": "string" },
+              "timestamp": { "type": "number" }
+            }
+          }
+        },
+        "missing_requirements": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": [
+        "finding_id",
+        "raw_runtime_verdict",
+        "semantic_verdict",
+        "business_evidence_status",
+        "final_review_status"
+      ]
+    }
+  },
+  "type": "object",
+  "$ref": "#/definitions/BusinessFindingContract"
+}

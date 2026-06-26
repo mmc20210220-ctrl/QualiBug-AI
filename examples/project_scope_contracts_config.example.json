@@ -1,0 +1,27 @@
+{
+  "target_environment": "test",
+  "consistency_isolation_execution_mode": "safe_live",
+  "consistency_isolation_reasoning": {
+    "project_scope_contracts": [
+      {
+        "resource": "scan findings",
+        "path": "/api/findings",
+        "project_param": "project",
+        "allowed_statuses": [200],
+        "denied_statuses": [401, 403, 404],
+        "contexts": [
+          {
+            "name": "project_alpha_qa",
+            "headers": {
+              "X-QualiBug-Actor": "sandbox_alpha_qa",
+              "X-QualiBug-Role": "qa_engineer",
+              "X-QualiBug-Project-Scopes": "sandbox-alpha"
+            },
+            "allowed_project": "sandbox-alpha",
+            "foreign_project": "sandbox-bravo"
+          }
+        ]
+      }
+    ]
+  }
+}

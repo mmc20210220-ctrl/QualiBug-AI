@@ -1,0 +1,47 @@
+{
+  "phase": "phase65_financial_ledger_conservation",
+  "title": "Financial Ledger Conservation Oracle",
+  "generated_at_utc": "2026-06-22T02:14:42+00:00",
+  "delivery_status": "engineering_validated_not_ga",
+  "release_ready": false,
+  "completion_blockers": [
+    "Run the canonical single-process pytest suite and release verifier in a clean CI environment; in this container, pytest -q reached roughly 95% progress without a failed assertion and then stalled during late-suite shutdown."
+  ],
+  "capability": {
+    "reused_engine": "ai_test_asset_center/business_causality_conservation.py",
+    "oracles": [
+      "explicit voucher-and-currency double-entry journal balance",
+      "explicit adjacent accounting-period closing-to-opening continuity",
+      "optional declared balance movement formula using Decimal arithmetic",
+      "LLM output retained as unverified hypotheses only"
+    ],
+    "business_bug_targets": [
+      "unbalanced journal voucher",
+      "partial or duplicate asynchronous ledger posting",
+      "period opening/closing carry-forward discontinuity",
+      "incorrect period balance movement formula"
+    ]
+  },
+  "integration_points": [
+    "business_causality_conservation",
+    "risk_based_probe_planner",
+    "real_project_defect_discovery",
+    "existing redacted evidence registry",
+    "existing private product report surfaces"
+  ],
+  "safety_and_governance": {
+    "live_requests": "GET-only and only after execution_safety_verdict permits safe_live",
+    "unsafe_target_behavior": "blocked before target HTTP execution",
+    "financial_mapping": "journal group, debit/credit fields and period sequence are explicit enterprise contracts",
+    "persisted_evidence": "redacted query metadata, field names, aggregates, period labels and hashed voucher/account identities only",
+    "llm_findings": "unverified_hypothesis only; not deterministic defects"
+  },
+  "verification": {
+    "focused_financial_ledger_tests": "3/3 passed",
+    "cross_engine_regression": "31/31 passed",
+    "grouped_complete_inventory": "95/95 passed (29 + 37 + 22 + 7)",
+    "python_compileall": "passed",
+    "canonical_single_process_pytest": "stalled at roughly 95% progress in this container; not counted as passed; clean CI release verifier remains mandatory"
+  },
+  "delivery_boundary": "No credentials, private runtime data, workspaces, logs, caches or generated outputs are included in the source archive."
+}

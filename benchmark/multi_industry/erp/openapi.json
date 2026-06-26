@@ -1,0 +1,27 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "erp",
+    "version": "1"
+  },
+  "paths": {
+    "/purchase-orders": {
+      "get": {
+        "summary": "采购订单、收货、入库、应付发票必须三单匹配；库存与金额一致。",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      },
+      "post": {
+        "summary": "采购订单、收货、入库、应付发票必须三单匹配；库存与金额一致。",
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    }
+  }
+}

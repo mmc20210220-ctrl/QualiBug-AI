@@ -1,0 +1,20 @@
+{
+  "phase": "phase59_enterprise_testops_control_plane",
+  "title": "Enterprise TestOps Control Plane",
+  "version": "0.59.0",
+  "entrypoint": "ai_test_asset_center.enterprise_testops_control_plane",
+  "documents": [
+    "docs/PHASE59_ENTERPRISE_TESTOPS_CONTROL_PLANE.md",
+    "PHASE59_RELEASE_NOTES.md",
+    "benchmark/README.md"
+  ],
+  "tests": [
+    "tests/test_enterprise_testops_control_plane.py"
+  ],
+  "governance": {
+    "github_sync": false,
+    "production_writes_blocked": true,
+    "credentials_references_only": true,
+    "benchmark_claim_guard": true
+  }
+}

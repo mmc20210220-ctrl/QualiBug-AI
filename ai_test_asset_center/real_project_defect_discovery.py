@@ -1,0 +1,1231 @@
+from __future__ import annotations
+
+import json
+import os
+import time
+import urllib.request
+import urllib.error
+from pathlib import Path
+from typing import Any
+
+from .real_project_onboarding import (
+    ROOT,
+    _html_escape,
+    _join_url,
+    _load_json,
+    _read_text,
+    _safe_project_id,
+    _write_json,
+    config_paths,
+    execution_safety_verdict,
+    load_real_project_config,
+    run_onboarding_check,
+)
+from .business_adaptation_layer import build_business_adaptation_profile, generate_business_adaptive_probes
+from .universal_defect_mining import build_universal_defect_mining_profile, generate_universal_defect_probes, load_universal_defect_mining
+from .business_outcome_validation import build_business_outcome_profile, generate_business_outcome_probes, load_business_outcome_profile, run_business_outcome_validation
+from .business_reconciliation import build_business_reconciliation_profile, generate_business_reconciliation_probes, load_business_reconciliation_profile, run_business_reconciliation
+from .business_invariant_mining import build_business_invariant_profile, generate_business_invariant_probes, load_business_invariant_profile, run_business_invariant_mining
+from .multisource_reasoning import build_multi_source_reasoning_profile, generate_multi_source_reasoning_probes, load_multi_source_reasoning_profile, run_multi_source_reasoning
+from .business_lifecycle_reasoning import build_business_lifecycle_profile, generate_business_lifecycle_probes, load_business_lifecycle_profile, run_business_lifecycle_reasoning
+from .consistency_isolation_reasoning import build_consistency_isolation_profile, generate_consistency_isolation_probes, load_consistency_isolation_profile, run_consistency_isolation_reasoning
+from .metamorphic_differential_reasoning import build_metamorphic_differential_profile, generate_metamorphic_differential_probes, load_metamorphic_differential_profile, run_metamorphic_differential_reasoning
+from .temporal_data_regression_reasoning import build_temporal_data_regression_profile, generate_temporal_data_regression_probes, load_temporal_data_regression_profile, run_temporal_data_regression_reasoning
+from .business_causality_conservation import build_business_causality_profile, generate_business_causality_probes, load_business_causality_profile, run_business_causality_conservation
+from .business_population_constraints import build_business_population_constraint_profile, generate_business_population_constraint_probes, load_business_population_constraint_profile, run_business_population_constraints
+from .business_event_chain_reasoning import build_business_event_chain_profile, generate_business_event_chain_probes, load_business_event_chain_profile, run_business_event_chain_reasoning
+from .business_saga_compensation_reasoning import build_business_saga_compensation_profile, generate_business_saga_compensation_probes, load_business_saga_compensation_profile, run_business_saga_compensation_reasoning
+from .agent_discovery_loop import build_agent_discovery_loop
+from .confirmed_bug_flywheel import build_confirmed_bug_flywheel, annotate_probes_with_confirmed_learning
+from .business_assurance_coverage import build_business_assurance_coverage_profile, generate_business_assurance_coverage_probes, load_business_assurance_coverage_profile, run_business_assurance_coverage
+from .multi_industry_business_reasoning import build_multi_industry_business_profile, generate_multi_industry_business_probes, load_multi_industry_business_profile
+from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset, build_enterprise_knowledge_evidence_bundle, generate_enterprise_business_knowledge_probes, load_enterprise_business_knowledge_asset
+from .enterprise_testops_control_plane import (
+    build_enterprise_testops_control_plane,
+    build_explainable_test_assets,
+    build_issue_lifecycle_and_fix_plan,
+    evaluate_defect_quality,
+    generate_enterprise_testops_probes,
+)
+
+DESTRUCTIVE_RISK_TYPES = {"payment", "refund", "delete", "idempotency", "duplicate_submit", "concurrency", "cancel_order"}
+
+
+def _live_mode_or_plan(configured_mode: Any, live_execution_allowed: bool) -> str:
+    """Preserve a requested read-only mode only after the shared safety gate."""
+    return str(configured_mode or "plan_only").lower() if live_execution_allowed else "plan_only"
+
+
+def _fetch_json_or_text(url: str, method: str = "GET", body: Any | None = None, token: str | None = None, timeout: int = 10) -> dict[str, Any]:
+    headers = {"Accept": "application/json"}
+    raw_body = None
+    if body is not None:
+        raw_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        req = urllib.request.Request(url, data=raw_body, method=method, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            text = resp.read(300_000).decode("utf-8", errors="replace")
+            return {"ok": 200 <= resp.status < 400, "status_code": resp.status, "body": text, "error": None}
+    except urllib.error.HTTPError as exc:
+        text = ""
+        try:
+            text = exc.read(300_000).decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        return {"ok": False, "status_code": exc.code, "body": text, "error": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "status_code": None, "body": "", "error": str(exc)}
+
+
+def _extract_token(login_response: dict[str, Any]) -> str | None:
+    try:
+        data = json.loads(login_response.get("body") or "{}")
+    except Exception:
+        return None
+    for key in ("token", "access_token", "jwt"):
+        if data.get(key):
+            return str(data[key])
+    return None
+
+
+def _login(cfg: dict[str, Any], account: dict[str, Any], timeout: int) -> dict[str, Any]:
+    username = account.get("username") or account.get("user")
+    password = account.get("password") or account.get("pass")
+    if not username or not password:
+        return {"token": account.get("token"), "response": {"skipped": True, "message": "账号无用户名密码，使用静态 token 或跳过"}}
+    url = _join_url(str(cfg.get("base_url") or ""), str(cfg.get("login_api") or "/auth/login"))
+    response = _fetch_json_or_text(url, "POST", {"username": username, "password": password}, timeout=timeout)
+    return {"token": _extract_token(response) or account.get("token"), "response": response}
+
+
+def _path_keywords(path: str, method: str) -> set[str]:
+    text = f"{method} {path}".lower()
+    keys: set[str] = set()
+    mapping = {
+        "admin": ["admin", "manage"],
+        "order": ["order", "orders"],
+        "coupon": ["coupon", "voucher", "discount"],
+        "stock": ["stock", "inventory"],
+        "payment": ["payment", "pay", "callback"],
+        "refund": ["refund"],
+        "tenant": ["tenant", "org", "organization"],
+        "address": ["address"],
+        "delete": ["delete", "remove"],
+        "checkout": ["checkout"],
+        "cart": ["cart"],
+    }
+    for key, words in mapping.items():
+        if any(w in text for w in words):
+            keys.add(key)
+    if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        keys.add("mutation")
+    return keys
+
+
+
+def _load_enterprise_history_patterns(project_id: str, root: Path | None = None) -> list[dict[str, Any]]:
+    root = root or ROOT
+    project = _safe_project_id(project_id)
+    path = root / "platform_workspace" / project / "defect_discovery" / "enterprise_bug_pattern_library.json"
+    data = _load_json(path, {})
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return [item for item in data["items"] if isinstance(item, dict)]
+    return []
+
+
+def _history_pattern_matches_path(pattern: dict[str, Any], path: str, method: str) -> bool:
+    text = f"{method} {path}".lower()
+    for api in pattern.get("related_apis") or []:
+        api_text = str(api).lower().replace("{id}", "")
+        if api_text and (api_text in text or text in api_text):
+            return True
+    for kw in pattern.get("keywords") or []:
+        kw = str(kw).lower()
+        if len(kw) >= 3 and kw in text:
+            return True
+    risk = str(pattern.get("risk_type") or "")
+    keys = _path_keywords(path, method)
+    return (risk == "permission_bypass" and "admin" in keys) or (risk == "idor" and "order" in keys) or (risk == "coupon_abuse" and "coupon" in keys) or (risk == "stock_consistency" and ("stock" in keys or "inventory" in keys or "checkout" in keys)) or (risk == "payment" and "payment" in keys) or (risk == "refund" and "refund" in keys) or (risk == "tenant_isolation" and "tenant" in keys)
+
+
+def generate_history_informed_probes(openapi: dict[str, Any], cfg: dict[str, Any], project_id: str, root: Path | None = None, max_count: int | None = None) -> list[dict[str, Any]]:
+    root = root or ROOT
+    mode = str(cfg.get("discovery_mode") or "safe").lower()
+    allow_destructive = bool(cfg.get("allow_destructive_tests"))
+    max_count = int(max_count or max(20, int(cfg.get("max_probe_count") or 100) // 2))
+    patterns = _load_enterprise_history_patterns(project_id, root)
+    probes: list[dict[str, Any]] = []
+    if not patterns:
+        return probes
+    for pattern in sorted(patterns, key=lambda p: (-float(p.get("confidence_prior") or 0), str(p.get("risk_type") or ""))):
+        risk = str(pattern.get("risk_type") or "business_rule")
+        severity = str(pattern.get("severity") or "P2")
+        destructive = risk in DESTRUCTIVE_RISK_TYPES or risk in {"payment", "refund", "idempotency"}
+        if destructive and (mode == "safe" or not allow_destructive):
+            # Preserve the enterprise risk signal, but do not execute destructive probes unless allowed.
+            execution_policy = "candidate_only"
+        else:
+            execution_policy = "execute"
+        matched_any = False
+        for path, methods in (openapi.get("paths") or {}).items():
+            if not isinstance(methods, dict):
+                continue
+            for method in methods.keys():
+                method_u = str(method).upper()
+                if method_u not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                    continue
+                if not _history_pattern_matches_path(pattern, path, method_u):
+                    continue
+                matched_any = True
+                probes.append({
+                    "probe_id": f"RP_HIST_{len(probes)+1:04d}",
+                    "source": "enterprise_history_rag",
+                    "history_pattern_id": pattern.get("pattern_id"),
+                    "risk_type": risk,
+                    "title": f"历史缺陷模式复测：{pattern.get('module') or risk}",
+                    "actor": "normal_user",
+                    "path": path,
+                    "method": method_u,
+                    "severity": severity,
+                    "expected": pattern.get("recommended_probe_strategy") or "历史缺陷模式不应复现",
+                    "bug_signal": pattern.get("business_impact") or "与历史缺陷模式相同的异常响应或状态变化",
+                    "destructive": destructive,
+                    "execution_policy": execution_policy,
+                    "confidence_prior": pattern.get("confidence_prior", 0.6),
+                    "matched_keywords": pattern.get("keywords", [])[:10],
+                    "discovery_mode": mode,
+                })
+                if len(probes) >= max_count:
+                    return probes
+        if not matched_any and len(probes) < max_count:
+            related = (pattern.get("related_apis") or [""])[0] or "/"
+            probes.append({
+                "probe_id": f"RP_HIST_{len(probes)+1:04d}",
+                "source": "enterprise_history_rag",
+                "history_pattern_id": pattern.get("pattern_id"),
+                "risk_type": risk,
+                "title": f"历史缺陷模式候选：{pattern.get('module') or risk}",
+                "actor": "normal_user",
+                "path": related,
+                "method": "GET",
+                "severity": severity,
+                "expected": pattern.get("recommended_probe_strategy") or "历史缺陷模式不应复现",
+                "bug_signal": pattern.get("business_impact") or "与历史缺陷模式相同的异常响应或状态变化",
+                "destructive": destructive,
+                "execution_policy": "candidate_only",
+                "confidence_prior": pattern.get("confidence_prior", 0.6),
+                "matched_keywords": pattern.get("keywords", [])[:10],
+                "discovery_mode": mode,
+            })
+    return probes
+
+def generate_real_project_probes(openapi: dict[str, Any], cfg: dict[str, Any], max_count: int | None = None) -> list[dict[str, Any]]:
+    mode = str(cfg.get("discovery_mode") or "safe").lower()
+    allow_destructive = bool(cfg.get("allow_destructive_tests"))
+    max_count = int(max_count or cfg.get("max_probe_count") or 100)
+    probes: list[dict[str, Any]] = []
+    for path, methods in (openapi.get("paths") or {}).items():
+        if not isinstance(methods, dict):
+            continue
+        for method, spec in methods.items():
+            method_u = method.upper()
+            if method_u not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            keys = _path_keywords(path, method_u)
+            base = {
+                "path": path,
+                "method": method_u,
+                "operation_id": (spec or {}).get("operationId") if isinstance(spec, dict) else None,
+                "source": "real_project_pattern",
+                "discovery_mode": mode,
+            }
+            if "admin" in keys:
+                probes.append({**base, "probe_id": f"RP_AUTH_ADMIN_{len(probes)+1:04d}", "risk_type": "permission_bypass", "title": "普通用户访问管理员接口", "actor": "normal_user", "expected": "403/401", "bug_signal": "返回 2xx 且包含业务数据", "destructive": False, "severity": "P1"})
+            if "order" in keys and "GET" == method_u and ("{" in path or "}" in path):
+                probes.append({**base, "probe_id": f"RP_IDOR_ORDER_{len(probes)+1:04d}", "risk_type": "idor", "title": "订单详情疑似水平越权", "actor": "normal_user", "expected": "只能访问本人订单", "bug_signal": "可访问他人资源或无归属校验", "destructive": False, "severity": "P1"})
+            if "tenant" in keys:
+                probes.append({**base, "probe_id": f"RP_TENANT_{len(probes)+1:04d}", "risk_type": "tenant_isolation", "title": "租户数据隔离风险", "actor": "normal_user", "expected": "跨租户访问应拒绝", "bug_signal": "返回其他租户数据", "destructive": False, "severity": "P0"})
+            if mode in {"standard", "aggressive"}:
+                if "coupon" in keys:
+                    probes.append({**base, "probe_id": f"RP_COUPON_{len(probes)+1:04d}", "risk_type": "coupon_abuse", "title": "优惠券规则绕过风险", "actor": "normal_user", "expected": "优惠券门槛、归属、有效期和重复使用受控", "bug_signal": "异常优惠仍可使用或重复抵扣", "destructive": method_u != "GET", "severity": "P1"})
+                if "stock" in keys or "inventory" in keys or "checkout" in keys:
+                    probes.append({**base, "probe_id": f"RP_STOCK_{len(probes)+1:04d}", "risk_type": "stock_consistency", "title": "库存一致性风险", "actor": "normal_user", "expected": "库存不足不可下单且库存变更一致", "bug_signal": "库存不足成功或状态不一致", "destructive": method_u != "GET", "severity": "P1"})
+                if "payment" in keys:
+                    probes.append({**base, "probe_id": f"RP_PAYMENT_{len(probes)+1:04d}", "risk_type": "payment", "title": "支付金额和状态一致性风险", "actor": "normal_user", "expected": "支付金额、订单状态和回调幂等一致", "bug_signal": "金额不一致仍成功或重复回调重复入账", "destructive": True, "severity": "P0"})
+                if "refund" in keys:
+                    probes.append({**base, "probe_id": f"RP_REFUND_{len(probes)+1:04d}", "risk_type": "refund", "title": "退款状态和金额一致性风险", "actor": "normal_user", "expected": "退款金额、状态和幂等受控", "bug_signal": "重复退款、超额退款或未支付退款成功", "destructive": True, "severity": "P0"})
+            if mode == "aggressive" and allow_destructive:
+                if method_u in {"POST", "PUT", "PATCH"} and ("order" in keys or "checkout" in keys or "payment" in keys):
+                    probes.append({**base, "probe_id": f"RP_IDEMPOTENCY_{len(probes)+1:04d}", "risk_type": "idempotency", "title": "重复提交 / 幂等风险", "actor": "normal_user", "expected": "相同幂等键重复提交不应产生重复业务结果", "bug_signal": "重复创建订单、重复扣款或重复扣库存", "destructive": True, "severity": "P1"})
+    filtered = []
+    for p in probes:
+        if p.get("destructive") and (mode == "safe" or not allow_destructive and mode == "aggressive"):
+            continue
+        if mode == "standard" and p.get("risk_type") in DESTRUCTIVE_RISK_TYPES and not allow_destructive:
+            # standard keeps non-destructive risk candidates, but avoids direct payment/refund mutation execution.
+            p = {**p, "execution_policy": "candidate_only"}
+        filtered.append(p)
+        if len(filtered) >= max_count:
+            break
+    return filtered
+
+
+def _status_suspicious(probe: dict[str, Any], response: dict[str, Any]) -> tuple[bool, float, str]:
+    code = response.get("status_code")
+    risk = probe.get("risk_type")
+    if code is None:
+        return False, 0.2, "接口未执行成功，作为风险候选保留但不判定为缺陷"
+    if risk in {"permission_bypass", "idor", "tenant_isolation"} and 200 <= int(code) < 300:
+        return True, 0.82, "访问控制类探针返回 2xx，需要 QA 确认是否越权"
+    if risk in {"coupon_abuse", "stock_consistency", "payment", "refund", "idempotency"} and 200 <= int(code) < 300:
+        return True, 0.66, "业务一致性类探针返回成功，需要结合状态数据确认"
+    return False, 0.35, "响应未触发明显缺陷信号"
+
+
+def run_real_project_discovery(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:
+    root = root or ROOT
+    project = _safe_project_id(project_id)
+    paths = config_paths(project, root)
+    cfg = load_real_project_config(project, root)
+
+    # ── Phase78A: Unified Safe HTTP Transport ──
+    from .unified_http_transport import (
+        SafeHttpTransport, ExecutionPolicy, set_global_transport,
+    )
+    env = str(cfg.get('environment') or cfg.get('target_environment') or '')
+    policy = ExecutionPolicy(
+        environment=env,
+        allow_destructive=bool(cfg.get('allow_destructive_tests')),
+    )
+    transport = SafeHttpTransport(
+        policy=policy,
+        base_url=str(cfg.get('base_url') or ''),
+        default_timeout=int(cfg.get('request_timeout_seconds') or 10),
+    )
+    set_global_transport(transport)
+    # Replace _fetch_json_or_text with transport adapter
+    _fetch_json_or_text = transport.fetch_json_or_text
+
+    if policy.is_production:
+        return {
+            'status': 'BLOCKED_BY_SAFETY',
+            'project': project,
+            'environment': env,
+            'reason': 'Production environment: all HTTP requests blocked by unified SafeHttpTransport.',
+            'allowed_actions': ['static_analysis', 'gap_report'],
+            'blocked_actions': ['http_request', 'observer', 'polling', 'flow_executor'],
+            'http_request_count': 0,
+            'http_blocked_count': 0,
+            'safety_boundary': {
+                'safe_to_proceed': False,
+                'violations': [{'rule': 'production_environment_declared', 'severity': 'BLOCKING',
+                                'message': f"项目声明了生产环境: '{env}'。QualiBug 只能运行在测试/预发布环境。"}],
+                'environment': env,
+            },
+            'metamorphic_differential_summary': {'execution_mode': 'plan_only'},
+            'business_invariant_summary': {'execution_mode': 'plan_only'},
+        }
+
+    try:
+        enterprise_testops_preflight = build_enterprise_testops_control_plane(project, root, {"target_environment": cfg.get("target_environment")})
+    except Exception:
+        enterprise_testops_preflight = None
+    mode = str(cfg.get("discovery_mode") or "safe").lower()
+    if mode == "aggressive" and not bool(cfg.get("allow_destructive_tests")):
+        raise ValueError("aggressive 模式必须开启 allow_destructive_tests=true")
+    accounts = _load_json(paths["input_dir"] / "test_accounts.json", {})
+    safety = execution_safety_verdict(project, cfg, accounts)
+    live_execution_allowed = bool(safety.get("safe_to_proceed"))
+    onboarding = run_onboarding_check(project, root)
+    openapi = _load_json(paths["workspace_dir"] / "normalized_openapi.json", {}) or _load_json(paths["input_dir"] / "openapi.json", {})
+    timeout = int(cfg.get("request_timeout_seconds") or 10)
+    business_adaptation_profile = build_business_adaptation_profile(project, root)
+    try:
+        multi_industry_business_profile = load_multi_industry_business_profile(project, root) or build_multi_industry_business_profile(project, root)
+    except Exception:
+        multi_industry_business_profile = None
+    try:
+        enterprise_business_knowledge_asset = load_enterprise_business_knowledge_asset(project, root) or build_enterprise_business_knowledge_asset(project, root)
+        enterprise_business_knowledge_evidence_bundle = build_enterprise_knowledge_evidence_bundle(project, root)
+    except Exception:
+        enterprise_business_knowledge_asset = None
+        enterprise_business_knowledge_evidence_bundle = None
+    use_risk_plan = bool(cfg.get("use_risk_based_planner", True)) or str(os.environ.get("USE_RISK_BASED_PLANNER", "1")).lower() in {"1", "true", "yes"}
+    risk_plan = None
+    if use_risk_plan:
+        try:
+            from .risk_based_probe_planner import build_risk_based_probe_plan, load_risk_based_probe_plan
+            risk_plan = load_risk_based_probe_plan(project, root) or build_risk_based_probe_plan(project, root)
+        except Exception:
+            risk_plan = None
+    try:
+        universal_defect_mining = load_universal_defect_mining(project, root) or build_universal_defect_mining_profile(project, root)
+    except Exception:
+        universal_defect_mining = None
+    try:
+        business_outcome_profile = load_business_outcome_profile(project, root) or build_business_outcome_profile(project, root)
+    except Exception:
+        business_outcome_profile = None
+    try:
+        business_reconciliation_profile = load_business_reconciliation_profile(project, root) or build_business_reconciliation_profile(project, root)
+    except Exception:
+        business_reconciliation_profile = None
+    try:
+        business_invariant_profile = load_business_invariant_profile(project, root) or build_business_invariant_profile(project, root)
+    except Exception:
+        business_invariant_profile = None
+    try:
+        multi_source_reasoning_profile = load_multi_source_reasoning_profile(project, root) or build_multi_source_reasoning_profile(project, root)
+    except Exception:
+        multi_source_reasoning_profile = None
+    try:
+        business_lifecycle_profile = load_business_lifecycle_profile(project, root) or build_business_lifecycle_profile(project, root)
+    except Exception:
+        business_lifecycle_profile = None
+    try:
+        consistency_isolation_profile = load_consistency_isolation_profile(project, root) or build_consistency_isolation_profile(project, root)
+    except Exception:
+        consistency_isolation_profile = None
+    try:
+        metamorphic_differential_profile = load_metamorphic_differential_profile(project, root) or build_metamorphic_differential_profile(project, root)
+    except Exception:
+        metamorphic_differential_profile = None
+    try:
+        temporal_data_regression_profile = load_temporal_data_regression_profile(project, root) or build_temporal_data_regression_profile(project, root)
+    except Exception:
+        temporal_data_regression_profile = None
+    try:
+        business_causality_profile = load_business_causality_profile(project, root) or build_business_causality_profile(project, root)
+    except Exception:
+        business_causality_profile = None
+    try:
+        business_population_profile = load_business_population_constraint_profile(project, root) or build_business_population_constraint_profile(project, root)
+    except Exception:
+        business_population_profile = None
+    try:
+        business_event_chain_profile = load_business_event_chain_profile(project, root) or build_business_event_chain_profile(project, root)
+    except Exception:
+        business_event_chain_profile = None
+    try:
+        business_saga_compensation_profile = load_business_saga_compensation_profile(project, root) or build_business_saga_compensation_profile(project, root)
+    except Exception:
+        business_saga_compensation_profile = None
+    try:
+        confirmed_bug_flywheel_profile = build_confirmed_bug_flywheel(project, root)
+    except Exception:
+        confirmed_bug_flywheel_profile = None
+    try:
+        business_assurance_coverage_profile = load_business_assurance_coverage_profile(project, root) or build_business_assurance_coverage_profile(project, root)
+    except Exception:
+        business_assurance_coverage_profile = None
+    try:
+        from .business_flow_execution import load_business_flow_execution_result
+        business_flow_execution = load_business_flow_execution_result(project, root)
+    except Exception:
+        business_flow_execution = None
+    try:
+        from .replay_evidence_sandbox import load_replay_evidence_sandbox
+        replay_evidence_sandbox = load_replay_evidence_sandbox(project, root)
+    except Exception:
+        replay_evidence_sandbox = None
+    if isinstance(risk_plan, dict) and isinstance(risk_plan.get("selected_probes"), list):
+        probes = [dict(p) for p in risk_plan.get("selected_probes", [])]
+    else:
+        base_probes = generate_real_project_probes(openapi if isinstance(openapi, dict) else {}, cfg)
+        adaptive_probes = generate_business_adaptive_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        multi_industry_probes = generate_multi_industry_business_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        enterprise_business_knowledge_probes = generate_enterprise_business_knowledge_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        enterprise_testops_probes = generate_enterprise_testops_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        try:
+            from .business_flow_graph import generate_business_flow_probes
+            flow_probes = generate_business_flow_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        except Exception:
+            flow_probes = []
+        history_probes = generate_history_informed_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        universal_probes = generate_universal_defect_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_outcome_probes = generate_business_outcome_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_reconciliation_probes = generate_business_reconciliation_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_invariant_probes = generate_business_invariant_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        multi_source_reasoning_probes = generate_multi_source_reasoning_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_lifecycle_probes = generate_business_lifecycle_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        consistency_isolation_probes = generate_consistency_isolation_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        metamorphic_differential_probes = generate_metamorphic_differential_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        temporal_data_regression_probes = generate_temporal_data_regression_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_causality_probes = generate_business_causality_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_population_probes = generate_business_population_constraint_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_event_chain_probes = generate_business_event_chain_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_saga_compensation_probes = generate_business_saga_compensation_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        business_assurance_coverage_probes = generate_business_assurance_coverage_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+        seen_probe_keys: set[tuple[str, str, str, str]] = set()
+        probes = []
+        for probe in [*business_assurance_coverage_probes, *enterprise_testops_probes, *enterprise_business_knowledge_probes, *multi_industry_probes, *business_saga_compensation_probes, *business_event_chain_probes, *business_population_probes, *business_causality_probes, *temporal_data_regression_probes, *metamorphic_differential_probes, *consistency_isolation_probes, *business_lifecycle_probes, *multi_source_reasoning_probes, *business_invariant_probes, *business_reconciliation_probes, *business_outcome_probes, *universal_probes, *flow_probes, *adaptive_probes, *base_probes, *history_probes]:
+            key = (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")))
+            if key in seen_probe_keys:
+                continue
+            seen_probe_keys.add(key)
+            probes.append(probe)
+            if len(probes) >= int(cfg.get("max_probe_count") or 100):
+                break
+
+    if isinstance(confirmed_bug_flywheel_profile, dict):
+        probes = annotate_probes_with_confirmed_learning(probes, project, root, profile=confirmed_bug_flywheel_profile)
+
+    normal = accounts.get("normal_user") or accounts.get("normal") or accounts.get("user") or {}
+    admin = accounts.get("admin") or accounts.get("admin_user") or {}
+    normal_login = _login(cfg, normal, timeout) if normal and live_execution_allowed else {"token": None, "response": {"skipped": True, "reason": "safety_boundary_blocked" if normal else "no_test_account"}}
+    admin_login = _login(cfg, admin, timeout) if admin and live_execution_allowed else {"token": None, "response": {"skipped": True, "reason": "safety_boundary_blocked" if admin else "no_test_account"}}
+    token_by_actor = {"normal_user": normal_login.get("token"), "admin": admin_login.get("token")}
+
+    issues: list[dict[str, Any]] = []
+    evidence_items: list[dict[str, Any]] = []
+    executions: list[dict[str, Any]] = []
+    base_url = str(cfg.get("base_url") or "")
+    # P0 fix: keep base_url for GET-only probes even when safety gate fails.
+    # Only clear it for write operations (POST/PUT/PATCH/DELETE).
+    read_only_base_url = base_url  # always available for GET probes
+    write_base_url = base_url if live_execution_allowed else ""
+    for probe in probes:
+        # P1 fix: Route delegated probes through unified execution bus instead of short-circuiting.
+        # GET-only probes from all sources should execute against the test environment.
+        # Only truly non-HTTP audit sources (assurance coverage, knowledge lineage) remain delegated.
+        delegated_audit_sources = {
+            "business_assurance_coverage",   # Phase56: assurance-case audit, no HTTP
+            "enterprise_business_knowledge_asset",  # Phase58: knowledge lineage, no HTTP
+        }
+        source = str(probe.get("source") or "")
+        if source in delegated_audit_sources:
+            executions.append({"probe_id": probe.get("probe_id"), "probe": probe, "response_status": None, "error": f"delegated_to_{source}", "suspicious": False, "confidence": 0.0, "reason": "non_http_audit_source"})
+            continue
+        if probe.get("execution_policy") == "candidate_only" or not base_url:
+            # P0 fix: GET-only candidate_only probes should still execute against test env.
+            # Only block candidate_only if it's a write operation (POST/PUT/PATCH/DELETE).
+            is_candidate_only = probe.get("execution_policy") == "candidate_only"
+            probe_method = str(probe.get("method") or "GET").upper()
+            is_read_only = probe_method in ("GET", "HEAD", "OPTIONS")
+            if (is_candidate_only and not is_read_only) or not base_url:
+                response = {"ok": False, "status_code": None, "body": "", "error": "candidate_only_or_missing_base_url"}
+            else:
+                # GET candidate_only: route to P0 execution logic below
+                response = None  # signal to continue to execution block
+        else:
+            response = None  # signal to continue to execution block
+        if response is None:
+            # P0 fix: differentiate GET vs write. GET probes always allowed on test environments.
+            # Write probes (POST/PUT/PATCH/DELETE) require live_execution_allowed.
+            probe_method = str(probe.get("method") or "GET").upper()
+            is_read_only = probe_method in ("GET", "HEAD", "OPTIONS")
+            is_destructive = probe.get("destructive") or (not is_read_only)
+
+            if is_destructive and not live_execution_allowed:
+                response = {"ok": False, "status_code": None, "body": "", "error": "write_probe_blocked_by_safety_gate"}
+            elif is_destructive and not bool(cfg.get("allow_destructive_tests")):
+                response = {"ok": False, "status_code": None, "body": "", "error": "destructive_probe_blocked"}
+            else:
+                target_url = read_only_base_url if is_read_only else write_base_url
+                response = _fetch_json_or_text(_join_url(target_url, str(probe.get("path"))), probe_method, token=token_by_actor.get(str(probe.get("actor"))), timeout=timeout)
+        suspicious, confidence, reason = _status_suspicious(probe, response)
+        execution = {"probe_id": probe["probe_id"], "probe": probe, "response_status": response.get("status_code"), "error": response.get("error"), "suspicious": suspicious, "confidence": confidence, "reason": reason}
+        executions.append(execution)
+        if suspicious or response.get("error") in {"candidate_only_or_missing_base_url", "destructive_probe_blocked"}:
+            candidate_only = response.get("error") in {"candidate_only_or_missing_base_url", "destructive_probe_blocked"}
+            issue = {
+                "issue_id": f"ISSUE_{probe['probe_id']}",
+                "title": probe.get("title"),
+                "risk_type": probe.get("risk_type"),
+                "severity": probe.get("severity") if not candidate_only else "P2",
+                "confidence": confidence if not candidate_only else 0.42,
+                "status": "needs_human_review",
+                "expected": probe.get("expected"),
+                "actual": f"HTTP {response.get('status_code')}" if response.get("status_code") is not None else "未执行 / 候选风险",
+                "business_impact": _impact_for_risk(str(probe.get("risk_type"))),
+                "suggested_fix": _fix_for_risk(str(probe.get("risk_type"))),
+                "qa_feedback_status": "pending",
+                "evidence": {
+                    "actor": probe.get("actor"),
+                    "request": {"method": probe.get("method"), "url": probe.get("path")},
+                    "response": {"status_code": response.get("status_code"), "body_excerpt": (response.get("body") or "")[:500], "error": response.get("error")},
+                    "reason": reason,
+                },
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": probe["probe_id"], "request": issue["evidence"]["request"], "response": issue["evidence"]["response"], "expected": issue["expected"], "actual": issue["actual"], "confidence": issue["confidence"]})
+
+    business_outcome_run = None
+    try:
+        outcome_mode = _live_mode_or_plan(cfg.get("business_outcome_execution_mode"), live_execution_allowed)
+        business_outcome_run = run_business_outcome_validation(project, root, options={"execution_mode": outcome_mode})
+        for finding in business_outcome_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "export_data_quality",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "导出、报表或对账结果与业务源数据不一致，可能导致运营、财务、审计或客户决策错误。",
+                "suggested_fix": "修复导出查询去重、筛选条件与源数据映射，并将该业务结果审计契约加入发布回归。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": ((finding.get("evidence") or {}).get("export_url") or "export")}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_outcome_run = {"error": str(exc)}
+
+    business_reconciliation_run = None
+    try:
+        reconciliation_mode = _live_mode_or_plan(cfg.get("business_reconciliation_execution_mode"), live_execution_allowed)
+        business_reconciliation_run = run_business_reconciliation(project, root, options={"execution_mode": reconciliation_mode})
+        for finding in business_reconciliation_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "business_reconciliation",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "统计看板、报表或经营指标与底层业务明细不一致，可能导致财务、运营、审计和管理决策失真。",
+                "suggested_fix": "统一统计聚合、筛选和去重口径；将该对账契约加入发布回归并保留异常证据。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("summary_request") or {"method": "GET", "url": "summary"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_reconciliation_run = {"error": str(exc)}
+
+    business_invariant_run = None
+    try:
+        invariant_mode = _live_mode_or_plan(cfg.get("business_invariant_execution_mode"), live_execution_allowed)
+        business_invariant_run = run_business_invariant_mining(project, root, options={"execution_mode": invariant_mode})
+        for finding in business_invariant_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "business_invariant",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "业务规则、筛选语义、数据关联或运行时契约被违反，可能导致错误决策、数据污染、漏查或业务链路中断。",
+                "suggested_fix": "修复后端查询/聚合/数据完整性逻辑，并把已确认的不变量作为发布回归门禁。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": "business_invariant"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_invariant_run = {"error": str(exc)}
+
+
+    multi_source_reasoning_run = None
+    try:
+        reasoning_mode = _live_mode_or_plan(cfg.get("multi_source_reasoning_execution_mode"), live_execution_allowed)
+        multi_source_reasoning_run = run_multi_source_reasoning(project, root, options={"execution_mode": reasoning_mode})
+        for finding in multi_source_reasoning_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "business_reasoning",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "跨系统、页面/API、异常处理或历史数据口径被破坏，可能造成错误业务决策、数据不同步、迁移损坏或线上异常被静默掩盖。",
+                "suggested_fix": "修复 Oracle 两侧的契约/同步/参数校验/迁移逻辑，并将已确认规则回灌为企业专属发布回归。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": "multi_source_oracle"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        multi_source_reasoning_run = {"error": str(exc)}
+
+    business_lifecycle_run = None
+    try:
+        lifecycle_mode = _live_mode_or_plan(cfg.get("business_lifecycle_execution_mode"), live_execution_allowed)
+        business_lifecycle_run = run_business_lifecycle_reasoning(project, root, options={"execution_mode": lifecycle_mode})
+        for finding in business_lifecycle_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "lifecycle_integrity",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "状态机、数据生命周期或事件历史被破坏，可能造成重复扣款、越过审批、终态回写、已删除数据泄漏或流程结果不可追溯。",
+                "suggested_fix": "修复状态转换守卫、事件写入与时间线一致性；将确认的生命周期 Oracle 加入发布回归和隔离沙箱状态机测试。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": "business_lifecycle"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_lifecycle_run = {"error": str(exc)}
+
+    consistency_isolation_run = None
+    try:
+        consistency_mode = _live_mode_or_plan(cfg.get("consistency_isolation_execution_mode"), live_execution_allowed)
+        consistency_isolation_run = run_consistency_isolation_reasoning(project, root, options={"execution_mode": consistency_mode})
+        for finding in consistency_isolation_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "consistency_integrity",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "租户隔离、异步结果、缓存/索引或最终一致性被破坏，可能造成跨客户数据泄漏、任务假成功、页面与事实源不一致或关键业务延迟生效。",
+                "suggested_fix": "修复租户查询边界、任务结果状态机、消息/索引幂等与缓存失效机制；把确认的 Oracle 作为发布回归与隔离沙箱并发测试。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": "consistency_isolation"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        consistency_isolation_run = {"error": str(exc)}
+
+    metamorphic_differential_run = None
+    try:
+        metamorphic_mode = _live_mode_or_plan(cfg.get("metamorphic_differential_execution_mode"), live_execution_allowed)
+        metamorphic_differential_run = run_metamorphic_differential_reasoning(project, root, options={"execution_mode": metamorphic_mode})
+        for finding in metamorphic_differential_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "metamorphic_relation",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "多个有效业务观察之间的关系被破坏，可能表现为筛选组合错误、分页重复/漏数、排序错误或列表详情展示不一致。",
+                "suggested_fix": "统一查询解析、排序分页和列表/详情序列化的业务口径；将该变形关系固化为发布前只读回归。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": "metamorphic_differential"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        metamorphic_differential_run = {"error": str(exc)}
+
+    temporal_data_regression_run = None
+    try:
+        temporal_mode = _live_mode_or_plan(cfg.get("temporal_data_regression_execution_mode"), live_execution_allowed)
+        temporal_data_regression_run = run_temporal_data_regression_reasoning(project, root, options={"execution_mode": temporal_mode})
+        for finding in temporal_data_regression_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "temporal_data_regression",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "新版本或运行结果相对可信基线发生数据语义回归，可能导致历史字段丢失、金额单位错误、关键业务属性被覆盖或主键重复。",
+                "suggested_fix": "检查数据迁移、序列化、金额单位、字段映射与索引重建；批准迁移后显式重建基线，并将确认的问题固化为发布前只读回归。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": "temporal_data_regression"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        temporal_data_regression_run = {"error": str(exc)}
+
+    business_causality_run = None
+    try:
+        causality_mode = _live_mode_or_plan(cfg.get("business_causality_execution_mode") or cfg.get("business_causality_conservation_execution_mode"), live_execution_allowed)
+        business_causality_run = run_business_causality_conservation(project, root, options={"execution_mode": causality_mode})
+        for finding in business_causality_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "business_causality",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "主业务状态与支付、库存、审批、台账等副作用脱节，可能造成漏扣、重复扣款、重复发货、无法对账或财务/库存事实失真。",
+                "suggested_fix": "修复事务边界、幂等键、消息消费去重、外键约束和金额计算；将确认的因果 Oracle 固化为发布前只读回归，并在隔离环境验证重放。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("source_request") or {"method": "GET", "url": "business_causality"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_causality_run = {"error": str(exc)}
+
+    business_population_run = None
+    try:
+        population_mode = _live_mode_or_plan(cfg.get("business_population_constraints_execution_mode") or cfg.get("business_population_constraint_execution_mode"), live_execution_allowed)
+        business_population_run = run_business_population_constraints(project, root, options={"execution_mode": population_mode})
+        for finding in business_population_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id") or finding.get("finding_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "business_population_constraint",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "多个业务记录共同突破额度、资源容量、时间排班、批次闭合或审批阈值，可能造成资损、资源双占、批量数据丢失和内控失效。",
+                "suggested_fix": "在数据库与服务层同时落实复合唯一约束、条件聚合锁、区间排他、批次终态校验和审批门禁；把确认的群体 Oracle 固化为发布前只读回归，并在隔离环境验证并发绕过。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("request") or {"method": "GET", "url": "business_population_constraints"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_population_run = {"error": str(exc)}
+
+
+    business_event_chain_run = None
+    try:
+        event_chain_mode = _live_mode_or_plan(cfg.get("business_event_chain_execution_mode") or cfg.get("event_chain_execution_mode"), live_execution_allowed)
+        business_event_chain_run = run_business_event_chain_reasoning(project, root, options={"execution_mode": event_chain_mode})
+        for finding in business_event_chain_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id") or finding.get("finding_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "event_chain_integrity",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "业务状态、消息投递与消费者结果断链，可能造成漏通知、漏发货、异步任务假成功、重复扣款/库存或死信长期无人处理。",
+                "suggested_fix": "修复 outbox 原子写入、消息幂等键、消费者去重/顺序控制、死信诊断与重试上限；把确认的事件 Oracle 固化为发布前只读回归，并在隔离环境验证重放。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("event_request") or {"method": "GET", "url": "business_event_chain"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_event_chain_run = {"error": str(exc)}
+
+    business_saga_compensation_run = None
+    try:
+        saga_mode = _live_mode_or_plan(cfg.get("business_saga_compensation_execution_mode") or cfg.get("saga_compensation_execution_mode"), live_execution_allowed)
+        business_saga_compensation_run = run_business_saga_compensation_reasoning(project, root, options={"execution_mode": saga_mode})
+        for finding in business_saga_compensation_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id") or finding.get("finding_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "saga_compensation",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.75,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "失败、取消或回滚后的资金、库存、授权和 Saga 状态未正确收敛，可能造成漏退款、重复退款、库存长期冻结、额度占用、客户投诉与财务对账差异。",
+                "suggested_fix": "修复补偿编排的幂等键、状态机终态、金额口径、补偿外键及残留资源释放；将确认的补偿 Oracle 固化为发布前只读回归，并在隔离环境验证重试与取消竞态。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": finding.get("evidence_stability") or {},
+                "learning_matches": finding.get("learning_matches") or [],
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": (issue.get("evidence") or {}).get("source_request") or {"method": "GET", "url": "business_saga_compensation"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_saga_compensation_run = {"error": str(exc)}
+
+    business_assurance_coverage_run = None
+    try:
+        business_assurance_coverage_run = run_business_assurance_coverage(project, root)
+        for finding in business_assurance_coverage_run.get("findings") or []:
+            issue = {
+                "issue_id": finding.get("issue_id") or finding.get("finding_id"),
+                "title": finding.get("title"),
+                "risk_type": finding.get("risk_type") or "assurance_coverage_gap",
+                "severity": finding.get("severity") or "P1",
+                "confidence": finding.get("confidence") or 0.99,
+                "status": finding.get("status") or "needs_human_review",
+                "expected": finding.get("expected"),
+                "actual": finding.get("actual"),
+                "business_impact": "关键业务失败模型没有可执行 Oracle 保护，当前发布质量无法被可重复证据证明；该项是质量保障缺口，不是已确认线上缺陷。",
+                "suggested_fix": "补齐对应业务 Oracle、将其纳入只读/预发执行，并以模型化故障杀伤率和回归证据闭环；写路径验证必须在隔离沙箱执行。",
+                "qa_feedback_status": "pending",
+                "evidence": finding.get("evidence") or {},
+                "evidence_stability": {},
+                "learning_matches": [],
+                "quality_assurance_gap": True,
+            }
+            issues.append(issue)
+            evidence_items.append({"issue_id": issue["issue_id"], "probe_id": finding.get("contract_id"), "request": {"method": "MODELLED", "url": "business_assurance_coverage"}, "response": issue.get("evidence"), "expected": issue.get("expected"), "actual": issue.get("actual"), "confidence": issue.get("confidence")})
+    except Exception as exc:
+        business_assurance_coverage_run = {"error": str(exc)}
+
+    high = [i for i in issues if float(i.get("confidence") or 0) >= 0.75]
+    medium = [i for i in issues if 0.5 <= float(i.get("confidence") or 0) < 0.75]
+    blockers = [i for i in issues if i.get("severity") in {"P0", "P1"} and float(i.get("confidence") or 0) >= 0.75]
+    risk_dist: dict[str, int] = {}
+    for i in issues:
+        risk_dist[str(i.get("risk_type") or "unknown")] = risk_dist.get(str(i.get("risk_type") or "unknown"), 0) + 1
+    data = {
+        "project_id": project,
+        "project_name": cfg.get("project_name") or project,
+        "mode": mode,
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "ground_truth_free": True,
+        "known_bugs": None,
+        "metrics": {
+            "issue_count": len(issues),
+            "high_confidence_issues": len(high),
+            "medium_confidence_issues": len(medium),
+            "needs_human_review": len(issues),
+            "evidence_completeness": round(sum(1 for e in evidence_items if e.get("request") and e.get("response")) / max(1, len(evidence_items)), 3),
+            "suggested_release_blockers": len(blockers),
+            "estimated_hours_saved": round(len(probes) * 0.08 + len(issues) * 0.25, 2),
+        },
+        "risk_distribution": risk_dist,
+        "onboarding_ok": onboarding.get("ok"),
+        "safety_boundary": safety,
+        "probes": probes,
+        "business_adaptation_profile": {
+            "selected_domains": business_adaptation_profile.get("selected_domains", []),
+            "operation_count": business_adaptation_profile.get("operation_count", 0),
+            "private_leak_check": business_adaptation_profile.get("private_leak_check", {}),
+        },
+        "enterprise_business_knowledge_asset": {
+            "asset_id": (enterprise_business_knowledge_asset or {}).get("asset_id") if isinstance(enterprise_business_knowledge_asset, dict) else None,
+            "summary": (enterprise_business_knowledge_asset or {}).get("summary", {}) if isinstance(enterprise_business_knowledge_asset, dict) else {},
+            "module_tree": (enterprise_business_knowledge_asset or {}).get("module_tree", []) if isinstance(enterprise_business_knowledge_asset, dict) else [],
+            "rule_library": (enterprise_business_knowledge_asset or {}).get("rule_library", []) if isinstance(enterprise_business_knowledge_asset, dict) else [],
+            "permission_matrix": (enterprise_business_knowledge_asset or {}).get("permission_matrix", []) if isinstance(enterprise_business_knowledge_asset, dict) else [],
+            "data_dependencies": (enterprise_business_knowledge_asset or {}).get("data_dependencies", []) if isinstance(enterprise_business_knowledge_asset, dict) else [],
+            "risk_domains": (enterprise_business_knowledge_asset or {}).get("risk_domains", []) if isinstance(enterprise_business_knowledge_asset, dict) else [],
+            "oracle_library": (enterprise_business_knowledge_asset or {}).get("oracle_library", []) if isinstance(enterprise_business_knowledge_asset, dict) else [],
+            "evidence_bundle": enterprise_business_knowledge_evidence_bundle or {},
+        },
+        "multi_industry_business_profile": {
+            "summary": (multi_industry_business_profile or {}).get("summary", {}) if isinstance(multi_industry_business_profile, dict) else {},
+            "recognized_industries": (multi_industry_business_profile or {}).get("recognized_industries", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "modules": (multi_industry_business_profile or {}).get("modules", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "business_objects": (multi_industry_business_profile or {}).get("business_objects", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "roles": (multi_industry_business_profile or {}).get("roles", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "state_machines": (multi_industry_business_profile or {}).get("state_machines", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "permission_boundaries": (multi_industry_business_profile or {}).get("permission_boundaries", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "data_dependencies": (multi_industry_business_profile or {}).get("data_dependencies", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "industry_oracles": (multi_industry_business_profile or {}).get("industry_oracles", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "risk_domains": (multi_industry_business_profile or {}).get("risk_domains", []) if isinstance(multi_industry_business_profile, dict) else [],
+            "private_leak_check": (multi_industry_business_profile or {}).get("private_leak_check", {}) if isinstance(multi_industry_business_profile, dict) else {},
+        },
+        "universal_defect_mining_summary": (universal_defect_mining or {}).get("summary", {}) if isinstance(universal_defect_mining, dict) else {},
+        "universal_defect_probe_count": len([p for p in probes if p.get("source") == "universal_spec_behavior"]),
+        "business_outcome_validation_summary": (business_outcome_run or business_outcome_profile or {}).get("summary", {}) if isinstance((business_outcome_run or business_outcome_profile), dict) else {},
+        "business_outcome_export_contract_count": ((business_outcome_profile or {}).get("summary") or {}).get("export_contract_count", 0) if isinstance(business_outcome_profile, dict) else 0,
+        "business_outcome_probe_count": len([p for p in probes if p.get("source") == "business_outcome_validation"]),
+        "business_outcome_finding_count": len((business_outcome_run or {}).get("findings") or []) if isinstance(business_outcome_run, dict) else 0,
+        "business_reconciliation_summary": (business_reconciliation_run or business_reconciliation_profile or {}).get("summary", {}) if isinstance((business_reconciliation_run or business_reconciliation_profile), dict) else {},
+        "business_reconciliation_contract_count": ((business_reconciliation_profile or {}).get("summary") or {}).get("reconciliation_contract_count", 0) if isinstance(business_reconciliation_profile, dict) else 0,
+        "business_reconciliation_probe_count": len([p for p in probes if p.get("source") == "business_reconciliation"]),
+        "business_reconciliation_finding_count": len((business_reconciliation_run or {}).get("findings") or []) if isinstance(business_reconciliation_run, dict) else 0,
+        "business_invariant_summary": (business_invariant_run or business_invariant_profile or {}).get("summary", {}) if isinstance((business_invariant_run or business_invariant_profile), dict) else {},
+        "business_invariant_contract_count": ((business_invariant_profile or {}).get("summary") or {}).get("invariant_contract_count", 0) if isinstance(business_invariant_profile, dict) else 0,
+        "business_invariant_probe_count": len([p for p in probes if p.get("source") == "business_invariant_mining"]),
+        "business_invariant_finding_count": len((business_invariant_run or {}).get("findings") or []) if isinstance(business_invariant_run, dict) else 0,
+        "multi_source_reasoning_summary": (multi_source_reasoning_run or multi_source_reasoning_profile or {}).get("summary", {}) if isinstance((multi_source_reasoning_run or multi_source_reasoning_profile), dict) else {},
+        "multi_source_reasoning_contract_count": ((multi_source_reasoning_profile or {}).get("summary") or {}).get("total_contract_count", 0) if isinstance(multi_source_reasoning_profile, dict) else 0,
+        "multi_source_reasoning_probe_count": len([p for p in probes if p.get("source") == "multi_source_business_reasoning"]),
+        "multi_source_reasoning_finding_count": len((multi_source_reasoning_run or {}).get("findings") or []) if isinstance(multi_source_reasoning_run, dict) else 0,
+        "confirmed_bug_memory_count": (((multi_source_reasoning_run or multi_source_reasoning_profile or {}).get("summary") or {}).get("confirmed_bug_memory_count", 0)) if isinstance((multi_source_reasoning_run or multi_source_reasoning_profile), dict) else 0,
+        "confirmed_bug_flywheel_summary": (confirmed_bug_flywheel_profile or {}).get("summary", {}) if isinstance(confirmed_bug_flywheel_profile, dict) else {},
+        "confirmed_bug_flywheel_pattern_count": int((((confirmed_bug_flywheel_profile or {}).get("summary") or {}).get("learning_pattern_count") or 0)) if isinstance(confirmed_bug_flywheel_profile, dict) else 0,
+        "confirmed_bug_flywheel_pending_promotion_count": int((((confirmed_bug_flywheel_profile or {}).get("summary") or {}).get("pending_promotion_count") or 0)) if isinstance(confirmed_bug_flywheel_profile, dict) else 0,
+        "business_lifecycle_summary": (business_lifecycle_run or business_lifecycle_profile or {}).get("summary", {}) if isinstance((business_lifecycle_run or business_lifecycle_profile), dict) else {},
+        "business_lifecycle_contract_count": ((business_lifecycle_profile or {}).get("summary") or {}).get("lifecycle_contract_count", 0) if isinstance(business_lifecycle_profile, dict) else 0,
+        "business_lifecycle_probe_count": len([p for p in probes if p.get("source") == "business_lifecycle_reasoning"]),
+        "business_lifecycle_finding_count": len((business_lifecycle_run or {}).get("findings") or []) if isinstance(business_lifecycle_run, dict) else 0,
+        "business_lifecycle_sandbox_candidate_count": (((business_lifecycle_run or business_lifecycle_profile or {}).get("summary") or {}).get("sandbox_transition_candidate_count", 0)) if isinstance((business_lifecycle_run or business_lifecycle_profile), dict) else 0,
+        "consistency_isolation_summary": (consistency_isolation_run or consistency_isolation_profile or {}).get("summary", {}) if isinstance((consistency_isolation_run or consistency_isolation_profile), dict) else {},
+        "consistency_isolation_contract_count": ((consistency_isolation_profile or {}).get("summary") or {}).get("consistency_contract_count", 0) if isinstance(consistency_isolation_profile, dict) else 0,
+        "consistency_isolation_role_access_contract_count": ((consistency_isolation_profile or {}).get("summary") or {}).get("role_access_contract_count", 0) if isinstance(consistency_isolation_profile, dict) else 0,
+        "consistency_isolation_probe_count": len([p for p in probes if p.get("source") == "consistency_isolation_reasoning"]),
+        "consistency_isolation_finding_count": len((consistency_isolation_run or {}).get("findings") or []) if isinstance(consistency_isolation_run, dict) else 0,
+        "consistency_isolation_sandbox_candidate_count": (((consistency_isolation_run or consistency_isolation_profile or {}).get("summary") or {}).get("sandbox_candidate_count", 0)) if isinstance((consistency_isolation_run or consistency_isolation_profile), dict) else 0,
+        "metamorphic_differential_summary": (metamorphic_differential_run or metamorphic_differential_profile or {}).get("summary", {}) if isinstance((metamorphic_differential_run or metamorphic_differential_profile), dict) else {},
+        "metamorphic_differential_contract_count": ((metamorphic_differential_profile or {}).get("summary") or {}).get("metamorphic_contract_count", 0) if isinstance(metamorphic_differential_profile, dict) else 0,
+        "metamorphic_differential_probe_count": len([p for p in probes if p.get("source") == "metamorphic_differential_reasoning"]),
+        "metamorphic_differential_finding_count": len((metamorphic_differential_run or {}).get("findings") or []) if isinstance(metamorphic_differential_run, dict) else 0,
+        "temporal_data_regression_summary": (temporal_data_regression_run or temporal_data_regression_profile or {}).get("summary", {}) if isinstance((temporal_data_regression_run or temporal_data_regression_profile), dict) else {},
+        "temporal_data_regression_contract_count": ((temporal_data_regression_profile or {}).get("summary") or {}).get("temporal_contract_count", 0) if isinstance(temporal_data_regression_profile, dict) else 0,
+        "temporal_data_regression_probe_count": len([p for p in probes if p.get("source") == "temporal_data_regression_reasoning"]),
+        "temporal_data_regression_finding_count": len((temporal_data_regression_run or {}).get("findings") or []) if isinstance(temporal_data_regression_run, dict) else 0,
+        "temporal_data_regression_baseline_established_count": (((temporal_data_regression_run or temporal_data_regression_profile or {}).get("summary") or {}).get("baseline_established_count", 0)) if isinstance((temporal_data_regression_run or temporal_data_regression_profile), dict) else 0,
+        "business_causality_summary": (business_causality_run or business_causality_profile or {}).get("summary", {}) if isinstance((business_causality_run or business_causality_profile), dict) else {},
+        "business_causality_contract_count": ((business_causality_profile or {}).get("summary") or {}).get("causality_contract_count", 0) if isinstance(business_causality_profile, dict) else 0,
+        "business_causality_journal_balance_contract_count": ((business_causality_profile or {}).get("summary") or {}).get("journal_balance_contract_count", 0) if isinstance(business_causality_profile, dict) else 0,
+        "business_causality_period_rollforward_contract_count": ((business_causality_profile or {}).get("summary") or {}).get("period_rollforward_contract_count", 0) if isinstance(business_causality_profile, dict) else 0,
+        "business_causality_inventory_reservation_contract_count": ((business_causality_profile or {}).get("summary") or {}).get("inventory_reservation_contract_count", 0) if isinstance(business_causality_profile, dict) else 0,
+        "business_causality_probe_count": len([p for p in probes if p.get("source") == "business_causality_conservation"]),
+        "business_causality_finding_count": len((business_causality_run or {}).get("findings") or []) if isinstance(business_causality_run, dict) else 0,
+        "business_population_summary": (business_population_run or business_population_profile or {}).get("summary", {}) if isinstance((business_population_run or business_population_profile), dict) else {},
+        "business_population_contract_count": ((business_population_profile or {}).get("summary") or {}).get("population_contract_count", 0) if isinstance(business_population_profile, dict) else 0,
+        "business_population_probe_count": len([p for p in probes if p.get("source") == "business_population_constraints"]),
+        "business_population_finding_count": len((business_population_run or {}).get("findings") or []) if isinstance(business_population_run, dict) else 0,
+        "business_event_chain_summary": (business_event_chain_run or business_event_chain_profile or {}).get("summary", {}) if isinstance((business_event_chain_run or business_event_chain_profile), dict) else {},
+        "business_event_chain_contract_count": ((business_event_chain_profile or {}).get("summary") or {}).get("event_chain_contract_count", 0) if isinstance(business_event_chain_profile, dict) else 0,
+        "business_event_chain_probe_count": len([p for p in probes if p.get("source") == "business_event_chain_reasoning"]),
+        "business_event_chain_finding_count": len((business_event_chain_run or {}).get("findings") or []) if isinstance(business_event_chain_run, dict) else 0,
+        "business_saga_compensation_summary": (business_saga_compensation_run or business_saga_compensation_profile or {}).get("summary", {}) if isinstance((business_saga_compensation_run or business_saga_compensation_profile), dict) else {},
+        "business_saga_compensation_contract_count": ((business_saga_compensation_profile or {}).get("summary") or {}).get("saga_compensation_contract_count", 0) if isinstance(business_saga_compensation_profile, dict) else 0,
+        "business_saga_compensation_probe_count": len([p for p in probes if p.get("source") == "business_saga_compensation_reasoning"]),
+        "business_saga_compensation_finding_count": len((business_saga_compensation_run or {}).get("findings") or []) if isinstance(business_saga_compensation_run, dict) else 0,
+        "business_assurance_coverage_summary": (business_assurance_coverage_run or business_assurance_coverage_profile or {}).get("summary", {}) if isinstance((business_assurance_coverage_run or business_assurance_coverage_profile), dict) else {},
+        "business_assurance_coverage_probe_count": len([p for p in probes if p.get("source") == "business_assurance_coverage"]),
+        "business_assurance_coverage_finding_count": len((business_assurance_coverage_run or {}).get("findings") or []) if isinstance(business_assurance_coverage_run, dict) else 0,
+        "business_assurance_score": float((((business_assurance_coverage_run or business_assurance_coverage_profile or {}).get("summary") or {}).get("assurance_score") or 0)) if isinstance((business_assurance_coverage_run or business_assurance_coverage_profile), dict) else 0.0,
+        "business_assurance_mutation_kill_rate": float((((business_assurance_coverage_run or business_assurance_coverage_profile or {}).get("summary") or {}).get("modeled_mutation_kill_rate") or 0)) if isinstance((business_assurance_coverage_run or business_assurance_coverage_profile), dict) else 0.0,
+        "business_adaptive_probe_count": len([p for p in probes if p.get("source") == "business_adaptation_layer"]),
+        "enterprise_business_knowledge_center_enabled": bool((enterprise_business_knowledge_asset or {}).get("summary", {}).get("active_source_count", 0)) if isinstance(enterprise_business_knowledge_asset, dict) else False,
+        "enterprise_business_knowledge_source_count": ((enterprise_business_knowledge_asset or {}).get("summary") or {}).get("active_source_count", 0) if isinstance(enterprise_business_knowledge_asset, dict) else 0,
+        "enterprise_business_knowledge_rule_count": ((enterprise_business_knowledge_asset or {}).get("summary") or {}).get("rule_count", 0) if isinstance(enterprise_business_knowledge_asset, dict) else 0,
+        "enterprise_business_knowledge_oracle_count": ((enterprise_business_knowledge_asset or {}).get("summary") or {}).get("oracle_count", 0) if isinstance(enterprise_business_knowledge_asset, dict) else 0,
+        "enterprise_business_knowledge_relationship_count": ((enterprise_business_knowledge_asset or {}).get("summary") or {}).get("relationship_count", 0) if isinstance(enterprise_business_knowledge_asset, dict) else 0,
+        "enterprise_business_knowledge_probe_count": len([p for p in probes if p.get("source") == "enterprise_business_knowledge_asset"]),
+        "multi_industry_business_understanding_enabled": bool(multi_industry_business_profile),
+        "multi_industry_recognized_industries": ((multi_industry_business_profile or {}).get("summary") or {}).get("recognized_industries", []) if isinstance(multi_industry_business_profile, dict) else [],
+        "multi_industry_business_object_count": ((multi_industry_business_profile or {}).get("summary") or {}).get("business_object_count", 0) if isinstance(multi_industry_business_profile, dict) else 0,
+        "multi_industry_state_machine_count": ((multi_industry_business_profile or {}).get("summary") or {}).get("state_machine_count", 0) if isinstance(multi_industry_business_profile, dict) else 0,
+        "multi_industry_oracle_count": ((multi_industry_business_profile or {}).get("summary") or {}).get("oracle_count", 0) if isinstance(multi_industry_business_profile, dict) else 0,
+        "multi_industry_risk_domain_count": ((multi_industry_business_profile or {}).get("summary") or {}).get("risk_domain_count", 0) if isinstance(multi_industry_business_profile, dict) else 0,
+        "multi_industry_business_probe_count": len([p for p in probes if p.get("source") == "multi_industry_business_reasoning"]),
+        "history_informed_probe_count": len([p for p in probes if p.get("source") == "enterprise_history_rag"]),
+        "enterprise_knowledge_probe_count": len([p for p in probes if p.get("source") == "enterprise_knowledge_rag"]),
+        "business_flow_scenario_probe_count": len([p for p in probes if p.get("source") == "enterprise_business_flow_graph"]),
+        "business_flow_execution_summary": (business_flow_execution or {}).get("summary", {}) if isinstance(business_flow_execution, dict) else {},
+        "business_flow_execution_candidate_issue_count": len((business_flow_execution or {}).get("candidate_issues") or []) if isinstance(business_flow_execution, dict) else 0,
+        "replay_evidence_summary": (replay_evidence_sandbox or {}).get("summary", {}) if isinstance(replay_evidence_sandbox, dict) else {},
+        "replay_evidence_packet_count": len((replay_evidence_sandbox or {}).get("evidence_packets") or []) if isinstance(replay_evidence_sandbox, dict) else 0,
+        "replay_evidence_enhanced_issue_count": len((replay_evidence_sandbox or {}).get("candidate_issues_enhanced") or []) if isinstance(replay_evidence_sandbox, dict) else 0,
+        "risk_based_planner_enabled": use_risk_plan,
+        "risk_based_plan_summary": (risk_plan or {}).get("summary", {}) if isinstance(risk_plan, dict) else {},
+        "probe_execution_result": executions,
+        "issues": issues,
+        "suggested_release_blockers": blockers,
+    }
+    # Phase59 turns raw discovery candidates into quality-scored, deduplicated
+    # enterprise defects.  Environment and data-precondition failures are kept
+    # observable but do not inflate the high-value Bug count.
+    try:
+        defect_quality_report = evaluate_defect_quality(issues, project, root)
+        issue_lifecycle, fix_verification_plan = build_issue_lifecycle_and_fix_plan(defect_quality_report, project, root)
+        explainable_assets = build_explainable_test_assets(
+            project, root, enterprise_business_knowledge_asset or {}, probes, defect_quality_report,
+            (enterprise_testops_preflight or {}).get("environment_health") or {},
+        )
+    except Exception:
+        defect_quality_report, issue_lifecycle, fix_verification_plan, explainable_assets = {}, {}, {}, {}
+    data["enterprise_testops_control_plane"] = {
+        "preflight": {
+            "target_environment": ((enterprise_testops_preflight or {}).get("environment_health") or {}).get("target_environment"),
+            "environment_testable": ((enterprise_testops_preflight or {}).get("environment_health") or {}).get("target_testable"),
+            "automatic_data_preparation_ratio": ((enterprise_testops_preflight or {}).get("test_data") or {}).get("automatic_preparation_ratio"),
+            "journey_count": len(((enterprise_testops_preflight or {}).get("journey_graph") or {}).get("journeys") or []),
+        },
+        "defect_quality_summary": (defect_quality_report or {}).get("summary", {}),
+        "issue_lifecycle_summary": (issue_lifecycle or {}).get("summary", {}),
+        "fix_verification_summary": (fix_verification_plan or {}).get("summary", {}),
+        "explainable_asset_counts": {
+            "probe_explanations": len((explainable_assets or {}).get("probe_explanations") or []),
+            "bug_explanations": len((explainable_assets or {}).get("bug_explanations") or []),
+        },
+    }
+    data["metrics"].update({
+        "enterprise_testops_environment_testable": bool(((enterprise_testops_preflight or {}).get("environment_health") or {}).get("target_testable")),
+        "enterprise_testops_data_automatic_preparation_ratio": ((enterprise_testops_preflight or {}).get("test_data") or {}).get("automatic_preparation_ratio", 0.0),
+        "enterprise_testops_journey_count": len(((enterprise_testops_preflight or {}).get("journey_graph") or {}).get("journeys") or []),
+        "enterprise_testops_high_confidence_defect_count": ((defect_quality_report or {}).get("summary") or {}).get("high_confidence_count", 0),
+        "enterprise_testops_environment_problem_count": ((defect_quality_report or {}).get("summary") or {}).get("environment_problem_count", 0),
+        "enterprise_testops_duplicate_compression_rate": ((defect_quality_report or {}).get("summary") or {}).get("duplicate_compression_rate", 0.0),
+    })
+    # Phase74: the Agent Loop is the single persistent control plane for
+    # unexplored business hypotheses, evidence, approval blockers and next
+    # experiments.  Discovery candidates are synchronized as candidates only;
+    # no report issue becomes a confirmed Bug merely by entering the ledger.
+    try:
+        agent_loop = build_agent_discovery_loop(
+            project,
+            root,
+            {"candidate_findings": issues, "max_next_actions": 12, "actor": "real_project_discovery"},
+        )
+    except Exception as exc:
+        agent_loop = {"status": "unavailable", "error": str(exc)}
+    data["agent_discovery_loop"] = {
+        "summary": (agent_loop or {}).get("summary", {}),
+        "canonical_store": (agent_loop or {}).get("canonical_store", {}),
+        "next_best_actions": (agent_loop or {}).get("next_best_actions", []),
+        "governance": (agent_loop or {}).get("governance", {}),
+        "status": (agent_loop or {}).get("status", "ready"),
+    }
+    # Phase90: record normalized candidate outcomes for future coverage-aware
+    # planning. Raw issues remain candidates; no entry is promoted here.
+    try:
+        from .business_risk_coverage_map import BusinessRiskCoverageMap
+        coverage_outcomes = []
+        for issue in issues:
+            coverage_outcomes.append({
+                "entity": issue.get("entity") or issue.get("resource"),
+                "method": (issue.get("request") or {}).get("method") if isinstance(issue.get("request"), dict) else issue.get("method"),
+                "path": (issue.get("request") or {}).get("url") if isinstance(issue.get("request"), dict) else issue.get("path"),
+                "risk_type": issue.get("risk_type"),
+                "verdict": issue.get("verdict") or issue.get("lifecycle_state") or "EVIDENCE_CAPTURED",
+                "reason": issue.get("actual") or issue.get("blocker") or "",
+            })
+        coverage_summary = BusinessRiskCoverageMap(project, root).record_outcomes(coverage_outcomes)
+    except Exception as exc:
+        coverage_summary = {"error": str(exc)[:300]}
+    data["business_risk_coverage_map"] = coverage_summary
+    data["metrics"]["business_risk_coverage_entries"] = int(coverage_summary.get("entry_count", 0) or 0) if isinstance(coverage_summary, dict) else 0
+
+    paths["workspace_dir"].mkdir(parents=True, exist_ok=True)
+    paths["output_dir"].mkdir(parents=True, exist_ok=True)
+    _write_json(paths["workspace_dir"] / "defect_probes.json", {"items": probes})
+    _write_json(paths["workspace_dir"] / "probe_execution_result.json", {"items": executions})
+    _write_json(paths["output_dir"] / "discovered_issues.json", {"items": issues, "metrics": data["metrics"], "risk_distribution": risk_dist})
+    _write_json(paths["output_dir"] / "evidence_bundle.json", {
+        "items": evidence_items,
+        "enterprise_testops": data.get("enterprise_testops_control_plane") or {},
+        "enterprise_business_knowledge": {
+            "asset_id": ((enterprise_business_knowledge_asset or {}).get("asset_id") if isinstance(enterprise_business_knowledge_asset, dict) else None),
+            "evidence_bundle": enterprise_business_knowledge_evidence_bundle or {},
+            "raw_source_payload_not_embedded": True,
+        },
+    })
+    _write_json(paths["output_dir"] / "real_project_defect_data.json", data)
+    (paths["output_dir"] / "bug_drafts.md").write_text(_render_bug_drafts(issues), encoding="utf-8")
+    (paths["output_dir"] / "real_project_defect_report.html").write_text(render_real_project_report(data), encoding="utf-8")
+    return data
+
+
+def _impact_for_risk(risk: str) -> str:
+    return {
+        "permission_bypass": "可能造成后台数据或敏感操作越权。",
+        "idor": "可能造成用户数据泄露或越权操作。",
+        "tenant_isolation": "可能造成跨租户数据泄露。",
+        "coupon_abuse": "可能造成营销资金损失。",
+        "stock_consistency": "可能造成超卖或库存账实不一致。",
+        "payment": "可能造成资损、重复入账或订单状态不一致。",
+        "refund": "可能造成重复退款、超额退款或账务不一致。",
+        "idempotency": "可能造成重复订单、重复扣款或重复库存扣减。",
+        "cross_system": "可能造成订单、库存、客户、财务等跨系统数据不一致。",
+        "cross_system_oracle": "可能造成跨系统同步或对账错误，影响履约和经营决策。",
+        "page_api_oracle": "可能造成页面展示与真实业务数据不一致。",
+        "exception_path": "可能造成非法输入被静默忽略，掩盖业务风险或产生错误结果。",
+        "historical_data_path": "可能造成存量数据丢失、迁移损坏或历史记录不可读取。",
+        "async_result_consistency": "可能造成异步任务显示成功但没有结果、文件或业务产物，影响导入导出、同步和批处理。",
+        "async_idempotency": "可能造成重复回调、重复入账、重复文件或重复同步结果。",
+        "read_model_consistency": "可能造成缓存、索引、搜索、看板或读模型与事实源不一致。",
+        "read_model_staleness": "可能造成关键业务变更长期未在缓存、索引或页面生效。",
+        "read_stability": "可能造成无业务变更下页面或查询结果短时间内漂移。",
+        "business_cohort_limit": "可能造成额度、预算、库存、名额或次数被拆分绕过，带来资损或资源超配。",
+        "business_interval_overlap": "可能造成房间、人员、库存、车辆或预约资源被重复占用。",
+        "business_composite_duplicate": "可能造成同一业务事实以不同主键重复写入，引发重复扣费、重复履约或重复报表。",
+        "business_batch_integrity": "可能造成批量导入、同步、迁移或任务显示成功但实际漏处理、重复处理或统计失真。",
+        "business_approval_threshold": "可能造成高风险、高金额业务绕过审批门禁，带来内控与资金风险。",
+    }.get(risk, "可能影响核心业务质量，需要 QA 结合证据确认。")
+
+
+def _fix_for_risk(risk: str) -> str:
+    return {
+        "permission_bypass": "增加 RBAC / ABAC 权限校验，并在后端强制执行。",
+        "idor": "校验资源归属，避免仅依赖前端隐藏入口。",
+        "tenant_isolation": "所有查询和写操作增加 tenant_id 隔离条件。",
+        "coupon_abuse": "校验优惠券归属、有效期、门槛和单次使用限制。",
+        "stock_consistency": "下单链路增加库存锁定、扣减、回滚和并发保护。",
+        "payment": "校验支付金额一致性和回调幂等键。",
+        "refund": "校验退款状态机、退款上限和幂等处理。",
+        "idempotency": "使用幂等键保护订单、支付、退款和库存变更。",
+        "cross_system_oracle": "统一跨系统主键、同步幂等与对账口径，并将 Oracle 纳入持续回归。",
+        "page_api_oracle": "统一页面指标与 API 绑定口径，避免缓存/聚合和展示来源漂移。",
+        "exception_path": "对非法参数返回明确 4xx 错误，禁止静默回退到未过滤查询。",
+        "historical_data_path": "建立迁移映射和历史兼容回归，确保关键历史字段与记录可读取。",
+        "async_result_consistency": "统一任务成功终态与结果产物写入，补充结果完整性校验、失败诊断和回归 Oracle。",
+        "async_idempotency": "为回调、消息消费和任务完成引入幂等键、去重表和唯一约束，并在沙箱做并发回归。",
+        "read_model_consistency": "修复消息投递、投影更新和缓存失效流程，并持续对账事实源与读模型。",
+        "read_model_staleness": "设置最终一致性 SLA、延迟监控和超时补偿，避免关键变更长期滞后。",
+        "read_stability": "梳理缓存键、失效条件与多副本读路径，避免同一查询无故返回不同业务字段。",
+        "business_cohort_limit": "在数据库与服务层同时执行按主体/窗口的聚合限额，配合锁、幂等键和审批门禁防止拆分绕过。",
+        "business_interval_overlap": "引入区间排他约束或资源占用锁，并在提交时按资源与时间区间原子校验容量。",
+        "business_composite_duplicate": "为真实业务键建立复合唯一索引，并在服务层使用幂等键与重复写入冲突处理。",
+        "business_batch_integrity": "将 total、processed、success、failed 置于同一可验证状态机，终态前强制做算术闭合和明细对账。",
+        "business_approval_threshold": "在后端金额门禁、状态机与审批凭据校验中强制执行阈值规则，不能只依赖前端流程。",
+    }.get(risk, "补充后端业务规则校验，并增加回归探针。")
+
+
+def _render_bug_drafts(issues: list[dict[str, Any]]) -> str:
+    if not issues:
+        return "# 缺陷草稿\n\n本次未生成疑似缺陷。\n"
+    parts = ["# 真实项目疑似缺陷草稿\n"]
+    for issue in issues:
+        parts.append(f"## {issue.get('severity')} {issue.get('title')}\n")
+        parts.append(f"- 风险类型：{issue.get('risk_type')}\n- 置信度：{issue.get('confidence')}\n- 期望：{issue.get('expected')}\n- 实际：{issue.get('actual')}\n- 影响：{issue.get('business_impact')}\n- 建议：{issue.get('suggested_fix')}\n")
+    return "\n".join(parts)
+
+
+def render_real_project_report(data: dict[str, Any]) -> str:
+    metrics = data.get("metrics", {})
+    cards = "".join(f"<div class='card'><span>{_html_escape(k)}</span><b>{_html_escape(v)}</b></div>" for k, v in metrics.items())
+    issues = data.get("issues", [])
+    rows = []
+    for i in issues[:80]:
+        rows.append(f"<tr><td>{_html_escape(i.get('severity'))}</td><td>{_html_escape(i.get('title'))}</td><td>{_html_escape(i.get('risk_type'))}</td><td>{_html_escape(i.get('confidence'))}</td><td>{_html_escape(i.get('actual'))}</td></tr>")
+    risk = "".join(f"<li>{_html_escape(k)}：{_html_escape(v)}</li>" for k, v in (data.get("risk_distribution") or {}).items())
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>真实项目缺陷发现报告</title>
+<style>body{{font-family:Segoe UI,Microsoft YaHei,sans-serif;background:#f6f8fb;color:#111827;padding:28px}}.hero,.panel{{background:white;border:1px solid #e5e7eb;border-radius:18px;padding:22px;margin-bottom:18px;box-shadow:0 8px 24px #0001}}.grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}}.card{{border:1px solid #e5e7eb;border-radius:14px;padding:14px;background:#fafafa}}.card span{{display:block;color:#6b7280;font-size:12px}}.card b{{font-size:22px}}table{{width:100%;border-collapse:collapse}}td,th{{padding:10px;border-bottom:1px solid #e5e7eb;text-align:left}}.badge{{display:inline-block;padding:4px 10px;border-radius:999px;background:#ecfeff;color:#155e75}}</style></head><body>
+<section class='hero'><span class='badge'>Real Project Discovery</span><h1>{_html_escape(data.get('project_name'))}</h1><p>真实项目模式不使用 ground truth，不展示 recall / precision。本报告展示疑似高价值 Bug、证据完整度、风险分布和 QA 待确认项。</p><p>发现模式：<b>{_html_escape(data.get('mode'))}</b> · 生成时间：{_html_escape(data.get('generated_at'))}</p></section>
+<section class='panel'><h2>质量概览</h2><div class='grid'>{cards}</div></section>
+<section class='panel'><h2>风险分布</h2><ul>{risk or '<li>暂无风险</li>'}</ul></section>
+<section class='panel'><h2>业务适配与链路图谱</h2><p>业务域：{_html_escape(', '.join([str(x.get('domain')) for x in ((data.get('business_adaptation_profile') or {}).get('selected_domains') or [])]) or 'auto')} · 自适应探针数：{_html_escape(data.get('business_adaptive_probe_count', 0))} · 企业知识库探针数：{_html_escape(data.get('enterprise_knowledge_probe_count', 0))} · 通用规格行为探针数：{_html_escape(data.get('universal_defect_probe_count', 0))} · 业务结果审计探针数：{_html_escape(data.get('business_outcome_probe_count', 0))} · 业务结果问题：{_html_escape(data.get('business_outcome_finding_count', 0))} · 业务对账探针数：{_html_escape(data.get('business_reconciliation_probe_count', 0))} · 业务对账问题：{_html_escape(data.get('business_reconciliation_finding_count', 0))} · 业务不变量探针数：{_html_escape(data.get('business_invariant_probe_count', 0))} · 业务不变量问题：{_html_escape(data.get('business_invariant_finding_count', 0))} · 多源推理契约：{_html_escape(data.get('multi_source_reasoning_contract_count', 0))} · 多源推理问题：{_html_escape(data.get('multi_source_reasoning_finding_count', 0))} · 生命周期契约：{_html_escape(data.get('business_lifecycle_contract_count', 0))} · 生命周期问题：{_html_escape(data.get('business_lifecycle_finding_count', 0))} · 生命周期沙箱候选：{_html_escape(data.get('business_lifecycle_sandbox_candidate_count', 0))} · 一致性/隔离契约：{_html_escape(data.get('consistency_isolation_contract_count', 0))} · 角色权限契约：{_html_escape(data.get('consistency_isolation_role_access_contract_count', 0))} · 一致性/隔离问题：{_html_escape(data.get('consistency_isolation_finding_count', 0))} · 一致性沙箱候选：{_html_escape(data.get('consistency_isolation_sandbox_candidate_count', 0))} · 变形差分契约：{_html_escape(data.get('metamorphic_differential_contract_count', 0))} · 变形差分问题：{_html_escape(data.get('metamorphic_differential_finding_count', 0))} · 时间数据回归契约：{_html_escape(data.get('temporal_data_regression_contract_count', 0))} · 时间数据回归问题：{_html_escape(data.get('temporal_data_regression_finding_count', 0))} · 业务因果契约：{_html_escape(data.get('business_causality_contract_count', 0))} · 账务双分录契约：{_html_escape(data.get('business_causality_journal_balance_contract_count', 0))} · 账期滚动契约：{_html_escape(data.get('business_causality_period_rollforward_contract_count', 0))} · 库存预占契约：{_html_escape(data.get('business_causality_inventory_reservation_contract_count', 0))} · 业务因果问题：{_html_escape(data.get('business_causality_finding_count', 0))} · 群体业务契约：{_html_escape(data.get('business_population_contract_count', 0))} · 群体业务问题：{_html_escape(data.get('business_population_finding_count', 0))} · 事件链契约：{_html_escape(data.get('business_event_chain_contract_count', 0))} · 事件链问题：{_html_escape(data.get('business_event_chain_finding_count', 0))} · Saga补偿契约：{_html_escape(data.get('business_saga_compensation_contract_count', 0))} · Saga补偿问题：{_html_escape(data.get('business_saga_compensation_finding_count', 0))} · 已确认缺陷记忆：{_html_escape(data.get('confirmed_bug_memory_count', 0))} · 多接口链路探针数：{_html_escape(data.get('business_flow_scenario_probe_count', 0))} · 链路断言候选问题：{_html_escape(data.get('business_flow_execution_candidate_issue_count', 0))} · Phase40证据包：{_html_escape(data.get('replay_evidence_packet_count', 0))}</p></section>
+<section class='panel'><h2>企业业务知识中心</h2><p>接入资料：{_html_escape(data.get('enterprise_business_knowledge_source_count', 0))} · 规则库：{_html_escape(data.get('enterprise_business_knowledge_rule_count', 0))} · Oracle：{_html_escape(data.get('enterprise_business_knowledge_oracle_count', 0))} · 资料到验证关联：{_html_escape(data.get('enterprise_business_knowledge_relationship_count', 0))} · 知识探针：{_html_escape(data.get('enterprise_business_knowledge_probe_count', 0))}</p><p>验证链路保留 PRD/MRD/接口/表结构/权限矩阵/历史缺陷的版本与来源指纹；原始资料不嵌入缺陷报告和证据摘要。</p></section>
+<section class='panel'><h2>企业 TestOps 控制平面</h2><p>目标环境可测：{_html_escape((data.get('enterprise_testops_control_plane') or {}).get('preflight', {}).get('environment_testable'))} · 自动数据准备比例：{_html_escape((data.get('enterprise_testops_control_plane') or {}).get('preflight', {}).get('automatic_data_preparation_ratio'))} · 跨系统 Journey：{_html_escape((data.get('enterprise_testops_control_plane') or {}).get('preflight', {}).get('journey_count'))} · 高置信缺陷：{_html_escape((data.get('enterprise_testops_control_plane') or {}).get('defect_quality_summary', {}).get('high_confidence_count'))} · 环境问题（不计入业务 Bug）：{_html_escape((data.get('enterprise_testops_control_plane') or {}).get('defect_quality_summary', {}).get('environment_problem_count'))} · 去重压缩率：{_html_escape((data.get('enterprise_testops_control_plane') or {}).get('defect_quality_summary', {}).get('duplicate_compression_rate'))}</p><p>探针与缺陷均可追溯到企业资料、接口、状态机、权限边界和业务 Oracle；数据库/审计/异步状态验证以受控适配器或只读查询接入。</p></section>
+<section class='panel'><h2>多行业业务理解</h2><p>识别行业：{_html_escape(', '.join((data.get('multi_industry_business_profile') or {}).get('summary', {}).get('recognized_industries') or []) or 'unknown_general_business')} · 对象：{_html_escape((data.get('multi_industry_business_profile') or {}).get('summary', {}).get('business_object_count', 0))} · 状态机：{_html_escape((data.get('multi_industry_business_profile') or {}).get('summary', {}).get('state_machine_count', 0))} · 权限边界：{_html_escape((data.get('multi_industry_business_profile') or {}).get('summary', {}).get('permission_boundary_count', 0))} · 行业 Oracle：{_html_escape((data.get('multi_industry_business_profile') or {}).get('summary', {}).get('oracle_count', 0))} · 高价值风险域：{_html_escape((data.get('multi_industry_business_profile') or {}).get('summary', {}).get('risk_domain_count', 0))} · 行业探针：{_html_escape(data.get('multi_industry_business_probe_count', 0))}</p></section>
+<section class='panel'><h2>疑似高价值 Bug</h2><table><thead><tr><th>等级</th><th>标题</th><th>风险</th><th>置信度</th><th>实际结果</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="5">暂无疑似缺陷</td></tr>'}</tbody></table></section>
+<section class='panel'><h2>下一步</h2><p>请进入 QA 反馈评审，确认有效 / 误报 / 重复 / 低价值，并把反馈用于下一轮策略增强。</p></section></body></html>"""
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = argv or []
+    project = os.environ.get("REAL_PROJECT_ID") or (argv[0] if argv else "real_project_demo")
+    data = run_real_project_discovery(project)
+    print(json.dumps({"ok": True, "project_id": data.get("project_id"), "metrics": data.get("metrics")}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,29 @@
+{
+  "temporal_data_regression_execution_mode": "safe_live",
+  "temporal_data_regression_reasoning": {
+    "max_records": 300,
+    "max_response_bytes": 3000000,
+    "contracts": [
+      {
+        "path": "/orders",
+        "identity_fields": ["order_id"],
+        "sample_query": {
+          "status": "completed"
+        },
+        "required_fields": ["order_id", "legacy_order_no", "currency", "amount", "status"],
+        "immutable_fields": ["source_system", "external_order_id", "legacy_order_no", "currency"],
+        "numeric_fields": ["amount", "tax_amount", "quantity"],
+        "enum_fields": {
+          "status": ["created", "paid", "shipped", "completed", "cancelled"]
+        },
+        "canary_identities": ["legacy-order-0001", "legacy-order-0002"],
+        "minimum_records": 20,
+        "presence_floor": 0.85,
+        "presence_drop_delta": 0.2,
+        "max_immutable_change_ratio": 0.25,
+        "scale_factors": [0.01, 0.1, 10, 100, 1000],
+        "numeric_scale_tolerance": 0.12
+      }
+    ]
+  }
+}

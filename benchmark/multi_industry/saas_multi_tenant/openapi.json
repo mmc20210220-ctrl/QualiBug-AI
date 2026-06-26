@@ -1,0 +1,27 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "saas_multi_tenant",
+    "version": "1"
+  },
+  "paths": {
+    "/tenants/{tenant_id}/subscriptions": {
+      "get": {
+        "summary": "租户数据严格隔离；订阅到期后功能不可访问；管理员权限按租户范围限制。",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      },
+      "post": {
+        "summary": "租户数据严格隔离；订阅到期后功能不可访问；管理员权限按租户范围限制。",
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    }
+  }
+}

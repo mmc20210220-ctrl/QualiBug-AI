@@ -1,0 +1,271 @@
+{
+  "phase": "phase76_agent_business_flow_orchestrator",
+  "title": "Agent Business-Flow Orchestrator & Evidence Dispatch",
+  "generated_at_utc": "2026-06-24T07:12:17+00:00",
+  "generated_by": "python -m aitestops.cli verify-release",
+  "overall_status": "failed",
+  "release_ready": false,
+  "completion_blockers": [],
+  "scope": {
+    "shared_design_system": "ai_test_asset_center/product_ui.py",
+    "unified_pages": [
+      "Enterprise Pilot Operations Center",
+      "Enterprise TestOps Control Center",
+      "Enterprise Business Knowledge Center",
+      "Release Risk Dashboard",
+      "Multi-industry Benchmark"
+    ],
+    "private_service_routes": [
+      "/dashboard",
+      "/control-plane",
+      "/knowledge",
+      "/release",
+      "/benchmark"
+    ],
+    "read_only_api_routes": [
+      "/api/pilot/overview",
+      "/api/pilot/tasks",
+      "/api/control-plane/overview",
+      "/api/knowledge/asset",
+      "/api/release/dashboard",
+      "/api/benchmark/report"
+    ]
+  },
+  "engineering_constraints": {
+    "new_frontend_framework": false,
+    "new_external_ui_dependency": false,
+    "preserves_existing_permissions": true,
+    "preserves_approval_and_audit": true,
+    "preserves_production_write_block": true,
+    "credential_storage": "references_only"
+  },
+  "validation": {
+    "compileall": "passed",
+    "full_test_suite": "failed",
+    "product_ui_tests": "failed",
+    "customer_visible_text": "passed",
+    "private_service_views": "dashboard, control-plane, knowledge, release, benchmark returned 200 with shared UI shell",
+    "private_service_read_only_apis": "pilot, control-plane, knowledge, release, benchmark verified locally",
+    "windows_sqlite_cleanup_regression": "not_proven"
+  },
+  "checks": [
+    {
+      "name": "compileall",
+      "passed": true,
+      "command": [
+        "D:\\anaconda3\\python.exe",
+        "-m",
+        "compileall",
+        "aitestops",
+        "ai_test_asset_center",
+        "benchmark_evaluator",
+        "demo_system",
+        "enterprise_bug_factory",
+        "tests",
+        "-q"
+      ],
+      "duration_seconds": 4.016,
+      "details": {
+        "returncode": 0
+      },
+      "stdout_tail": "",
+      "stderr_tail": ""
+    },
+    {
+      "name": "pytest",
+      "passed": false,
+      "command": [
+        "D:\\anaconda3\\python.exe",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "duration_seconds": 900.36,
+      "details": {
+        "error": "timeout",
+        "timeout_seconds": 900
+      },
+      "stdout_tail": "........................................................................ [ 22%]\n.......................................................................s [ 45%]\n.EE.E.EE...........................F.F",
+      "stderr_tail": ""
+    },
+    {
+      "name": "product_ui_tests",
+      "passed": false,
+      "command": [
+        "D:\\anaconda3\\python.exe",
+        "-m",
+        "pytest",
+        "tests/test_product_ui.py",
+        "-q"
+      ],
+      "duration_seconds": 6.406,
+      "details": {
+        "returncode": 1
+      },
+      "stdout_tail": "e=\\'upload-item\\';\\n        item.innerHTML=\\'<span class=file-icon>\\'+file.name.split(\\'.\\').pop().toUpperCase().slice(0,4)+\\'</span><div class=file-info><span>\\'+file.name+\\'</span><small>上传中...</small></div>\\';\\n        status.appendChild(item);\\n        uploadFile(file,item);\\n      }\\n    }\\n    async function uploadFile(file,item){\\n      try{\\n        var b64=await new Promise(function(resolve,reject){var r=new FileReader();r.onload=function(){resolve(r.result.split(\\',\\')[1])};r.onerror=reject;r.readAsDataURL(file)});\\n        var resp=await fetch(\\'/api/knowledge/ingest\\',{method:\\'POST\\',headers:{\\'Content-Type\\':\\'application/json\\'},body:JSON.stringify({project_id:\\'ui_demo\\',type:file.name.endsWith(\\'.yaml\\')||file.name.endsWith(\\'.json\\')?\\'openapi\\':\\'prd\\',filename:file.name,content:b64})});\\n        var r=await resp.json();\\n        if(r.ok){item.className=\\'upload-item success\\';item.querySelector(\\'small\\').textContent=\\'\\\\u2713 \\'+r.message}\\n        else{item.className=\\'upload-item error\\';item.querySelector(\\'small\\').textContent=\\'\\\\u2717 \\'+(r.message||\\'Failed\\')}\\n      }catch(e){item.className=\\'upload-item error\\';item.querySelector(\\'small\\').textContent=\\'\\\\u2717 \\'+e.message}\\n      setTimeout(function(){location.reload()},2500);\\n    }\\n  }\\n})();\\n</script>\\n</body>\\n</html>'\n\ntests\\test_product_ui.py:31: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_product_ui.py::ProductUiTests::test_shared_shell_has_private_enterprise_navigation_and_safe_export\n1 failed, 2 passed in 0.85s\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "customer_text_quality",
+      "passed": true,
+      "command": [],
+      "duration_seconds": 0.031,
+      "details": {
+        "files_checked": [
+          "README.md",
+          "DELIVERY_SCOPE.md",
+          "PHASE68_RELEASE_NOTES.md",
+          "PHASE68_VERIFICATION.md",
+          "PHASE69_RELEASE_NOTES.md",
+          "PHASE69_VERIFICATION.md",
+          "PHASE70_RELEASE_NOTES.md",
+          "PHASE70_VERIFICATION.md",
+          "PHASE71_RELEASE_NOTES.md",
+          "PHASE71_VERIFICATION.md",
+          "PHASE71_DEEP_ANALYSIS.md",
+          "PHASE71_PACKAGE_RECEIPT.md",
+          "PHASE72_RELEASE_NOTES.md",
+          "PHASE72_VERIFICATION.md",
+          "PHASE72_PACKAGE_RECEIPT.md",
+          "PHASE73_RELEASE_NOTES.md",
+          "PHASE73_VERIFICATION.md",
+          "PHASE73_PACKAGE_RECEIPT.md",
+          "PHASE74_RELEASE_NOTES.md",
+          "PHASE74_VERIFICATION.md",
+          "PHASE74_PACKAGE_RECEIPT.md",
+          "PHASE75_RELEASE_NOTES.md",
+          "PHASE75_VERIFICATION.md",
+          "PHASE75_PACKAGE_RECEIPT.md",
+          "PHASE76_RELEASE_NOTES.md",
+          "PHASE76_VERIFICATION.md",
+          "PHASE76_PACKAGE_RECEIPT.md",
+          "PHASE61_RELEASE_NOTES.md",
+          "PHASE65_RELEASE_MANIFEST.json",
+          "PHASE64_RELEASE_NOTES.md",
+          "PHASE64_RELEASE_MANIFEST.json",
+          "PHASE65_RELEASE_NOTES.md",
+          "PHASE65_RELEASE_MANIFEST.json",
+          "docs/PHASE65_FINANCIAL_LEDGER_CONSERVATION.md",
+          "docs/PHASE64_ROLE_ACCESS_BOUNDARY.md",
+          "docs/PHASE70_INVENTORY_RESERVATION_CONSERVATION.md",
+          "docs/PHASE71_PROJECT_SCOPE_ISOLATION.md",
+          "docs/PHASE72_WORLD_MODEL_CONCURRENCY_LEARNING.md",
+          "docs/PHASE74_AGENT_DISCOVERY_LOOP.md",
+          "docs/PHASE75_AGENT_EXPERIMENT_COMPILER.md",
+          "docs/PHASE76_AGENT_BUSINESS_FLOW_ORCHESTRATOR.md",
+          ".env.local.example",
+          ".github/workflows/release-verify.yml",
+          "aitestops/cli.py",
+          "aitestops/release_verifier.py",
+          "ai_test_asset_center/private_pilot_service.py",
+          "ai_test_asset_center/product_ui.py",
+          "deploy/docker-compose.private.yml",
+          "deploy/private.env.example",
+          "docs/PHASE61_PRODUCT_UI.md",
+          "docs/CI_RELEASE_VERIFICATION.md",
+          "docs/GA_READINESS_AUDIT.md",
+          "docs/OPERATIONS_RUNBOOK.md",
+          "deploy/README.md",
+          "requirements-optional.txt"
+        ],
+        "findings": [],
+        "finding_count": 0
+      },
+      "stdout_tail": "",
+      "stderr_tail": ""
+    },
+    {
+      "name": "private_service_smoke",
+      "passed": true,
+      "command": [],
+      "duration_seconds": 2.984,
+      "details": {
+        "statuses": {
+          "/dashboard": 200,
+          "/control-plane": 200,
+          "/knowledge": 200,
+          "/release": 200,
+          "/benchmark": 200,
+          "/api/pilot/overview": 200,
+          "/api/pilot/tasks": 200,
+          "/api/control-plane/overview": 200,
+          "/api/knowledge/asset": 200,
+          "/api/release/dashboard": 200,
+          "/api/benchmark/report": 200
+        },
+        "shell_checks": {
+          "/dashboard": true,
+          "/control-plane": true,
+          "/knowledge": true,
+          "/release": true,
+          "/benchmark": true
+        },
+        "shell_missing_tokens": {
+          "/dashboard": [],
+          "/control-plane": [],
+          "/knowledge": [],
+          "/release": [],
+          "/benchmark": []
+        },
+        "shell_forbidden_tokens": {
+          "/dashboard": [],
+          "/control-plane": [],
+          "/knowledge": [],
+          "/release": [],
+          "/benchmark": []
+        },
+        "required_shell_tokens": [
+          "data-product-ui='phase61-product-ui'",
+          "class='app-shell'",
+          "class='sidebar'",
+          "class='topbar'",
+          "class='content'",
+          "class='hero'",
+          "data-download",
+          "href='/dashboard?project=",
+          "href='/knowledge?project=",
+          "href='/control-plane?project=",
+          "href='/release?project=",
+          "href='/benchmark?project=",
+          "QualiBug"
+        ],
+        "forbidden_shell_tokens": [
+          "X-QualiBug-Actor':'admin",
+          "\"X-QualiBug-Actor\":\"admin\"",
+          "X-QualiBug-Role':'admin",
+          "\"X-QualiBug-Role\":\"admin\""
+        ],
+        "page_text_findings": [],
+        "page_text_finding_count": 0,
+        "route_count": 11
+      },
+      "stdout_tail": "",
+      "stderr_tail": ""
+    }
+  ],
+  "delivery_evidence": [
+    "DELIVERY_SCOPE.md",
+    "PHASE71_RELEASE_NOTES.md",
+    "PHASE71_VERIFICATION.md",
+    "PHASE71_DEEP_ANALYSIS.md",
+    "PHASE71_PACKAGE_RECEIPT.md",
+    "PHASE72_RELEASE_NOTES.md",
+    "PHASE72_VERIFICATION.md",
+    "PHASE72_PACKAGE_RECEIPT.md",
+    "docs/PHASE71_PROJECT_SCOPE_ISOLATION.md",
+    "docs/PHASE72_WORLD_MODEL_CONCURRENCY_LEARNING.md",
+    "PHASE73_RELEASE_NOTES.md",
+    "PHASE73_VERIFICATION.md",
+    "PHASE73_PACKAGE_RECEIPT.md",
+    "PHASE74_RELEASE_NOTES.md",
+    "PHASE74_VERIFICATION.md",
+    "PHASE74_PACKAGE_RECEIPT.md",
+    "docs/PHASE74_AGENT_DISCOVERY_LOOP.md",
+    "PHASE75_RELEASE_NOTES.md",
+    "PHASE75_VERIFICATION.md",
+    "PHASE75_PACKAGE_RECEIPT.md",
+    "docs/PHASE75_AGENT_EXPERIMENT_COMPILER.md",
+    "docs/GA_READINESS_AUDIT.md"
+  ],
+  "delivery_boundary": "No GitHub upload. Runtime outputs, local demo data, caches, logs, databases, credentials and private benchmark ground truth are excluded."
+}

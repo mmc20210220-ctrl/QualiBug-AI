@@ -1,0 +1,70 @@
+{
+  "business_saga_compensation_execution_mode": "safe_live",
+  "business_saga_compensation_reasoning": {
+    "max_records": 2000,
+    "max_pages": 12,
+    "contracts": [
+      {
+        "type": "compensation_coverage",
+        "source_path": "/orders",
+        "source_identity_fields": ["order_id"],
+        "source_status_field": "status",
+        "trigger_states": ["cancelled", "failed", "refunded"],
+        "compensation_path": "/refunds",
+        "compensation_foreign_key": "order_id",
+        "compensation_status_field": "status",
+        "completed_compensation_states": ["completed", "succeeded"],
+        "min_count": 1,
+        "max_count": 1
+      },
+      {
+        "type": "compensation_amount",
+        "source_path": "/orders",
+        "source_identity_fields": ["order_id"],
+        "source_status_field": "status",
+        "trigger_states": ["cancelled", "refunded"],
+        "source_amount_field": "refundable_amount",
+        "compensation_path": "/refunds",
+        "compensation_foreign_key": "order_id",
+        "compensation_status_field": "status",
+        "completed_compensation_states": ["completed"],
+        "compensation_amount_field": "refund_amount",
+        "amount_relation": "sum_equal",
+        "tolerance": 0.01
+      },
+      {
+        "type": "residual_effect_active",
+        "source_path": "/orders",
+        "source_identity_fields": ["order_id"],
+        "source_status_field": "status",
+        "trigger_states": ["cancelled", "failed"],
+        "residual_path": "/inventory-reservations",
+        "residual_foreign_key": "order_id",
+        "residual_status_field": "status",
+        "active_residual_states": ["reserved", "locked", "allocated"]
+      },
+      {
+        "type": "saga_terminal_state",
+        "source_path": "/orders",
+        "source_identity_fields": ["order_id"],
+        "source_status_field": "status",
+        "trigger_states": ["cancelled", "failed"],
+        "saga_path": "/sagas",
+        "saga_foreign_key": "order_id",
+        "saga_status_field": "status",
+        "terminal_saga_states": ["compensated", "rolled_back", "cancelled", "failed"]
+      },
+      {
+        "type": "compensation_stale",
+        "source_path": "/orders",
+        "source_identity_fields": ["order_id"],
+        "compensation_path": "/refunds",
+        "compensation_foreign_key": "order_id",
+        "compensation_status_field": "status",
+        "pending_compensation_states": ["pending", "processing", "retrying"],
+        "compensation_time_field": "updated_at",
+        "max_pending_seconds": 1800
+      }
+    ]
+  }
+}

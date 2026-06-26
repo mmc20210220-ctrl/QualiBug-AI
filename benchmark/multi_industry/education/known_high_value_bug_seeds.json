@@ -1,0 +1,12 @@
+{
+  "bugs": [
+    {
+      "risk_type": "industry_enrollment_capacity",
+      "severity": "P0"
+    },
+    {
+      "risk_type": "industry_grade_integrity",
+      "severity": "P0"
+    }
+  ]
+}

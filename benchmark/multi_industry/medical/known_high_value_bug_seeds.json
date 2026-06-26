@@ -1,0 +1,12 @@
+{
+  "bugs": [
+    {
+      "risk_type": "industry_sensitive_data_access",
+      "severity": "P0"
+    },
+    {
+      "risk_type": "industry_prescription_authorization",
+      "severity": "P0"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "phase": "phase54_business_saga_compensation_reasoning",
+  "title": "Saga Compensation and Rollback Integrity Engine",
+  "new_modules": [
+    "ai_test_asset_center/business_saga_compensation_reasoning.py"
+  ],
+  "integrations": [
+    "ai_test_asset_center/risk_based_probe_planner.py",
+    "ai_test_asset_center/real_project_defect_discovery.py"
+  ],
+  "tests": [
+    "tests/test_business_saga_compensation_reasoning.py"
+  ],
+  "docs": [
+    "docs/PHASE54_SAGA_COMPENSATION_REASONING.md",
+    "examples/business_saga_compensation_reasoning_config.example.json"
+  ],
+  "execution_safety": {
+    "safe_live_get_only": true,
+    "writes_disabled": true,
+    "retry_rollback_and_cancel_races": "sandbox_required",
+    "raw_business_rows_persisted": false,
+    "credentials_persisted": false
+  }
+}

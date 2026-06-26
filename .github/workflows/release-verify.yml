@@ -1,0 +1,28 @@
+name: Release Verify
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Compile check
+        run: python -m compileall -q aitestops ai_test_asset_center benchmark_evaluator demo_system enterprise_bug_factory
+      - name: Targeted regression tests
+        run: |
+          python -m pytest tests/test_phase92a_evidence_bridge.py tests/test_phase94abcd_bug_discovery_engine.py -q
+          python -m pytest tests/test_discovery_engine_verifier_quality.py tests/test_grounded_probe_executor.py tests/test_blind_project_runner.py -q
+      - name: Build clean release archive
+        run: python build_release.py --output build/QualiBug_V11_PRODUCTION_FINAL_CLEAN.zip

@@ -1,0 +1,156 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Enterprise Bug Factory Shop",
+    "version": "1.0"
+  },
+  "paths": {
+    "/login": {
+      "post": {
+        "summary": "登录获取 token",
+        "requestBody": {},
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/products": {
+      "get": {
+        "summary": "商品列表",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/products/{product_id}": {
+      "get": {
+        "summary": "商品详情",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/cart/apply-coupon": {
+      "post": {
+        "summary": "应用优惠券",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/orders": {
+      "post": {
+        "summary": "创建订单",
+        "responses": {
+          "201": {
+            "description": "Created"
+          }
+        }
+      }
+    },
+    "/orders/{order_id}": {
+      "get": {
+        "summary": "订单详情",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/orders/{order_id}/cancel": {
+      "post": {
+        "summary": "取消订单",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/payments": {
+      "post": {
+        "summary": "订单支付",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/payments/callback": {
+      "post": {
+        "summary": "支付回调",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/refunds": {
+      "post": {
+        "summary": "退款",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/admin/orders": {
+      "get": {
+        "summary": "管理后台订单列表",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/admin/products/{product_id}": {
+      "post": {
+        "summary": "管理后台修改商品",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/tenant/orders": {
+      "get": {
+        "summary": "租户订单列表",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/reset": {
+      "post": {
+        "summary": "重置演示数据",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  }
+}

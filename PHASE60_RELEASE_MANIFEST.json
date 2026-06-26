@@ -1,0 +1,37 @@
+{
+  "phase": "phase60_enterprise_pilot_runtime",
+  "title": "Enterprise Pilot Runtime & Private Deployment",
+  "scope": [
+    "project/workspace isolation",
+    "connector registry and export ingestion",
+    "persistent task orchestration and idempotency",
+    "independent approvals",
+    "private HTTP entrypoint and Chinese pilot dashboard",
+    "private deployment templates",
+    "pilot readiness scorecard"
+  ],
+  "reused_modules": [
+    "enterprise_knowledge_center",
+    "enterprise_testops_control_plane",
+    "release_risk_dashboard",
+    "real_project_defect_discovery"
+  ],
+  "security_boundaries": [
+    "credential references only",
+    "localhost default binding",
+    "trusted reverse proxy identity headers",
+    "production write/data setup/direct discovery blocked",
+    "sandbox data setup plan only",
+    "hash-chained audit log"
+  ],
+  "verification": {
+    "phase60_tests": "5/5 passed",
+    "full_regression": "68/68 passed",
+    "python_compile_check": "passed",
+    "safe_local_pilot_demo": "passed",
+    "demo_network_requests": 0,
+    "protected_environment_execution": "blocked",
+    "archive_integrity": "passed"
+  },
+  "github_sync": "disabled_by_user"
+}

@@ -1,0 +1,75 @@
+{
+  "business_event_chain_execution_mode": "safe_live",
+  "business_event_chain_reasoning": {
+    "max_records": 3000,
+    "max_pages": 12,
+    "max_response_bytes": 3000000,
+    "contracts": [
+      {
+        "type": "event_delivery",
+        "source_path": "/orders",
+        "event_path": "/event-outbox",
+        "source_id_field": "order_id",
+        "source_status_field": "status",
+        "eligible_source_states": ["paid", "completed"],
+        "event_foreign_key_field": "order_id",
+        "event_id_field": "event_id",
+        "event_type_field": "event_type",
+        "event_status_field": "status",
+        "required_event_types": ["order.paid"],
+        "delivered_event_statuses": ["delivered", "processed"]
+      },
+      {
+        "type": "consumer_outcome",
+        "source_path": "/orders",
+        "event_path": "/event-outbox",
+        "consumer_path": "/fulfillment-results",
+        "source_id_field": "order_id",
+        "event_foreign_key_field": "order_id",
+        "event_id_field": "event_id",
+        "event_type_field": "event_type",
+        "event_status_field": "status",
+        "required_event_types": ["order.shipped"],
+        "delivered_event_statuses": ["delivered"],
+        "consumer_foreign_key_field": "order_id",
+        "consumer_status_field": "status",
+        "consumer_success_statuses": ["processed", "completed", "success"]
+      },
+      {
+        "type": "event_ordering",
+        "event_path": "/event-outbox",
+        "event_id_field": "event_id",
+        "event_foreign_key_field": "order_id",
+        "event_type_field": "event_type",
+        "sequence_field": "sequence",
+        "expected_event_types": ["order.created", "order.paid", "order.shipped", "order.completed"]
+      },
+      {
+        "type": "event_duplicate",
+        "event_path": "/event-outbox",
+        "event_id_field": "event_id",
+        "event_foreign_key_field": "order_id",
+        "event_type_field": "event_type",
+        "max_events_per_source_type": 1
+      },
+      {
+        "type": "event_orphan",
+        "source_path": "/orders",
+        "event_path": "/event-outbox",
+        "source_id_field": "order_id",
+        "event_foreign_key_field": "order_id",
+        "event_id_field": "event_id"
+      },
+      {
+        "type": "dead_letter",
+        "event_path": "/event-outbox",
+        "event_id_field": "event_id",
+        "event_status_field": "status",
+        "dead_letter_statuses": ["dead_letter", "failed"],
+        "error_field": "error_message",
+        "retry_field": "retry_count",
+        "max_retries": 5
+      }
+    ]
+  }
+}

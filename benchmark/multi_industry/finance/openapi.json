@@ -1,0 +1,27 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "finance",
+    "version": "1"
+  },
+  "paths": {
+    "/transactions": {
+      "get": {
+        "summary": "账户余额、账本、交易金额守恒；重复回调不得重复入账；租户隔离。",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      },
+      "post": {
+        "summary": "账户余额、账本、交易金额守恒；重复回调不得重复入账；租户隔离。",
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    }
+  }
+}

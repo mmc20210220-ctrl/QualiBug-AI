@@ -1,0 +1,47 @@
+{
+  "quality_assurance_coverage": {
+    "minimum_assurance_score": 85,
+    "critical_paths": [
+      {
+        "path": "/orders",
+        "method": "POST",
+        "severity": "P0"
+      },
+      {
+        "path": "/orders/{order_id}",
+        "method": "GET",
+        "severity": "P1"
+      },
+      {
+        "path": "/reports/orders/summary",
+        "method": "GET",
+        "severity": "P1"
+      }
+    ],
+    "required_controls": [
+      {
+        "title": "订单付款后的账务、库存与事件链必须最终一致",
+        "path": "/orders",
+        "method": "POST",
+        "mutation": "event_chain_break",
+        "severity": "P0",
+        "required_oracle_sources": [
+          "business_event_chain_reasoning",
+          "business_causality_conservation",
+          "business_reconciliation"
+        ]
+      },
+      {
+        "title": "财务汇总必须与订单明细金额守恒",
+        "path": "/reports/orders/summary",
+        "method": "GET",
+        "mutation": "aggregate_or_amount_drift",
+        "severity": "P1",
+        "required_oracle_sources": [
+          "business_reconciliation",
+          "business_outcome_validation"
+        ]
+      }
+    ]
+  }
+}

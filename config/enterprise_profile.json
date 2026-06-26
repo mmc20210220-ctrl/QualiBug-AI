@@ -1,0 +1,21 @@
+{
+  "company_name": "Demo Enterprise",
+  "team_size": 8,
+  "monthly_releases": 8,
+  "main_systems": [
+    "Web",
+    "API",
+    "Admin",
+    "AI Assistant"
+  ],
+  "quality_goals": [
+    "reduce_regression_time",
+    "improve_failure_triage",
+    "govern_ai_generated_assets"
+  ],
+  "integrations": [
+    "Jira/ZenTao",
+    "Jenkins/GitLab CI",
+    "Feishu/WeCom"
+  ]
+}

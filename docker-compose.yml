@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  qualibug:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qualibug:v11
+    ports:
+      - "5000:5000"
+    environment:
+      QUALIBUG_PROJECT: default
+      QUALIBUG_PRODUCTION: "1"
+      QUALIBUG_PORT: "5000"
+    volumes:
+      - qualibug-platform-outputs:/app/platform_outputs
+      - qualibug-platform-workspace:/app/platform_workspace
+      - qualibug-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  qualibug-platform-outputs:
+  qualibug-platform-workspace:
+  qualibug-logs:

@@ -1,0 +1,24 @@
+{
+  "phase": "Phase51",
+  "name": "Business Causality & Conservation Counterexample Engine",
+  "capability": "从主业务、支付/库存/审批/台账等副作用关系中自动推导因果完整性、幂等性、可追溯性和金额守恒 Oracle",
+  "new_files": [
+    "ai_test_asset_center/business_causality_conservation.py",
+    "tests/test_business_causality_conservation.py",
+    "examples/business_causality_conservation_config.example.json",
+    "docs/PHASE51_BUSINESS_CAUSALITY_CONSERVATION.md"
+  ],
+  "integrations": [
+    "risk_based_probe_planner",
+    "real_project_defect_discovery",
+    "cross_run_evidence_registry",
+    "confirmed_bug_memory_priority",
+    "safe_live_get_only"
+  ],
+  "governance": [
+    "no live write requests",
+    "replay and concurrency validation are sandbox-required",
+    "persisted evidence uses hashed identities and aggregates",
+    "findings require human review"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "bugs": [
+    {
+      "risk_type": "industry_inventory_conservation",
+      "severity": "P0"
+    },
+    {
+      "risk_type": "industry_payment_idempotency",
+      "severity": "P0"
+    }
+  ]
+}

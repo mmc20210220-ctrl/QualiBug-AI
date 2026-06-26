@@ -1,0 +1,49 @@
+{
+  "phase": "phase64_role_access_boundary",
+  "title": "Role Access Boundary & Field-level Authorization Oracle",
+  "generated_at_utc": "2026-06-22T02:01:49+00:00",
+  "delivery_status": "engineering_validated_not_ga",
+  "release_ready": false,
+  "completion_blockers": [
+    "Run the canonical single-process pytest suite and release verifier in a clean CI environment; this container's complete run stalls after the self-dogfood audit starts, despite non-overlapping grouped runs passing."
+  ],
+  "capability": {
+    "reused_engine": "ai_test_asset_center/consistency_isolation_reasoning.py",
+    "oracles": [
+      "explicit role allow/deny/empty access contracts on OpenAPI GET routes",
+      "field-level forbidden-field exposure checks for allowed views",
+      "direct consistency-engine safety boundary enforcement",
+      "LLM output retained as unverified hypotheses only"
+    ],
+    "business_bug_targets": [
+      "route-level authorization bypass",
+      "restricted-role data visibility",
+      "field-level financial or personal-data exposure",
+      "authorized-role unexpected rejection"
+    ]
+  },
+  "integration_points": [
+    "risk_based_probe_planner",
+    "real_project_defect_discovery",
+    "existing redacted evidence registry",
+    "existing private product report surfaces"
+  ],
+  "safety_and_governance": {
+    "live_requests": "GET-only and only after execution_safety_verdict permits safe_live",
+    "unsafe_target_behavior": "blocked before target HTTP execution",
+    "role_credentials": "each role context supplies its own credential/header material; no implicit project-token inheritance",
+    "persisted_evidence": "redacted context metadata, status codes, field paths and counts only",
+    "llm_findings": "unverified_hypothesis only; not deterministic defects"
+  },
+  "verification": {
+    "focused_role_access_tests": "5/5 passed",
+    "cross_engine_regression": "26/26 passed",
+    "business_core_regression": "37/37 passed",
+    "remaining_platform_regression": "22/22 passed",
+    "business_outcome_regression": "7/7 passed",
+    "grouped_non_overlapping_total": "92/92 passed",
+    "python_compileall": "passed",
+    "canonical_single_process_pytest": "not completed in this container; stalls after self-dogfood audit begins without an assertion failure"
+  },
+  "delivery_boundary": "No credentials, private runtime data, workspaces, logs, caches or generated outputs are included in the source archive."
+}

@@ -1,0 +1,6 @@
+# Local Windows runner dependencies.
+# Install with: python -m pip install -r requirements-local-run.txt
+fastapi>=0.110,<1
+uvicorn>=0.27,<1
+pydantic>=2,<3
+pytest>=7.4,<9

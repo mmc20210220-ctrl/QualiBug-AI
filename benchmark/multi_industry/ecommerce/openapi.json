@@ -1,0 +1,27 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ecommerce",
+    "version": "1"
+  },
+  "paths": {
+    "/orders": {
+      "get": {
+        "summary": "下单后扣库存；支付回调幂等；退款不得超过已支付金额；优惠券不能跨用户。",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      },
+      "post": {
+        "summary": "下单后扣库存；支付回调幂等；退款不得超过已支付金额；优惠券不能跨用户。",
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    }
+  }
+}

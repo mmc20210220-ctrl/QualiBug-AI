@@ -1,0 +1,429 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qualibug.com/schemas/business_finding_schema.json",
+  "title": "QualiBug Business Finding Evidence Contract",
+  "description": "Every finding entering Human Review must satisfy this contract. Missing critical fields → NEEDS_MORE_EVIDENCE. Do not auto-promote to CONFIRMED.",
+  "type": "object",
+  "required": [
+    "finding_id",
+    "project_id",
+    "verdict",
+    "title",
+    "entity_binding",
+    "before_snapshot_ref",
+    "action_evidence_ref",
+    "after_snapshot_ref",
+    "violated_invariant",
+    "reproduction",
+    "cleanup",
+    "adversarial_validation"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "finding_id": {
+      "type": "string",
+      "description": "Unique identifier for this finding"
+    },
+    "hypothesis_id": {
+      "type": "string",
+      "description": "Reference to the originating hypothesis"
+    },
+    "project_id": {
+      "type": "string",
+      "description": "Project this finding belongs to"
+    },
+    "policy_version": {
+      "type": "string",
+      "description": "Policy version at time of finding"
+    },
+    "context_artifact_id": {
+      "type": "string",
+      "description": "Reference to Project Context Artifact"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "CANDIDATE",
+        "EVIDENCE_CAPTURED",
+        "ADVERSARIAL_VALIDATING",
+        "VALIDATED_CANDIDATE",
+        "REJECTED",
+        "NEEDS_MORE_EVIDENCE",
+        "SCHEMA_INVALID",
+        "BLOCKED_BY_SAFETY",
+        "BLOCKED_BY_FIXTURE",
+        "BLOCKED_BY_BINDING",
+        "BLOCKED_BY_OBSERVER",
+        "BLOCKED_BY_CLEANUP"
+      ],
+      "description": "Current verdict. Only VALIDATED_CANDIDATE can proceed to Human Review."
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "Human-readable one-line description"
+    },
+    "business_intent": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "What business intent this finding violates"
+    },
+    "root_cause_candidate": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Candidate root cause hypothesis"
+    },
+    "entrypoint": {
+      "type": "object",
+      "properties": {
+        "flow_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "action_type": {
+          "type": "string"
+        },
+        "actor_role": {
+          "type": "string"
+        }
+      }
+    },
+    "entity_binding": {
+      "type": "object",
+      "required": [
+        "entity_alias",
+        "entity_type",
+        "entity_id",
+        "tenant_id",
+        "binding_confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "entity_alias": {
+          "type": "string",
+          "description": "Business alias for the entity"
+        },
+        "entity_type": {
+          "type": "string",
+          "description": "e.g. 'permit', 'account', 'order'"
+        },
+        "entity_id": {
+          "type": "string",
+          "description": "Unique business identifier"
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant / owner scope"
+        },
+        "correlation_id": {
+          "type": "string",
+          "description": "Cross-system correlation ID"
+        },
+        "binding_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How confident we are this is the right entity (0-1)"
+        }
+      }
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Preconditions that must hold for this finding to be valid"
+    },
+    "before_snapshot_ref": {
+      "type": "string",
+      "description": "Reference to the Before snapshot (file path or graph ID)"
+    },
+    "action_evidence_ref": {
+      "type": "string",
+      "description": "Reference to action execution evidence"
+    },
+    "after_snapshot_ref": {
+      "type": "string",
+      "description": "Reference to the After snapshot"
+    },
+    "observer_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "References to observer evidence"
+    },
+    "violated_invariant": {
+      "type": "object",
+      "required": [
+        "kind",
+        "definition",
+        "result",
+        "evidence_ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "state",
+            "transition",
+            "conservation",
+            "temporal",
+            "permission",
+            "schema",
+            "lifecycle",
+            "other"
+          ]
+        },
+        "definition": {
+          "type": "string",
+          "description": "What the invariant asserts"
+        },
+        "result": {
+          "type": "string",
+          "description": "What was actually observed"
+        },
+        "evidence_ref": {
+          "type": "string"
+        }
+      }
+    },
+    "business_impact": {
+      "type": "object",
+      "properties": {
+        "impact_type": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "reproduction": {
+      "type": "object",
+      "required": [
+        "flow_id",
+        "expected_observation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "flow_id": {
+          "type": "string"
+        },
+        "fixture_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_observation": {
+          "type": "string"
+        }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "status",
+        "evidence_ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "CLEAN",
+            "DIRTY",
+            "CLEANUP_FAILED",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "evidence_ref": {
+          "type": "string"
+        }
+      }
+    },
+    "adversarial_validation": {
+      "type": "object",
+      "required": [
+        "deterministic_result",
+        "disprover_result",
+        "counterarguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "deterministic_result": {
+          "type": "string",
+          "enum": [
+            "DETERMINISTIC_DISPROOF",
+            "DETERMINISTIC_CONFLICT",
+            "DETERMINISTIC_INSUFFICIENT_EVIDENCE",
+            "DETERMINISTIC_PASS"
+          ]
+        },
+        "disprover_result": {
+          "type": "string",
+          "enum": [
+            "DISPROVED",
+            "NOT_DISPROVED",
+            "INSUFFICIENT_EVIDENCE",
+            "EXECUTION_BLOCKED",
+            "NOT_RUN"
+          ]
+        },
+        "counterarguments": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "maxItems": 5,
+          "description": "Specific reasons the finding was or could be disproved"
+        },
+        "unresolved_questions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "maxItems": 5
+        },
+        "disprover_source": {
+          "type": "string",
+          "enum": [
+            "deterministic",
+            "llm",
+            "both",
+            "none"
+          ]
+        }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "properties": {
+        "score": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp"
+    },
+    "severity": {
+      "type": "string",
+      "description": "Phase92A: Finding severity (P1/P2/P3)"
+    },
+    "raw_runtime_verdict": {
+      "type": "string",
+      "description": "Phase92A: Raw verdict from Stage_verify"
+    },
+    "semantic_verdict": {
+      "type": "string",
+      "description": "Phase92A: Semantic verdict from normalizer"
+    },
+    "business_evidence_status": {
+      "type": "string",
+      "description": "Phase92A: Business evidence enrichment status"
+    },
+    "final_review_status": {
+      "type": "string",
+      "description": "Phase92A: Final review status"
+    },
+    "runtime_gate_status": {
+      "type": "string",
+      "description": "Phase92A: Runtime gate status"
+    },
+    "business_gate_status": {
+      "type": "string",
+      "description": "Phase92A: Business gate status"
+    },
+    "missing_requirements": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Phase92A: Missing evidence requirements"
+    },
+    "state_history": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Phase92A: State transition history"
+    },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Phase92A: Original probe calls from discovery engine"
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Phase92A: Combined evidence for gate checking"
+    },
+    "business_gate_missing": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Phase92A: Missing requirements from business gate"
+    },
+    "evidence_model": {
+      "type": "string",
+      "description": "Evidence shape, e.g. read_only_auth_boundary"
+    },
+    "auth_boundary_matrix": {
+      "type": "object",
+      "description": "Role/auth boundary matrix for read-only permission findings"
+    },
+    "response_sensitivity": {
+      "type": "object",
+      "description": "Redacted response sensitivity summary"
+    }
+  },
+  "sensitive_field_patterns": [
+    "password",
+    "token",
+    "authorization",
+    "api_key",
+    "secret",
+    "cookie",
+    "bearer",
+    "credential",
+    "jwt",
+    "access_key"
+  ]
+}

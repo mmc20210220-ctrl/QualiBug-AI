@@ -1,0 +1,71 @@
+{
+  "schema_version": "phase90-v1",
+  "title": "QualiBug measured pre-production capability scorecard",
+  "scoring_scope": "repository implementation and controlled verification only",
+  "score": 90,
+  "hard_gates": {
+    "production_http_requests_zero": "passed",
+    "cleanup_failure_blocks_high_risk_flow": "passed",
+    "all_high_confidence_findings_use_adversarial_schema_gate": "passed",
+    "runtime_failure_never_converges": "passed",
+    "full_regression_suite": "passed: 338 passed, 1 skipped",
+    "release_verifier": "passed",
+    "release_package_sensitive_runtime_audit": "passed"
+  },
+  "dimensions": [
+    {
+      "name": "Loop long-running resilience",
+      "weight": 15,
+      "score": 14,
+      "evidence": ["SQLite lease", "heartbeat/final-state reconciliation", "Windows detached logging regression", "failure semantics regression"]
+    },
+    {
+      "name": "Context / Reader efficiency and degradation",
+      "weight": 10,
+      "score": 9,
+      "evidence": ["Artifact cache", "Builder/Waiter single-flight", "stale fallback", "Evidence Pack tests"]
+    },
+    {
+      "name": "Multi-agent business-risk discovery",
+      "weight": 15,
+      "score": 13,
+      "evidence": ["11 reasoner lenses", "Hypothesis schema isolation", "coverage-aware probe planning"]
+    },
+    {
+      "name": "Flow / semantic evidence",
+      "weight": 15,
+      "score": 13,
+      "evidence": ["Before/action/after evidence", "observer and invariant tests", "Sandbox state/idempotency/auth regressions"]
+    },
+    {
+      "name": "False-positive control",
+      "weight": 15,
+      "score": 14,
+      "evidence": ["deduplication", "deterministic adversarial validation", "independent evidence validation", "Business Finding Schema"]
+    },
+    {
+      "name": "Discovery-policy self-evolution",
+      "weight": 10,
+      "score": 8,
+      "evidence": ["strict paired replay/shadow promotion gate", "active policy wiring", "quality/safety rollback rejection"],
+      "external_validation_required": "real customer replay corpus and shadow receipts"
+    },
+    {
+      "name": "Shared test-environment safety and cleanup",
+      "weight": 10,
+      "score": 9,
+      "evidence": ["Test Run Session", "explicit cleanup plan", "cleanup evidence", "Dirty Test Environment guard"]
+    },
+    {
+      "name": "Release and private deployment governance",
+      "weight": 10,
+      "score": 10,
+      "evidence": ["338-pass regression run", "passed release verifier", "package audit", "Phase90 CI workflow"]
+    }
+  ],
+  "external_limitations_only": [
+    "No live customer environment, credential or production data was used.",
+    "No real DeepSeek request was made from this isolated build environment.",
+    "Customer-specific adapter/approval configuration remains a deployment validation activity."
+  ]
+}

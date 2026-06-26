@@ -1,0 +1,27 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "education",
+    "version": "1"
+  },
+  "paths": {
+    "/enrollments": {
+      "get": {
+        "summary": "课程报名不能超容量；成绩仅教师可修改；学生只能访问本人记录。",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      },
+      "post": {
+        "summary": "课程报名不能超容量；成绩仅教师可修改；学生只能访问本人记录。",
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    }
+  }
+}

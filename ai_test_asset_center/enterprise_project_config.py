@@ -1,0 +1,319 @@
+from __future__ import annotations
+
+"""
+Multi-Service Enterprise Project Configuration.
+
+Real enterprises don't have one monolith. They have order-service, payment-service,
+inventory-service, logistics-service, notification-service... each with its own
+base URL, OpenAPI spec, and document set.
+
+This module replaces the single-service assumption in real_project_onboarding
+with a multi-service model that enables:
+
+1. Per-service configuration (base_url, openapi_spec, prd docs)
+2. Cross-service relationship modeling (order→payment, payment→refund, etc.)
+3. Service-boundary bug detection (bugs that only appear when services interact)
+4. Incremental analysis (only re-analyze changed services)
+"""
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from .real_project_onboarding import ROOT, _safe_project_id, _write_json, _load_json
+
+# ---------------------------------------------------------------------------
+# Service configuration
+# ---------------------------------------------------------------------------
+
+EXAMPLE_MULTI_SERVICE_CONFIG = {
+    "project_name": "acme_ecommerce",
+    "services": [
+        {
+            "name": "order-service",
+            "base_url": "http://order-service.internal:8080",
+            "openapi_spec": "docs/openapi/order-service.yaml",
+            "prd": "docs/prd/order-service.md",
+            "description": "订单管理：创建、查询、状态流转、取消",
+            "depends_on": [],
+            "exposes_to": ["payment-service", "logistics-service"],
+        },
+        {
+            "name": "payment-service",
+            "base_url": "http://payment-service.internal:8081",
+            "openapi_spec": "docs/openapi/payment-service.yaml",
+            "prd": "docs/prd/payment-service.md",
+            "description": "支付处理：收款、退款、对账",
+            "depends_on": ["order-service"],
+            "exposes_to": ["order-service"],
+        },
+        {
+            "name": "inventory-service",
+            "base_url": "http://inventory-service.internal:8082",
+            "openapi_spec": "docs/openapi/inventory-service.yaml",
+            "prd": "docs/prd/inventory-service.md",
+            "description": "库存管理：扣减、回补、盘点",
+            "depends_on": ["order-service"],
+            "exposes_to": ["order-service", "logistics-service"],
+        },
+        {
+            "name": "logistics-service",
+            "base_url": "http://logistics-service.internal:8083",
+            "openapi_spec": "docs/openapi/logistics-service.yaml",
+            "prd": "docs/prd/logistics-service.md",
+            "description": "物流管理：发货、追踪、签收",
+            "depends_on": ["order-service", "inventory-service"],
+            "exposes_to": ["order-service"],
+            "external_integrations": ["jt-express", "pinduoduo"],
+        },
+    ],
+    "cross_service_contracts": [
+        {
+            "contract_id": "order_to_payment",
+            "from_service": "order-service",
+            "to_service": "payment-service",
+            "relationship": "order.payment_id → payment.id",
+            "invariant": "订单paid状态 → 必须存在对应payment记录，且金额相等",
+            "trigger": "order.status == 'paid'",
+            "verification": "GET /orders?status=paid → for each: GET /payments?order_id={id} → assert payment.amount == order.total_amount",
+        },
+        {
+            "contract_id": "payment_to_refund",
+            "from_service": "payment-service",
+            "to_service": "payment-service",
+            "relationship": "同一服务内：refund.payment_id → payment.id",
+            "invariant": "退款金额 ≤ 原支付金额，且退款必须原路返回",
+        },
+        {
+            "contract_id": "order_to_shipment",
+            "from_service": "order-service",
+            "to_service": "logistics-service",
+            "relationship": "order.id → shipment.order_id",
+            "invariant": "订单shipped状态 → 必须存在对应shipment记录，且tracking_number不为空",
+        },
+        {
+            "contract_id": "inventory_to_order",
+            "from_service": "inventory-service",
+            "to_service": "order-service",
+            "relationship": "inventory.sku → order.line_items.sku",
+            "invariant": "订单创建时库存必须充足；订单取消时库存必须回补",
+            "trigger": "order.status == 'confirmed'",
+            "verification": "下单前GET /inventory/{sku}记录库存 → 下单后再次GET → 库存减少量 == 订单数量",
+        },
+    ],
+    "external_integrations": [
+        {
+            "integration_id": "jt_express_order_flow",
+            "name": "极兔工单对接",
+            "our_service": "logistics-service",
+            "external_system": "jt-express",
+            "external_system_type": "third_party_logistics",
+            "data_flow": "outbound",
+            "description": "我方创建物流单 → 推送极兔 → 极兔返回运单号 → 我方记录 → 极兔回传状态更新",
+            "contract": {
+                "step_1": "POST /api/external/jt/orders → 极兔创建工单",
+                "step_2": "极兔回调 POST /api/callback/jt/status → 我方更新物流状态",
+                "step_3": "我方 GET /api/external/jt/orders/{id}/tracking → 查询最新轨迹",
+            },
+            "invariants": [
+                "推送成功后 30 秒内必须收到极兔返回的运单号",
+                "极兔回传的订单状态变更不允许跳步（shipped→delivered，不能直接从pending→delivered）",
+                "我方物流单号与极兔运单号必须一对一绑定",
+            ],
+        },
+        {
+            "integration_id": "pinduoduo_order_sync",
+            "name": "拼多多订单同步",
+            "our_service": "order-service",
+            "external_system": "pinduoduo",
+            "external_system_type": "ecommerce_platform",
+            "data_flow": "inbound",
+            "description": "拼多多推送订单 → 我方接收 → 我方处理 → 回传状态到拼多多",
+            "contract": {
+                "step_1": "拼多多推送 POST /api/external/pdd/orders → 我方接收",
+                "step_2": "我方回传 PUT /api/external/pdd/orders/{id}/status → 拼多多",
+            },
+            "invariants": [
+                "拼多多推送的订单必须在我方系统创建成功，且关键字段（金额、商品、收货地址）完全一致",
+                "我方回传的状态变更必须在拼多多规定的时效内完成",
+            ],
+        },
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Multi-service project management
+# ---------------------------------------------------------------------------
+
+class MultiServiceProject:
+    """Manages a multi-service enterprise project."""
+
+    def __init__(self, project_id: str, root: Path | None = None):
+        self.project_id = _safe_project_id(project_id)
+        self.root = root or ROOT
+        self._config: dict[str, Any] | None = None
+
+    @property
+    def config(self) -> dict[str, Any]:
+        if self._config is None:
+            self._config = self._load_config()
+        return self._config
+
+    def _config_path(self) -> Path:
+        pdir = self.root / "platform_workspace" / self.project_id
+        return pdir / "multi_service_config.json"
+
+    def _load_config(self) -> dict[str, Any]:
+        path = self._config_path()
+        if path.exists():
+            return _load_json(path, {})
+        # Fall back to single-service legacy config
+        from .real_project_onboarding import load_real_project_config
+        legacy = load_real_project_config(self.project_id, self.root)
+        if legacy.get("base_url"):
+            # Auto-migrate: wrap single-service config into multi-service format
+            return {
+                "project_name": legacy.get("project_name", self.project_id),
+                "services": [{
+                    "name": "default",
+                    "base_url": legacy.get("base_url", ""),
+                    "openapi_spec": str(legacy.get("openapi_path", "")),
+                    "prd": str(legacy.get("prd_path", "")),
+                    "description": "Auto-migrated from legacy single-service config",
+                    "depends_on": [],
+                    "exposes_to": [],
+                }],
+                "cross_service_contracts": [],
+                "external_integrations": [],
+            }
+        return {}
+
+    def init_from_example(self) -> dict[str, Any]:
+        """Initialize a multi-service project with the example template."""
+        self._config = dict(EXAMPLE_MULTI_SERVICE_CONFIG)
+        self._config["project_name"] = self.project_id
+        self._config_path().parent.mkdir(parents=True, exist_ok=True)
+        _write_json(self._config_path(), self._config)
+        return self._config
+
+    def services(self) -> list[dict[str, Any]]:
+        return self.config.get("services", [])
+
+    def service_names(self) -> list[str]:
+        return [s["name"] for s in self.services()]
+
+    def get_service(self, name: str) -> dict[str, Any] | None:
+        for s in self.services():
+            if s["name"] == name:
+                return s
+        return None
+
+    def cross_service_contracts(self) -> list[dict[str, Any]]:
+        return self.config.get("cross_service_contracts", [])
+
+    def external_integrations(self) -> list[dict[str, Any]]:
+        return self.config.get("external_integrations", [])
+
+    def service_dependencies(self) -> dict[str, list[str]]:
+        """Build dependency graph: service_name → [dependencies]."""
+        deps: dict[str, list[str]] = {}
+        for s in self.services():
+            deps[s["name"]] = s.get("depends_on", [])
+        return deps
+
+    def service_dependents(self) -> dict[str, list[str]]:
+        """Build reverse dependency graph: service_name → [who depends on me]."""
+        deps: dict[str, list[str]] = {}
+        for s in self.services():
+            for dep in s.get("depends_on", []):
+                deps.setdefault(dep, []).append(s["name"])
+        return deps
+
+    def affected_services(self, changed_service: str) -> list[str]:
+        """When a service changes, which other services might be affected?
+        Returns the full transitive closure of dependents."""
+        dependents = self.service_dependents()
+        visited: set[str] = set()
+        queue = [changed_service]
+        while queue:
+            svc = queue.pop(0)
+            if svc in visited:
+                continue
+            visited.add(svc)
+            for dep in dependents.get(svc, []):
+                if dep not in visited:
+                    queue.append(dep)
+        return sorted(visited)
+
+    def validate(self) -> dict[str, Any]:
+        """Validate the multi-service configuration."""
+        issues: list[str] = []
+        names = set()
+
+        for svc in self.services():
+            name = svc.get("name", "")
+            if not name:
+                issues.append("Service missing 'name' field")
+            elif name in names:
+                issues.append(f"Duplicate service name: {name}")
+            names.add(name)
+
+            base_url = svc.get("base_url", "")
+            if not base_url:
+                issues.append(f"Service '{name}' missing base_url")
+
+        for contract in self.cross_service_contracts():
+            from_svc = contract.get("from_service", "")
+            to_svc = contract.get("to_service", "")
+            if from_svc not in names:
+                issues.append(f"Cross-service contract references unknown service: {from_svc}")
+            if to_svc not in names:
+                issues.append(f"Cross-service contract references unknown service: {to_svc}")
+
+        return {
+            "valid": len(issues) == 0,
+            "service_count": len(names),
+            "cross_service_contract_count": len(self.cross_service_contracts()),
+            "external_integration_count": len(self.external_integrations()),
+            "issues": issues,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Cross-service bug detection hints
+# ---------------------------------------------------------------------------
+
+CROSS_SERVICE_BUG_PATTERNS = [
+    {
+        "pattern": "service_a_success_service_b_failure",
+        "description": "服务A操作成功但服务B操作失败，导致分布式事务不一致",
+        "example": "订单服务创建订单成功，但库存服务扣减失败 → 订单存在但库存未扣",
+        "detection": "检查 order.status=confirmed 时，inventory 的预留量是否等于订单量",
+    },
+    {
+        "pattern": "cross_service_data_drift",
+        "description": "同一业务实体在不同服务中存在不一致的副本",
+        "example": "订单服务中 order.total=100，支付服务中 payment.amount=99.99",
+        "detection": "对账：order.total 与 payment.amount 的跨服务比较",
+    },
+    {
+        "pattern": "service_version_mismatch",
+        "description": "服务A升级了API但服务B还在用旧版本，导致字段缺失或类型错误",
+        "example": "订单服务新增了 tax_rate 字段但支付服务未更新，导致计税错误",
+        "detection": "对比各服务的 OpenAPI spec 变更，标记不兼容的字段变更",
+    },
+    {
+        "pattern": "external_callback_timeout",
+        "description": "外部系统回调超时或未到达，导致状态卡在中间态",
+        "example": "极兔创建工单成功但 30 秒内未回调运单号",
+        "detection": "监控 external_integrations 中定义的回调时效",
+    },
+    {
+        "pattern": "cross_org_data_field_mismatch",
+        "description": "跨组织数据流转时，字段映射错误或精度丢失",
+        "example": "拼多多推送的订单金额是分（整数），我方系统期望是元（浮点），造成金额×100",
+        "detection": "对比外部推送的原始数据与我方接收后的存储数据",
+    },
+]

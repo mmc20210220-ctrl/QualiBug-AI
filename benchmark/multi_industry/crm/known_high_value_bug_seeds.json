@@ -1,0 +1,12 @@
+{
+  "bugs": [
+    {
+      "risk_type": "idor",
+      "severity": "P0"
+    },
+    {
+      "risk_type": "industry_ownership_boundary",
+      "severity": "P0"
+    }
+  ]
+}

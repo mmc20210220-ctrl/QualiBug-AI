@@ -1,0 +1,24 @@
+{
+  "phase": "Phase52",
+  "name": "Cross-Record Business Population Constraint Engine",
+  "capability": "从企业配置、PRD、OpenAPI和真实只读数据中推导跨记录额度、资源时间区间、复合业务键、批次完整性与审批阈值 Oracle，并主动发现群体业务反例",
+  "new_files": [
+    "ai_test_asset_center/business_population_constraints.py",
+    "tests/test_business_population_constraints.py",
+    "examples/business_population_constraints_config.example.json",
+    "docs/PHASE52_BUSINESS_POPULATION_CONSTRAINTS.md"
+  ],
+  "integrations": [
+    "risk_based_probe_planner",
+    "real_project_defect_discovery",
+    "cross_run_evidence_registry",
+    "confirmed_bug_memory_priority",
+    "safe_live_get_only"
+  ],
+  "governance": [
+    "no live write requests",
+    "quota split and race verification are sandbox-required",
+    "persisted evidence uses hashed identities and aggregates",
+    "findings require human review"
+  ]
+}

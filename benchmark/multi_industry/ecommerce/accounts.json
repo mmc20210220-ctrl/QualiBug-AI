@@ -1,0 +1,14 @@
+{
+  "accounts": [
+    {
+      "alias": "owner_a",
+      "role": "normal_user",
+      "credential_ref": "vault:owner_a"
+    },
+    {
+      "alias": "admin",
+      "role": "admin",
+      "credential_ref": "vault:admin"
+    }
+  ]
+}

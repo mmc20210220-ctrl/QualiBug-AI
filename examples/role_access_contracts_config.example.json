@@ -1,0 +1,42 @@
+{
+  "target_environment": "test",
+  "consistency_isolation_execution_mode": "safe_live",
+  "consistency_isolation_reasoning": {
+    "access_contracts": [
+      {
+        "path": "/finance/reports",
+        "sample_query": {
+          "period": "2026-06",
+          "tenant_id": "sandbox-tenant"
+        },
+        "allowed_statuses": [200],
+        "denied_statuses": [401, 403, 404],
+        "contexts": [
+          {
+            "name": "finance_admin",
+            "expected_access": "allow",
+            "token_env": "QUALIBUG_FINANCE_ADMIN_TOKEN"
+          },
+          {
+            "name": "sales_viewer",
+            "expected_access": "deny",
+            "token_env": "QUALIBUG_SALES_VIEWER_TOKEN"
+          },
+          {
+            "name": "support_viewer",
+            "expected_access": "allow",
+            "forbidden_fields": ["gross_margin", "bank_account", "supplier_cost"],
+            "token_env": "QUALIBUG_SUPPORT_VIEWER_TOKEN"
+          },
+          {
+            "name": "limited_viewer",
+            "expected_access": "empty",
+            "headers": {
+              "X-Test-Role": "limited_viewer"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "phase": "phase58_enterprise_knowledge_unified_ingestion",
+  "title": "Enterprise Knowledge Unified Ingestion",
+  "description": "Normalize enterprise PRD/MRD/API/schema/permission/history materials into traceable high-value business bug validation assets.",
+  "core_module": "ai_test_asset_center/enterprise_knowledge_center.py",
+  "integrations": [
+    "ai_test_asset_center/risk_based_probe_planner.py",
+    "ai_test_asset_center/business_assurance_coverage.py",
+    "ai_test_asset_center/real_project_defect_discovery.py",
+    "ai_test_asset_center/release_risk_dashboard.py"
+  ],
+  "tests": [
+    "tests/test_enterprise_knowledge_center.py"
+  ],
+  "documentation": [
+    "docs/PHASE58_ENTERPRISE_KNOWLEDGE_UNIFIED_INGESTION.md",
+    "examples/enterprise_knowledge_source_manifest.example.json",
+    "PHASE58_RELEASE_NOTES.md",
+    "PHASE58_VERIFICATION.md"
+  ],
+  "delivery_policy": {
+    "github_sync_default": false,
+    "raw_enterprise_sources_embedded_in_release": false,
+    "release_contains_only_code_docs_examples_tests": true
+  }
+}

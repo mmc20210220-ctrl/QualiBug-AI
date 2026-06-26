@@ -1,0 +1,70 @@
+{
+  "schema_version": "phase57.multi_industry_evaluation.v1",
+  "purpose": "Document/OpenAPI evidence evaluation only; not a customer-installed industry package.",
+  "cases": {
+    "crm": {
+      "prd": "销售通过 lead 创建客户 customer、商机 opportunity、报价 quote 和合同 contract。销售仅可见自己负责客户。合同 draft -> approved -> signed，超折扣需销售经理审批。",
+      "paths": [
+        "/leads",
+        "/customers/{customer_id}",
+        "/opportunities/{opportunity_id}",
+        "/quotes",
+        "/contracts/{contract_id}/sign"
+      ]
+    },
+    "erp": {
+      "prd": "采购订单 purchase order 审批后收货 goods receipt 并更新仓库 inventory。采购订单、收货单、invoice 发票需三单匹配；库存按仓库和物料守恒。",
+      "paths": [
+        "/purchase-orders",
+        "/goods-receipts",
+        "/warehouses/{warehouse_id}/inventory",
+        "/invoices"
+      ]
+    },
+    "finance": {
+      "prd": "账户 account 余额 balance、ledger 账本与 transfer 转账交易必须一致。提现和额度 limit 需要风控审批，交易 initiated -> pending -> settled 或 reversed。",
+      "paths": [
+        "/accounts/{account_id}",
+        "/transactions",
+        "/ledger",
+        "/withdrawals"
+      ]
+    },
+    "healthcare": {
+      "prd": "患者 patient 只能被有治疗关系的 doctor 医生查看。appointment 预约不可冲突，prescription 处方需授权医生签署并绑定患者。",
+      "paths": [
+        "/patients/{patient_id}/records",
+        "/appointments",
+        "/prescriptions"
+      ]
+    },
+    "education": {
+      "prd": "student 学生报名 enrollment 课程 course 不能超容量。teacher 教师才能发布 score 成绩；exam 考试 draft -> scheduled -> graded -> published。",
+      "paths": [
+        "/courses/{course_id}/enrollments",
+        "/exams",
+        "/scores/{score_id}"
+      ]
+    },
+    "saas_multitenant": {
+      "prd": "tenant 租户和 workspace 工作区的数据必须隔离。membership 成员邀请后 active，subscription 订阅到期后 entitlement 权益失效。tenant_admin 管理成员但不能读取其他 tenant 数据。",
+      "paths": [
+        "/tenants/{tenant_id}/members",
+        "/workspaces/{workspace_id}",
+        "/subscriptions",
+        "/entitlements"
+      ]
+    },
+    "ecommerce": {
+      "prd": "用户将 sku 商品加入 cart 购物车并创建 order 订单，payment 支付与 refund 退款累计必须与订单金额一致。inventory 库存预留不能超卖，coupon 优惠券只能使用一次。",
+      "paths": [
+        "/carts",
+        "/orders/{order_id}",
+        "/payments",
+        "/refunds",
+        "/inventory/{sku_id}",
+        "/coupons"
+      ]
+    }
+  }
+}

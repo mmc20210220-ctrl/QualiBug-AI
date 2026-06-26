@@ -1,0 +1,31 @@
+{
+  "target_environment": "test",
+  "business_causality_execution_mode": "safe_live",
+  "business_causality_conservation": {
+    "max_records": 5000,
+    "contracts": [
+      {
+        "type": "inventory_reservation_balance",
+        "resource": "warehouse_inventory",
+        "source_path": "/inventory/snapshots",
+        "dependent_path": "/inventory/reservations",
+        "source_query": {
+          "tenant_scope": "qualibug-sandbox"
+        },
+        "dependent_query": {
+          "tenant_scope": "qualibug-sandbox"
+        },
+        "inventory_identity_fields": ["sku_id", "warehouse_id"],
+        "reservation_identity_fields": ["sku_id", "warehouse_id"],
+        "on_hand_field": "on_hand_quantity",
+        "reserved_field": "reserved_quantity",
+        "available_field": "available_quantity",
+        "reservation_quantity_field": "quantity",
+        "reservation_status_field": "status",
+        "active_reservation_states": ["reserved", "allocated"],
+        "allow_negative_available": false,
+        "tolerance": 0.001
+      }
+    ]
+  }
+}

@@ -1,0 +1,223 @@
+{
+  "phase": "phase91_cognitive_memory_graph",
+  "project_id": "phase91_validation_demo",
+  "environment_id": "test",
+  "mode": "shadow",
+  "measurement": {
+    "baseline_source": "current project PRD/OpenAPI/API docs",
+    "challenger_source": "typed SQLite graph local neighborhood",
+    "live_llm_called": false,
+    "real_metrics_only": true,
+    "missing_quality_metrics_keep_graph_in_shadow": true,
+    "elapsed_seconds": 0.078948
+  },
+  "graph_sync": {
+    "schema_version": "phase91-v1",
+    "project_id": "phase91_validation_demo",
+    "environment_id": "test",
+    "node_count": 45,
+    "edge_count": 11,
+    "node_types": {
+      "API": 6,
+      "CoverageGap": 24,
+      "Entity": 2,
+      "Environment": 1,
+      "Invariant": 8,
+      "Observer": 1,
+      "Project": 1,
+      "SourceDocument": 2
+    },
+    "confidence": {
+      "evidenced": 15,
+      "inferred": 30
+    },
+    "path": "/mnt/data/qualibug_phase91_work/QualiBug_AI_Enterprise_Edition_Phase91/platform_workspace/phase91_validation_demo/cognitive_memory_graph.sqlite3"
+  },
+  "graph_stats": {
+    "schema_version": "phase91-v1",
+    "project_id": "phase91_validation_demo",
+    "environment_id": "test",
+    "node_count": 45,
+    "edge_count": 11,
+    "node_types": {
+      "API": 6,
+      "CoverageGap": 24,
+      "Entity": 2,
+      "Environment": 1,
+      "Invariant": 8,
+      "Observer": 1,
+      "Project": 1,
+      "SourceDocument": 2
+    },
+    "confidence": {
+      "evidenced": 15,
+      "inferred": 30
+    },
+    "path": "/mnt/data/qualibug_phase91_work/QualiBug_AI_Enterprise_Edition_Phase91/platform_workspace/phase91_validation_demo/cognitive_memory_graph.sqlite3"
+  },
+  "selected_frontier": {
+    "risk_surface_id": "CMG_COVE_616e7cb1abeacaad603afceb",
+    "target": {
+      "api": "POST:/records",
+      "risk_type": "idempotency"
+    },
+    "state": "UNSEEN",
+    "priority_score": 168.0,
+    "priority_reasons": [
+      "high-value uncovered risk surface"
+    ],
+    "dimensions": {
+      "business_impact": 0.7,
+      "uncertainty": 0.8,
+      "coverage_gap": 1.0,
+      "recent_change": 0.0,
+      "finding_adjacency": 0.0,
+      "available_observer_quality": 0.9,
+      "execution_cost": 0.3,
+      "duplicate_risk": 0.1,
+      "safety_risk": 0.1
+    },
+    "execution_allowed": true,
+    "policy_version": ""
+  },
+  "evidence_pack": {
+    "target": {
+      "api": "POST:/records",
+      "risk_type": "idempotency"
+    },
+    "context_refs": [
+      {
+        "node_id": "CMG_API_014c16cb28cbe96670b4bb0d",
+        "source_ref": "platform_inputs/phase91_validation_demo/openapi.json",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_API_20c23fe18dc275966420ffe1",
+        "source_ref": "platform_inputs/phase91_validation_demo/openapi.json",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_API_2f49fa5e88e3ff2837dea65b",
+        "source_ref": "platform_inputs/phase91_validation_demo/openapi.json",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_API_5bf319383a159c6af0ebda54",
+        "source_ref": "platform_inputs/phase91_validation_demo/openapi.json",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_API_c2fe794cad0d13e9bb60506e",
+        "source_ref": "platform_inputs/phase91_validation_demo/openapi.json",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_API_ce0014f665a98c699447d265",
+        "source_ref": "platform_inputs/phase91_validation_demo/openapi.json",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_COVE_0b001f17b3fb5b54d28de5ed",
+        "source_ref": "POST:/records",
+        "confidence": "inferred"
+      },
+      {
+        "node_id": "CMG_COVE_119fd4a253bc8141d97497fb",
+        "source_ref": "POST:/records/{id}/cancel",
+        "confidence": "inferred"
+      },
+      {
+        "node_id": "CMG_COVE_2829d4cfa7df9fa7d7e2dee9",
+        "source_ref": "POST:/records/{id}/approve",
+        "confidence": "inferred"
+      },
+      {
+        "node_id": "CMG_COVE_33ef307c463d29ff96a18859",
+        "source_ref": "POST:/records/{id}/approve",
+        "confidence": "inferred"
+      },
+      {
+        "node_id": "CMG_COVE_428f80c4c109158a4616bb6d",
+        "source_ref": "POST:/records/{id}/approve",
+        "confidence": "inferred"
+      },
+      {
+        "node_id": "CMG_COVE_616e7cb1abeacaad603afceb",
+        "source_ref": "POST:/records",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_ENTI_b905473347388b2a85eb7c5d",
+        "source_ref": "prd.md#lifecycle",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_INVA_4134d687f9c6375ca43aebb0",
+        "source_ref": "prd.md#idempotency",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_OBSE_4b491ea70d23615d4c65529e",
+        "source_ref": "openapi.json#/paths/~1audit-events/get",
+        "confidence": "evidenced"
+      },
+      {
+        "node_id": "CMG_SOUR_d33b5994b075eea0736084fb",
+        "source_ref": "platform_inputs/phase91_validation_demo/openapi.json",
+        "confidence": "evidenced"
+      }
+    ],
+    "rendered_char_count": 1844,
+    "traceable": true
+  },
+  "evaluation": {
+    "baseline": {
+      "prompt_chars": 6600,
+      "production_http_requests": 0
+    },
+    "challenger": {
+      "prompt_chars": 1844,
+      "context_refs": 16,
+      "graph_ready": true,
+      "production_http_requests": 0
+    },
+    "deltas": {
+      "prompt_chars": -4756,
+      "prompt_reduction_ratio": 0.720606
+    },
+    "safety_passed": true,
+    "quality_known": false,
+    "quality_passed": false,
+    "promotion": "shadow",
+    "reason": "Graph context remains shadow until measured replay/shadow quality gates pass",
+    "metrics": {
+      "baseline": {
+        "production_http_requests": 0
+      },
+      "challenger": {
+        "production_http_requests": 0
+      }
+    }
+  },
+  "promotion_guard": {
+    "active_requires_external_replay_or_shadow_metrics": true,
+    "production_http_requests": 0,
+    "safety_violation": "not_measured",
+    "cleanup_failures": "not_measured"
+  },
+  "output_path": "/mnt/data/qualibug_phase91_work/QualiBug_AI_Enterprise_Edition_Phase91/PHASE91_CONTEXT_AB_REPORT.json",
+  "validation_dataset": {
+    "kind": "controlled_local_contract_fixture",
+    "network_requests": 0,
+    "expected_top_risk": {
+      "api": "POST /records",
+      "risk_type": "idempotency"
+    },
+    "selected_top_risk": {
+      "api": "POST:/records",
+      "risk_type": "idempotency"
+    },
+    "graph_context_is_traceable": true,
+    "operator_mode_remains": "shadow"
+  }
+}

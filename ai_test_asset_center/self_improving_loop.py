@@ -1,0 +1,640 @@
+"""
+QualiBug Self-Improving Loop v2 — with heartbeat, progress tracking, incremental save
+"""
+
+from __future__ import annotations
+
+import json, time, sys, os, traceback
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
+from .scenario_runner import ScenarioRunner
+from .db_verifier import MESDBVerifier
+from .loop_runtime import LoopBusyError, LoopRuntimeError, LoopRuntimeSession
+from .console_output import safe_print
+
+
+HEARTBEAT_FILE_TEMPLATE = "platform_outputs/{project_id}/.loop_heartbeat.json"
+DEFAULT_PROJECT_ID = "real_project_demo"
+_ACTIVE_RUNTIME: LoopRuntimeSession | None = None
+
+
+class DiscoveryRunError(RuntimeError):
+    """A discovery failure that must never be converted into a convergence result."""
+
+
+def _console(message: object = "") -> None:
+    """Best-effort operational logging that never aborts a supervised loop."""
+    safe_print(str(message), flush=True)
+
+
+def _fallback_heartbeat_path(project_id: str = DEFAULT_PROJECT_ID) -> Path:
+    return Path(HEARTBEAT_FILE_TEMPLATE.format(project_id=project_id))
+
+
+def _tick(step: str, detail: str = "", round_num: int = 0):
+    """Persist progress without hiding heartbeat failures.
+
+    Long Reader/Reasoner stages are kept alive by LoopRuntimeSession's background
+    heartbeat pump.  This function records semantic stage transitions.
+    """
+    runtime = _ACTIVE_RUNTIME
+    if runtime is not None:
+        runtime.assert_healthy()
+        runtime.heartbeat(step=step, detail=detail, round_num=round_num)
+    else:
+        # Backward-compatible fallback for direct unit calls.  Never silently
+        # swallow a write failure because that would make watchdog data untrustworthy.
+        path = _fallback_heartbeat_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": time.time(), "step": step, "detail": detail[:500],
+            "round": round_num, "pid": os.getpid(), "status": "RUNNING",
+            "last_progress_at": time.time(),
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    marker = "[IMP]" if step == "improve" else ("[BUG]" if step == "verify" else "[...]")
+    _console(f"  {marker} [{step}] {detail[:120]}")
+
+
+@dataclass
+class ImprovementAction:
+    target: str
+    problem: str
+    change: str
+    expected_effect: str
+
+
+@dataclass
+class ImproveRound:
+    round_num: int
+    bugs_found: int
+    inconclusive_rate: float
+    actions: list[ImprovementAction]
+    after_verdict: str
+
+
+class SelfImprovingSweep:
+    MAX_ROUNDS = 5
+    CONVERGED_THRESHOLD = 0.30
+
+    def __init__(self, prd_path=None, api_path=None, base_url="http://127.0.0.1:8000/api", *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
+        if prd_path is None:
+            prd_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/PRD.md")
+        if api_path is None:
+            api_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/API.md")
+
+        self.prd = Path(prd_path).read_text(encoding="utf-8") if Path(prd_path).exists() else ""
+        self.api = Path(api_path).read_text(encoding="utf-8") if Path(api_path).exists() else ""
+        self.base_url = base_url
+        self.project_id = project_id
+        self.output_dir = Path(output_dir or Path("platform_outputs") / project_id)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.engine = AutonomousDiscoveryEngine(base_url=base_url)
+        self.rounds: list[ImproveRound] = []
+        self._prior_inconclusive_rate = 1.0
+        self._last_discovery_result: dict[str, Any] = {}
+        # Phase91: discovery remains the only executor; this is a read-only
+        # observation of the graph/frontier decision that selected the round.
+        self._cognitive_graph_observation: dict[str, Any] = {}
+        
+        # Phase79+: Auto-compile project context on init
+        self._context = self._compile_context()
+
+    def _compile_context(self) -> dict:
+        """Phase79+: Auto-compile project context from PRD+OpenAPI before discovery."""
+        try:
+            from .project_context_compiler import ProjectContextCompiler
+            from .api_capability_mapper import APICapabilityMapper
+            from .onboarding_modules import (
+                ObserverCandidateBuilder, BindingCandidateBuilder,
+                FixtureReadinessAnalyzer, VerificationCoverageAnalyzer,
+            )
+            
+            compiler = ProjectContextCompiler()
+            openapi_spec = {}
+            try: openapi_spec = json.loads(self.api) if self.api.strip().startswith("{") else {}
+            except: pass
+            
+            ctx = compiler.compile(self.prd[:5000], openapi_spec, "")
+            
+            mapper = APICapabilityMapper()
+            apis = mapper.map_from_openapi(openapi_spec) if openapi_spec else []
+            
+            obs = ObserverCandidateBuilder().build(apis, ctx.entities)
+            bindings = BindingCandidateBuilder().build(apis, ctx.entities)
+            readiness = FixtureReadinessAnalyzer().analyze(bindings, obs, apis)
+            coverage = VerificationCoverageAnalyzer().analyze(ctx)
+            
+            return {
+                "entities": len(ctx.entities),
+                "apis": len(apis),
+                "observers": len(obs),
+                "bindings": len(bindings),
+                "ready_flows": sum(1 for r in readiness if r.readiness == "READY"),
+                "coverage": coverage.get("entity_coverage", {}).get("rate", 0),
+            }
+        except Exception:
+            return {}
+
+    def _observe(self) -> tuple[list[DiscoveryFinding], int, float]:
+        _tick("observe", "Starting discovery engine...")
+        last_error: Exception | None = None
+        result: dict[str, Any] | None = None
+        for attempt in range(2):
+            try:
+                # Discovery emits stage transitions while the runtime heartbeat
+                # pump keeps the lease alive during slow provider calls.
+                self.engine.progress_callback = lambda stage, detail="": _tick(stage, detail)
+                candidate = self.engine.discover(self.prd, self.api)
+                if not isinstance(candidate, dict):
+                    raise DiscoveryRunError("discover() returned a non-dict result")
+                stage_failures = candidate.get("stage_failures", [])
+                if stage_failures:
+                    raise DiscoveryRunError("discovery stage failure: " + "; ".join(map(str, stage_failures)))
+                report = getattr(self.engine, "_last_engine_report", {}) or {}
+                failed = report.get("failed_engines", [])
+                total_engines = int(report.get("total_engines", 0) or 0)
+                if total_engines and len(failed) >= total_engines:
+                    existing_findings = list(getattr(self.engine, "findings", []) or [])
+                    local_exhausted = bool(report.get("local_bootstrap_exhausted_by_prior_findings"))
+                    # If the first pass already produced findings and the second-pass/local bootstrap
+                    # has no *new* non-duplicate hypotheses, this is convergence/exhaustion, not a
+                    # provider outage.  Never convert collected evidence into FAILED_RETRYABLE.
+                    if existing_findings and local_exhausted:
+                        result = candidate
+                        break
+                    # All engines failed — likely transient API outage, retry with backoff
+                    if attempt == 0:
+                        _console(f"  [WARN] All {total_engines} engines failed — API outage, retrying with backoff...")
+                        import gc; gc.collect()
+                        time.sleep(10)
+                        continue
+                    raise DiscoveryRunError("all reasoner engines failed after retry; refusing false convergence")
+                result = candidate
+                break
+            except Exception as exc:
+                last_error = exc
+                _console(f"  [FAIL] discover() failed (attempt {attempt + 1}): {exc}")
+                if attempt == 0:
+                    import gc
+                    gc.collect()
+                    time.sleep(2)
+        if result is None:
+            raise DiscoveryRunError("discover() failed after retry: %s" % (last_error or "unknown failure"))
+
+        self._last_discovery_result = result
+        verifier_stage = ((result.get("stages") or {}).get("verifier") or {}) if isinstance(result, dict) else {}
+        self._last_raw_confirmed_signals = int(verifier_stage.get("raw_confirmed_signals", 0) or 0)
+        self._last_validated_candidates = int(verifier_stage.get("validated_candidates", 0) or 0)
+        self._last_needs_more_evidence = int(verifier_stage.get("needs_more_evidence", 0) or 0)
+        graph_stage = ((result.get("stages") or {}).get("cognitive_graph") or {}) if isinstance(result, dict) else {}
+        # This is intentionally read-only.  The Self-Improving Loop must not
+        # turn a graph score into a verifier relaxation, policy promotion, or
+        # write permission.  It only makes the selected frontier auditable.
+        self._cognitive_graph_observation = {
+            "available": bool(graph_stage),
+            "mode": graph_stage.get("mode", "off") if isinstance(graph_stage, dict) else "off",
+            "frontier": graph_stage.get("frontier") if isinstance(graph_stage, dict) else None,
+            "context_refs": graph_stage.get("context_refs") if isinstance(graph_stage, dict) else [],
+            "ab": graph_stage.get("ab") if isinstance(graph_stage, dict) else {},
+            "reason": "read_only_discovery_observation",
+        }
+        findings = list(getattr(self.engine, "findings", []) or [])
+        total = len(findings) or 1
+        validated_candidates = sum(1 for f in findings if f.verdict == "validated_candidate")
+        unresolved = sum(1 for f in findings if f.verdict in {"inconclusive", "needs_more_evidence", "schema_invalid"})
+        inconclusive_rate = unresolved / total
+        import gc
+        gc.collect()
+        _tick("observed", (
+            f"{validated_candidates} validated candidates, "
+            f"{getattr(self, '_last_raw_confirmed_signals', 0)} raw confirmed signals, "
+            f"{inconclusive_rate:.0%} unresolved (total: {total})"
+        ))
+        return findings, validated_candidates, inconclusive_rate
+
+    def _diagnose(self, findings: list[DiscoveryFinding]) -> list[ImprovementAction]:
+        _tick("diagnose", f"Analyzing {len(findings)} findings...")
+        actions = []
+
+        # ── Level 0: Engine health check (NEW) ──
+        engine_report = getattr(self.engine, '_last_engine_report', None)
+        if engine_report:
+            failed = engine_report.get('failed_engines', [])
+            total_engines = engine_report.get('total_engines', 9)
+            if len(failed) > 0:
+                # Check if these same engines failed in previous rounds
+                prev_failed = getattr(self, '_prev_failed_engines', set())
+                repeat_offenders = [e for e in failed if e in prev_failed]
+                self._prev_failed_engines = set(failed)
+                
+                if repeat_offenders and len(repeat_offenders) == len(failed):
+                    # Same engines keep failing — don't repeat ineffective fix
+                    actions.append(ImprovementAction("engine",
+                        f"{len(failed)}/{total_engines} engines persistently failed: {', '.join(failed[:3])}",
+                        "MAX_TOKENS_ALREADY_MAXED — skip these engines or switch LLM provider",
+                        f"External API issue, not code-fixable. Suggest: skip engine or use fallback model"))
+                else:
+                    actions.append(ImprovementAction("engine",
+                        f"{len(failed)}/{total_engines} engines failed: {', '.join(failed[:3])}",
+                        "Increase max_tokens, fix prompt format, or reduce prompt size",
+                        f"Restore {len(failed)} failed engines → ~{len(failed)*5} more hypotheses"))
+            low_output = engine_report.get('engines_with_low_output', [])
+            if low_output:
+                actions.append(ImprovementAction("prompt",
+                    f"{len(low_output)} engines with <3 hypotheses: {', '.join(low_output[:3])}",
+                    "Inject domain context into Reasoner prompt, add more few-shot examples",
+                    f"Boost hypothesis yield from {len(low_output)} engines"))
+
+        # ── Level 1: Finding-level patterns ──
+        inconclusives = [f for f in findings if f.verdict == "inconclusive"]
+        evidence_texts = [str(f.evidence.get("actual", "")) for f in inconclusives]
+
+        route_404_count = sum(1 for t in evidence_texts if "404" in t)
+        if route_404_count > len(inconclusives) * 0.3:
+            actions.append(ImprovementAction("route_map",
+                f"{route_404_count}/{len(inconclusives)} inconclusive due to 404",
+                "Expand fuzzy matching + inject OpenAPI paths into Reasoner prompt",
+                f"Reduce ~{route_404_count} inconclusive"))
+
+        side_effect_count = sum(1 for t in evidence_texts if "副作用" in t or "需验证" in t or "编排" in t)
+        if side_effect_count > len(inconclusives) * 0.2:
+            actions.append(ImprovementAction("scenario",
+                f"{side_effect_count} need state orchestration",
+                "Auto-attach scenario_runner after Verifier",
+                f"Confirm ~{side_effect_count} orchestration-needed hypotheses"))
+
+        fake_terms = ["租户", "tenant", "金额字段", "用户列表与用户详情"]
+        fake_count = sum(1 for f in inconclusives if any(t in f.title.lower() for t in fake_terms))
+        if fake_count > 0:
+            actions.append(ImprovementAction("prompt",
+                f"{fake_count} hallucinated (multi-tenant / financial on single-tenant MES)",
+                "Inject MES context: 'single-tenant, no financial fields, no payment'",
+                f"Reduce ~{fake_count} hallucinations"))
+
+        if len(inconclusives) > len(findings) * 0.5:
+            actions.append(ImprovementAction("evidence_plan",
+                f"Inconclusive rate {100*len(inconclusives)//max(len(findings),1)}% > 50%",
+                "Add missing observers, bindings, and async evidence before re-running",
+                "Increase determinacy without lowering the confirmed-bug evidence bar"))
+
+        raw_confirmed = int(getattr(self, "_last_raw_confirmed_signals", 0) or 0)
+        needs_more = int(getattr(self, "_last_needs_more_evidence", 0) or 0)
+        validated = int(getattr(self, "_last_validated_candidates", 0) or 0)
+        # Trigger the bridge evolution only when the gate is broadly blocking
+        # runtime-confirmed signals.  Once validated candidates are flowing, the
+        # remaining pending items should be handled by targeted evidence work, not
+        # repeated generic bridge candidates that create noisy STUCK loops.
+        if raw_confirmed > 0 and validated == 0 and needs_more >= max(1, raw_confirmed // 2):
+            actions.append(ImprovementAction("evidence_bridge",
+                f"{raw_confirmed} runtime-confirmed signals were held as needs_more_evidence by the evidence gate",
+                "Generate auth-boundary business-evidence contracts: request/response refs, role matrix, sensitivity tags, and reviewer-ready reproduction",
+                "Convert strong runtime signals into validated candidates without relaxing the gate"))
+
+        _tick("diagnose", f"Found {len(actions)} improvements" if actions else "No improvements needed")
+        return actions
+
+    def _improve(self, actions: list[ImprovementAction]) -> int:
+        applied = 0
+        for a in actions:
+            try:
+                if a.target in {"route_map", "engine", "prompt", "scenario", "evidence_plan", "evidence_bridge"}:
+                    # Runtime actions are recorded as a candidate policy only.
+                    # Do not mutate a live client/global prompt in the middle of a
+                    # run; Champion/Challenger evaluation decides later whether a
+                    # candidate can become active.
+                    self._evidence_plan_required = True
+                applied += 1
+                _tick("improve", f"{a.target}: {a.change[:80]}")
+            except Exception as e:
+                _console(f"    ✗ {a.target}: {e}")
+        
+        # Phase81: Persist improvements to Policy Registry for versioned evolution
+        self._save_to_policy_registry(actions)
+        
+        return applied
+
+    def _save_to_policy_registry(self, actions: list[ImprovementAction]):
+        """Record a candidate only; never auto-promote or relax evidence gates."""
+        if not actions:
+            return
+        try:
+            from .policy_registry import PolicyRecord, get_policy_registry
+            import copy
+            reg = get_policy_registry()
+            active_record = reg.get_active()
+            if active_record is None:
+                return
+            candidate = copy.deepcopy(active_record.strategy)
+            for a in actions:
+                if a.target in ("engine", "route_map"):
+                    candidate.execution.max_tokens = max(candidate.execution.max_tokens, 32768)
+                elif a.target == "scenario":
+                    candidate.verification.scenario_auto = True
+                elif a.target == "evidence_bridge":
+                    order = list(candidate.verification.evidence_collection_order or [])
+                    for required in ("auth_boundary_matrix", "response_sensitivity", "reproduction_trace"):
+                        if required not in order:
+                            order.append(required)
+                    candidate.verification.evidence_collection_order = order
+                elif a.target == "prompt":
+                    candidate.discovery.dedicated_threshold = min(candidate.discovery.dedicated_threshold + 0.05, 0.95)
+                # evidence_plan intentionally changes no evidence threshold.
+            pid = f"policy-{int(time.time())}"
+            reg.register(PolicyRecord(
+                policy_id=pid,
+                policy_version=f"v{int(time.time())}",
+                parent_policy_version=active_record.policy_version,
+                project_scope="global",
+                status="candidate",
+                created_reason=f"Runtime candidate: {len(actions)} actions; independent evaluation required",
+                strategy=candidate,
+            ))
+            _console(f"  [POLICY] Policy candidate recorded: {pid} (not auto-promoted)")
+        except Exception as exc:
+            # Candidate persistence is non-critical; report it but do not hide it.
+            _console(f"  [WARN] Policy candidate not recorded: {exc}")
+
+    def _inject_context(self):
+        """Deprecated compatibility hook: use only explicit project context guards.
+
+        The self-improving loop must not mutate global prompts with MES-specific
+        assumptions.  DiscoveryEngine reads the reviewed guard, if any, from
+        ``QUALIBUG_PROJECT_CONTEXT_GUARD`` and dynamic Project Context Artifacts.
+        """
+        return None
+
+    def _verify_improvement(self, before_rate: float, after_rate: float,
+                            before_bugs: int, after_bugs: int) -> str:
+        # A local sweep cannot prove a strategy improvement.  It may only report
+        # an observation and queue a candidate for independent evaluation.
+        if after_rate < before_rate * 0.7 and after_bugs >= before_bugs:
+            return "CANDIDATE_REQUIRES_EVALUATION"
+        if after_rate < self.CONVERGED_THRESHOLD:
+            return "NO_FURTHER_LOCAL_ACTION"
+        return "STUCK"
+
+    def _save_progress(self):
+        data = {
+            "rounds": [{"round": r.round_num, "bugs": r.bugs_found,
+                        "inconclusive_rate": r.inconclusive_rate,
+                        "verdict": r.after_verdict,
+                        "actions": [a.target for a in r.actions]}
+                       for r in self.rounds],
+            "updated_at": time.time(),
+        }
+        try:
+            with open(str(self.output_dir / ".loop_progress.json"), "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _load_state(self) -> dict:
+        """Load previous round progress for resumable execution."""
+        try:
+            data = json.loads(Path(str(self.output_dir / ".loop_progress.json")).read_text())
+            rounds = data.get("rounds", [])
+            if rounds:
+                return {"round": rounds[-1]["round"], "actions": rounds[-1].get("actions", [])}
+        except: pass
+        return {}
+
+    def _write_report(self, result: dict) -> None:
+        path = self.output_dir / "self_improving_report.json"
+        path.write_text(json.dumps(result, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+
+    def _failure_result(self, exc: BaseException) -> dict:
+        result = {
+            "rounds": len(self.rounds),
+            "total_improvements": 0,
+            "total_bugs": 0,
+            "terminal": "FAILED_RETRYABLE",
+            "execution_status": "FAILED_RETRYABLE",
+            "failure_stage": getattr(_ACTIVE_RUNTIME, "_step", "unknown"),
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+            "actions": [],
+            "findings": [],
+        }
+        self._write_report(result)
+        return result
+
+    def _run_once(self) -> dict:
+        _console("=" * 60)
+        _console("QualiBug Self-Improving Loop v3 (supervised 1-round mode)")
+        _console("=" * 60)
+        self._scenario_auto = False
+        self._evidence_plan_required = False
+        all_actions: list[ImprovementAction] = []
+
+        prev_state = self._load_state()
+        start_round = prev_state.get("round", 0) + 1
+        rd = min(start_round, self.MAX_ROUNDS)
+        _tick("round_start", f"Round {rd}", rd)
+
+        findings, bugs, inconclusive_rate = self._observe()
+        _tick("observed", f"Round {rd}: {bugs} bugs, {inconclusive_rate:.0%} inconclusive", rd)
+        actions = self._diagnose(findings)
+        applied = self._improve(actions) if actions else 0
+
+        if applied > 0:
+            _console(f"\n  [RUN] Re-running after {applied} improvements...")
+            _tick("re_observe", f"Re-running after {applied} improvements", rd)
+            findings2, bugs2, rate2 = self._observe()
+            verdict = self._verify_improvement(inconclusive_rate, rate2, bugs, bugs2)
+            _tick("verified", f"Before: {inconclusive_rate:.0%} → After: {rate2:.0%}, Verdict: {verdict}", rd)
+            _console(f"  [STATS] {inconclusive_rate:.0%} -> {rate2:.0%} inconclusive | {bugs} -> {bugs2} bugs | {verdict}")
+            self._prior_inconclusive_rate = rate2
+            all_actions.extend(actions)
+            self.rounds.append(ImproveRound(rd, max(bugs, bugs2), rate2, actions, verdict))
+            final_rate = rate2
+        else:
+            if bugs > 0 and inconclusive_rate < 0.50:
+                verdict = "COMPLETED_WITH_FINDINGS"
+            else:
+                verdict = "CONVERGED" if inconclusive_rate < self.CONVERGED_THRESHOLD else "STUCK"
+            self.rounds.append(ImproveRound(rd, bugs, inconclusive_rate, actions, verdict))
+            _tick("done", f"No improvements possible. Inconclusive rate: {inconclusive_rate:.0%}", rd)
+            final_rate = inconclusive_rate
+
+        self._save_progress()
+        # Do not sum the same rediscovered findings across local rounds.
+        # A run's business value is the unique/latest validated candidate count,
+        # while repeated rounds are only attempts to improve evidence quality.
+        total_bugs = max((r.bugs_found for r in self.rounds), default=0)
+        engine_health = getattr(self.engine, "_last_engine_report", {}) or {}
+        result = {
+            "rounds": len(self.rounds),
+            "total_improvements": len(all_actions),
+            "total_bugs": total_bugs,
+            "confirmed_bugs": total_bugs,
+            "raw_confirmed_signals": int(getattr(self, "_last_raw_confirmed_signals", 0) or 0),
+            "needs_more_evidence": int(getattr(self, "_last_needs_more_evidence", 0) or 0),
+            "validated_candidates": int(getattr(self, "_last_validated_candidates", 0) or 0),
+            "inconclusive_rate": final_rate,
+            "terminal": verdict,
+            "execution_status": "COMPLETED",
+            "actions": [{"target": a.target, "problem": a.problem, "change": a.change} for a in all_actions],
+            "findings": [
+                {"id": f.hypothesis_id, "title": f.title, "verdict": f.verdict, "severity": f.severity,
+                 "expected": f.expected, "actual": f.actual, "confidence": f.confidence,
+                 "evidence": f.evidence if hasattr(f, 'evidence') and isinstance(f.evidence, dict) else {}}
+                for f in (getattr(self.engine, "findings", []) or [])
+            ],
+            "engine_health": engine_health,
+            "cognitive_graph": self._cognitive_graph_observation,
+            "discovery": self._last_discovery_result,
+        }
+        self._write_report(result)
+        # Only successful runs may train runtime memory.
+        _save_to_memory(result, all_actions, self.output_dir)
+        _console(f"\n=== COMPLETE: {result['terminal']} ===")
+        _console(f"Rounds: {result['rounds']} | Improvements: {result['total_improvements']} | Bugs: {result['total_bugs']}")
+        return result
+
+    def run(self) -> dict:
+        global _ACTIVE_RUNTIME
+        runtime = LoopRuntimeSession(self.project_id, self.output_dir)
+        try:
+            runtime.acquire()
+        except LoopBusyError as exc:
+            result = {
+                "rounds": 0, "total_improvements": 0, "total_bugs": 0,
+                "terminal": "SKIPPED_ALREADY_RUNNING", "execution_status": "SKIPPED_ALREADY_RUNNING",
+                "error": str(exc), "actions": [], "findings": [],
+            }
+            self._write_report(result)
+            _console(f"  [SKIP] {result['terminal']}: {exc}")
+            return result
+        except Exception as exc:
+            result = {
+                "rounds": 0, "total_improvements": 0, "total_bugs": 0,
+                "terminal": "FAILED_TERMINAL", "execution_status": "FAILED_TERMINAL",
+                "error": f"Could not acquire runtime lease: {exc}", "actions": [], "findings": [],
+            }
+            self._write_report(result)
+            return result
+
+        _ACTIVE_RUNTIME = runtime
+        try:
+            _tick("starting", "Runtime lease acquired")
+            all_results = []
+            terminal = "RUNNING"
+            total_bugs = 0
+            total_improvements = 0
+            
+            for round_num in range(1, self.MAX_ROUNDS + 1):
+                result = self._run_once()
+                all_results.append(result)
+                total_bugs = max(total_bugs, result.get("total_bugs", 0))
+                total_improvements += result.get("total_improvements", 0)
+                terminal = result.get("terminal", "COMPLETED")
+                
+                if terminal == "STUCK":
+                    _console("\\n  [STUCK] Terminal: STUCK — no more improvements possible")
+                    break
+                elif terminal in ("COMPLETED_WITH_FINDINGS", "CONVERGED", "NO_FURTHER_LOCAL_ACTION"):
+                    _console(f"\\n  [DONE] Terminal: {terminal}")
+                    break
+                elif terminal in ("FAILED_RETRYABLE", "FAILED_TERMINAL"):
+                    _console(f"\\n  [FAIL] Terminal: {terminal}")
+                    break
+                elif round_num < self.MAX_ROUNDS:
+                    _console(f"\\n  [NEXT] Continuing to round {round_num + 1}...")
+            
+            # Preserve the final run payload rather than throwing away engine
+            # health, stage failures, artifact status, and error evidence.
+            merged = dict(all_results[-1]) if all_results else {}
+            merged.update({
+                "rounds": len(all_results),
+                "total_improvements": total_improvements,
+                "total_bugs": total_bugs,
+                "terminal": terminal,
+                "execution_status": terminal,
+                "actions": [a for r in all_results for a in r.get("actions", [])],
+            })
+            runtime.assert_healthy()
+            runtime.complete(terminal)
+            return merged
+        except Exception as exc:
+            try:
+                runtime.fail(exc, retryable=True)
+            except Exception as heartbeat_exc:
+                _console(f"  [WARN] Failed to persist runtime failure: {heartbeat_exc}")
+            result = self._failure_result(exc)
+            _console(f"\n=== FAILED_RETRYABLE: {exc} ===")
+            return result
+        finally:
+            _ACTIVE_RUNTIME = None
+            runtime.release()
+
+
+def _save_to_memory(result: dict, actions: list, output_dir: Path | str | None = None):
+    """P4: Append loop results to persistent cumulative memory (bug_memory.jsonl)."""
+    import hashlib
+    mem_path = Path(output_dir or Path("platform_outputs") / DEFAULT_PROJECT_ID) / "bug_memory.jsonl"
+    mem_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load existing
+    existing = []
+    if mem_path.exists():
+        for line in mem_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try: existing.append(json.loads(line))
+            except: pass
+    
+    # Dedup by title hash
+    seen = {hashlib.md5(json.dumps(e, sort_keys=True, default=str).encode()).hexdigest() for e in existing}
+    
+    new_entries = 0
+    for a in actions:
+        entry = {
+            "ts": time.time(),
+            "type": "improvement",
+            "target": a.target,
+            "problem": a.problem[:200],
+            "change": a.change[:200],
+            "rounds": result["rounds"],
+            "bugs": result["total_bugs"],
+            "terminal": result["terminal"],
+        }
+        h = hashlib.md5(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()
+        if h not in seen:
+            seen.add(h)
+            existing.append(entry)
+            new_entries += 1
+    
+    # Add summary entry
+    summary = {
+        "ts": time.time(),
+        "type": "loop_summary",
+        "rounds": result["rounds"],
+        "bugs": result["total_bugs"],
+        "improvements": result["total_improvements"],
+        "terminal": result["terminal"],
+    }
+    h = hashlib.md5(json.dumps(summary, sort_keys=True, default=str).encode()).hexdigest()
+    if h not in seen:
+        existing.append(summary)
+        new_entries += 1
+    
+    if new_entries:
+        mem_path.write_text(
+            "\n".join(json.dumps(e, ensure_ascii=False, default=str) for e in existing) + "\n",
+            encoding="utf-8",
+        )
+        _console(f"  [MEM] Memory: +{new_entries} entries (total: {len(existing)})")
+
+
+def run_self_improving(prd_path=None, api_path=None, base_url="http://127.0.0.1:8000/api", *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
+    sweeper = SelfImprovingSweep(prd_path, api_path, base_url, project_id=project_id, output_dir=output_dir)
+    return sweeper.run()
+
+
+if __name__ == "__main__":
+    result = run_self_improving()
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))

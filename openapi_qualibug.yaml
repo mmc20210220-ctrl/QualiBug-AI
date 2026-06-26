@@ -1,0 +1,558 @@
+openapi: "3.0.3"
+info:
+  title: QualiBug AI Enterprise Edition
+  description: |
+    AI-powered business quality assurance platform. Discovers high-value business bugs
+    through semantic reasoning and cross-system validation. Private deployment, 
+    test-environment only, never touches production data or customer code.
+  version: "phase61"
+  contact:
+    name: QualiBug Team
+servers:
+  - url: http://127.0.0.1:8088
+    description: Local private pilot service
+
+tags:
+  - name: Health
+    description: Service health check
+  - name: Dashboard
+    description: Enterprise pilot operations center
+  - name: Knowledge
+    description: Business knowledge center & document ingestion
+  - name: Scan
+    description: Autonomous bug scanning pipeline
+  - name: Environment
+    description: Test environment configuration
+  - name: Settings
+    description: System & LLM configuration
+  - name: Connectors
+    description: Enterprise tool connectors (Feishu, Confluence, Jira)
+  - name: Tasks
+    description: Controlled task orchestration & approval
+  - name: Findings
+    description: Bug findings & impact analysis
+
+paths:
+  # ─── Health ───
+  /health:
+    get:
+      tags: [Health]
+      summary: Service health check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  service: { type: string }
+                  version: { type: string }
+                  llm_available: { type: boolean }
+                  pattern_library_patterns: { type: integer }
+
+  # ─── Dashboard ───
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Enterprise pilot operations center
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string, default: "real_project_demo" }
+      responses:
+        "200":
+          description: Dashboard HTML page with metrics, environment config, scan controls
+          content:
+            text/html:
+              schema: { type: string }
+
+  /api/pilot/overview:
+    get:
+      tags: [Dashboard]
+      summary: Get pilot overview JSON
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pilot overview with scorecard, tasks, connectors, knowledge asset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  overview: { type: object }
+
+  # ─── Knowledge Center ───
+  /knowledge:
+    get:
+      tags: [Knowledge]
+      summary: Enterprise knowledge center page
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Knowledge center with document upload, preview, delete
+
+  /api/knowledge/asset:
+    get:
+      tags: [Knowledge]
+      summary: Get knowledge asset JSON
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Knowledge asset with sources, rules, oracles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  knowledge_asset: { type: object }
+
+  /api/knowledge/ingest:
+    post:
+      tags: [Knowledge]
+      summary: Upload and ingest a document (PRD, OpenAPI, etc.)
+      description: |
+        Accepts base64-encoded file content. Automatically classifies, 
+        deduplicates, versions, and builds knowledge assets.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, content]
+              properties:
+                project_id: { type: string }
+                filename: { type: string, example: "openapi_order.yaml" }
+                type: { type: string, enum: [prd, openapi, mrd] }
+                content: { type: string, description: "Base64-encoded file content" }
+      responses:
+        "200":
+          description: Document ingested successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  filename: { type: string }
+                  doc_type: { type: string }
+                  knowledge_updated: { type: boolean }
+                  message: { type: string }
+        "400":
+          description: Missing content or decode failure
+
+  /api/knowledge/delete:
+    post:
+      tags: [Knowledge]
+      summary: Delete a knowledge source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, source_id]
+              properties:
+                project_id: { type: string }
+                source_id: { type: string }
+      responses:
+        "200":
+          description: Source deleted
+        "404":
+          description: Source not found
+
+  /api/knowledge/reanalyze:
+    post:
+      tags: [Knowledge]
+      summary: Rebuild knowledge center with fresh analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+      responses:
+        "200":
+          description: Knowledge center rebuilt
+
+  /api/knowledge/preview:
+    get:
+      tags: [Knowledge]
+      summary: Get file content for preview
+      parameters:
+        - name: source_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  filename: { type: string }
+                  content: { type: string }
+
+  # ─── Bug Findings ───
+  /findings:
+    get:
+      tags: [Findings]
+      summary: Bug findings detail page
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Findings page with severity filter, evidence cards
+
+  /api/findings:
+    get:
+      tags: [Findings]
+      summary: Get latest pipeline findings JSON
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pipeline report with findings and impact analyses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  report:
+                    type: object
+                    properties:
+                      stage1_industry: { type: object }
+                      stage2_discovery:
+                        type: object
+                        properties:
+                          total_findings: { type: integer }
+                          findings:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                severity: { type: string, enum: [P0, P1, P2, P3] }
+                                title: { type: string }
+                                category: { type: string }
+                                confidence_score: { type: number }
+                                description: { type: string }
+                      stage3_impact_analysis:
+                        type: object
+                        properties:
+                          total_analyses: { type: integer }
+                          analyses:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                bug_title: { type: string }
+                                severity: { type: string }
+                                source: { type: string }
+                                evidence: { type: string }
+                                impact_area: { type: string }
+
+  # ─── Autonomous Scan ───
+  /api/scan/run:
+    post:
+      tags: [Scan]
+      summary: Run autonomous bug scanning pipeline
+      description: |
+        5-stage pipeline: Industry Inference → Bug Discovery → Impact Analysis → 
+        Pattern Library → Flywheel Update. Safety gate blocks production environments.
+        LLM-powered semantic reasoning across 17 engines. Returns findings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+      responses:
+        "200":
+          description: Scan completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  status: { type: string }
+                  message: { type: string }
+                  stage2_discovery:
+                    type: object
+                    properties:
+                      total_findings: { type: integer }
+                      findings: { type: array, items: { type: object } }
+                  stage3_impact_analysis: { type: object }
+
+  # ─── Environment Config ───
+  /api/environment/config:
+    post:
+      tags: [Environment]
+      summary: Save test environment configuration
+      description: |
+        Saves target environment name, base URL, and timeout. 
+        Only test/staging/dev environments accepted. Production blocked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                payload:
+                  type: object
+                  properties:
+                    target_environment: { type: string, default: "test" }
+                    base_url: { type: string, example: "http://test-api:8080" }
+                    request_timeout_seconds: { type: integer, default: 10 }
+      responses:
+        "200":
+          description: Environment config saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  target_environment: { type: string }
+                  environments: { type: array, items: { type: object } }
+
+  # ─── Settings ───
+  /settings:
+    get:
+      tags: [Settings]
+      summary: System settings page
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Settings page with LLM config, connector registration
+
+  /api/settings/save:
+    post:
+      tags: [Settings]
+      summary: Save LLM configuration
+      description: Saves to .env file and updates in-process environment variables
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                llm_base_url: { type: string, example: "https://api.deepseek.com/v1" }
+                llm_model: { type: string, example: "deepseek-chat" }
+                llm_temperature: { type: string, example: "0.1" }
+                llm_api_key: { type: string, description: "API key (stored securely)" }
+      responses:
+        "200":
+          description: Settings saved with LLM availability check
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  llm_available: { type: boolean }
+                  message: { type: string }
+
+  # ─── Connectors ───
+  /api/connectors/register:
+    post:
+      tags: [Connectors]
+      summary: Register enterprise tool connector
+      description: Only stores credential references, never plaintext secrets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id: { type: string }
+                name: { type: string, example: "Feishu Docs" }
+                kind: { type: string, enum: [feishu_doc, confluence, jira, github_repo] }
+                credential_ref: { type: string, example: "env://FEISHU_APP_TOKEN" }
+      responses:
+        "200":
+          description: Connector registered
+
+  # ─── Tasks ───
+  /api/pilot/tasks:
+    get:
+      tags: [Tasks]
+      summary: List pilot tasks
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Task list with statuses
+    post:
+      tags: [Tasks]
+      summary: Enqueue a new pilot task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                payload:
+                  type: object
+                  properties:
+                    job_type: { type: string }
+                    target_environment: { type: string }
+      responses:
+        "200":
+          description: Task enqueued
+
+  /api/pilot/tasks/approve:
+    post:
+      tags: [Tasks]
+      summary: Approve a pending task
+      description: Submitter and approver must be different actors
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id: { type: string }
+                payload:
+                  type: object
+                  properties:
+                    job_id: { type: string }
+                    decision: { type: string, enum: [approved, rejected] }
+                    note: { type: string }
+      responses:
+        "200":
+          description: Task approved/rejected
+        "403":
+          description: Permission denied
+
+  /api/pilot/tasks/run-next:
+    post:
+      tags: [Tasks]
+      summary: Run next queued task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id: { type: string }
+      responses:
+        "200":
+          description: Next task started
+
+  # ─── Control Plane ───
+  /control-plane:
+    get:
+      tags: [Dashboard]
+      summary: Enterprise TestOps control plane
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Control plane with environment health, data autonomy, risk reports
+
+  /api/control-plane/overview:
+    get:
+      tags: [Dashboard]
+      summary: Get control plane overview JSON
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Control plane data
+
+  # ─── Release & Benchmark ───
+  /release:
+    get:
+      tags: [Dashboard]
+      summary: Release risk dashboard
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Release gate with risk scores, evidence, decision
+
+  /benchmark:
+    get:
+      tags: [Dashboard]
+      summary: Multi-industry benchmark report
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Benchmark results across 7+ industries
+
+components:
+  securitySchemes:
+    trustedActor:
+      type: apiKey
+      in: header
+      name: X-QualiBug-Actor
+      description: Trusted actor name (set by reverse proxy / SSO gateway)
+    trustedRole:
+      type: apiKey
+      in: header
+      name: X-QualiBug-Role
+      description: Trusted actor role (admin, qa_lead, project_owner, etc.)
+    trustedProjectScopes:
+      type: apiKey
+      in: header
+      name: X-QualiBug-Project-Scopes
+      description: Trusted reverse-proxy injected comma-separated project allow-list; required for non-local public/private-cloud bindings.
+
+security:
+  - trustedActor: []
+    trustedRole: []
+    trustedProjectScopes: []
