@@ -173,8 +173,12 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
     acceptance_gate = _as_dict(report.get("commercial_handoff_acceptance_gate"))
     secret_audit = _as_dict(report.get("commercial_handoff_secret_audit"))
     bundle = _as_dict(report.get("commercial_handoff_bundle"))
+    sla_gate = _as_dict(report.get("runtime_evidence_readiness_sla_gate"))
     summary = _as_dict(report.get("summary"))
     run_lineage_id = _stable_lineage_id(report, probe_plan_hash, sla_gate_hash, bundle_hash)
+    minimum_failures = [str(x) for x in _as_list(sla_gate.get("minimum_commercial_gate_failures")) if str(x)]
+    commercial_blockers = [str(x) for x in _as_list(sla_gate.get("commercial_blocking_reasons")) if str(x)]
+    acceptance_violations = [x for x in _as_list(acceptance_gate.get("violations")) if isinstance(x, dict)]
 
     if missing_required:
         status = "archive_receipt_with_missing_required_artifacts"
@@ -205,10 +209,14 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
         "remediation_verification_hash": remediation_hash,
         "customer_acceptance_status": acceptance_gate.get("status"),
         "customer_acceptance_gate_passed": bool(acceptance_gate.get("acceptance_gate_passed")),
+        "customer_acceptance_violation_count": int(acceptance_gate.get("violation_count") or len(acceptance_violations)),
+        "customer_acceptance_violation_ids": [str(v.get("violation_id")) for v in acceptance_violations if v.get("violation_id")],
         "handoff_status": bundle.get("status"),
         "secret_audit_status": secret_audit.get("status"),
         "safe_for_customer_handoff": bool(secret_audit.get("safe_for_customer_handoff")),
         "commercial_readiness_score": summary.get("runtime_evidence_readiness_score"),
+        "minimum_commercial_gate_failures": minimum_failures,
+        "commercial_blocking_reasons": commercial_blockers,
         "hash_scope_note": "execution_report_payload_hash is computed before embedding this Phase93M receipt to avoid a circular self-reference.",
     }
 
@@ -280,6 +288,8 @@ def render_handoff_archive_manifest_markdown(manifest: dict[str, Any]) -> str:
         f"- handoff bundle hash: `{receipt.get('commercial_handoff_bundle_hash')}`",
         f"- secret audit hash: `{receipt.get('commercial_handoff_secret_audit_hash')}`",
         f"- customer acceptance status: `{receipt.get('customer_acceptance_status')}`",
+        f"- customer acceptance violations: `{receipt.get('customer_acceptance_violation_count')}`",
+        f"- minimum commercial gate failures: `{receipt.get('minimum_commercial_gate_failures')}`",
         f"- safe for customer handoff: `{receipt.get('safe_for_customer_handoff')}`",
         "",
     ]
@@ -314,7 +324,10 @@ def render_immutable_run_receipt_markdown(receipt: dict[str, Any]) -> str:
         f"- handoff bundle hash: `{receipt.get('commercial_handoff_bundle_hash')}`",
         f"- secret audit hash: `{receipt.get('commercial_handoff_secret_audit_hash')}`",
         f"- customer acceptance status: `{receipt.get('customer_acceptance_status')}`",
+        f"- customer acceptance violations: `{receipt.get('customer_acceptance_violation_count')}`",
         f"- handoff status: `{receipt.get('handoff_status')}`",
+        f"- minimum commercial gate failures: `{receipt.get('minimum_commercial_gate_failures')}`",
+        f"- commercial blocking reasons: `{receipt.get('commercial_blocking_reasons')}`",
         f"- safe for customer handoff: `{receipt.get('safe_for_customer_handoff')}`",
         "",
         f"> {receipt.get('hash_scope_note')}",
