@@ -83,6 +83,16 @@ def build_commercial_lineage_reviewer_signoff_packet(report: dict[str, Any]) -> 
         "signoff_item_count": len(items),
         "signoff_items": items,
         "blocked_gate_ids": [str((b or {}).get("gate_id") or "UNKNOWN-BLOCKER") for b in blockers if isinstance(b, dict)],
+        "blocked_gate_details": [
+            {
+                "gate_id": b.get("gate_id"),
+                "severity": b.get("severity"),
+                "reason": b.get("reason"),
+                "changed_fields": b.get("changed_fields"),
+            }
+            for b in blockers
+            if isinstance(b, dict)
+        ],
         "closure_claim_count": len(closure_claims),
         "closure_claims_under_review": [
             {

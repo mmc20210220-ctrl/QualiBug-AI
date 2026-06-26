@@ -51,6 +51,11 @@ def build_commercial_closure_acceptance_ledger(report: dict[str, Any]) -> dict[s
     global_state = str(dashboard.get("closure_claim_state") or "")
     signoff_status = str(signoff.get("status") or "")
     claims = _claims_from_dashboard(dashboard)
+    audit_blockers = [
+        blocker for blocker in _as_list(signoff.get("blocked_gate_details") or gate.get("blockers"))
+        if isinstance(blocker, dict)
+    ]
+    audit_blocker_ids = [str(blocker.get("gate_id") or "UNKNOWN-BLOCKER") for blocker in audit_blockers]
 
     entries: list[dict[str, Any]] = []
     for index, claim in enumerate(claims, 1):
@@ -66,6 +71,8 @@ def build_commercial_closure_acceptance_ledger(report: dict[str, Any]) -> dict[s
             "acceptance_rationale": rationale,
             "requires_reviewer_signoff": status == "pending_reviewer_signoff",
             "blocked": status == "blocked_by_lineage_audit",
+            "audit_blocker_ids": audit_blocker_ids if status == "blocked_by_lineage_audit" else [],
+            "audit_blocker_details": audit_blockers if status == "blocked_by_lineage_audit" else [],
         })
 
     counts: dict[str, int] = {}
@@ -98,6 +105,9 @@ def build_commercial_closure_acceptance_ledger(report: dict[str, Any]) -> dict[s
         "previous_run_lineage_id": dashboard.get("previous_run_lineage_id"),
         "closure_claim_state": global_state,
         "signoff_packet_status": signoff_status,
+        "audit_blocker_count": len(audit_blockers),
+        "audit_blocker_ids": audit_blocker_ids,
+        "audit_blocker_details": audit_blockers,
         "ledger_entry_count": len(entries),
         "acceptance_status_counts": counts,
         "ledger_entries": entries,
