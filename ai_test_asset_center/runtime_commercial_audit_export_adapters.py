@@ -60,6 +60,9 @@ def _event_description(event: dict[str, Any], run_lineage_id: str) -> str:
     for key in ("gate_status", "dashboard_status", "signoff_status", "comparison_status", "commercial_acceptance_status", "endpoint"):
         if event.get(key) not in (None, ""):
             lines.append(f"{key}: {event.get(key)}")
+    blocker_ids = [str(x) for x in _as_list(event.get("audit_blocker_ids")) if str(x)]
+    if blocker_ids:
+        lines.append("audit_blocker_ids: " + ", ".join(blocker_ids))
     return "\n".join(lines)
 
 
@@ -121,6 +124,7 @@ def build_commercial_audit_export_adapters(report: dict[str, Any]) -> dict[str, 
             "gate_status": event.get("gate_status") or "",
             "requires_reviewer_signoff": str(bool(event.get("requires_reviewer_signoff"))).lower(),
             "blocked": str(bool(event.get("blocked"))).lower(),
+            "audit_blocker_ids": ", ".join(str(x) for x in _as_list(event.get("audit_blocker_ids")) if str(x)),
         })
 
     closure_keys: list[dict[str, Any]] = []
@@ -138,6 +142,8 @@ def build_commercial_audit_export_adapters(report: dict[str, Any]) -> dict[str, 
             "commercial_acceptance_status": entry.get("commercial_acceptance_status"),
             "requires_reviewer_signoff": bool(entry.get("requires_reviewer_signoff")),
             "blocked": bool(entry.get("blocked")),
+            "audit_blocker_ids": entry.get("audit_blocker_ids") or [],
+            "audit_blocker_details": entry.get("audit_blocker_details") or [],
         })
 
     critical_or_warning_events = [e for e in events if str(e.get("severity") or "").lower() in {"critical", "warning"}]
@@ -239,6 +245,7 @@ def render_csv_audit_ledger(exports: dict[str, Any]) -> str:
         "gate_status",
         "requires_reviewer_signoff",
         "blocked",
+        "audit_blocker_ids",
     ]
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")

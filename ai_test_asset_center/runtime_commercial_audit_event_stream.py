@@ -102,6 +102,8 @@ def build_commercial_audit_event_stream(report: dict[str, Any]) -> dict[str, Any
             commercial_acceptance_status=status,
             requires_reviewer_signoff=bool(entry.get("requires_reviewer_signoff")),
             blocked=bool(entry.get("blocked")),
+            audit_blocker_ids=entry.get("audit_blocker_ids") or [],
+            audit_blocker_details=entry.get("audit_blocker_details") or [],
         ))
 
     severity_counts: dict[str, int] = {}
