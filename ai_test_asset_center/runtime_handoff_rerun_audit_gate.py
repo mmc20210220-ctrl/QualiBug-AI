@@ -14,6 +14,13 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _changes_by_category(comparison: dict[str, Any], category: str) -> list[dict[str, Any]]:
+    return [
+        change for change in (comparison.get("changes") or [])
+        if isinstance(change, dict) and str(change.get("category") or "") == category
+    ]
+
+
 def build_handoff_rerun_audit_gate(report: dict[str, Any]) -> dict[str, Any]:
     comparison = _as_dict(report.get("handoff_receipt_comparison"))
     fix_index = _as_dict(report.get("fix_verification_loop_index"))
@@ -30,6 +37,22 @@ def build_handoff_rerun_audit_gate(report: dict[str, Any]) -> dict[str, Any]:
         blockers.append({"gate_id": "RERUN-CURRENT-RECEIPT-MISSING", "severity": "P0", "reason": "Current run has no immutable receipt."})
     if status == "rerun_input_changed_new_lineage":
         blockers.append({"gate_id": "RERUN-INPUT-LINEAGE-CHANGED", "severity": "P0", "reason": "Probe plan/input hash changed; do not use this rerun to close previous findings."})
+    commercial_gate_changes = _changes_by_category(comparison, "commercial_gate")
+    acceptance_gate_changes = _changes_by_category(comparison, "acceptance_gate")
+    if commercial_gate_changes:
+        blockers.append({
+            "gate_id": "RERUN-MINIMUM-COMMERCIAL-GATE-CHANGED",
+            "severity": "P0",
+            "reason": "Minimum commercial gate failures or commercial blockers changed; rerun closure requires a fresh commercial acceptance review.",
+            "changed_fields": [str(change.get("field")) for change in commercial_gate_changes if change.get("field")],
+        })
+    if acceptance_gate_changes:
+        blockers.append({
+            "gate_id": "RERUN-CUSTOMER-ACCEPTANCE-GATE-CHANGED",
+            "severity": "P0",
+            "reason": "Customer acceptance gate or violation state changed; do not close previous commercial claims without re-acceptance.",
+            "changed_fields": [str(change.get("field")) for change in acceptance_gate_changes if change.get("field")],
+        })
     if status == "rerun_same_input_delivery_changed":
         warnings.append({"gate_id": "RERUN-DELIVERY-ARCHIVE-CHANGED", "severity": "P1", "reason": "Input hash is stable, but SLA/handoff/artifact hashes changed; require reviewer approval before closure claim."})
     if not previous_present:
