@@ -15,6 +15,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,9 +78,10 @@ def _load_project_bugs(project_dir: Path) -> list[RuntimeBug]:
         path = _normalize_request_path(str(bug.get("endpoint_hint") or ""))
         if not path:
             continue
-        method = method_by_hint.get(path)
-        if not method:
-            method = "GET" if ("?" in path or re.search(r"/(?:list|search|export|reports?)\\b", path, re.I)) else "POST"
+        if "?" in path or re.search(r"/(?:list|search|export|reports?)(?:\?|$)", path, re.I):
+            method = "GET"
+        else:
+            method = method_by_hint.get(path) or "POST"
         key = (method, path)
         if key in seen:
             continue
@@ -116,6 +118,10 @@ class BenchmarkRuntime:
             if enabled and project_dir.name not in enabled:
                 continue
             self.bugs.extend(_load_project_bugs(project_dir))
+        self.search_bugs = [
+            bug for bug in self.bugs
+            if bug.method == "GET" and re.search(r"/(?:list|search)(?:\?|$)", bug.path)
+        ]
 
     def reset(self) -> None:
         self.created_resources.clear()
@@ -126,6 +132,10 @@ class BenchmarkRuntime:
                 continue
             if bug.pattern.match(path):
                 return bug
+        if method.upper() == "GET":
+            for bug in self.search_bugs:
+                if _canonical_lookup_path(path) == _canonical_lookup_path(bug.path):
+                    return bug
         return None
 
     def response_for(self, bug: RuntimeBug, request: Request, body: Any) -> dict[str, Any]:
@@ -164,6 +174,20 @@ class BenchmarkRuntime:
 
 runtime = BenchmarkRuntime(_default_suite_root())
 app = FastAPI(title="QualiBug Benchmark Suite v3 Runtime Target", version="1.0")
+
+
+def _canonical_lookup_path(path: str) -> str:
+    value = urllib.parse.unquote(str(path or ""))
+    domain = ""
+    match = re.match(r"^/api/v\d+/([^/]+)", value)
+    if match:
+        domain = "/" + match.group(1)
+    value = re.sub(r"^/api/v\d+/[^/]+", "", value)
+    if value.startswith("/search"):
+        return domain + "/search"
+    if value.startswith("/list"):
+        return domain + "/list"
+    return value
 
 
 @app.get("/__health")

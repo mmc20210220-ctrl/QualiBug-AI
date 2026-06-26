@@ -30,6 +30,14 @@ This is deliberately separate from the offline `2400/2400` score.  The offline
 score measures candidate recall against hidden ground truth; this runtime run
 measures reproducible HTTP evidence.
 
+Runtime target policy:
+
+- `list` / `search` / report-style query surfaces are modeled as GET read
+  surfaces in this benchmark target.
+- Mutating business commands remain POST/PUT/PATCH/DELETE surfaces.
+- Query endpoints are matched with their business domain prefix so evidence from
+  one project cannot satisfy another project's probe.
+
 Latest local validation:
 
 - loaded runtime surfaces: 1095
