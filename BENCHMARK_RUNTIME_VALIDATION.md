@@ -53,7 +53,7 @@ Suite v3 projects, executes each project's generated `grounded_probe_plan.json`,
 and writes an aggregate report to
 `platform_outputs/benchmark_runtime_suite_v3_full/suite_runtime_validation_summary.json`.
 
-Latest bounded full-suite validation (`-MaxProbesPerProject 20`):
+Latest bounded full-suite validation (`-MaxProbesPerProject 20`, high-priority smoke):
 
 - projects: 15
 - probes: 300
@@ -63,3 +63,20 @@ Latest bounded full-suite validation (`-MaxProbesPerProject 20`):
 - protected: 0
 - needs more evidence: 0
 - before/after snapshot requests: 570
+
+Latest expanded full-suite validation (`-MaxProbesPerProject 80`, deeper queue):
+
+- projects: 15
+- probes: 1200
+- runtime confirmed: 750
+- strong evidence findings: 750
+- high/P1 findings: 557
+- protected: 90
+- needs more evidence: 0
+- before/after snapshot requests: 2220
+- confirmed by risk type: ownership_scope_probe 360, auth_boundary_probe 360, state_transition_probe 30
+- observed non-confirmed outcomes: inconclusive 300, protected 90, observed_no_finding 60
+
+The 20-probe smoke run is intentionally top-of-queue and measures priority
+quality. The 80-probe run measures deeper queue behavior and is the more honest
+commercial readiness indicator.
