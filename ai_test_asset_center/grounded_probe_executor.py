@@ -205,13 +205,19 @@ def _negative_headers(headers: dict[str, str], names: list[str]) -> dict[str, st
 
 
 def _join_url(base_url: str, path: str) -> str:
+    def quote_url_path(value: str) -> str:
+        parsed = urllib.parse.urlsplit(value)
+        quoted_path = urllib.parse.quote(parsed.path, safe="/%")
+        quoted_query = urllib.parse.quote(parsed.query, safe="=&%:/?,+")
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, quoted_path, quoted_query, parsed.fragment))
+
     base = str(base_url or "").rstrip("/")
     if not base:
-        return str(path)
+        return quote_url_path(str(path))
     p = str(path or "")
     if re.match(r"^https?://", p, re.I):
-        return p
-    return base + "/" + p.lstrip("/")
+        return quote_url_path(p)
+    return base + "/" + quote_url_path(p.lstrip("/"))
 
 
 def _url_host(base_url: str) -> str:

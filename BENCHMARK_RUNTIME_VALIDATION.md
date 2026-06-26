@@ -68,15 +68,21 @@ Latest expanded full-suite validation (`-MaxProbesPerProject 80`, deeper queue):
 
 - projects: 15
 - probes: 1200
-- runtime confirmed: 750
-- strong evidence findings: 750
-- high/P1 findings: 557
-- protected: 90
+- runtime confirmed: 1005
+- strong evidence findings: 1005
+- high/P1 findings: 797
+- protected: 105
 - needs more evidence: 0
 - before/after snapshot requests: 2220
-- confirmed by risk type: ownership_scope_probe 360, auth_boundary_probe 360, state_transition_probe 30
-- observed non-confirmed outcomes: inconclusive 300, protected 90, observed_no_finding 60
+- confirmed by risk type: ownership_scope_probe 480, auth_boundary_probe 480, state_transition_probe 45
+- observed non-confirmed outcomes: protected 105, observed_no_finding 90
+- runtime execution errors: 0
 
 The 20-probe smoke run is intentionally top-of-queue and measures priority
 quality. The 80-probe run measures deeper queue behavior and is the more honest
 commercial readiness indicator.
+
+The expanded result improved after fixing runtime URL percent-encoding for
+non-ASCII business paths. Before the fix, 300 probes were inconclusive due to
+`UnicodeEncodeError`; after the fix, those probes execute normally and the full
+suite confirmation rate is 1005 / 1200.
