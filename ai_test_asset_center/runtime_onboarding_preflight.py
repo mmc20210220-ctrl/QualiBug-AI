@@ -179,13 +179,27 @@ def _auth_readiness(config: dict[str, Any]) -> dict[str, Any]:
     if not accounts:
         headers = config.get("default_headers") if isinstance(config.get("default_headers"), dict) else {}
         token_like = any(str(k).lower() in {"authorization", "cookie", "x-api-key"} for k in headers)
-        return {"ok": token_like, "mode": "headers_or_no_accounts", "successful_session_count": 1 if token_like else 0, "message": "default auth headers configured" if token_like else "no test accounts or auth headers configured"}
+        return {
+            "ok": False,
+            "configured": token_like,
+            "verified": False,
+            "mode": "headers_configured_unverified" if token_like else "headers_or_no_accounts",
+            "successful_session_count": 0,
+            "message": "default auth headers configured but no login/session health check has verified them" if token_like else "no test accounts or auth headers configured",
+        }
     if runtime.get("mode") == "account_login":
         success = int(runtime.get("successful_session_count") or 0)
-        return {"ok": success > 0, "mode": "account_login", "successful_session_count": success, "message": f"{success} account session(s) derived by login flow" if success else "account login attempted but no usable session was derived"}
+        return {
+            "ok": success > 0,
+            "configured": True,
+            "verified": success > 0,
+            "mode": "account_login",
+            "successful_session_count": success,
+            "message": f"{success} account session(s) derived by login flow" if success else "account login attempted but no usable session was derived",
+        }
     if runtime.get("blocked_reason"):
-        return {"ok": False, "mode": runtime.get("mode"), "successful_session_count": 0, "message": str(runtime.get("blocked_reason"))}
-    return {"ok": False, "mode": runtime.get("mode") or "unknown", "successful_session_count": 0, "message": "accounts configured but login flow was not resolved"}
+        return {"ok": False, "configured": bool(accounts), "verified": False, "mode": runtime.get("mode"), "successful_session_count": 0, "message": str(runtime.get("blocked_reason"))}
+    return {"ok": False, "configured": bool(accounts), "verified": False, "mode": runtime.get("mode") or "unknown", "successful_session_count": 0, "message": "accounts configured but login flow was not resolved"}
 
 
 def _sandbox_readiness(config: dict[str, Any], allow_write_sandbox: bool) -> dict[str, Any]:
