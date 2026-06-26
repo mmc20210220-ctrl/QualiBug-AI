@@ -105,6 +105,7 @@ def _signoff_checklist(report: dict[str, Any], status: str) -> list[dict[str, An
     safety = _as_dict(report.get("onboarding_patch_safety_validation"))
     findings = [x for x in _as_list(report.get("findings")) if isinstance(x, dict)]
     p0p1 = [f for f in findings if str(f.get("priority")) in {"P0", "P1"}]
+    minimum_failures = [str(x) for x in _as_list(gate.get("minimum_commercial_gate_failures")) if str(x)]
 
     return [
         {
@@ -120,6 +121,15 @@ def _signoff_checklist(report: dict[str, Any], status: str) -> list[dict[str, An
             "required": True,
             "passed": bool(gate.get("sla_gate_passed")),
             "text": "Review evidence readiness score and whether commercial runtime SLA can be claimed.",
+            "minimum_gate_failures": minimum_failures,
+        },
+        {
+            "item_id": "HANDOFF-MINIMUM-COMMERCIAL-GATE",
+            "owner": "delivery_owner",
+            "required": True,
+            "passed": not minimum_failures,
+            "text": "Confirm all minimum commercial gate checks passed, including verified auth session, non-production target, base URL and document grounding.",
+            "minimum_gate_failures": minimum_failures,
         },
         {
             "item_id": "HANDOFF-PATCH-SAFETY",
@@ -216,6 +226,8 @@ def build_commercial_handoff_bundle(report: dict[str, Any]) -> dict[str, Any]:
             "p0_p1_finding_count": sum(1 for f in findings if str(f.get("priority")) in {"P0", "P1"}),
             "runtime_sla_must_run_count": policy.get("must_run_for_sla_count", summary.get("runtime_sla_must_run_count", 0)),
             "blocked_before_sla_count": policy.get("blocked_before_sla_count", summary.get("runtime_sla_blocked_before_sla_count", 0)),
+            "minimum_commercial_gate_failures": _as_list(gate.get("minimum_commercial_gate_failures")),
+            "commercial_blocking_reasons": _as_list(gate.get("commercial_blocking_reasons")),
             "handoff_blocker_count": sum(1 for item in signoff if item.get("required") and not item.get("passed")),
         },
         "artifact_manifest": _artifact_manifest(report),
@@ -257,6 +269,8 @@ def render_commercial_handoff_markdown(bundle: dict[str, Any]) -> str:
         "p0_p1_finding_count",
         "runtime_sla_must_run_count",
         "blocked_before_sla_count",
+        "minimum_commercial_gate_failures",
+        "commercial_blocking_reasons",
         "handoff_blocker_count",
     ]:
         lines.append(f"- {key}: `{summary.get(key)}`")
