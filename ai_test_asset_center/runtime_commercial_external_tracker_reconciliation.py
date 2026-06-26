@@ -38,6 +38,8 @@ def build_commercial_external_tracker_reconciliation(report: dict[str, Any]) -> 
     gate_status = str(gate.get("status") or "not_built")
     gate_ready = bool(gate.get("import_ready"))
     placeholder_count = int(gate.get("placeholder_count") or 0)
+    import_gate_violations = [item for item in _as_list(gate.get("violations")) if isinstance(item, dict)]
+    import_gate_violation_kinds = [str(item.get("kind") or "unknown_violation") for item in import_gate_violations]
 
     entries: list[dict[str, Any]] = []
 
@@ -65,6 +67,8 @@ def build_commercial_external_tracker_reconciliation(report: dict[str, Any]) -> 
             "external_id": external_id or "",
             "external_url": result.get("url") or "",
             "reconciliation_status": status,
+            "import_gate_violation_kinds": import_gate_violation_kinds if status == "blocked_by_import_gate" else [],
+            "import_gate_violations": import_gate_violations if status == "blocked_by_import_gate" else [],
             "customer_action": _entry_action(status),
         })
 
@@ -110,6 +114,9 @@ def build_commercial_external_tracker_reconciliation(report: dict[str, Any]) -> 
         "project_id": report.get("project_id") or exports.get("project_id"),
         "run_lineage_id": exports.get("run_lineage_id"),
         "import_gate_status": gate_status,
+        "import_gate_violation_count": int(gate.get("violation_count") or len(import_gate_violations)),
+        "import_gate_violation_kinds": import_gate_violation_kinds,
+        "import_gate_violations": import_gate_violations,
         "entry_count": len(entries),
         "status_counts": status_counts,
         "entries": entries,

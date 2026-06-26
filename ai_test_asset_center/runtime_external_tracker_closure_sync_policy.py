@@ -168,6 +168,8 @@ def build_external_tracker_closure_sync_policy(report: dict[str, Any]) -> dict[s
             "sync_rationale": rationale,
             "audit_blocker_ids": entry.get("audit_blocker_ids") or [],
             "audit_blocker_details": entry.get("audit_blocker_details") or [],
+            "import_gate_violation_kinds": reconciliation.get("import_gate_violation_kinds") or [],
+            "import_gate_violations": reconciliation.get("import_gate_violations") or [],
             "external_tracker_references": external_refs,
             "required_tracker_comment_attachments": _attachment_links(report, entry),
         })
