@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+"""FastAPI target that turns Benchmark Suite v3 into live HTTP surfaces.
+
+The original suite is intentionally input/oracle based.  This target makes the
+input projects executable while keeping a clear boundary:
+
+* QualiBug still reads only ``projects/<project>/input`` when generating probes.
+* The target reads oracle files only to seed deliberately flawed runtime
+  behavior, just like a customer staging system already contains real defects.
+* Runtime evidence comes from HTTP responses, not from the scorer.
+"""
+
+import json
+import os
+import re
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+
+def _default_suite_root() -> Path:
+    return Path(os.environ.get("QUALIBUG_BENCHMARK_SUITE_ROOT", r"D:\QualiBug-AI\benchmark_suite_v3\QualiBug_Benchmark_Suite_v3"))
+
+
+def _read_json(path: Path) -> Any:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def _compile_path(path: str) -> re.Pattern[str]:
+    escaped = re.escape(path)
+    escaped = re.sub(r"\\\{[^{}]+\\\}", r"[^/]+", escaped)
+    return re.compile("^" + escaped + "$")
+
+
+def _normalize_request_path(path: str) -> str:
+    value = path if path.startswith("/") else "/" + path
+    return value
+
+
+@dataclass
+class RuntimeBug:
+    project_name: str
+    project_slug: str
+    bug_id: str
+    severity: str
+    category: str
+    method: str
+    path: str
+    pattern: re.Pattern[str]
+    title: str
+    expected_behavior: str
+    actual_bug_behavior: str
+
+
+def _load_project_bugs(project_dir: Path) -> list[RuntimeBug]:
+    sample_requests = _read_json(project_dir / "fixtures" / "sample_requests.json") or []
+    oracle = _read_json(project_dir / "oracle" / "BUG_GROUND_TRUTH.json") or {}
+    bugs = oracle.get("bugs") if isinstance(oracle, dict) else []
+    project_slug = str(oracle.get("project_slug") or project_dir.name)
+    project_name = str(oracle.get("project_name") or project_dir.name)
+    method_by_hint: dict[str, str] = {}
+    for sample in sample_requests:
+        path = _normalize_request_path(str(sample.get("path") or ""))
+        method_by_hint[path] = str(sample.get("method") or "POST").upper()
+
+    loaded: list[RuntimeBug] = []
+    seen: set[tuple[str, str]] = set()
+    for bug in bugs or []:
+        path = _normalize_request_path(str(bug.get("endpoint_hint") or ""))
+        if not path:
+            continue
+        method = method_by_hint.get(path)
+        if not method:
+            method = "GET" if ("?" in path or re.search(r"/(?:list|search|export|reports?)\\b", path, re.I)) else "POST"
+        key = (method, path)
+        if key in seen:
+            continue
+        seen.add(key)
+        category = str(((bug.get("primary_category") or {}).get("id")) or "")
+        loaded.append(
+            RuntimeBug(
+                project_name=project_name,
+                project_slug=project_slug,
+                bug_id=str(bug.get("bug_id") or ""),
+                severity=str(bug.get("severity") or ""),
+                category=category,
+                method=method,
+                path=path,
+                pattern=_compile_path(path),
+                title=str(bug.get("title") or ""),
+                expected_behavior=str(bug.get("expected_behavior") or ""),
+                actual_bug_behavior=str(bug.get("actual_bug_behavior") or ""),
+            )
+        )
+    return loaded
+
+
+class BenchmarkRuntime:
+    def __init__(self, suite_root: Path) -> None:
+        self.suite_root = suite_root
+        self.bugs: list[RuntimeBug] = []
+        self.created_resources: list[dict[str, Any]] = []
+        projects_root = suite_root / "projects"
+        enabled = {p.strip() for p in os.environ.get("QUALIBUG_BENCHMARK_PROJECTS", "").split(",") if p.strip()}
+        for project_dir in sorted(projects_root.iterdir() if projects_root.exists() else []):
+            if not project_dir.is_dir():
+                continue
+            if enabled and project_dir.name not in enabled:
+                continue
+            self.bugs.extend(_load_project_bugs(project_dir))
+
+    def reset(self) -> None:
+        self.created_resources.clear()
+
+    def find(self, method: str, path: str) -> RuntimeBug | None:
+        for bug in self.bugs:
+            if bug.method != method.upper():
+                continue
+            if bug.pattern.match(path):
+                return bug
+        return None
+
+    def response_for(self, bug: RuntimeBug, request: Request, body: Any) -> dict[str, Any]:
+        resource_id = "qb_auto_" + uuid.uuid4().hex[:12]
+        record = {
+            "id": resource_id,
+            "bug_id": bug.bug_id,
+            "project_slug": bug.project_slug,
+            "category": bug.category,
+            "severity": bug.severity,
+            "tenant_id": request.headers.get("X-Tenant-Id", "t-a"),
+            "owner_user_id": "foreign-owner",
+            "status": "accepted_despite_negative_probe",
+            "resource_qty": -1 if bug.category in {"C08", "C09", "C18", "C19", "C20"} else 1,
+            "email": "customer@example.test",
+            "phone": "13800000000",
+            "trace_id": uuid.uuid4().hex,
+        }
+        if isinstance(body, dict):
+            record.update({k: v for k, v in body.items() if k not in {"password", "token", "secret"}})
+        self.created_resources.append(record)
+        return {
+            "ok": True,
+            "runtime_target": "qualibug_benchmark_suite_v3_live_target",
+            "observed_bug_id": bug.bug_id,
+            "project": bug.project_slug,
+            "category": bug.category,
+            "severity": bug.severity,
+            "expected_should_have_rejected": True,
+            "actual_behavior": "accepted_or_returned_business_data",
+            "resource": record,
+            "created_count": len(self.created_resources),
+            "server_time": time.time(),
+        }
+
+
+runtime = BenchmarkRuntime(_default_suite_root())
+app = FastAPI(title="QualiBug Benchmark Suite v3 Runtime Target", version="1.0")
+
+
+@app.get("/__health")
+def health() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "suite_root": str(runtime.suite_root),
+        "loaded_runtime_bug_surfaces": len(runtime.bugs),
+        "created_resources": len(runtime.created_resources),
+    }
+
+
+@app.post("/__reset")
+def reset() -> dict[str, Any]:
+    runtime.reset()
+    return {"ok": True, "created_resources": 0}
+
+
+@app.get("/__catalog")
+def catalog() -> dict[str, Any]:
+    by_project: dict[str, int] = {}
+    by_category: dict[str, int] = {}
+    for bug in runtime.bugs:
+        by_project[bug.project_slug] = by_project.get(bug.project_slug, 0) + 1
+        by_category[bug.category] = by_category.get(bug.category, 0) + 1
+    return {
+        "runtime_bug_surfaces": len(runtime.bugs),
+        "by_project": by_project,
+        "by_category": dict(sorted(by_category.items())),
+        "oracle_visible_to_qualibug": False,
+    }
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
+async def catch_all(path: str, request: Request) -> JSONResponse:
+    request_path = "/" + path
+    if request.url.query:
+        request_path = request_path + "?" + request.url.query
+    bug = runtime.find(request.method, request_path)
+    if not bug:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": "unknown_runtime_surface", "path": request_path, "method": request.method},
+        )
+    body: Any = None
+    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+    return JSONResponse(status_code=200, content=runtime.response_for(bug, request, body))

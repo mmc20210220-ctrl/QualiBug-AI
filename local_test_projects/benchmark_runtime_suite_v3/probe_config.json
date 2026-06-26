@@ -1,0 +1,22 @@
+{
+  "environment_kind": "sandbox",
+  "base_url": "http://127.0.0.1:8011",
+  "default_headers": {
+    "Authorization": "Bearer benchmark-demo-token",
+    "X-Tenant-Id": "t-a"
+  },
+  "allow_write_probes": true,
+  "disposable_sandbox": {
+    "enabled": true,
+    "approval_id": "benchmark-runtime-suite-v3",
+    "target_kind": "sandbox",
+    "cleanup_strategy": "benchmark_reset",
+    "base_url_allowlist": [
+      "127.0.0.1",
+      "localhost"
+    ]
+  },
+  "auto_fixture": {
+    "enabled": true
+  }
+}
