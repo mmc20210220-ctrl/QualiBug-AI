@@ -97,8 +97,14 @@ def build_commercial_audit_export_import_gate(report: dict[str, Any]) -> dict[st
         missing = sorted(k for k in required_csv_fields if row.get(k) in (None, ""))
         if missing:
             violations.append({"kind": "csv_row_missing_required_fields", "external_tracking_key": row.get("external_tracking_key"), "missing_fields": missing})
+        if str(row.get("commercial_acceptance_status") or "") == "blocked_by_lineage_audit" and not str(row.get("audit_blocker_ids") or "").strip():
+            violations.append({"kind": "csv_blocked_closure_missing_audit_blocker_ids", "external_tracking_key": row.get("external_tracking_key"), "event_id": row.get("event_id")})
         if _has_raw_secret(row):
             violations.append({"kind": "csv_row_secret_leak", "external_tracking_key": row.get("external_tracking_key")})
+
+    for item in closure_keys:
+        if bool(item.get("blocked")) and not _as_list(item.get("audit_blocker_ids")):
+            violations.append({"kind": "closure_tracking_key_missing_audit_blocker_ids", "external_tracking_key": item.get("external_tracking_key"), "ledger_entry_id": item.get("ledger_entry_id")})
 
     event_count = int(exports.get("event_count") or 0)
     if event_count and (len(jira_issues) != event_count or len(linear_issues) != event_count or len(csv_rows) != event_count):
