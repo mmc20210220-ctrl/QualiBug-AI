@@ -43,6 +43,16 @@ def validate_external_tracker_sync_payloads(report: dict[str, Any]) -> dict[str,
     payloads = _as_dict(report.get("external_tracker_sync_payloads"))
     source_policy = _as_dict(report.get("external_tracker_closure_sync_policy"))
     source_status = str(source_policy.get("status") or payloads.get("source_policy_status") or "")
+    policy_by_id = {
+        str(policy.get("sync_policy_id")): policy
+        for policy in _as_list(source_policy.get("policies"))
+        if isinstance(policy, dict) and policy.get("sync_policy_id")
+    }
+    blocked_policy_ids = {
+        policy_id
+        for policy_id, policy in policy_by_id.items()
+        if bool(policy.get("blocked")) or str(policy.get("sync_status") or "").startswith("sync_blocked")
+    }
     violations: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
 
@@ -68,6 +78,24 @@ def validate_external_tracker_sync_payloads(report: dict[str, Any]) -> dict[str,
                 continue
             if _has_secret(item):
                 violations.append({"kind": "payload_secret_leak", "collection": collection_name, "sync_policy_id": item.get("sync_policy_id")})
+            sync_policy_id = str(item.get("sync_policy_id") or "")
+            source_entry = policy_by_id.get(sync_policy_id, {})
+            if collection_name in {"jira", "linear", "csv"} and sync_policy_id in blocked_policy_ids:
+                violations.append({
+                    "kind": "resolution_payload_from_blocked_policy",
+                    "collection": collection_name,
+                    "sync_policy_id": sync_policy_id,
+                    "audit_blocker_ids": source_entry.get("audit_blocker_ids") or [],
+                })
+            if collection_name == "hold" and sync_policy_id in blocked_policy_ids:
+                source_blocker_ids = _as_list(source_entry.get("audit_blocker_ids"))
+                hold_blocker_ids = _as_list(item.get("audit_blocker_ids"))
+                if source_blocker_ids and not hold_blocker_ids:
+                    violations.append({
+                        "kind": "hold_item_missing_audit_blockers",
+                        "sync_policy_id": sync_policy_id,
+                        "expected_audit_blocker_ids": source_blocker_ids,
+                    })
             if collection_name in {"jira", "linear"} and item.get("dry_run_only") is not True:
                 violations.append({"kind": "mutation_payload_not_marked_dry_run", "collection": collection_name, "sync_policy_id": item.get("sync_policy_id")})
             if collection_name == "jira":
