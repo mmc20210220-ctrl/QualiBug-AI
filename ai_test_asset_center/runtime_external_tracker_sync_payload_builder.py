@@ -49,6 +49,13 @@ def _comment(policy: dict[str, Any], report: dict[str, Any]) -> str:
             lines.append(
                 f"- {blocker.get('gate_id')}: {blocker.get('reason')}"
             )
+    import_violations = [v for v in _as_list(policy.get("import_gate_violations")) if isinstance(v, dict)]
+    if import_violations:
+        lines.append("import_gate_violations:")
+        for violation in import_violations[:10]:
+            lines.append(
+                f"- {violation.get('kind')}: {violation.get('message') or violation.get('ledger_entry_id') or violation.get('external_tracking_key') or ''}"
+            )
     for link in _as_list(policy.get("required_tracker_comment_attachments")):
         if isinstance(link, dict):
             lines.append(f"- {link.get('kind')}: {link.get('path') or link.get('hash')}")
@@ -115,6 +122,8 @@ def build_external_tracker_sync_payloads(report: dict[str, Any]) -> dict[str, An
                 "hold_reason": policy.get("sync_rationale") or policy.get("sync_action"),
                 "audit_blocker_ids": policy.get("audit_blocker_ids") or [],
                 "audit_blocker_details": policy.get("audit_blocker_details") or [],
+                "import_gate_violation_kinds": policy.get("import_gate_violation_kinds") or [],
+                "import_gate_violations": policy.get("import_gate_violations") or [],
                 "recommended_external_state": "Open / Do not mark resolved",
                 "comment": comment,
             })

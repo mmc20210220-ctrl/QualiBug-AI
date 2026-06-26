@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai_test_asset_center.runtime_commercial_external_tracker_reconciliation import build_commercial_external_tracker_reconciliation
 from ai_test_asset_center.runtime_external_tracker_closure_sync_policy import build_external_tracker_closure_sync_policy
+from ai_test_asset_center.runtime_external_tracker_sync_payload_builder import build_external_tracker_sync_payloads
 
 
 def _blocked_import_report() -> dict[str, object]:
@@ -64,3 +65,17 @@ def test_closure_sync_policy_receives_reconciliation_import_gate_violations() ->
     assert item["sync_status"] == "sync_blocked_by_import_gate"
     assert item["import_gate_violation_kinds"] == ["closure_tracking_key_missing_audit_blocker_ids"]
     assert item["import_gate_violations"][0]["ledger_entry_id"] == "CLAIM-0001"
+
+
+def test_tracker_hold_payload_comment_includes_import_gate_violations() -> None:
+    report = _blocked_import_report()
+    report["commercial_external_tracker_reconciliation"] = build_commercial_external_tracker_reconciliation(report)
+    report["external_tracker_closure_sync_policy"] = build_external_tracker_closure_sync_policy(report)
+
+    payloads = build_external_tracker_sync_payloads(report)
+    hold = payloads["hold_items"][0]
+
+    assert hold["import_gate_violation_kinds"] == ["closure_tracking_key_missing_audit_blocker_ids"]
+    assert hold["import_gate_violations"][0]["ledger_entry_id"] == "CLAIM-0001"
+    assert "import_gate_violations:" in hold["comment"]
+    assert "closure_tracking_key_missing_audit_blocker_ids" in hold["comment"]
