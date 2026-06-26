@@ -18,5 +18,27 @@
   },
   "auto_fixture": {
     "enabled": true
+  },
+  "snapshots": {
+    "*": {
+      "before": [
+        {
+          "method": "GET",
+          "path": "/__state",
+          "observer_kind": "benchmark_runtime_state_projection",
+          "evidence_goal": "capture benchmark target business state before the negative probe",
+          "source": "benchmark_runtime_validation_config"
+        }
+      ],
+      "after": [
+        {
+          "method": "GET",
+          "path": "/__state",
+          "observer_kind": "benchmark_runtime_state_projection",
+          "evidence_goal": "capture benchmark target business state after the negative probe",
+          "source": "benchmark_runtime_validation_config"
+        }
+      ]
+    }
   }
 }

@@ -197,6 +197,19 @@ def catalog() -> dict[str, Any]:
     }
 
 
+@app.get("/__state")
+def state() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "record_count": len(runtime.created_resources),
+        "records": runtime.created_resources[-200:],
+        "by_category": {
+            category: sum(1 for row in runtime.created_resources if str(row.get("category")) == category)
+            for category in sorted({str(row.get("category")) for row in runtime.created_resources})
+        },
+    }
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
 async def catch_all(path: str, request: Request) -> JSONResponse:
     request_path = "/" + path

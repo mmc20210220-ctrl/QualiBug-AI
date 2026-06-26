@@ -23,7 +23,21 @@ Current script scope:
 - Uses project `03_mes_work_order_quality_trace`.
 - Executes up to 120 grounded probes against the live target.
 - Writes evidence to `platform_outputs/benchmark_runtime_suite_v3_mes`.
+- Captures before/after snapshots from the runtime target `GET /__state`
+  observer.
 
 This is deliberately separate from the offline `2400/2400` score.  The offline
 score measures candidate recall against hidden ground truth; this runtime run
 measures reproducible HTTP evidence.
+
+Latest local validation:
+
+- loaded runtime surfaces: 1095
+- executed probes: 120
+- runtime confirmed: 82
+- protected: 6
+- needs more evidence: 0
+- before/after snapshot requests: 228
+- write probes with before/after evidence: 114 / 114
+- strong evidence findings: 82
+- high/P1 findings: 25
