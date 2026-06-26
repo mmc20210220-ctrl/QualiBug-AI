@@ -15,8 +15,12 @@ _COMPARE_FIELDS: list[tuple[str, str, str]] = [
     ("probe_plan_hash", "input", "Probe plan / grounded input changed."),
     ("runtime_evidence_sla_gate_hash", "sla_gate", "Commercial evidence SLA gate changed."),
     ("runtime_sla_execution_policy_hash", "sla_policy", "SLA execution policy changed."),
+    ("minimum_commercial_gate_failures", "commercial_gate", "Minimum commercial gate failure set changed."),
+    ("commercial_blocking_reasons", "commercial_gate", "Commercial blocking reason set changed."),
     ("commercial_handoff_bundle_hash", "handoff_bundle", "Commercial handoff bundle changed."),
     ("commercial_handoff_acceptance_gate_hash", "acceptance_gate", "Customer acceptance gate changed."),
+    ("customer_acceptance_violation_count", "acceptance_gate", "Customer acceptance violation count changed."),
+    ("customer_acceptance_violation_ids", "acceptance_gate", "Customer acceptance violation set changed."),
     ("commercial_handoff_secret_audit_hash", "secret_audit", "Secret audit changed."),
     ("remediation_verification_hash", "remediation", "Developer remediation artifact changed."),
     ("artifact_archive_hash", "artifact_archive", "Generated artifact archive changed."),
@@ -35,6 +39,16 @@ def _receipt_from_report(report: dict[str, Any] | None) -> dict[str, Any]:
         return receipt
     manifest = _as_dict(report.get("handoff_archive_manifest"))
     return _as_dict(manifest.get("immutable_run_receipt"))
+
+
+def _normalize_compare_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return sorted(str(x) for x in value)
+    if isinstance(value, tuple):
+        return sorted(str(x) for x in value)
+    if isinstance(value, set):
+        return sorted(str(x) for x in value)
+    return value
 
 
 def compare_immutable_run_receipts(current_report: dict[str, Any], previous_report: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -67,8 +81,8 @@ def compare_immutable_run_receipts(current_report: dict[str, Any], previous_repo
     changes: list[dict[str, Any]] = []
     matrix: list[dict[str, Any]] = []
     for field, category, reason in _COMPARE_FIELDS:
-        cur = current.get(field)
-        prev = previous.get(field)
+        cur = _normalize_compare_value(current.get(field))
+        prev = _normalize_compare_value(previous.get(field))
         match = bool(cur and prev and cur == prev)
         row = {
             "field": field,
