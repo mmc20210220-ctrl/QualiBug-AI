@@ -42,6 +42,13 @@ def _comment(policy: dict[str, Any], report: dict[str, Any]) -> str:
         f"receipt_hash: {receipt.get('receipt_hash') or receipt.get('run_receipt_hash') or ''}",
         "evidence_links:",
     ]
+    blockers = [b for b in _as_list(policy.get("audit_blocker_details")) if isinstance(b, dict)]
+    if blockers:
+        lines.append("audit_blockers:")
+        for blocker in blockers[:10]:
+            lines.append(
+                f"- {blocker.get('gate_id')}: {blocker.get('reason')}"
+            )
     for link in _as_list(policy.get("required_tracker_comment_attachments")):
         if isinstance(link, dict):
             lines.append(f"- {link.get('kind')}: {link.get('path') or link.get('hash')}")
@@ -106,6 +113,8 @@ def build_external_tracker_sync_payloads(report: dict[str, Any]) -> dict[str, An
                 "external_closure_tracking_key": policy.get("external_closure_tracking_key"),
                 "sync_status": status,
                 "hold_reason": policy.get("sync_rationale") or policy.get("sync_action"),
+                "audit_blocker_ids": policy.get("audit_blocker_ids") or [],
+                "audit_blocker_details": policy.get("audit_blocker_details") or [],
                 "recommended_external_state": "Open / Do not mark resolved",
                 "comment": comment,
             })
