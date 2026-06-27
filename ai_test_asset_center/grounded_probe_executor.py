@@ -1244,13 +1244,7 @@ def _execute_snapshots(config: dict[str, Any], base_url: str, probe: dict[str, A
         if method not in READ_METHODS:
             out.append({"skipped": True, "reason": f"snapshot_method_not_read_only:{method}"})
             continue
-        path_params = dict((config.get("path_params") or {}).get("*") or {})
-        if _auto_fixture_enabled(config):
-            bundle = _auto_fixture_bundle(config, probe)
-            if isinstance(bundle.get("path_params"), dict):
-                path_params.update(bundle.get("path_params") or {})
-        if isinstance(item.get("path_params"), dict):
-            path_params.update(item.get("path_params") or {})
+        path_params = _fixture_item_path_params(config, probe, item)
         path, missing = _render_path(str(item.get("path") or ""), path_params)
         if missing:
             out.append({"skipped": True, "reason": f"snapshot_missing_path_params:{','.join(missing)}", "path": item.get("path"), "observer_kind": item.get("observer_kind")})
@@ -1278,6 +1272,51 @@ def _auto_fixture_requests(config: dict[str, Any], probe: dict[str, Any], key: s
     return [r for r in (raw if isinstance(raw, list) else []) if isinstance(r, dict)][:5]
 
 
+def _runtime_bound_fixture_path_params(config: dict[str, Any], probe: dict[str, Any]) -> dict[str, Any]:
+    """Return path params that were rebound from observed fixture/flow responses."""
+    if not _auto_fixture_enabled(config):
+        return {}
+    bundle = _auto_fixture_bundle(config, probe)
+    if not isinstance(bundle, dict):
+        return {}
+    params = bundle.get("path_params") if isinstance(bundle.get("path_params"), dict) else {}
+    fields: list[str] = []
+    receipt = bundle.get("receipt") if isinstance(bundle.get("receipt"), dict) else {}
+    for field in receipt.get("runtime_bound_path_params") or []:
+        if str(field) not in fields:
+            fields.append(str(field))
+    for binding in bundle.get("runtime_bindings") or []:
+        if not isinstance(binding, dict) or not binding.get("bound"):
+            continue
+        for field in binding.get("path_params") or []:
+            if str(field) not in fields:
+                fields.append(str(field))
+    return {field: params[field] for field in fields if isinstance(params, dict) and field in params}
+
+
+def _fixture_item_path_params(config: dict[str, Any], probe: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    """Merge path params for setup/snapshot/cleanup with runtime ids winning safely.
+
+    Generated fixture items can contain placeholders such as ``qb_auto_order_1``.
+    Once an earlier setup step returns the real server id, later fixture setup,
+    snapshot and cleanup requests must use that observed id.  Customer-supplied
+    concrete params still win unless their value is one of QualiBug's generated
+    placeholders.
+    """
+    path_params = dict((config.get("path_params") or {}).get("*") or {})
+    if isinstance(item.get("path_params"), dict):
+        path_params.update(item.get("path_params") or {})
+    if _auto_fixture_enabled(config):
+        bundle = _auto_fixture_bundle(config, probe)
+        bundle_params = bundle.get("path_params") if isinstance(bundle, dict) and isinstance(bundle.get("path_params"), dict) else {}
+        for key, value in (bundle_params or {}).items():
+            path_params.setdefault(str(key), value)
+        for key, value in _runtime_bound_fixture_path_params(config, probe).items():
+            if key not in path_params or _generated_fixture_value(path_params.get(key)):
+                path_params[key] = value
+    return path_params
+
+
 def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe: dict[str, Any], key: str, timeout: float) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
     for item in _auto_fixture_requests(config, probe, key):
@@ -1285,17 +1324,17 @@ def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe:
         if method not in WRITE_METHODS:
             receipts.append({"status": "skipped", "reason": f"auto_fixture_method_not_write:{method}", "path": item.get("path")})
             continue
-        path_params = dict((config.get("path_params") or {}).get("*") or {})
-        if isinstance(item.get("path_params"), dict):
-            path_params.update(item.get("path_params") or {})
+        path_params = _fixture_item_path_params(config, probe, item)
         path, missing = _render_path(str(item.get("path") or ""), path_params)
         if missing:
             receipts.append({"status": "blocked", "reason": f"auto_fixture_missing_path_params:{','.join(missing)}", "path": item.get("path")})
             continue
+        query_string = _render_query(item.get("query"), path_params)
+        request_path = path + (("?" + query_string) if query_string else "")
         headers = _fixture_control_headers(config)
         if isinstance(item.get("headers"), dict):
             headers.update({str(k): str(v) for k, v in (item.get("headers") or {}).items()})
-        response = _http_request(method, _join_url(base_url, path), headers, body=item.get("body"), timeout=timeout)
+        response = _http_request(method, _join_url(base_url, request_path), headers, body=item.get("body"), timeout=timeout)
         code = response.get("status_code")
         accepted = bool(isinstance(code, int) and 200 <= int(code) < 300)
         binding = _bind_auto_fixture_response_id(config, probe, item, response) if accepted else {}
@@ -1304,8 +1343,9 @@ def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe:
             "purpose": item.get("purpose") or key,
             "accepted": accepted,
             "method": method,
-            "path": path,
+            "path": request_path,
             "used_fixture_control_headers": True,
+            "path_params_bound_at_execution": _redact(path_params),
             "runtime_binding": binding,
             "response": {"status_code": code, "error": response.get("error"), "payload": _redact(response.get("payload")), "duration_ms": response.get("duration_ms")},
         })
