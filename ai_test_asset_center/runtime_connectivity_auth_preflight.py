@@ -60,12 +60,46 @@ CSRF_TOKEN_PATHS = (
     "result.csrf_token",
     "result.csrfToken",
 )
+REFRESH_TOKEN_PATHS = (
+    "refresh_token",
+    "refreshToken",
+    "data.refresh_token",
+    "data.refreshToken",
+    "result.refresh_token",
+    "result.refreshToken",
+    "auth.refresh_token",
+    "authentication.refresh_token",
+)
+TOKEN_EXPIRY_SECOND_PATHS = (
+    "expires_in",
+    "expiresIn",
+    "expires",
+    "data.expires_in",
+    "data.expiresIn",
+    "result.expires_in",
+    "result.expiresIn",
+    "auth.expires_in",
+    "authentication.expires_in",
+)
+TOKEN_EXPIRY_AT_PATHS = (
+    "expires_at",
+    "expiresAt",
+    "data.expires_at",
+    "data.expiresAt",
+    "result.expires_at",
+    "result.expiresAt",
+)
 PLACEHOLDER_RE = re.compile(r"<\s*(?:FILL|TODO|REQUIRED|SANDBOX|REPLACE)[^>]*>", re.I)
 SECRET_KEY_RE = re.compile(r"(?:password|passwd|secret|token|authorization|cookie|api[_-]?key|session)", re.I)
 SAFE_METADATA_KEYS = {
     "token_json_path",
     "token_source",
     "csrf_source",
+    "refresh_token_source",
+    "token_expiry_source",
+    "token_expires_in_seconds",
+    "token_expiry_kind",
+    "refresh_succeeded",
     "derived_header_names",
     "injected_header_names",
     "injected_body_fields",
@@ -241,6 +275,39 @@ def _extract_token(payload: Any, preferred_path: str = "") -> tuple[str | None, 
         if value:
             return str(value), path
     return None, None
+
+
+def _extract_refresh_token(payload: Any, preferred_path: str = "") -> tuple[str | None, str | None]:
+    paths = [preferred_path] if preferred_path else []
+    paths.extend(p for p in REFRESH_TOKEN_PATHS if p not in paths)
+    for path in paths:
+        value = _json_path_get(payload, path)
+        if value:
+            return str(value), path
+    return None, None
+
+
+def _extract_token_expiry(payload: Any, auth_flow: dict[str, Any]) -> tuple[int | None, str | None, str | None]:
+    preferred_seconds = str(auth_flow.get("expires_in_json_path") or auth_flow.get("token_expires_in_json_path") or "")
+    second_paths = [preferred_seconds] if preferred_seconds else []
+    second_paths.extend(p for p in TOKEN_EXPIRY_SECOND_PATHS if p not in second_paths)
+    for path in second_paths:
+        value = _json_path_get(payload, path)
+        if value is None or value == "":
+            continue
+        try:
+            return max(0, int(float(str(value)))), path, "seconds"
+        except Exception:
+            continue
+
+    preferred_at = str(auth_flow.get("expires_at_json_path") or auth_flow.get("token_expires_at_json_path") or "")
+    at_paths = [preferred_at] if preferred_at else []
+    at_paths.extend(p for p in TOKEN_EXPIRY_AT_PATHS if p not in at_paths)
+    for path in at_paths:
+        value = _json_path_get(payload, path)
+        if value:
+            return None, path, "absolute"
+    return None, None, None
 
 
 def _headers(resp: dict[str, Any]) -> dict[str, str]:
@@ -502,6 +569,98 @@ def _verify_session(base_url: str, headers: dict[str, str], auth_flow: dict[str,
     }
 
 
+def _refresh_expected_statuses(auth_flow: dict[str, Any]) -> set[int]:
+    raw = auth_flow.get("refresh_expected_statuses") or auth_flow.get("refresh_success_statuses")
+    if isinstance(raw, list):
+        out = {int(x) for x in raw if str(x).isdigit()}
+        return out or set(range(200, 300))
+    return set(range(200, 300))
+
+
+def _refresh_session(
+    base_url: str,
+    auth_flow: dict[str, Any],
+    current_headers: dict[str, str],
+    refresh_token: str,
+    timeout_seconds: float,
+    requester: Requester | None,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    path = str(auth_flow.get("refresh_path") or auth_flow.get("token_refresh_path") or auth_flow.get("renew_path") or "")
+    if not path:
+        return current_headers, {"configured": False, "attempted": False, "message": "refresh path not configured"}
+    if requester is None:
+        return current_headers, {"configured": True, "attempted": False, "path": path, "error": "requester_not_provided"}
+    if not refresh_token:
+        return current_headers, {"configured": True, "attempted": False, "path": path, "error": "refresh_token_not_available"}
+
+    method = str(auth_flow.get("refresh_method") or "POST").upper()
+    body_format = str(auth_flow.get("refresh_body_format") or auth_flow.get("body_format") or "json").lower()
+    headers = dict(auth_flow.get("refresh_headers") or {}) if isinstance(auth_flow.get("refresh_headers"), dict) else {}
+    headers = {str(k): str(v) for k, v in headers.items()}
+    if current_headers.get("Cookie"):
+        headers["Cookie"] = _merge_cookie_headers(headers.get("Cookie", ""), current_headers.get("Cookie", ""))
+    body = dict(auth_flow.get("refresh_extra_body") or {}) if isinstance(auth_flow.get("refresh_extra_body"), dict) else {}
+    refresh_header_name = str(auth_flow.get("refresh_token_header_name") or "")
+    refresh_token_in = str(auth_flow.get("refresh_token_in") or ("header" if refresh_header_name else "body")).lower()
+    if refresh_token_in == "header" and refresh_header_name:
+        refresh_prefix = str(auth_flow.get("refresh_token_header_prefix") or "")
+        headers[refresh_header_name] = _format_token_header_value(refresh_token, refresh_header_name, refresh_prefix)
+    else:
+        body_field = str(auth_flow.get("refresh_token_field") or auth_flow.get("refresh_body_field") or "refresh_token")
+        body[body_field] = refresh_token
+    if body_format in {"form", "urlencoded", "x-www-form-urlencoded", "form-urlencoded"}:
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    elif body_format == "json":
+        headers.setdefault("Content-Type", "application/json")
+
+    started = time.time()
+    try:
+        resp = requester(method, _join_url(base_url, path), headers, body, min(float(timeout_seconds or 10.0), 10.0))
+    except Exception as exc:  # pragma: no cover - defensive guard around injected requester
+        return current_headers, {
+            "configured": True,
+            "attempted": True,
+            "path": path,
+            "error": f"{type(exc).__name__}: {exc}",
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+
+    payload = _jsonish_payload(resp)
+    token, token_source = _extract_token(payload, str(auth_flow.get("refresh_access_token_json_path") or auth_flow.get("token_json_path") or ""))
+    if not token:
+        token, token_source = _extract_header_token(resp, str(auth_flow.get("refresh_response_token_header") or auth_flow.get("token_response_header") or ""))
+    response_cookie = _cookie_header_from_response(resp)
+    token_header = str(auth_flow.get("token_header_name") or "Authorization")
+    token_prefix = str(auth_flow.get("token_header_prefix") or "Bearer")
+    refreshed_headers = dict(current_headers)
+    if token:
+        refreshed_headers[token_header] = _format_token_header_value(token, token_header, token_prefix)
+    if response_cookie:
+        refreshed_headers["Cookie"] = _merge_cookie_headers(current_headers.get("Cookie", ""), response_cookie)
+    code = resp.get("status_code")
+    expected = _refresh_expected_statuses(auth_flow)
+    status_ok = isinstance(code, int) and int(code) in expected
+    meta = {
+        "configured": True,
+        "attempted": True,
+        "path": path,
+        "status_code": code,
+        "status_ok": status_ok,
+        "expected_statuses": sorted(expected),
+        "request_body_format": body_format,
+        "token_refreshed": bool(token),
+        "token_source": token_source,
+        "cookie_refreshed": bool(response_cookie),
+        "derived_header_names": sorted(refreshed_headers.keys()),
+        "duration_ms": resp.get("duration_ms") or int((time.time() - started) * 1000),
+    }
+    if not (token or response_cookie):
+        meta["error"] = "refresh_response_did_not_contain_token_or_cookie"
+    if not status_ok:
+        meta["error"] = meta.get("error") or "refresh_status_not_expected"
+    return refreshed_headers if status_ok and (token or response_cookie) else current_headers, meta
+
+
 def _login_account(
     base_url: str,
     auth_flow: dict[str, Any],
@@ -549,6 +708,8 @@ def _login_account(
         return {}, {"account": account_name, "login_attempted": True, "error": f"{type(exc).__name__}: {exc}", "bootstrap": bootstrap_meta, "duration_ms": int((time.time() - started) * 1000)}
     payload = _jsonish_payload(resp)
     token, token_path = _extract_token(payload, token_json_path)
+    refresh_token, refresh_token_source = _extract_refresh_token(payload, str(auth_flow.get("refresh_token_json_path") or ""))
+    token_expires_in_seconds, token_expiry_source, token_expiry_kind = _extract_token_expiry(payload, auth_flow)
     token_source = token_path
     if not token:
         token, token_source = _extract_header_token(resp, response_token_header)
@@ -565,6 +726,9 @@ def _login_account(
     if account.get("tenant_id"):
         tenant_header = str(auth_flow.get("tenant_header_name") or "X-Tenant-Id")
         derived_headers.setdefault(tenant_header, str(account.get("tenant_id")))
+    refresh_meta = {"configured": bool(auth_flow.get("refresh_path") or auth_flow.get("token_refresh_path") or auth_flow.get("renew_path")), "attempted": False}
+    if refresh_token and refresh_meta["configured"]:
+        derived_headers, refresh_meta = _refresh_session(base_url, auth_flow, derived_headers, refresh_token, timeout_seconds, requester)
     code = resp.get("status_code")
     expected_login_statuses = _login_expected_statuses(auth_flow)
     status_ok = isinstance(code, int) and int(code) in expected_login_statuses
@@ -579,6 +743,13 @@ def _login_account(
         "token_acquired": bool(token),
         "token_source": token_source,
         "token_json_path": token_path if token_path and token_path != token_source else token_path,
+        "refresh_token_acquired": bool(refresh_token),
+        "refresh_token_source": refresh_token_source,
+        "token_expires_in_seconds": token_expires_in_seconds,
+        "token_expiry_source": token_expiry_source,
+        "token_expiry_kind": token_expiry_kind,
+        "refresh": refresh_meta,
+        "refresh_succeeded": bool(refresh_meta.get("status_ok") and (refresh_meta.get("token_refreshed") or refresh_meta.get("cookie_refreshed"))),
         "cookie_acquired": bool(response_cookie),
         "bootstrap_cookie_reused": bool(headers.get("Cookie") and not response_cookie),
         "csrf_acquired": bool(bootstrap_meta.get("csrf_acquired")),
@@ -617,6 +788,9 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
     token_count = 0
     cookie_count = 0
     csrf_count = 0
+    refresh_token_count = 0
+    expiring_token_count = 0
+    refresh_verified_count = 0
     for name, raw_account in accounts.items():
         if not isinstance(raw_account, dict):
             continue
@@ -629,9 +803,13 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
         token_count += 1 if meta.get("token_acquired") else 0
         cookie_count += 1 if meta.get("cookie_acquired") else 0
         csrf_count += 1 if meta.get("csrf_acquired") else 0
+        refresh_token_count += 1 if meta.get("refresh_token_acquired") else 0
+        expiring_token_count += 1 if meta.get("token_expires_in_seconds") is not None or meta.get("token_expiry_kind") == "absolute" else 0
         health = _verify_session(base_url, headers, auth_flow, config, timeout_seconds, requester) if headers else {"ok": False, "skipped": True, "message": "no auth headers derived"}
         if health.get("ok"):
             verified_count += 1
+            if meta.get("refresh_succeeded"):
+                refresh_verified_count += 1
         meta["session_health"] = health
         events.append(meta)
         resolved_headers[str(name)] = headers
@@ -653,6 +831,9 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
         "token_acquired_count": token_count,
         "cookie_acquired_count": cookie_count,
         "csrf_token_acquired_count": csrf_count,
+        "refresh_token_acquired_count": refresh_token_count,
+        "expiring_token_count": expiring_token_count,
+        "token_refresh_verified_count": refresh_verified_count,
         "session_health_verified_count": verified_count,
         "derived_default_header_names": sorted(derived_default_headers.keys()),
         "events": events,
@@ -720,6 +901,9 @@ def build_runtime_connectivity_auth_preflight(
     configured = bool(auth.get("configured"))
     token_or_cookie = int(auth.get("successful_session_count") or 0) > 0
     health_verified = int(auth.get("session_health_verified_count") or 0) > 0
+    expiring_token_count = int(auth.get("expiring_token_count") or 0)
+    refresh_verified_count = int(auth.get("token_refresh_verified_count") or 0)
+    refresh_ready = expiring_token_count == 0 or refresh_verified_count > 0
     needs_runtime = bool(execute_readonly or allow_write_sandbox)
     checks = [
         _check("url_parse_ok", bool(parsed.get("ok")), parsed.get("message") or "url parse unknown", severity="blocking" if needs_runtime else "warning", url=parsed),
@@ -728,6 +912,16 @@ def build_runtime_connectivity_auth_preflight(
         _check("auth_configured", configured, "authentication inputs are configured" if configured else "no auth_flow/accounts/static auth headers configured", severity="warning"),
         _check("token_cookie_or_session_acquired", token_or_cookie, "token/cookie/session material was acquired" if token_or_cookie else "no token/cookie/session material acquired yet", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count")),
         _check("session_health_verified", health_verified, "authenticated session was verified by health/me endpoint" if health_verified else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth.get("session_health_verified_count")),
+        _check(
+            "token_refresh_ready",
+            refresh_ready,
+            "expiring/TTL session token can be refreshed and re-verified" if expiring_token_count and refresh_ready else ("auth response did not expose token expiry; refresh check skipped" if not expiring_token_count else "token expiry was observed but refresh was not verified"),
+            severity="warning",
+            skipped=expiring_token_count == 0,
+            expiring_token_count=expiring_token_count,
+            refresh_token_acquired_count=auth.get("refresh_token_acquired_count"),
+            token_refresh_verified_count=refresh_verified_count,
+        ),
     ]
     blocking = [c for c in checks if c.get("severity") == "blocking" and not c.get("ok") and not c.get("skipped")]
     warnings = [c for c in checks if c.get("severity") != "blocking" and not c.get("ok")]
@@ -748,6 +942,9 @@ def build_runtime_connectivity_auth_preflight(
         "token_acquired_count": int(auth.get("token_acquired_count") or 0),
         "cookie_acquired_count": int(auth.get("cookie_acquired_count") or 0),
         "csrf_token_acquired_count": int(auth.get("csrf_token_acquired_count") or 0),
+        "refresh_token_acquired_count": int(auth.get("refresh_token_acquired_count") or 0),
+        "expiring_token_count": expiring_token_count,
+        "token_refresh_verified_count": refresh_verified_count,
         "session_health_verified_count": int(auth.get("session_health_verified_count") or 0),
         "default_account": auth.get("default_account"),
         "blocked_reason": auth.get("blocked_reason"),
@@ -770,12 +967,12 @@ def build_runtime_connectivity_auth_preflight(
         "checks": checks,
         "blocking_reasons": [str(c.get("name")) for c in blocking],
         "warning_reasons": [str(c.get("name")) for c in warnings],
-        "recommended_next_step": _recommended_next_step(status, blocking, warnings, token_or_cookie, health_verified),
+        "recommended_next_step": _recommended_next_step(status, blocking, warnings, token_or_cookie, health_verified, expiring_token_count, refresh_verified_count),
         "secret_redaction_policy": "No raw token, cookie, password or session secret is returned in this report.",
     }
 
 
-def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings: list[dict[str, Any]], token_or_cookie: bool, health_verified: bool) -> str:
+def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings: list[dict[str, Any]], token_or_cookie: bool, health_verified: bool, expiring_token_count: int = 0, refresh_verified_count: int = 0) -> str:
     if blocking:
         names = ", ".join(str(c.get("name")) for c in blocking[:4])
         return f"Fix environment connectivity blockers before runtime probes: {names}."
@@ -783,6 +980,8 @@ def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings
         return "Provide auth_flow plus test accounts, or static Authorization/Cookie headers, then rerun connectivity/auth preflight."
     if not health_verified:
         return "Token/cookie was acquired, but session health is not verified; add session_health_path/me_path for stronger readiness proof."
+    if expiring_token_count and not refresh_verified_count:
+        return "Session token expiry was observed; add refresh_path/refresh_token mapping so long runtime probes can renew auth safely."
     if warnings:
         names = ", ".join(str(c.get("name")) for c in warnings[:4])
         return f"Authenticated runtime can continue in degraded mode; improve: {names}."

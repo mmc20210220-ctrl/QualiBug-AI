@@ -190,6 +190,9 @@ def _auth_readiness(config: dict[str, Any]) -> dict[str, Any]:
         session_health = int(runtime.get("session_health_verified_count") or 0)
         token_count = int(runtime.get("token_acquired_count") or 0)
         cookie_count = int(runtime.get("cookie_acquired_count") or 0)
+        refresh_token_count = int(runtime.get("refresh_token_acquired_count") or 0)
+        expiring_token_count = int(runtime.get("expiring_token_count") or 0)
+        refresh_verified_count = int(runtime.get("token_refresh_verified_count") or 0)
         return {
             "ok": success > 0,
             "configured": True,
@@ -200,6 +203,10 @@ def _auth_readiness(config: dict[str, Any]) -> dict[str, Any]:
             "token_acquired_count": token_count,
             "cookie_acquired_count": cookie_count,
             "session_health_verified_count": session_health,
+            "refresh_token_acquired_count": refresh_token_count,
+            "expiring_token_count": expiring_token_count,
+            "token_refresh_verified_count": refresh_verified_count,
+            "refresh_ready": expiring_token_count == 0 or refresh_verified_count > 0,
             "message": f"{success} account session(s) derived by login flow" if success else "account login attempted but no usable token/cookie/session was derived",
         }
 
@@ -344,6 +351,8 @@ def run_runtime_onboarding_preflight(
     url_parse = connectivity_auth.get("url_parse") if isinstance(connectivity_auth.get("url_parse"), dict) else {}
     dns_resolution = connectivity_auth.get("dns_resolution") if isinstance(connectivity_auth.get("dns_resolution"), dict) else {}
     auth_runtime = connectivity_auth.get("auth_runtime") if isinstance(connectivity_auth.get("auth_runtime"), dict) else {}
+    expiring_token_count = int(auth_runtime.get("expiring_token_count") or auth.get("expiring_token_count") or 0)
+    token_refresh_verified_count = int(auth_runtime.get("token_refresh_verified_count") or auth.get("token_refresh_verified_count") or 0)
 
     checks = [
         _check("base_url_configured", bool(base_url), "target base URL is configured" if base_url else "no target base URL; runtime execution will be plan-only", severity="blocking" if execute_readonly or allow_write_sandbox else "warning"),
@@ -355,6 +364,16 @@ def run_runtime_onboarding_preflight(
         _check("auth_session_ready", bool(auth.get("ok")), auth.get("message") or "auth readiness unknown", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count"), token_acquired_count=auth.get("token_acquired_count"), cookie_acquired_count=auth.get("cookie_acquired_count"), session_health_verified_count=auth.get("session_health_verified_count")),
         _check("token_cookie_or_session_acquired", int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0, "token/cookie/session material was acquired" if int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0 else "no token/cookie/session material acquired yet", severity="warning", mode=auth_runtime.get("mode") or auth.get("mode"), successful_session_count=auth_runtime.get("successful_session_count") or auth.get("successful_session_count")),
         _check("session_health_verified", int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0, "authenticated session was verified by health/me endpoint" if int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0 else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count")),
+        _check(
+            "auth_session_refresh_ready",
+            expiring_token_count == 0 or token_refresh_verified_count > 0,
+            "expiring/TTL auth sessions can refresh and re-verify" if expiring_token_count and token_refresh_verified_count else ("auth response did not expose token expiry; refresh readiness skipped" if not expiring_token_count else "auth session expiry observed but refresh was not verified"),
+            severity="warning",
+            skipped=expiring_token_count == 0,
+            expiring_token_count=expiring_token_count,
+            refresh_token_acquired_count=auth_runtime.get("refresh_token_acquired_count") or auth.get("refresh_token_acquired_count"),
+            token_refresh_verified_count=token_refresh_verified_count,
+        ),
         _check("role_coverage", not roles.get("missing_recommended_roles"), "recommended tenant/admin/owner/normal role coverage is present" if not roles.get("missing_recommended_roles") else "recommended role coverage is incomplete; some boundary probes may be degraded", severity="warning", role_coverage=roles),
         _check("auto_fixture_create_permission", bool(sandbox.get("enabled") and sandbox.get("auto_fixture_enabled")), "auto fixture creation is enabled for disposable test data" if sandbox.get("enabled") and sandbox.get("auto_fixture_enabled") else "auto fixture creation is not fully enabled", severity="warning", sandbox=sandbox),
         _check("cleanup_health_declared", bool(sandbox.get("cleanup_strategy_supported")), f"cleanup strategy `{sandbox.get('cleanup_strategy')}` is supported" if sandbox.get("cleanup_strategy_supported") else "cleanup strategy is missing or unsupported", severity="blocking" if allow_write_sandbox else "warning", cleanup_strategy=sandbox.get("cleanup_strategy")),

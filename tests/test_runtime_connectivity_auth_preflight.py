@@ -262,3 +262,109 @@ def test_html_csrf_bootstrap_form_login_and_redirect_cookie_session_are_supporte
     dumped = json.dumps(report, ensure_ascii=False)
     assert "html-csrf-secret" not in dumped
     assert "redirect-session-secret" not in dumped
+
+
+def _refresh_token_requester(method: str, url: str, headers: dict[str, str], body: Any, timeout: float) -> dict[str, Any]:
+    if url.endswith("/api/login"):
+        return {
+            "status_code": 200,
+            "payload": {
+                "data": {
+                    "accessToken": "short-lived-access-secret",
+                    "refreshToken": "refresh-token-secret",
+                    "expiresIn": 60,
+                }
+            },
+            "headers": {"Set-Cookie": "sid=login-session-secret; Path=/; HttpOnly"},
+            "duration_ms": 3,
+        }
+    if url.endswith("/api/refresh"):
+        assert method == "POST"
+        assert body["refresh_token"] == "refresh-token-secret"
+        assert "sid=login-session-secret" in headers.get("Cookie", "")
+        return {
+            "status_code": 200,
+            "payload": {"data": {"accessToken": "renewed-access-secret", "expiresIn": 3600}},
+            "headers": {"Set-Cookie": "sid=renewed-session-secret; Path=/; HttpOnly"},
+            "duration_ms": 4,
+        }
+    if url.endswith("/api/me"):
+        assert headers.get("Authorization") == "Bearer renewed-access-secret"
+        assert "sid=renewed-session-secret" in headers.get("Cookie", "")
+        return {"status_code": 200, "payload": {"user": "qa"}, "duration_ms": 2}
+    return {"status_code": 401, "duration_ms": 1}
+
+
+def test_expiring_token_refresh_is_verified_without_secret_leak() -> None:
+    report = build_runtime_connectivity_auth_preflight(
+        config={
+            "auth_flow": {
+                "login_path": "/api/login",
+                "token_json_path": "data.accessToken",
+                "refresh_token_json_path": "data.refreshToken",
+                "expires_in_json_path": "data.expiresIn",
+                "refresh_path": "/api/refresh",
+                "refresh_access_token_json_path": "data.accessToken",
+                "session_health_path": "/api/me",
+            },
+            "accounts": {"normal_user": {"username": "qa", "password": "pw", "role": "normal_user"}},
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_refresh_token_requester,
+        resolver=_resolver,
+    )
+
+    auth = report["auth_runtime"]
+    assert auth["successful_session_count"] == 1
+    assert auth["refresh_token_acquired_count"] == 1
+    assert auth["expiring_token_count"] == 1
+    assert auth["token_refresh_verified_count"] == 1
+    assert auth["session_health_verified_count"] == 1
+    check = {item["name"]: item for item in report["checks"]}["token_refresh_ready"]
+    assert check["ok"] is True
+    assert check["status"] == "passed"
+
+    event = report["auth_runtime"]["events"][0]
+    assert event["refresh_token_acquired"] is True
+    assert event["token_expires_in_seconds"] == 60
+    assert event["refresh"]["status_ok"] is True
+    assert event["refresh"]["token_refreshed"] is True
+
+    dumped = json.dumps(report, ensure_ascii=False)
+    assert "short-lived-access-secret" not in dumped
+    assert "refresh-token-secret" not in dumped
+    assert "renewed-access-secret" not in dumped
+    assert "login-session-secret" not in dumped
+    assert "renewed-session-secret" not in dumped
+    assert "pw" not in dumped
+
+
+def test_onboarding_preflight_exposes_refresh_readiness() -> None:
+    report = run_runtime_onboarding_preflight(
+        plan=_grounded_read_plan(),
+        config={
+            "environment_kind": "sandbox",
+            "auth_flow": {
+                "login_path": "/api/login",
+                "token_json_path": "data.accessToken",
+                "refresh_token_json_path": "data.refreshToken",
+                "expires_in_json_path": "data.expiresIn",
+                "refresh_path": "/api/refresh",
+                "refresh_access_token_json_path": "data.accessToken",
+                "session_health_path": "/api/me",
+            },
+            "accounts": {"normal_user": {"username": "qa", "password": "pw", "role": "normal_user"}},
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_refresh_token_requester,
+        resolver=_resolver,
+    )
+
+    assert report["auth_readiness"]["refresh_ready"] is True
+    assert report["auth_readiness"]["token_refresh_verified_count"] == 1
+    check_names = {check["name"] for check in report["checks"]}
+    assert "auth_session_refresh_ready" in check_names
