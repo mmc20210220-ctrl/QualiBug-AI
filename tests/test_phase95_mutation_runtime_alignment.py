@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from ai_test_asset_center.auto_test_data_factory import build_auto_fixture_for_probe
-from ai_test_asset_center.grounded_probe_executor import _headers_for_probe, _verify_observation, _verify_write_observation
+from ai_test_asset_center.grounded_probe_executor import (
+    _append_query_surface_get_fallbacks,
+    _headers_for_probe,
+    _runtime_query_surface_fallback_response,
+    _verify_observation,
+    _verify_write_observation,
+)
 
 
 def _grounded_write_probe(risk_type: str, mutation: dict) -> dict:
@@ -156,3 +162,259 @@ def test_conservation_probe_validates_accepted_negative_write_payload_marker() -
 
     assert verdict["verdict"] == "validated_candidate"
     assert "business payload shows" in verdict["reason"]
+
+
+def test_query_surface_fallback_does_not_override_working_post_search(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body=None, timeout: float = 10.0) -> dict:
+        calls.append((method, url))
+        return {"status_code": 200, "payload": {"ok": True, "data": []}, "duration_ms": 1}
+
+    monkeypatch.setattr("ai_test_asset_center.grounded_probe_executor._http_request", fake_http)
+    responses = [{"status_code": 200, "payload": {"ok": True, "data": []}, "duration_ms": 1}]
+
+    _append_query_surface_get_fallbacks(
+        probe={"source_refs": []},
+        config={},
+        original_method="POST",
+        original_path="/search",
+        first_response=responses[0],
+        responses=responses,
+        headers={},
+        body={},
+        base_url="http://sandbox",
+        timeout=1.0,
+    )
+
+    assert len(responses) == 1
+    assert calls == []
+
+
+def test_query_surface_fallback_tries_get_only_after_unknown_post_surface(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body=None, timeout: float = 10.0) -> dict:
+        calls.append((method, url))
+        return {
+            "status_code": 200,
+            "payload": {
+                "ok": True,
+                "observed_bug_id": "ORD-C30-030",
+                "expected_should_have_rejected": True,
+                "actual_behavior": "accepted_or_returned_business_data",
+                "resource": {"id": "srv_search_1", "status": "accepted_despite_negative_probe"},
+            },
+            "duration_ms": 1,
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.grounded_probe_executor._http_request", fake_http)
+    responses = [{"status_code": 404, "payload": {"error": "unknown_runtime_surface"}, "duration_ms": 1}]
+
+    _append_query_surface_get_fallbacks(
+        probe={
+            "risk_type": "ownership_scope_probe",
+            "source_refs": [
+                {"section": "/api/v1/orders/search?keyword=", "quote": "search must validate tenant scope"},
+            ],
+        },
+        config={},
+        original_method="POST",
+        original_path="/search",
+        first_response=responses[0],
+        responses=responses,
+        headers={},
+        body={},
+        base_url="http://sandbox",
+        timeout=1.0,
+    )
+
+    assert calls == [("GET", "http://sandbox/api/v1/orders/search?keyword=")]
+    assert responses[1]["fallback_from_method"] == "POST"
+    assert responses[1]["fallback_reason"] == "post_query_surface_unknown_runtime_surface"
+    verdict = _verify_write_observation({"risk_type": "ownership_scope_probe"}, responses, {"before": [], "after": []})
+    assert verdict["verdict"] == "validated_candidate"
+    assert "safe GET fallback" in verdict["reason"]
+
+
+def test_query_surface_fallback_uses_input_api_path_for_post_search(monkeypatch, tmp_path) -> None:
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body=None, timeout: float = 10.0) -> dict:
+        calls.append((method, url, body))
+        return {
+            "status_code": 200,
+            "payload": {
+                "ok": True,
+                "observed_bug_id": "ORD-C30-030",
+                "expected_should_have_rejected": True,
+                "actual_behavior": "accepted_or_returned_business_data",
+                "resource": {"id": "srv_search_1", "status": "accepted_despite_negative_probe"},
+            },
+            "duration_ms": 1,
+        }
+
+    (tmp_path / "API.md").write_text(
+        "### 30. /api/v1/orders/search?keyword=\n"
+        "C30 search must validate tenant scope.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("ai_test_asset_center.grounded_probe_executor._http_request", fake_http)
+    responses = [{"status_code": 404, "payload": {"error": "unknown_runtime_surface"}, "duration_ms": 1}]
+
+    _append_query_surface_get_fallbacks(
+        probe={"risk_type": "ownership_scope_probe", "endpoint": {"capability_code": "C30"}, "source_refs": []},
+        config={"input_dir": str(tmp_path)},
+        original_method="POST",
+        original_path="/search",
+        first_response=responses[0],
+        responses=responses,
+        headers={},
+        body={"tenant_id": "foreign"},
+        base_url="http://sandbox",
+        timeout=1.0,
+    )
+
+    assert calls == [("POST", "http://sandbox/api/v1/orders/search?keyword=", {"tenant_id": "foreign"})]
+    assert responses[1]["fallback_from_path"] == "/search"
+    assert responses[1]["fallback_reason"] == "query_surface_input_path_after_unknown_runtime_surface"
+    verdict = _verify_write_observation({"risk_type": "ownership_scope_probe"}, responses, {"before": [], "after": []})
+    assert verdict["verdict"] == "validated_candidate"
+
+
+def test_read_query_surface_fallback_keeps_working_search_path(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body=None, timeout: float = 10.0) -> dict:
+        calls.append((method, url))
+        return {"status_code": 200, "payload": {"ok": True}, "duration_ms": 1}
+
+    monkeypatch.setattr("ai_test_asset_center.grounded_probe_executor._http_request", fake_http)
+    first = {"status_code": 200, "payload": {"ok": True}, "duration_ms": 1}
+
+    response = _runtime_query_surface_fallback_response(
+        probe={"source_refs": [{"section": "/api/v1/orders/search?keyword=", "quote": "scope search"}]},
+        method="GET",
+        original_path="/search",
+        first_response=first,
+        headers={},
+        base_url="http://sandbox",
+        timeout=1.0,
+    )
+
+    assert response is first
+    assert calls == []
+
+
+def test_read_query_surface_fallback_rebinds_unknown_generic_search_path(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body=None, timeout: float = 10.0) -> dict:
+        calls.append((method, url))
+        return {
+            "status_code": 200,
+            "payload": {
+                "ok": True,
+                "observed_bug_id": "ORD-C30-030",
+                "expected_should_have_rejected": True,
+                "actual_behavior": "accepted_or_returned_business_data",
+                "resource": {"id": "srv_search_1", "status": "accepted_despite_negative_probe"},
+            },
+            "duration_ms": 1,
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.grounded_probe_executor._http_request", fake_http)
+
+    response = _runtime_query_surface_fallback_response(
+        probe={
+            "risk_type": "ownership_scope_probe",
+            "source_refs": [{"section": "/api/v1/orders/search?keyword=", "quote": "search must validate tenant scope"}],
+        },
+        method="GET",
+        original_path="/search",
+        first_response={"status_code": 404, "payload": {"error": "unknown_runtime_surface"}, "duration_ms": 1},
+        headers={},
+        base_url="http://sandbox",
+        timeout=1.0,
+    )
+
+    assert calls == [("GET", "http://sandbox/api/v1/orders/search?keyword=")]
+    assert response["fallback_from_path"] == "/search"
+    assert response["fallback_reason"] == "query_surface_unknown_runtime_surface"
+    verdict = _verify_observation({"risk_type": "ownership_scope_probe", "endpoint": {"method": "GET", "path": "/search"}}, response)
+    assert verdict["verdict"] == "validated_candidate"
+
+
+def test_read_query_surface_fallback_uses_contract_post_search_when_declared(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body=None, timeout: float = 10.0) -> dict:
+        calls.append((method, url))
+        return {
+            "status_code": 200,
+            "payload": {
+                "ok": True,
+                "observed_bug_id": "ORD-C30-030",
+                "expected_should_have_rejected": True,
+                "actual_behavior": "accepted_or_returned_business_data",
+                "resource": {"id": "srv_search_1", "status": "accepted_despite_negative_probe"},
+            },
+            "duration_ms": 1,
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.grounded_probe_executor._http_request", fake_http)
+
+    response = _runtime_query_surface_fallback_response(
+        probe={
+            "risk_type": "ownership_scope_probe",
+            "source_refs": [{"kind": "endpoint_contract", "section": "POST /search", "quote": "search can be POST in this system"}],
+        },
+        method="GET",
+        original_path="/search",
+        first_response={"status_code": 404, "payload": {"error": "unknown_runtime_surface"}, "duration_ms": 1},
+        headers={},
+        base_url="http://sandbox",
+        timeout=1.0,
+    )
+
+    assert calls == [("POST", "http://sandbox/search")]
+    assert response["fallback_from_method"] == "GET"
+    assert response["fallback_reason"] == "query_surface_contract_method_after_unknown_runtime_surface"
+    verdict = _verify_observation({"risk_type": "ownership_scope_probe", "endpoint": {"method": "GET", "path": "/search"}}, response)
+    assert verdict["verdict"] == "validated_candidate"
+
+
+def test_read_query_surface_fallback_probes_post_for_full_api_search_path(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body=None, timeout: float = 10.0) -> dict:
+        calls.append((method, url))
+        return {
+            "status_code": 200,
+            "payload": {
+                "ok": True,
+                "observed_bug_id": "ORD-C21-021",
+                "expected_should_have_rejected": True,
+                "actual_behavior": "accepted_or_returned_business_data",
+                "resource": {"id": "srv_search_1", "status": "accepted_despite_negative_probe"},
+            },
+            "duration_ms": 1,
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.grounded_probe_executor._http_request", fake_http)
+
+    response = _runtime_query_surface_fallback_response(
+        probe={"risk_type": "ownership_scope_probe", "source_refs": []},
+        method="GET",
+        original_path="/api/v1/orders/search?keyword=",
+        first_response={"status_code": 404, "payload": {"error": "unknown_runtime_surface"}, "duration_ms": 1},
+        headers={},
+        base_url="http://sandbox",
+        timeout=1.0,
+    )
+
+    assert calls == [("POST", "http://sandbox/api/v1/orders/search?keyword=")]
+    assert response["fallback_from_method"] == "GET"
+    assert response["fallback_reason"] == "query_surface_post_contract_probe_after_unknown_get_surface"
+    verdict = _verify_observation({"risk_type": "ownership_scope_probe", "endpoint": {"method": "GET", "path": "/api/v1/orders/search?keyword="}}, response)
+    assert verdict["verdict"] == "validated_candidate"

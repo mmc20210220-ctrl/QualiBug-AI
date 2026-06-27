@@ -78,10 +78,9 @@ def _load_project_bugs(project_dir: Path) -> list[RuntimeBug]:
         path = _normalize_request_path(str(bug.get("endpoint_hint") or ""))
         if not path:
             continue
-        if "?" in path or re.search(r"/(?:list|search|export|reports?)(?:\?|$)", path, re.I):
-            method = "GET"
-        else:
-            method = method_by_hint.get(path) or "POST"
+        method = method_by_hint.get(path)
+        if not method:
+            method = "GET" if ("?" in path or re.search(r"/(?:list|search|export|reports?)(?:\?|$)", path, re.I)) else "POST"
         key = (method, path)
         if key in seen:
             continue
@@ -118,9 +117,9 @@ class BenchmarkRuntime:
             if enabled and project_dir.name not in enabled:
                 continue
             self.bugs.extend(_load_project_bugs(project_dir))
-        self.search_bugs = [
+        self.query_bugs = [
             bug for bug in self.bugs
-            if bug.method == "GET" and re.search(r"/(?:list|search)(?:\?|$)", bug.path)
+            if re.search(r"/(?:list|search)(?:\?|$)", bug.path)
         ]
 
     def reset(self) -> None:
@@ -132,10 +131,9 @@ class BenchmarkRuntime:
                 continue
             if bug.pattern.match(path):
                 return bug
-        if method.upper() == "GET":
-            for bug in self.search_bugs:
-                if _canonical_lookup_path(path) == _canonical_lookup_path(bug.path):
-                    return bug
+        for bug in self.query_bugs:
+            if bug.method == method.upper() and _canonical_lookup_path(path) == _canonical_lookup_path(bug.path):
+                return bug
         return None
 
     def response_for(self, bug: RuntimeBug, request: Request, body: Any) -> dict[str, Any]:

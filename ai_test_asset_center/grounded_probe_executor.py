@@ -2634,10 +2634,18 @@ def _effective_runtime_request(probe: dict[str, Any], decision: ProbeDecision, c
     return request, headers, missing
 
 
+def _primary_write_verification_response(probe: dict[str, Any], responses: list[dict[str, Any]]) -> dict[str, Any]:
+    for response in responses:
+        code = response.get("status_code")
+        if isinstance(code, int) and 200 <= code < 300 and _negative_probe_payload_was_accepted(probe, response.get("payload")):
+            return response
+    return responses[0] if responses else {}
+
+
 def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, Any]], snapshots: dict[str, Any]) -> dict[str, Any]:
     risk_type = str(probe.get("risk_type") or "")
     expected = _expected_negative_statuses(probe)
-    first = responses[0] if responses else {}
+    first = _primary_write_verification_response(probe, responses)
     status = first.get("status_code")
     payload = first.get("payload")
     summary = _safe_payload_summary(payload)
@@ -2677,9 +2685,11 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
         return {"verdict": "falsified_or_protected", "reason": f"negative sandbox write was rejected with expected HTTP {code}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
 
     if 200 <= code < 300 and _negative_probe_payload_was_accepted(probe, payload):
+        method = str(first.get("method") or "").upper()
+        fallback_note = " via safe GET fallback" if method == "GET" and str(first.get("fallback_from_method") or "").upper() == "POST" else ""
         return {
             "verdict": "validated_candidate",
-            "reason": f"negative sandbox write returned HTTP {code} and business payload shows the rejected operation was accepted",
+            "reason": f"negative runtime probe returned HTTP {code}{fallback_note} and business payload shows the rejected operation was accepted",
             "confidence": 0.9,
             "payload_summary": summary,
             "sensitive_keys": sensitive_keys,
@@ -3056,6 +3066,56 @@ def _verify_concurrency_observation(probe: dict[str, Any], responses: list[dict[
     return None
 
 
+def _runtime_query_surface_fallback_response(
+    *,
+    probe: dict[str, Any],
+    method: str,
+    original_path: str,
+    first_response: dict[str, Any],
+    headers: dict[str, str],
+    base_url: str,
+    timeout: float,
+) -> dict[str, Any]:
+    original_method = str(method or "").upper()
+    if original_method not in READ_METHODS or not _unknown_runtime_surface(first_response):
+        return first_response
+    for contract_method in _query_surface_contract_methods(probe, original_path):
+        if contract_method == original_method:
+            continue
+        response = _http_request(contract_method, _join_url(base_url, original_path), headers, timeout=timeout)
+        response.update({
+            "method": contract_method,
+            "path": original_path,
+            "fallback_from_method": original_method,
+            "fallback_reason": "query_surface_contract_method_after_unknown_runtime_surface",
+        })
+        if not _unknown_runtime_surface(response):
+            return response
+    if original_method == "GET" and re.match(r"^/api/v\d+/.+/(?:list|search)(?:\?|$)", str(original_path or ""), re.I):
+        response = _http_request("POST", _join_url(base_url, original_path), headers, timeout=timeout)
+        response.update({
+            "method": "POST",
+            "path": original_path,
+            "fallback_from_method": original_method,
+            "fallback_reason": "query_surface_post_contract_probe_after_unknown_get_surface",
+        })
+        if not _unknown_runtime_surface(response):
+            return response
+    for path in _query_surface_get_fallback_paths(probe, original_path):
+        if path == original_path:
+            continue
+        response = _http_request(original_method, _join_url(base_url, path), headers, timeout=timeout)
+        response.update({
+            "method": original_method,
+            "path": path,
+            "fallback_from_path": original_path,
+            "fallback_reason": "query_surface_unknown_runtime_surface",
+        })
+        if not _unknown_runtime_surface(response):
+            return response
+    return first_response
+
+
 def _execute_read_probe(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, timeout: float) -> dict[str, Any]:
     setup_required = bool((decision.request or {}).get("runtime_fixture_setup_required"))
     setup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "setup_requests", timeout) if setup_required else []
@@ -3069,6 +3129,15 @@ def _execute_read_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
         verification = {"verdict": "inconclusive", "reason": response["error"], "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
     else:
         response = _http_request(decision.method, str(effective_request.get("url") or ""), headers, timeout=timeout)
+        response = _runtime_query_surface_fallback_response(
+            probe=probe,
+            method=decision.method,
+            original_path=decision.path,
+            first_response=response,
+            headers=headers,
+            base_url=base_url,
+            timeout=timeout,
+        )
         verification = _verify_observation(probe, response)
         verification = _anchor_auth_boundary_fixture_evidence(probe, verification, response, config)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout) if setup_required else []
@@ -3080,7 +3149,17 @@ def _execute_read_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
         "request": effective_request if not setup_blocked else (decision.request | {"setup_blocked": True}),
         "fixture_receipts": setup_receipts,
         "cleanup_receipts": cleanup_receipts,
-        "response": {"status_code": response.get("status_code"), "error": response.get("error"), "payload": _redact(response.get("payload")), "duration_ms": response.get("duration_ms")},
+        "response": {
+            "method": response.get("method") or decision.method,
+            "path": response.get("path") or decision.path,
+            "fallback_from_method": response.get("fallback_from_method"),
+            "fallback_from_path": response.get("fallback_from_path"),
+            "fallback_reason": response.get("fallback_reason"),
+            "status_code": response.get("status_code"),
+            "error": response.get("error"),
+            "payload": _redact(response.get("payload")),
+            "duration_ms": response.get("duration_ms"),
+        },
         "verification": verification,
         "source_refs": probe.get("source_refs") or [],
         "grounding_basis": probe.get("grounding_basis") or {},
@@ -3177,6 +3256,136 @@ def _verify_flow_observation(probe: dict[str, Any], responses: list[dict[str, An
     return {"verdict": "needs_more_evidence", "reason": "multi-step flow executed but runtime oracle needs observer deltas for confirmation", "confidence": 0.52, "payload_summary": _safe_payload_summary([r.get("payload") for r in responses]), "sensitive_keys": [], "business_invariant_evaluation": invariant_eval}
 
 
+def _query_surface_path(path: str) -> bool:
+    low = str(path or "").lower().split("?", 1)[0].rstrip("/")
+    return low == "/list" or low == "/search" or low.endswith("/list") or low.endswith("/search")
+
+
+def _unknown_runtime_surface(response: dict[str, Any]) -> bool:
+    payload = response.get("payload")
+    return int(response.get("status_code") or 0) == 404 and isinstance(payload, dict) and payload.get("error") == "unknown_runtime_surface"
+
+
+def _query_surface_get_fallback_paths(probe: dict[str, Any], original_path: str) -> list[str]:
+    if not _query_surface_path(original_path):
+        return []
+    suffix = str(original_path or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+    hits: list[str] = []
+    pattern = re.compile(r"(/api/v\d+/[^\s`|，,。；;]+)")
+    for ref in probe.get("source_refs") or []:
+        if not isinstance(ref, dict):
+            continue
+        text = " ".join(str(ref.get(k) or "") for k in ("section", "quote"))
+        for match in pattern.findall(text):
+            candidate = match.strip().rstrip("`")
+            candidate_base = candidate.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+            if candidate_base == suffix:
+                hits.append(candidate)
+    if not hits:
+        hits.append(original_path)
+    return list(dict.fromkeys(hits))[:3]
+
+
+def _query_surface_contract_methods(probe: dict[str, Any], original_path: str) -> list[str]:
+    if not _query_surface_path(original_path):
+        return []
+    suffix = str(original_path or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+    methods: list[str] = []
+    pattern = re.compile(r"\b(GET|HEAD|POST)\s+(/[^\s`|，,。；;]+)", re.I)
+    for ref in probe.get("source_refs") or []:
+        if not isinstance(ref, dict) or str(ref.get("kind") or "") != "endpoint_contract":
+            continue
+        text = " ".join(str(ref.get(k) or "") for k in ("section", "quote"))
+        for method, path in pattern.findall(text):
+            candidate_base = str(path or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+            if candidate_base == suffix:
+                methods.append(method.upper())
+    return [m for m in dict.fromkeys(methods) if m in {"GET", "HEAD", "POST"}]
+
+
+def _query_surface_input_paths(config: dict[str, Any], probe: dict[str, Any], original_path: str) -> list[str]:
+    if not _query_surface_path(original_path):
+        return []
+    input_dir = config.get("input_dir") or config.get("project_input_dir")
+    if not input_dir:
+        return []
+    input_path = Path(str(input_dir))
+    api_md = input_path / "API.md"
+    if not api_md.exists():
+        api_md = input_path / "api.md"
+    if not api_md.exists():
+        return []
+    cache = config.setdefault("_query_surface_input_path_cache", {})
+    cache_key = str(api_md.resolve())
+    text = cache.get(cache_key)
+    if text is None:
+        text = api_md.read_text(encoding="utf-8", errors="replace")
+        cache[cache_key] = text
+    suffix = str(original_path or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+    capability_code = str(((probe.get("endpoint") or {}).get("capability_code") if isinstance(probe.get("endpoint"), dict) else "") or "").upper()
+    capability_number = capability_code[1:].lstrip("0") if re.match(r"^C\d+$", capability_code) else ""
+    matches: list[tuple[int, str]] = []
+    for section in re.finditer(r"^###\s*(?:\d+\.\s*)?(/[^\n]+)\n(?P<body>.*?)(?=^###\s|\Z)", str(text or ""), re.M | re.S):
+        path = section.group(1).strip()
+        base = path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+        if base != suffix or not path.startswith("/api/"):
+            continue
+        hay = f"{section.group(0)} {path}".upper()
+        has_capability = bool(
+            capability_code and (
+                capability_code in hay
+                or (capability_number and re.search(rf"###\s*0*{re.escape(capability_number)}\b", hay))
+            )
+        )
+        if capability_code and not has_capability:
+            continue
+        matches.append((0 if has_capability else 1, path))
+    return list(dict.fromkeys(path for _, path in sorted(matches)))[:5]
+
+
+def _append_query_surface_get_fallbacks(
+    *,
+    probe: dict[str, Any],
+    config: dict[str, Any],
+    original_method: str,
+    original_path: str,
+    first_response: dict[str, Any],
+    responses: list[dict[str, Any]],
+    headers: dict[str, str],
+    body: Any,
+    base_url: str,
+    timeout: float,
+) -> None:
+    if str(original_method or "").upper() != "POST" or not _unknown_runtime_surface(first_response):
+        return
+    for path in _query_surface_input_paths(config, probe, original_path):
+        if path == original_path:
+            continue
+        response = _http_request("POST", _join_url(base_url, path), headers, body=body, timeout=timeout)
+        responses.append(response | {
+            "attempt": len(responses) + 1,
+            "method": "POST",
+            "path": path,
+            "fallback_from_method": "POST",
+            "fallback_from_path": original_path,
+            "fallback_reason": "query_surface_input_path_after_unknown_runtime_surface",
+        })
+        if not _unknown_runtime_surface(response):
+            return
+    for path in _query_surface_get_fallback_paths(probe, original_path):
+        response = _http_request("GET", _join_url(base_url, path), headers, timeout=timeout)
+        responses.append(response | {
+            "attempt": len(responses) + 1,
+            "method": "GET",
+            "path": path,
+            "fallback_from_method": "POST",
+            "fallback_from_path": original_path,
+            "fallback_reason": "post_query_surface_unknown_runtime_surface",
+        })
+        if not _unknown_runtime_surface(response):
+            break
+
+
 def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, timeout: float) -> dict[str, Any]:
     setup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "setup_requests", timeout)
     setup_blocked = any(r.get("status") == "blocked" for r in setup_receipts)
@@ -3208,6 +3417,19 @@ def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config:
             for idx in range(replay_count):
                 response = _http_request(decision.method, str(effective_request.get("url") or ""), headers, body=body, timeout=timeout)
                 responses.append(response | {"attempt": idx + 1})
+            if responses:
+                _append_query_surface_get_fallbacks(
+                    probe=probe,
+                    config=config,
+                    original_method=decision.method,
+                    original_path=decision.path,
+                    first_response=responses[0],
+                    responses=responses,
+                    headers=headers,
+                    body=body,
+                    base_url=base_url,
+                    timeout=timeout,
+                )
         snapshots["after"] = _execute_snapshots(config, base_url, probe, "after", timeout)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout)
     if missing:
@@ -3226,7 +3448,7 @@ def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config:
         "fixture_receipts": setup_receipts,
         "cleanup_receipts": cleanup_receipts,
         "responses": [
-            {"attempt": r.get("attempt"), "parallel": r.get("parallel"), "status_code": r.get("status_code"), "error": r.get("error"), "payload": _redact(r.get("payload")), "duration_ms": r.get("duration_ms")}
+            {"attempt": r.get("attempt"), "parallel": r.get("parallel"), "method": r.get("method") or decision.method, "path": r.get("path") or decision.path, "fallback_from_method": r.get("fallback_from_method"), "fallback_from_path": r.get("fallback_from_path"), "fallback_reason": r.get("fallback_reason"), "status_code": r.get("status_code"), "error": r.get("error"), "payload": _redact(r.get("payload")), "duration_ms": r.get("duration_ms")}
             for r in responses
         ],
         "snapshots": snapshots,
