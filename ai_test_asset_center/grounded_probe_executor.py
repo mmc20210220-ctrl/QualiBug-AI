@@ -930,6 +930,102 @@ def _bind_auto_fixture_response_id(config: dict[str, Any], probe: dict[str, Any]
     return binding
 
 
+FLOW_BINDABLE_PATH_PARAM_RE = re.compile(
+    r"(?:^|[_-])(?:id|uuid|code)$|(?:order|payment|transaction|event|resource|item|invoice|shipment|cart|product|sku)[_-]?(?:id|uuid|code)$",
+    re.I,
+)
+
+
+def _flow_path_placeholders(steps: list[dict[str, Any]], start_index: int, fallback_path: str) -> list[str]:
+    names: list[str] = []
+    for path in [fallback_path] + [str(s.get("path") or "") for s in steps[start_index + 1 :] if isinstance(s, dict)]:
+        for name in re.findall(r"\{([^{}]+)\}", str(path or "")):
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _explicit_flow_bind_fields(step: dict[str, Any]) -> list[str]:
+    raw = (
+        step.get("bind_response_id_to")
+        or step.get("bind_response_id_to_path_params")
+        or step.get("response_id_param")
+        or step.get("response_id_path_param")
+    )
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(x) for x in (raw or []) if str(x or "").strip()]
+
+
+def _generated_fixture_value(value: Any) -> bool:
+    text = str(value or "")
+    return not text or text.startswith("qb_auto") or bool(UNRESOLVED_PLACEHOLDER_RE.search(text))
+
+
+def _infer_flow_bind_fields(
+    *,
+    step: dict[str, Any],
+    steps: list[dict[str, Any]],
+    step_index: int,
+    decision_path: str,
+    path_params: dict[str, Any],
+) -> tuple[list[str], str]:
+    explicit = _explicit_flow_bind_fields(step)
+    if explicit:
+        return explicit, "explicit_step_bind_response_id_to"
+    future = _flow_path_placeholders(steps, step_index, decision_path)
+    candidates = [name for name in future if FLOW_BINDABLE_PATH_PARAM_RE.search(name)]
+    candidates = [name for name in candidates if _generated_fixture_value(path_params.get(name))]
+    if len(candidates) == 1:
+        return candidates, "inferred_single_future_generated_id_path_param"
+    return [], "no_unambiguous_flow_response_id_path_param"
+
+
+def _bind_flow_response_id_to_runtime(
+    config: dict[str, Any],
+    probe: dict[str, Any],
+    path_params: dict[str, Any],
+    bind_fields: list[str],
+    response_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    fields = [str(f) for f in bind_fields if str(f or "").strip()]
+    if not fields or not response_id:
+        return {}
+    old_values: dict[str, str] = {}
+    for field in fields:
+        old_values[field] = str(path_params.get(field) or "")
+        path_params[field] = response_id
+    bundle = _auto_fixture_bundle(config, probe)
+    if isinstance(bundle, dict):
+        bundle_params = bundle.setdefault("path_params", {})
+        if isinstance(bundle_params, dict):
+            for field in fields:
+                old_values.setdefault(field, str(bundle_params.get(field) or ""))
+                bundle_params[field] = response_id
+        for old_id in [v for v in old_values.values() if v and v != response_id]:
+            for key in ("request_body", "snapshots", "cleanup_requests"):
+                if key in bundle:
+                    bundle[key] = _replace_fixture_runtime_value(bundle.get(key), old_id, response_id)
+        runtime_bindings = bundle.setdefault("runtime_bindings", [])
+        if isinstance(runtime_bindings, list):
+            runtime_bindings.append({
+                "bound": True,
+                "source": "flow_step_response",
+                "response_id": response_id,
+                "path_params": fields,
+                "reason": reason,
+            })
+    return {
+        "bound": True,
+        "source": "flow_step_response",
+        "response_id": response_id,
+        "previous_values": old_values,
+        "path_params": fields,
+        "reason": reason,
+    }
+
+
 def _effective_runtime_request(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, body: Any) -> tuple[dict[str, Any], dict[str, str], list[str]]:
     path_params = _configured_path_params(config, probe, decision.method, decision.path)
     rendered, missing = _render_path(decision.path, path_params)
@@ -1042,7 +1138,7 @@ def _snapshot_requests(config: dict[str, Any], probe: dict[str, Any], phase: str
     if not reqs and _auto_fixture_enabled(config):
         bundle = _auto_fixture_bundle(config, probe)
         auto_snaps = bundle.get("snapshots") if isinstance(bundle, dict) else {}
-        raw = (auto_snaps or {}).get(phase) if isinstance(auto_snaps, dict) else []
+        raw = ((auto_snaps or {}).get(phase) if isinstance(auto_snaps, dict) else []) or []
         if isinstance(raw, dict):
             raw = [raw]
         reqs.extend([r for r in raw if isinstance(r, dict)])
@@ -1259,7 +1355,27 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
                 responses.append({"attempt": idx + 1, "step": idx + 1, "status_code": None, "error": f"flow_step_missing_path_params:{','.join(missing)}", "payload": {}})
                 continue
             response = _http_request(method, _join_url(base_url, path), headers, body=shared_body, timeout=timeout)
-            responses.append(response | {"attempt": idx + 1, "step": idx + 1, "flow_action": step.get("action"), "flow_path": path})
+            runtime_binding: dict[str, Any] = {}
+            if isinstance(response.get("status_code"), int) and 200 <= int(response.get("status_code")) < 300:
+                response_id = _extract_id_like(response.get("payload"))
+                bind_fields, bind_reason = _infer_flow_bind_fields(
+                    step=step,
+                    steps=steps[:8],
+                    step_index=idx,
+                    decision_path=decision.path,
+                    path_params=shared_params,
+                )
+                runtime_binding = _bind_flow_response_id_to_runtime(
+                    config,
+                    probe,
+                    shared_params,
+                    bind_fields,
+                    response_id,
+                    bind_reason,
+                )
+                if runtime_binding:
+                    shared_body = _replace_fixture_runtime_value(shared_body, str((runtime_binding.get("previous_values") or {}).get(bind_fields[0]) or ""), response_id)
+            responses.append(response | {"attempt": idx + 1, "step": idx + 1, "flow_action": step.get("action"), "flow_path": path, "runtime_binding": runtime_binding})
         snapshots["after"] = _execute_snapshots(config, base_url, probe, "after", timeout)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout)
     verification = _verify_flow_observation(probe, responses, snapshots) if not setup_blocked else {"verdict": "inconclusive", "reason": "auto_fixture_setup_blocked", "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
@@ -1272,7 +1388,7 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
         "fixture_receipts": setup_receipts,
         "cleanup_receipts": cleanup_receipts,
         "responses": [
-            {"attempt": r.get("attempt"), "step": r.get("step"), "flow_action": r.get("flow_action"), "status_code": r.get("status_code"), "error": r.get("error"), "payload": _redact(r.get("payload")), "duration_ms": r.get("duration_ms")}
+            {"attempt": r.get("attempt"), "step": r.get("step"), "flow_action": r.get("flow_action"), "flow_path": r.get("flow_path"), "runtime_binding": r.get("runtime_binding") or {}, "status_code": r.get("status_code"), "error": r.get("error"), "payload": _redact(r.get("payload")), "duration_ms": r.get("duration_ms")}
             for r in responses
         ],
         "snapshots": snapshots,
