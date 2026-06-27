@@ -2941,6 +2941,90 @@ def _runtime_repro_steps_for_observation(obs: dict[str, Any]) -> list[dict[str, 
     return steps
 
 
+
+def _runtime_reproduction_readiness_gate(
+    ledger_entry: dict[str, Any],
+    verification: dict[str, Any],
+    steps: list[dict[str, Any]],
+    binding_events: list[dict[str, Any]],
+    obs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Decide whether a packaged finding is safe to call customer-reproducible.
+
+    A validated runtime verdict alone is not enough for a customer handoff.  The
+    package also needs an actual redacted reproduction trace and no known
+    per-probe execution gaps from the ledger.  This gate prevents over-claiming
+    customer readiness when the finding exists but its setup/binding/snapshot or
+    cleanup evidence is incomplete.
+    """
+    blockers: list[str] = []
+    gap_types = [str(g) for g in (ledger_entry.get("gap_types") or []) if g]
+    verdict = str(verification.get("verdict") or "")
+    target_steps = [
+        step for step in steps
+        if isinstance(step, dict) and step.get("phase") in {"target", "target_flow_step"}
+    ]
+    target_http_statuses = [
+        int(step.get("status_code")) for step in target_steps
+        if isinstance(step.get("status_code"), int)
+    ]
+    failed_support_steps = [
+        str(step.get("phase") or "unknown")
+        for step in steps
+        if isinstance(step, dict)
+        and step.get("phase") in {"setup", "snapshot_before", "snapshot_after", "cleanup"}
+        and step.get("accepted") is False
+    ]
+    unbound_events = [
+        event for event in binding_events
+        if isinstance(event, dict) and event.get("bound") is not True
+    ]
+
+    if not isinstance(obs, dict) or not obs:
+        blockers.append("missing_runtime_observation")
+    if verdict != "validated_candidate":
+        blockers.append("runtime_verdict_not_validated")
+    if not steps:
+        blockers.append("missing_reproduction_trace")
+    if not target_steps:
+        blockers.append("missing_target_reproduction_step")
+    if not target_http_statuses:
+        blockers.append("missing_target_http_status")
+    if gap_types:
+        blockers.append("probe_ledger_has_evidence_gaps")
+    if unbound_events:
+        blockers.append("runtime_binding_not_fully_bound")
+    if failed_support_steps:
+        blockers.append("supporting_setup_snapshot_or_cleanup_failed")
+
+    blockers = sorted(dict.fromkeys(blockers))
+    customer_ready = not blockers
+    if customer_ready:
+        level = "customer_ready_reproduction"
+    elif verdict == "validated_candidate":
+        level = "validated_but_reproduction_gap"
+    else:
+        level = "not_validated_runtime_finding"
+
+    return {
+        "engine": "runtime_customer_reproduction_readiness_gate_v1_phase95",
+        "customer_ready": customer_ready,
+        "level": level,
+        "blockers": blockers,
+        "blocker_count": len(blockers),
+        "checks": {
+            "validated_runtime_verdict": verdict == "validated_candidate",
+            "has_runtime_observation": isinstance(obs, dict) and bool(obs),
+            "has_reproduction_trace": bool(steps),
+            "has_target_reproduction_step": bool(target_steps),
+            "target_http_statuses": target_http_statuses,
+            "ledger_gap_types": gap_types,
+            "runtime_binding_event_count": len(binding_events),
+            "runtime_binding_unbound_count": len(unbound_events),
+            "failed_support_step_phases": failed_support_steps,
+        },
+    }
+
 def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[str, Any]:
     """Package customer-ready findings with exact, redacted runtime reproduction traces."""
     observations = [o for o in (report.get("observations") or []) if isinstance(o, dict)]
@@ -2961,6 +3045,7 @@ def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[st
         verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
         steps = _runtime_repro_steps_for_observation(obs) if obs else []
         binding_events = _runtime_evidence_probe_binding_events(obs) if obs else []
+        readiness_gate = _runtime_reproduction_readiness_gate(ledger_entry, verification, steps, binding_events, obs)
         packages.append({
             "finding_id": finding.get("finding_id"),
             "candidate_id": cid,
@@ -2971,8 +3056,9 @@ def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[st
             "confidence": finding.get("confidence"),
             "evidence_grade": finding.get("evidence_grade"),
             "evidence_strength_score": finding.get("evidence_strength_score"),
-            "customer_ready": bool(ledger_entry.get("customer_ready")) or verification.get("verdict") == "validated_candidate",
-            "readiness_level": ledger_entry.get("readiness_level") or "validated_candidate_without_probe_ledger",
+            "customer_ready": bool(readiness_gate.get("customer_ready")),
+            "readiness_level": readiness_gate.get("level") or ledger_entry.get("readiness_level") or "validated_candidate_without_probe_ledger",
+            "reproduction_readiness_gate": readiness_gate,
             "reason": finding.get("reason") or verification.get("reason"),
             "runtime_evidence": {
                 "target_http_statuses": _runtime_evidence_target_statuses(obs) if obs else [],
@@ -2990,13 +3076,21 @@ def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[st
             "customer_triage": _redact(finding.get("customer_triage") or {}),
         })
 
+    customer_ready_count = sum(1 for item in packages if item.get("customer_ready") is True)
+    blocker_counts: dict[str, int] = {}
+    for item in packages:
+        gate = item.get("reproduction_readiness_gate") if isinstance(item.get("reproduction_readiness_gate"), dict) else {}
+        for blocker in gate.get("blockers") or []:
+            blocker_counts[str(blocker)] = blocker_counts.get(str(blocker), 0) + 1
     return {
         "engine": "runtime_customer_reproduction_pack_v1_phase95",
         "created_at": report.get("created_at"),
         "project_id": report.get("project_id"),
         "finding_count": len(packages),
-        "customer_ready_reproduction_count": sum(1 for item in packages if item.get("customer_ready") is True),
-        "status": "ready" if packages else "empty_no_validated_runtime_findings",
+        "customer_ready_reproduction_count": customer_ready_count,
+        "blocked_reproduction_count": len(packages) - customer_ready_count,
+        "status": "ready" if customer_ready_count else ("blocked_reproduction_evidence_gap" if packages else "empty_no_validated_runtime_findings"),
+        "reproduction_readiness_blocker_counts": dict(sorted(blocker_counts.items(), key=lambda item: (-item[1], item[0]))),
         "redaction_policy": "uses BASE_URL templates and redacts secret-bearing fields; no raw Authorization/Cookie values are emitted",
         "packages": packages,
     }
@@ -3011,6 +3105,8 @@ def _render_runtime_customer_reproduction_pack_markdown(pack: dict[str, Any]) ->
         f"- status: `{pack.get('status')}`",
         f"- findings packaged: {pack.get('finding_count')}",
         f"- customer-ready reproductions: {pack.get('customer_ready_reproduction_count')}",
+        f"- blocked reproductions: {pack.get('blocked_reproduction_count', 0)}",
+        f"- readiness blockers: `{json.dumps(pack.get('reproduction_readiness_blocker_counts') or {}, ensure_ascii=False)}`",
         f"- redaction policy: {pack.get('redaction_policy')}",
         "",
     ]
@@ -3026,6 +3122,7 @@ def _render_runtime_customer_reproduction_pack_markdown(pack: dict[str, Any]) ->
             f"- candidate: `{item.get('candidate_id')}`",
             f"- endpoint: `{item.get('method')} {item.get('path')}`",
             f"- readiness: `{item.get('readiness_level')}` / customer-ready `{item.get('customer_ready')}`",
+            f"- readiness blockers: `{json.dumps(((item.get('reproduction_readiness_gate') or {}).get('blockers') or []), ensure_ascii=False)}`",
             f"- evidence: grade `{item.get('evidence_grade')}`, score `{item.get('evidence_strength_score')}`, confidence `{item.get('confidence')}`",
             f"- reason: {item.get('reason')}",
             "",
