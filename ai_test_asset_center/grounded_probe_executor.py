@@ -72,7 +72,12 @@ from .runtime_onboarding_patch_safety_validator import validate_onboarding_patch
 from .runtime_write_sandbox_approval_packet import build_write_sandbox_approval_packet, render_write_sandbox_approval_markdown
 from .runtime_commercial_handoff_bundle import build_commercial_handoff_bundle, render_commercial_handoff_markdown
 from .runtime_commercial_handoff_acceptance_gate import validate_commercial_handoff_acceptance, render_commercial_handoff_acceptance_markdown
-from .runtime_handoff_secret_audit import audit_commercial_handoff_secrets, render_handoff_secret_audit_markdown
+from .runtime_handoff_secret_audit import (
+    audit_commercial_handoff_secrets,
+    build_handoff_secret_redaction_plan,
+    render_handoff_secret_audit_markdown,
+    render_handoff_secret_redaction_plan_markdown,
+)
 from .runtime_handoff_archive_manifest import (
     build_handoff_archive_manifest,
     render_handoff_archive_manifest_markdown,
@@ -5072,6 +5077,8 @@ def run_grounded_probe_executor(
             "commercial_handoff_secret_audit_status": "not_built",
             "commercial_handoff_secret_audit_issue_count": 0,
             "commercial_handoff_safe_for_customer": False,
+            "commercial_handoff_secret_redaction_plan_status": "not_built",
+            "commercial_handoff_secret_redaction_action_count": 0,
             "handoff_archive_manifest_status": "not_built",
             "handoff_archive_hashed_artifact_count": 0,
             "handoff_archive_missing_required_artifact_count": 0,
@@ -5162,6 +5169,8 @@ def run_grounded_probe_executor(
     commercial_handoff_acceptance_md_path = output / "grounded_probe_commercial_handoff_acceptance_gate.md"
     handoff_secret_audit_json_path = output / "grounded_probe_commercial_handoff_secret_audit.json"
     handoff_secret_audit_md_path = output / "grounded_probe_commercial_handoff_secret_audit.md"
+    handoff_secret_redaction_plan_json_path = output / "grounded_probe_commercial_handoff_secret_redaction_plan.json"
+    handoff_secret_redaction_plan_md_path = output / "grounded_probe_commercial_handoff_secret_redaction_plan.md"
     handoff_archive_manifest_json_path = output / "grounded_probe_handoff_archive_manifest.json"
     handoff_archive_manifest_md_path = output / "grounded_probe_handoff_archive_manifest.md"
     immutable_run_receipt_json_path = output / "grounded_probe_immutable_run_receipt.json"
@@ -5244,6 +5253,8 @@ def run_grounded_probe_executor(
         "commercial_handoff_acceptance_gate_md": str(commercial_handoff_acceptance_md_path),
         "commercial_handoff_secret_audit_json": str(handoff_secret_audit_json_path),
         "commercial_handoff_secret_audit_md": str(handoff_secret_audit_md_path),
+        "commercial_handoff_secret_redaction_plan_json": str(handoff_secret_redaction_plan_json_path),
+        "commercial_handoff_secret_redaction_plan_md": str(handoff_secret_redaction_plan_md_path),
         "handoff_archive_manifest_json": str(handoff_archive_manifest_json_path),
         "handoff_archive_manifest_md": str(handoff_archive_manifest_md_path),
         "immutable_run_receipt_json": str(immutable_run_receipt_json_path),
@@ -5419,6 +5430,28 @@ def run_grounded_probe_executor(
     report["summary"]["commercial_handoff_safe_for_customer"] = bool(report["commercial_handoff_secret_audit"].get("safe_for_customer_handoff"))
     _write_json(handoff_secret_audit_json_path, report["commercial_handoff_secret_audit"])
     handoff_secret_audit_md_path.write_text(render_handoff_secret_audit_markdown(report["commercial_handoff_secret_audit"]), encoding="utf-8")
+    report["commercial_handoff_secret_redaction_plan"] = build_handoff_secret_redaction_plan(report, report["commercial_handoff_secret_audit"])
+    report["summary"]["commercial_handoff_secret_redaction_plan_status"] = report["commercial_handoff_secret_redaction_plan"].get("status")
+    report["summary"]["commercial_handoff_secret_redaction_action_count"] = report["commercial_handoff_secret_redaction_plan"].get("action_count", 0)
+    _write_json(handoff_secret_redaction_plan_json_path, report["commercial_handoff_secret_redaction_plan"])
+    handoff_secret_redaction_plan_md_path.write_text(render_handoff_secret_redaction_plan_markdown(report["commercial_handoff_secret_redaction_plan"]), encoding="utf-8")
+
+    # Refresh handoff artifacts after secret audit/redaction planning so the
+    # customer-facing handoff bundle and acceptance gate reflect P0 redaction
+    # blockers discovered late in the reporting pipeline.
+    report["commercial_handoff_bundle"] = build_commercial_handoff_bundle(report)
+    report["summary"]["commercial_handoff_status"] = report["commercial_handoff_bundle"].get("status")
+    report["summary"]["commercial_handoff_blocker_count"] = (report["commercial_handoff_bundle"].get("executive_summary") or {}).get("handoff_blocker_count", 0)
+    report["summary"]["commercial_handoff_artifact_count"] = len(report["commercial_handoff_bundle"].get("artifact_manifest") or [])
+    _write_json(commercial_handoff_json_path, report["commercial_handoff_bundle"])
+    commercial_handoff_md_path.write_text(render_commercial_handoff_markdown(report["commercial_handoff_bundle"]), encoding="utf-8")
+    report["commercial_handoff_acceptance_gate"] = validate_commercial_handoff_acceptance(report)
+    report["summary"]["commercial_handoff_acceptance_status"] = report["commercial_handoff_acceptance_gate"].get("status")
+    report["summary"]["commercial_handoff_acceptance_gate_passed"] = bool(report["commercial_handoff_acceptance_gate"].get("acceptance_gate_passed"))
+    report["summary"]["commercial_handoff_acceptance_violation_count"] = report["commercial_handoff_acceptance_gate"].get("violation_count", 0)
+    _write_json(commercial_handoff_acceptance_json_path, report["commercial_handoff_acceptance_gate"])
+    commercial_handoff_acceptance_md_path.write_text(render_commercial_handoff_acceptance_markdown(report["commercial_handoff_acceptance_gate"]), encoding="utf-8")
+
     report["handoff_archive_manifest"] = build_handoff_archive_manifest(report)
     report["immutable_run_receipt"] = report["handoff_archive_manifest"].get("immutable_run_receipt") or {}
     report["summary"]["handoff_archive_manifest_status"] = report["handoff_archive_manifest"].get("status")

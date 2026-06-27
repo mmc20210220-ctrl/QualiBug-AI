@@ -23,6 +23,7 @@ _REQUIRED_KEYS = {
     "commercial_handoff_bundle_json",
     "commercial_handoff_acceptance_gate_json",
     "commercial_handoff_secret_audit_json",
+    "commercial_handoff_secret_redaction_plan_json",
     "runtime_evidence_readiness_sla_gate_json",
     "runtime_evidence_scoreboard_json",
     "runtime_evidence_probe_ledger_json",
@@ -181,6 +182,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
     bundle_hash = _payload_hash(_as_dict(report.get("commercial_handoff_bundle")))
     acceptance_hash = _payload_hash(_as_dict(report.get("commercial_handoff_acceptance_gate")))
     secret_audit_hash = _payload_hash(_as_dict(report.get("commercial_handoff_secret_audit")))
+    secret_redaction_plan_hash = _payload_hash(_as_dict(report.get("commercial_handoff_secret_redaction_plan")))
     sla_gate_hash = _payload_hash(_as_dict(report.get("runtime_evidence_readiness_sla_gate")))
     sla_policy_hash = _payload_hash(_as_dict(report.get("runtime_sla_execution_policy")))
     remediation_hash = _payload_hash(_as_dict(report.get("remediation_verification_artifact")))
@@ -227,6 +229,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
         "commercial_handoff_bundle_hash": bundle_hash,
         "commercial_handoff_acceptance_gate_hash": acceptance_hash,
         "commercial_handoff_secret_audit_hash": secret_audit_hash,
+        "commercial_handoff_secret_redaction_plan_hash": secret_redaction_plan_hash,
         "runtime_evidence_sla_gate_hash": sla_gate_hash,
         "runtime_sla_execution_policy_hash": sla_policy_hash,
         "remediation_verification_hash": remediation_hash,
@@ -242,6 +245,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
         "safe_for_customer_handoff": bool(secret_audit.get("safe_for_customer_handoff")),
         "secret_audit_issue_count": int(secret_audit.get("issue_count") or 0),
         "runtime_evidence_secret_issue_count": int(secret_audit.get("runtime_evidence_issue_count") or 0),
+        "secret_redaction_action_count": int(_as_dict(report.get("commercial_handoff_secret_redaction_plan")).get("action_count") or 0),
         "commercial_readiness_score": summary.get("runtime_evidence_readiness_score"),
         "minimum_commercial_gate_failures": minimum_failures,
         "commercial_blocking_reasons": commercial_blockers,
@@ -276,6 +280,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
             "commercial_handoff_bundle_hash": bundle_hash,
             "commercial_handoff_acceptance_gate_hash": acceptance_hash,
             "commercial_handoff_secret_audit_hash": secret_audit_hash,
+            "commercial_handoff_secret_redaction_plan_hash": secret_redaction_plan_hash,
             "runtime_evidence_sla_gate_hash": sla_gate_hash,
             "runtime_sla_execution_policy_hash": sla_policy_hash,
             "remediation_verification_hash": remediation_hash,
@@ -292,6 +297,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
             "runtime_evidence_delivery_manifest_verification_hash",
             "commercial_handoff_bundle_hash",
             "commercial_handoff_secret_audit_hash",
+            "commercial_handoff_secret_redaction_plan_hash",
             "artifact_archive_hash",
         ],
         "secret_audit_blocked": bool(secret_audit_unsafe),
@@ -324,6 +330,7 @@ def render_handoff_archive_manifest_markdown(manifest: dict[str, Any]) -> str:
         f"- secret audit hash: `{receipt.get('commercial_handoff_secret_audit_hash')}`",
         f"- secret audit issue count: `{receipt.get('secret_audit_issue_count')}`",
         f"- runtime evidence secret issues: `{receipt.get('runtime_evidence_secret_issue_count')}`",
+        f"- secret redaction actions: `{receipt.get('secret_redaction_action_count')}`",
         f"- customer acceptance status: `{receipt.get('customer_acceptance_status')}`",
         f"- customer acceptance violations: `{receipt.get('customer_acceptance_violation_count')}`",
         f"- minimum commercial gate failures: `{receipt.get('minimum_commercial_gate_failures')}`",
@@ -362,6 +369,7 @@ def render_immutable_run_receipt_markdown(receipt: dict[str, Any]) -> str:
         f"- secret audit hash: `{receipt.get('commercial_handoff_secret_audit_hash')}`",
         f"- secret audit issue count: `{receipt.get('secret_audit_issue_count')}`",
         f"- runtime evidence secret issues: `{receipt.get('runtime_evidence_secret_issue_count')}`",
+        f"- secret redaction actions: `{receipt.get('secret_redaction_action_count')}`",
         f"- customer acceptance status: `{receipt.get('customer_acceptance_status')}`",
         f"- customer acceptance violations: `{receipt.get('customer_acceptance_violation_count')}`",
         f"- handoff status: `{receipt.get('handoff_status')}`",

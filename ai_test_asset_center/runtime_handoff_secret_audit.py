@@ -167,6 +167,133 @@ def audit_commercial_handoff_secrets(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _issue_section(issue: dict[str, Any]) -> str:
+    path = str(issue.get("path") or "")
+    if path.startswith("$."):
+        return path[2:].split(".", 1)[0].split("[", 1)[0]
+    return "unknown"
+
+
+def _redaction_replacement_for_issue(issue: dict[str, Any]) -> str:
+    key = str(issue.get("key") or "").lower()
+    issue_id = str(issue.get("issue_id") or "")
+    if "authorization" in key or "HANDOFF-RAW-SECRET-VALUE" in issue_id:
+        return "<REDACTED_RUNTIME_SECRET>"
+    if "cookie" in key or "session" in key:
+        return "<REDACTED_COOKIE>"
+    if "password" in key or "passwd" in key:
+        return "<REDACTED_PASSWORD>"
+    if "api" in key and "key" in key:
+        return "<REDACTED_API_KEY>"
+    if "token" in key or "secret" in key:
+        return "<REDACTED_TOKEN>"
+    return "<REDACTED>"
+
+
+def build_handoff_secret_redaction_plan(report: dict[str, Any], audit: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build an actionable redaction/remediation plan from secret-audit findings.
+
+    The plan deliberately does not mutate evidence artifacts.  It gives a
+    deterministic redaction queue that can be applied by the artifact producer,
+    followed by regeneration of the secret audit, commercial handoff bundle and
+    archive manifest.
+    """
+
+    audit = audit if isinstance(audit, dict) else audit_commercial_handoff_secrets(report)
+    issues = [x for x in audit.get("issues") or [] if isinstance(x, dict)]
+    actions: list[dict[str, Any]] = []
+    affected_sections: list[str] = []
+    affected_runtime_sections: list[str] = []
+
+    for index, issue in enumerate(issues, start=1):
+        section = _issue_section(issue)
+        if section not in affected_sections:
+            affected_sections.append(section)
+        if section in RUNTIME_EVIDENCE_SECTIONS and section not in affected_runtime_sections:
+            affected_runtime_sections.append(section)
+        actions.append({
+            "action_id": f"REDACT-{index:03d}",
+            "priority": "P0",
+            "source_issue_id": issue.get("issue_id"),
+            "section": section,
+            "path": issue.get("path"),
+            "key": issue.get("key"),
+            "value_preview": issue.get("value_preview"),
+            "replacement": _redaction_replacement_for_issue(issue),
+            "owner": "security_owner" if section not in RUNTIME_EVIDENCE_SECTIONS else "runtime_evidence_owner",
+            "blocks_customer_handoff": True,
+            "required_follow_up": [
+                "replace_raw_secret_with_placeholder_or_remove_field",
+                "regenerate_runtime_evidence_artifact_if_source_artifact_changed",
+                "rerun_commercial_handoff_secret_audit",
+                "rerun_runtime_delivery_manifest_hash_verification",
+            ],
+            "verification": "Secret audit must return safe_for_customer_handoff=true and runtime_evidence_issue_count=0 before customer handoff.",
+        })
+
+    if actions:
+        status = "handoff_secret_redaction_required"
+        safe_after_regeneration = False
+        next_action = "Apply every P0 redaction action, regenerate affected artifacts, then rerun the secret audit and delivery manifest verification."
+    else:
+        status = "handoff_secret_redaction_not_required"
+        safe_after_regeneration = True
+        next_action = "No redaction actions are required; keep the secret audit artifact with the delivery archive."
+
+    return {
+        "engine": "runtime_handoff_secret_redaction_plan_v1_phase95",
+        "status": status,
+        "redaction_required": bool(actions),
+        "safe_for_customer_handoff_after_regeneration": safe_after_regeneration,
+        "source_audit_status": audit.get("status"),
+        "source_audit_issue_count": audit.get("issue_count", 0),
+        "source_runtime_evidence_issue_count": audit.get("runtime_evidence_issue_count", 0),
+        "action_count": len(actions),
+        "p0_action_count": sum(1 for action in actions if action.get("priority") == "P0"),
+        "affected_sections": affected_sections,
+        "affected_runtime_evidence_sections": affected_runtime_sections,
+        "redaction_actions": actions,
+        "replacement_policy": {
+            "never_emit_raw_secret_values": True,
+            "allowed_placeholders": ["<REDACTED>", "<REDACTED_TOKEN>", "<REDACTED_COOKIE>", "<REDACTED_RUNTIME_SECRET>", "***"],
+            "requires_regeneration_after_redaction": bool(actions),
+            "does_not_mutate_original_artifacts": True,
+        },
+        "customer_safe_note": "This plan is safe to share because it contains only paths, previews and placeholder replacements, not full secret values.",
+        "next_action": next_action,
+    }
+
+
+def render_handoff_secret_redaction_plan_markdown(plan: dict[str, Any]) -> str:
+    lines = [
+        "# Commercial Handoff Secret Redaction Plan",
+        "",
+        f"- engine: `{plan.get('engine')}`",
+        f"- status: `{plan.get('status')}`",
+        f"- redaction required: `{plan.get('redaction_required')}`",
+        f"- action count: `{plan.get('action_count')}`",
+        f"- P0 action count: `{plan.get('p0_action_count')}`",
+        f"- affected sections: `{', '.join(str(x) for x in plan.get('affected_sections') or [])}`",
+        f"- affected runtime evidence sections: `{', '.join(str(x) for x in plan.get('affected_runtime_evidence_sections') or [])}`",
+        f"- next action: {plan.get('next_action')}",
+        "",
+    ]
+    actions = [x for x in plan.get("redaction_actions") or [] if isinstance(x, dict)]
+    if actions:
+        lines.extend(["## Redaction queue", "", "| Action | Priority | Section | Path | Replacement |", "| --- | --- | --- | --- | --- |"] )
+        for action in actions:
+            lines.append(
+                f"| `{action.get('action_id')}` | `{action.get('priority')}` | `{action.get('section')}` | `{action.get('path')}` | `{action.get('replacement')}` |"
+            )
+        lines.append("")
+        lines.extend(["## Follow-up verification", ""])
+        for action in actions:
+            lines.append(f"- `{action.get('action_id')}`: {action.get('verification')}")
+        lines.append("")
+    lines.append(f"> {plan.get('customer_safe_note')}")
+    return "\n".join(lines)
+
+
 def render_handoff_secret_audit_markdown(audit: dict[str, Any]) -> str:
     lines = [
         "# Commercial Handoff Secret Audit",
