@@ -8,6 +8,7 @@ with raw passwords, bearer tokens, cookies or API keys embedded in report
 sections.
 """
 
+import copy
 import re
 from typing import Any
 
@@ -262,6 +263,226 @@ def build_handoff_secret_redaction_plan(report: dict[str, Any], audit: dict[str,
         "customer_safe_note": "This plan is safe to share because it contains only paths, previews and placeholder replacements, not full secret values.",
         "next_action": next_action,
     }
+
+
+def _path_tokens(path: str) -> list[str | int]:
+    if not isinstance(path, str) or not path.startswith("$."):
+        return []
+    tokens: list[str | int] = []
+    tail = path[2:]
+    for part in tail.split("."):
+        if not part:
+            continue
+        match = re.match(r"^([^\[]+)", part)
+        if match:
+            tokens.append(match.group(1))
+        for index in re.findall(r"\[(\d+)\]", part):
+            tokens.append(int(index))
+    return tokens
+
+
+def _get_path_value(root: Any, path: str) -> tuple[bool, Any]:
+    current = root
+    for token in _path_tokens(path):
+        if isinstance(token, int):
+            if not isinstance(current, list) or token >= len(current):
+                return False, None
+            current = current[token]
+        else:
+            if not isinstance(current, dict) or token not in current:
+                return False, None
+            current = current[token]
+    return True, current
+
+
+def _set_path_value(root: Any, path: str, value: Any) -> bool:
+    tokens = _path_tokens(path)
+    if not tokens:
+        return False
+    current = root
+    for token in tokens[:-1]:
+        if isinstance(token, int):
+            if not isinstance(current, list) or token >= len(current):
+                return False
+            current = current[token]
+        else:
+            if not isinstance(current, dict) or token not in current:
+                return False
+            current = current[token]
+    last = tokens[-1]
+    if isinstance(last, int):
+        if not isinstance(current, list) or last >= len(current):
+            return False
+        current[last] = value
+        return True
+    if not isinstance(current, dict):
+        return False
+    current[last] = value
+    return True
+
+
+def _redact_issue_value(value: Any, issue: dict[str, Any]) -> Any:
+    replacement = _redaction_replacement_for_issue(issue)
+    if isinstance(value, str):
+        redacted = RAW_SECRET_VALUE_RE.sub(replacement, value)
+        key = str(issue.get("key") or "")
+        if redacted == value and SENSITIVE_KEY_RE.search(key):
+            return replacement
+        return redacted
+    return replacement
+
+
+def build_handoff_redacted_runtime_evidence_pack(
+    report: dict[str, Any],
+    audit: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a customer-safe redacted evidence pack without mutating originals.
+
+    The pack is a convenience artifact for security review and customer
+    delivery.  It keeps the original runtime/handoff evidence unchanged, applies
+    the deterministic redaction actions to a deep copy, and re-runs the same
+    handoff secret audit against the redacted copy.
+    """
+
+    audit = audit if isinstance(audit, dict) else audit_commercial_handoff_secrets(report)
+    plan = plan if isinstance(plan, dict) else build_handoff_secret_redaction_plan(report, audit)
+    redacted_report = copy.deepcopy(report)
+    actions = [x for x in plan.get("redaction_actions") or [] if isinstance(x, dict)]
+    applied_actions: list[dict[str, Any]] = []
+    skipped_actions: list[dict[str, Any]] = []
+    redacted_sections: dict[str, Any] = {}
+
+    for action in actions:
+        path = str(action.get("path") or "")
+        found, original = _get_path_value(redacted_report, path)
+        if not found:
+            skipped_actions.append({
+                "action_id": action.get("action_id"),
+                "path": path,
+                "reason": "path_not_found_in_report_copy",
+            })
+            continue
+        replacement_issue = {
+            "issue_id": action.get("source_issue_id"),
+            "key": action.get("key"),
+        }
+        redacted_value = _redact_issue_value(original, replacement_issue)
+        if not _set_path_value(redacted_report, path, redacted_value):
+            skipped_actions.append({
+                "action_id": action.get("action_id"),
+                "path": path,
+                "reason": "failed_to_write_redacted_value",
+            })
+            continue
+        section = str(action.get("section") or _issue_section({"path": path}))
+        applied_actions.append({
+            "action_id": action.get("action_id"),
+            "section": section,
+            "path": path,
+            "replacement": _redaction_replacement_for_issue(replacement_issue),
+            "redaction_applied": True,
+        })
+
+    for section in HANDOFF_SECTIONS:
+        if section in redacted_report and (section in RUNTIME_EVIDENCE_SECTIONS or section in {"commercial_handoff_bundle", "commercial_handoff_acceptance_gate"}):
+            redacted_sections[section] = redacted_report.get(section)
+
+    verification_audit = audit_commercial_handoff_secrets(redacted_report)
+    blockers: list[str] = []
+    if skipped_actions:
+        blockers.append("redaction_action_path_missing_or_failed")
+    if verification_audit.get("safe_for_customer_handoff") is False:
+        blockers.append("redacted_pack_still_contains_secret_indicators")
+
+    if not actions:
+        status = "handoff_redacted_runtime_evidence_not_required"
+        next_action = "No redacted evidence pack is required; keep the clean secret audit with the delivery archive."
+    elif blockers:
+        status = "handoff_redacted_runtime_evidence_blocked"
+        next_action = "Review skipped redaction paths or remaining secret indicators, then regenerate the source evidence artifacts."
+    else:
+        status = "handoff_redacted_runtime_evidence_ready"
+        next_action = "Use the redacted runtime evidence pack for security review/customer handoff and regenerate delivery manifest hashes if it replaces source artifacts."
+
+    applied_runtime_sections = []
+    for action in applied_actions:
+        section = str(action.get("section") or "")
+        if section in RUNTIME_EVIDENCE_SECTIONS and section not in applied_runtime_sections:
+            applied_runtime_sections.append(section)
+
+    return {
+        "engine": "runtime_handoff_redacted_evidence_pack_v1_phase95",
+        "status": status,
+        "redaction_applied": bool(applied_actions),
+        "safe_for_customer_handoff_after_redaction": bool(verification_audit.get("safe_for_customer_handoff")),
+        "source_audit_status": audit.get("status"),
+        "source_issue_count": audit.get("issue_count", 0),
+        "source_runtime_evidence_issue_count": audit.get("runtime_evidence_issue_count", 0),
+        "redaction_action_count": len(actions),
+        "applied_action_count": len(applied_actions),
+        "skipped_action_count": len(skipped_actions),
+        "redacted_runtime_evidence_sections": applied_runtime_sections,
+        "redacted_runtime_evidence_section_count": len(applied_runtime_sections),
+        "redacted_sections": redacted_sections,
+        "redacted_section_count": len(redacted_sections),
+        "applied_actions": applied_actions,
+        "skipped_actions": skipped_actions,
+        "verification_audit": verification_audit,
+        "verification_issue_count": verification_audit.get("issue_count", 0),
+        "blockers": blockers,
+        "blocker_count": len(blockers),
+        "replacement_policy": {
+            "mutates_original_report": False,
+            "replacement_value": "<REDACTED_RUNTIME_SECRET>",
+            "safe_placeholders_allowed": ["<REDACTED>", "<REDACTED_RUNTIME_SECRET>", "<REDACTED_TOKEN>", "<REDACTED_COOKIE>", "***"],
+            "requires_secret_audit_after_redaction": True,
+        },
+        "customer_safe_note": "This pack contains redacted copies of runtime/handoff evidence sections. It does not expose full raw secret values.",
+        "next_action": next_action,
+    }
+
+
+def render_handoff_redacted_runtime_evidence_markdown(pack: dict[str, Any]) -> str:
+    lines = [
+        "# Commercial Handoff Redacted Runtime Evidence Pack",
+        "",
+        f"- engine: `{pack.get('engine')}`",
+        f"- status: `{pack.get('status')}`",
+        f"- redaction applied: `{pack.get('redaction_applied')}`",
+        f"- safe after redaction: `{pack.get('safe_for_customer_handoff_after_redaction')}`",
+        f"- source issue count: `{pack.get('source_issue_count')}`",
+        f"- applied action count: `{pack.get('applied_action_count')}`",
+        f"- skipped action count: `{pack.get('skipped_action_count')}`",
+        f"- redacted runtime evidence sections: `{', '.join(str(x) for x in pack.get('redacted_runtime_evidence_sections') or [])}`",
+        f"- blocker count: `{pack.get('blocker_count')}`",
+        f"- next action: {pack.get('next_action')}",
+        "",
+    ]
+    blockers = [str(x) for x in pack.get("blockers") or [] if str(x)]
+    if blockers:
+        lines.extend(["## Blockers", ""])
+        for blocker in blockers:
+            lines.append(f"- `{blocker}`")
+        lines.append("")
+    actions = [x for x in pack.get("applied_actions") or [] if isinstance(x, dict)]
+    if actions:
+        lines.extend(["## Applied redactions", "", "| Action | Section | Path | Replacement |", "| --- | --- | --- | --- |"] )
+        for action in actions:
+            lines.append(
+                f"| `{action.get('action_id')}` | `{action.get('section')}` | `{action.get('path')}` | `{action.get('replacement')}` |"
+            )
+        lines.append("")
+    verification = pack.get("verification_audit") if isinstance(pack.get("verification_audit"), dict) else {}
+    lines.extend([
+        "## Verification",
+        "",
+        f"- verification audit status: `{verification.get('status')}`",
+        f"- verification issue count: `{verification.get('issue_count', 0)}`",
+        "",
+        f"> {pack.get('customer_safe_note')}",
+    ])
+    return "\n".join(lines)
 
 
 def render_handoff_secret_redaction_plan_markdown(plan: dict[str, Any]) -> str:

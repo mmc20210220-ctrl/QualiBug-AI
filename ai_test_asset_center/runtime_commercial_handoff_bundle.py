@@ -46,6 +46,8 @@ _ARTIFACTS: list[tuple[str, str, str, str]] = [
     ("runtime_evidence_delivery_manifest_verification_md", "grounded_probe_runtime_evidence_delivery_manifest_verification.md", "Delivery manifest verification summary", "security_owner"),
     ("commercial_handoff_secret_redaction_plan_json", "grounded_probe_commercial_handoff_secret_redaction_plan.json", "Secret redaction remediation queue", "security_owner"),
     ("commercial_handoff_secret_redaction_plan_md", "grounded_probe_commercial_handoff_secret_redaction_plan.md", "Customer-safe redaction action guide", "security_owner"),
+    ("commercial_handoff_redacted_runtime_evidence_json", "grounded_probe_commercial_handoff_redacted_runtime_evidence.json", "Customer-safe redacted runtime evidence pack", "security_owner"),
+    ("commercial_handoff_redacted_runtime_evidence_md", "grounded_probe_commercial_handoff_redacted_runtime_evidence.md", "Redacted runtime evidence summary", "security_owner"),
     ("runtime_sla_execution_policy_json", "grounded_probe_runtime_sla_execution_policy.json", "SLA-gated execution policy", "qa_owner"),
     ("runtime_sla_execution_policy_md", "grounded_probe_runtime_sla_execution_policy.md", "SLA execution policy guide", "qa_owner"),
     ("runtime_sla_gap_prioritizer_json", "grounded_probe_runtime_sla_gap_prioritizer.json", "Prioritized onboarding delta plan", "customer_admin"),
@@ -114,27 +116,29 @@ def _artifact_manifest(report: dict[str, Any]) -> list[dict[str, Any]]:
     manifest: list[dict[str, Any]] = []
     for key, default_name, purpose, owner in _ARTIFACTS:
         path = outputs.get(key) or default_name
+        redaction_action_count = int(_as_dict(report.get("commercial_handoff_secret_redaction_plan")).get("action_count") or 0)
+        required = key in {
+            "execution_report",
+            "onboarding_preflight_json",
+            "runtime_capability_matrix_json",
+            "runtime_evidence_readiness_sla_gate_json",
+            "runtime_evidence_scoreboard_json",
+            "runtime_evidence_probe_ledger_json",
+            "runtime_customer_reproduction_pack_json",
+            "runtime_evidence_remediation_plan_json",
+            "runtime_evidence_promotion_gate_json",
+            "runtime_evidence_customer_delivery_manifest_json",
+            "runtime_evidence_delivery_manifest_verification_json",
+            "commercial_handoff_secret_redaction_plan_json",
+            "runtime_sla_execution_policy_json",
+            "runtime_execution_runbook_md",
+        } or (key == "commercial_handoff_redacted_runtime_evidence_json" and redaction_action_count > 0)
         manifest.append({
             "artifact_key": key,
             "path": path,
             "purpose": purpose,
             "primary_owner": owner,
-            "required_for_handoff": key in {
-                "execution_report",
-                "onboarding_preflight_json",
-                "runtime_capability_matrix_json",
-                "runtime_evidence_readiness_sla_gate_json",
-                "runtime_evidence_scoreboard_json",
-                "runtime_evidence_probe_ledger_json",
-                "runtime_customer_reproduction_pack_json",
-                "runtime_evidence_remediation_plan_json",
-                "runtime_evidence_promotion_gate_json",
-                "runtime_evidence_customer_delivery_manifest_json",
-                "runtime_evidence_delivery_manifest_verification_json",
-                "commercial_handoff_secret_redaction_plan_json",
-                "runtime_sla_execution_policy_json",
-                "runtime_execution_runbook_md",
-            },
+            "required_for_handoff": required,
         })
     return manifest
 
@@ -306,6 +310,8 @@ def build_commercial_handoff_bundle(report: dict[str, Any]) -> dict[str, Any]:
             "commercial_handoff_safe_for_customer": bool(_as_dict(report.get("commercial_handoff_secret_audit")).get("safe_for_customer_handoff")) if _as_dict(report.get("commercial_handoff_secret_audit")) else None,
             "runtime_evidence_secret_issue_count": _as_dict(report.get("commercial_handoff_secret_audit")).get("runtime_evidence_issue_count", 0),
             "secret_redaction_action_count": _as_dict(report.get("commercial_handoff_secret_redaction_plan")).get("action_count", 0),
+            "redacted_runtime_evidence_status": _as_dict(report.get("commercial_handoff_redacted_runtime_evidence")).get("status"),
+            "redacted_runtime_evidence_safe": bool(_as_dict(report.get("commercial_handoff_redacted_runtime_evidence")).get("safe_for_customer_handoff_after_redaction")),
             "validated_candidate_count": summary.get("validated_candidate_count", len(findings)),
             "finding_count_by_priority": _count_by_priority(findings),
             "p0_p1_finding_count": sum(1 for f in findings if str(f.get("priority")) in {"P0", "P1"}),
@@ -359,6 +365,8 @@ def render_commercial_handoff_markdown(bundle: dict[str, Any]) -> str:
         "commercial_handoff_secret_audit_status",
         "commercial_handoff_secret_redaction_plan_status",
         "commercial_handoff_secret_redaction_action_count",
+        "commercial_handoff_redacted_runtime_evidence_status",
+        "commercial_handoff_redacted_runtime_evidence_action_count",
         "commercial_handoff_safe_for_customer",
         "runtime_evidence_secret_issue_count",
         "validated_candidate_count",

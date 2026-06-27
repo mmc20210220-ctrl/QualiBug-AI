@@ -75,8 +75,10 @@ from .runtime_commercial_handoff_acceptance_gate import validate_commercial_hand
 from .runtime_handoff_secret_audit import (
     audit_commercial_handoff_secrets,
     build_handoff_secret_redaction_plan,
+    build_handoff_redacted_runtime_evidence_pack,
     render_handoff_secret_audit_markdown,
     render_handoff_secret_redaction_plan_markdown,
+    render_handoff_redacted_runtime_evidence_markdown,
 )
 from .runtime_handoff_archive_manifest import (
     build_handoff_archive_manifest,
@@ -5079,6 +5081,9 @@ def run_grounded_probe_executor(
             "commercial_handoff_safe_for_customer": False,
             "commercial_handoff_secret_redaction_plan_status": "not_built",
             "commercial_handoff_secret_redaction_action_count": 0,
+            "commercial_handoff_redacted_runtime_evidence_status": "not_built",
+            "commercial_handoff_redacted_runtime_evidence_safe": False,
+            "commercial_handoff_redacted_runtime_evidence_action_count": 0,
             "handoff_archive_manifest_status": "not_built",
             "handoff_archive_hashed_artifact_count": 0,
             "handoff_archive_missing_required_artifact_count": 0,
@@ -5171,6 +5176,8 @@ def run_grounded_probe_executor(
     handoff_secret_audit_md_path = output / "grounded_probe_commercial_handoff_secret_audit.md"
     handoff_secret_redaction_plan_json_path = output / "grounded_probe_commercial_handoff_secret_redaction_plan.json"
     handoff_secret_redaction_plan_md_path = output / "grounded_probe_commercial_handoff_secret_redaction_plan.md"
+    handoff_redacted_runtime_evidence_json_path = output / "grounded_probe_commercial_handoff_redacted_runtime_evidence.json"
+    handoff_redacted_runtime_evidence_md_path = output / "grounded_probe_commercial_handoff_redacted_runtime_evidence.md"
     handoff_archive_manifest_json_path = output / "grounded_probe_handoff_archive_manifest.json"
     handoff_archive_manifest_md_path = output / "grounded_probe_handoff_archive_manifest.md"
     immutable_run_receipt_json_path = output / "grounded_probe_immutable_run_receipt.json"
@@ -5255,6 +5262,8 @@ def run_grounded_probe_executor(
         "commercial_handoff_secret_audit_md": str(handoff_secret_audit_md_path),
         "commercial_handoff_secret_redaction_plan_json": str(handoff_secret_redaction_plan_json_path),
         "commercial_handoff_secret_redaction_plan_md": str(handoff_secret_redaction_plan_md_path),
+        "commercial_handoff_redacted_runtime_evidence_json": str(handoff_redacted_runtime_evidence_json_path),
+        "commercial_handoff_redacted_runtime_evidence_md": str(handoff_redacted_runtime_evidence_md_path),
         "handoff_archive_manifest_json": str(handoff_archive_manifest_json_path),
         "handoff_archive_manifest_md": str(handoff_archive_manifest_md_path),
         "immutable_run_receipt_json": str(immutable_run_receipt_json_path),
@@ -5435,6 +5444,16 @@ def run_grounded_probe_executor(
     report["summary"]["commercial_handoff_secret_redaction_action_count"] = report["commercial_handoff_secret_redaction_plan"].get("action_count", 0)
     _write_json(handoff_secret_redaction_plan_json_path, report["commercial_handoff_secret_redaction_plan"])
     handoff_secret_redaction_plan_md_path.write_text(render_handoff_secret_redaction_plan_markdown(report["commercial_handoff_secret_redaction_plan"]), encoding="utf-8")
+    report["commercial_handoff_redacted_runtime_evidence"] = build_handoff_redacted_runtime_evidence_pack(
+        report,
+        report["commercial_handoff_secret_audit"],
+        report["commercial_handoff_secret_redaction_plan"],
+    )
+    report["summary"]["commercial_handoff_redacted_runtime_evidence_status"] = report["commercial_handoff_redacted_runtime_evidence"].get("status")
+    report["summary"]["commercial_handoff_redacted_runtime_evidence_safe"] = bool(report["commercial_handoff_redacted_runtime_evidence"].get("safe_for_customer_handoff_after_redaction"))
+    report["summary"]["commercial_handoff_redacted_runtime_evidence_action_count"] = report["commercial_handoff_redacted_runtime_evidence"].get("applied_action_count", 0)
+    _write_json(handoff_redacted_runtime_evidence_json_path, report["commercial_handoff_redacted_runtime_evidence"])
+    handoff_redacted_runtime_evidence_md_path.write_text(render_handoff_redacted_runtime_evidence_markdown(report["commercial_handoff_redacted_runtime_evidence"]), encoding="utf-8")
 
     # Refresh handoff artifacts after secret audit/redaction planning so the
     # customer-facing handoff bundle and acceptance gate reflect P0 redaction

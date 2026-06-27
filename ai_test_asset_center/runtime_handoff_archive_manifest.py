@@ -24,6 +24,7 @@ _REQUIRED_KEYS = {
     "commercial_handoff_acceptance_gate_json",
     "commercial_handoff_secret_audit_json",
     "commercial_handoff_secret_redaction_plan_json",
+    "commercial_handoff_redacted_runtime_evidence_json",
     "runtime_evidence_readiness_sla_gate_json",
     "runtime_evidence_scoreboard_json",
     "runtime_evidence_probe_ledger_json",
@@ -58,6 +59,7 @@ _PHASE_BY_KEY_PREFIX = [
     ("write_sandbox_approval", "phase93i"),
     ("commercial_handoff_bundle", "phase93j"),
     ("commercial_handoff_acceptance", "phase93k"),
+    ("commercial_handoff_redacted_runtime_evidence", "phase95_runtime_delivery_security"),
     ("commercial_handoff_secret", "phase93l"),
     ("handoff_archive_manifest", "phase93m"),
     ("immutable_run_receipt", "phase93m"),
@@ -183,6 +185,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
     acceptance_hash = _payload_hash(_as_dict(report.get("commercial_handoff_acceptance_gate")))
     secret_audit_hash = _payload_hash(_as_dict(report.get("commercial_handoff_secret_audit")))
     secret_redaction_plan_hash = _payload_hash(_as_dict(report.get("commercial_handoff_secret_redaction_plan")))
+    redacted_runtime_evidence_hash = _payload_hash(_as_dict(report.get("commercial_handoff_redacted_runtime_evidence")))
     sla_gate_hash = _payload_hash(_as_dict(report.get("runtime_evidence_readiness_sla_gate")))
     sla_policy_hash = _payload_hash(_as_dict(report.get("runtime_sla_execution_policy")))
     remediation_hash = _payload_hash(_as_dict(report.get("remediation_verification_artifact")))
@@ -230,6 +233,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
         "commercial_handoff_acceptance_gate_hash": acceptance_hash,
         "commercial_handoff_secret_audit_hash": secret_audit_hash,
         "commercial_handoff_secret_redaction_plan_hash": secret_redaction_plan_hash,
+        "commercial_handoff_redacted_runtime_evidence_hash": redacted_runtime_evidence_hash,
         "runtime_evidence_sla_gate_hash": sla_gate_hash,
         "runtime_sla_execution_policy_hash": sla_policy_hash,
         "remediation_verification_hash": remediation_hash,
@@ -246,6 +250,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
         "secret_audit_issue_count": int(secret_audit.get("issue_count") or 0),
         "runtime_evidence_secret_issue_count": int(secret_audit.get("runtime_evidence_issue_count") or 0),
         "secret_redaction_action_count": int(_as_dict(report.get("commercial_handoff_secret_redaction_plan")).get("action_count") or 0),
+        "redacted_runtime_evidence_safe": bool(_as_dict(report.get("commercial_handoff_redacted_runtime_evidence")).get("safe_for_customer_handoff_after_redaction")),
         "commercial_readiness_score": summary.get("runtime_evidence_readiness_score"),
         "minimum_commercial_gate_failures": minimum_failures,
         "commercial_blocking_reasons": commercial_blockers,
@@ -281,6 +286,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
             "commercial_handoff_acceptance_gate_hash": acceptance_hash,
             "commercial_handoff_secret_audit_hash": secret_audit_hash,
             "commercial_handoff_secret_redaction_plan_hash": secret_redaction_plan_hash,
+            "commercial_handoff_redacted_runtime_evidence_hash": redacted_runtime_evidence_hash,
             "runtime_evidence_sla_gate_hash": sla_gate_hash,
             "runtime_sla_execution_policy_hash": sla_policy_hash,
             "remediation_verification_hash": remediation_hash,
@@ -298,6 +304,7 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
             "commercial_handoff_bundle_hash",
             "commercial_handoff_secret_audit_hash",
             "commercial_handoff_secret_redaction_plan_hash",
+            "commercial_handoff_redacted_runtime_evidence_hash",
             "artifact_archive_hash",
         ],
         "secret_audit_blocked": bool(secret_audit_unsafe),
