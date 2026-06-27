@@ -955,6 +955,314 @@ def _render_runtime_evidence_carry_forward_markdown(carry: dict[str, Any]) -> st
         lines.append("")
     return "\n".join(lines)
 
+
+def _runtime_progress_delta_artifact_paths(config: dict[str, Any], report: dict[str, Any]) -> dict[str, list[Path]]:
+    """Resolve previous-run artifacts used to compare targeted rerun progress.
+
+    The remediation loop is useful only if each rerun can prove that evidence
+    gaps are shrinking and customer-ready evidence is preserved.  This resolver
+    consumes explicit previous-artifact paths, a baseline directory, or the
+    parent directory of the remediation plan that triggered the rerun.
+    """
+    buckets: dict[str, list[Path]] = {
+        "scoreboards": [],
+        "remediation_plans": [],
+        "reproduction_packs": [],
+        "probe_ledgers": [],
+    }
+
+    def add_file(bucket: str, value: Any) -> None:
+        if not value:
+            return
+        try:
+            path = Path(str(value)).expanduser()
+        except Exception:
+            return
+        if path.exists() and path.is_file():
+            buckets[bucket].append(path)
+
+    def add_dir(value: Any) -> None:
+        if not value:
+            return
+        try:
+            base_dir = Path(str(value)).expanduser()
+        except Exception:
+            return
+        if base_dir.is_file():
+            base_dir = base_dir.parent
+        if not base_dir.exists() or not base_dir.is_dir():
+            return
+        add_file("scoreboards", base_dir / "grounded_probe_runtime_evidence_scoreboard.json")
+        add_file("remediation_plans", base_dir / "grounded_probe_runtime_evidence_remediation_plan.json")
+        add_file("reproduction_packs", base_dir / "grounded_probe_runtime_customer_reproduction_pack.json")
+        add_file("probe_ledgers", base_dir / "grounded_probe_runtime_evidence_probe_ledger.json")
+
+    explicit_keys = {
+        "scoreboards": [
+            "runtime_evidence_previous_scoreboard_path",
+            "runtime_evidence_progress_previous_scoreboard_path",
+        ],
+        "remediation_plans": [
+            "runtime_evidence_previous_remediation_plan_path",
+            "runtime_evidence_progress_previous_remediation_plan_path",
+        ],
+        "reproduction_packs": [
+            "runtime_evidence_previous_reproduction_pack_path",
+            "runtime_customer_reproduction_pack_path",
+            "runtime_evidence_carry_forward_reproduction_pack_path",
+        ],
+        "probe_ledgers": [
+            "runtime_evidence_previous_probe_ledger_path",
+            "runtime_evidence_probe_ledger_path",
+            "runtime_evidence_carry_forward_probe_ledger_path",
+        ],
+    }
+    for bucket, keys in explicit_keys.items():
+        for key in keys:
+            add_file(bucket, config.get(key))
+
+    for key in (
+        "runtime_evidence_progress_baseline_dir",
+        "runtime_evidence_previous_output_dir",
+        "runtime_evidence_baseline_output_dir",
+    ):
+        add_dir(config.get(key))
+
+    runtime_rerun_selection = report.get("runtime_rerun_selection") if isinstance(report.get("runtime_rerun_selection"), dict) else {}
+    for source in runtime_rerun_selection.get("sources") or []:
+        raw = str(source).split(":", 1)[1] if ":" in str(source) else str(source)
+        if not raw or raw.startswith("inline"):
+            continue
+        try:
+            path = Path(raw).expanduser()
+        except Exception:
+            continue
+        if path.exists():
+            add_dir(path.parent if path.is_file() else path)
+
+    return {key: _dedupe_paths(value) for key, value in buckets.items()}
+
+
+def _read_first_runtime_artifact(paths: list[Path]) -> tuple[dict[str, Any], str | None, str | None]:
+    for path in paths:
+        try:
+            payload = _read_json(path)
+        except Exception as exc:
+            return {}, str(path), f"load_failed:{type(exc).__name__}"
+        if isinstance(payload, dict):
+            return payload, str(path), None
+    return {}, None, None
+
+
+def _runtime_gap_types_from_remediation_plan(plan: dict[str, Any]) -> list[str]:
+    gaps: list[str] = []
+    for group in plan.get("priority_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        gap = str(group.get("gap_type") or "").strip()
+        if gap:
+            gaps.append(gap)
+    return _dedupe(gaps)
+
+
+def _runtime_reproduction_ready_count(pack: dict[str, Any]) -> int:
+    if isinstance(pack.get("customer_ready_reproduction_count"), int):
+        return int(pack.get("customer_ready_reproduction_count") or 0)
+    return sum(1 for package in (pack.get("packages") or []) if isinstance(package, dict) and package.get("customer_ready") is True)
+
+
+def _runtime_delta_number(current: Any, previous: Any) -> float | int:
+    try:
+        current_num = float(current or 0)
+        previous_num = float(previous or 0)
+    except Exception:
+        return 0
+    delta = round(current_num - previous_num, 2)
+    return int(delta) if float(delta).is_integer() else delta
+
+
+def _build_runtime_evidence_progress_delta(config: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Compare the current run with previous evidence artifacts.
+
+    Targeted remediation reruns must show measurable improvement or a clear
+    regression.  This artifact prevents the loop from saying "rerun complete"
+    when P0 gaps stayed the same, customer-ready evidence disappeared, or new
+    blockers appeared.
+    """
+    paths = _runtime_progress_delta_artifact_paths(config, report)
+    previous_scoreboard, scoreboard_source, scoreboard_error = _read_first_runtime_artifact(paths["scoreboards"])
+    previous_plan, plan_source, plan_error = _read_first_runtime_artifact(paths["remediation_plans"])
+    previous_pack, pack_source, pack_error = _read_first_runtime_artifact(paths["reproduction_packs"])
+    previous_ledger, ledger_source, ledger_error = _read_first_runtime_artifact(paths["probe_ledgers"])
+
+    current_scoreboard = report.get("runtime_evidence_scoreboard") if isinstance(report.get("runtime_evidence_scoreboard"), dict) else {}
+    current_plan = report.get("runtime_evidence_remediation_plan") if isinstance(report.get("runtime_evidence_remediation_plan"), dict) else {}
+    current_pack = report.get("runtime_customer_reproduction_pack") if isinstance(report.get("runtime_customer_reproduction_pack"), dict) else {}
+    current_ledger = report.get("runtime_evidence_probe_ledger") if isinstance(report.get("runtime_evidence_probe_ledger"), dict) else {}
+
+    previous_gap_types = _runtime_gap_types_from_remediation_plan(previous_plan)
+    current_gap_types = _runtime_gap_types_from_remediation_plan(current_plan)
+    resolved_gap_types = [gap for gap in previous_gap_types if gap not in set(current_gap_types)]
+    new_gap_types = [gap for gap in current_gap_types if gap not in set(previous_gap_types)]
+    persisting_gap_types = [gap for gap in current_gap_types if gap in set(previous_gap_types)]
+
+    previous_maturity = previous_scoreboard.get("evidence_maturity") if isinstance(previous_scoreboard.get("evidence_maturity"), dict) else {}
+    current_maturity = current_scoreboard.get("evidence_maturity") if isinstance(current_scoreboard.get("evidence_maturity"), dict) else {}
+
+    previous_p0 = int(previous_plan.get("p0_group_count") or 0)
+    current_p0 = int(current_plan.get("p0_group_count") or 0)
+    previous_queue = int(previous_plan.get("queued_candidate_count") or 0)
+    current_queue = int(current_plan.get("queued_candidate_count") or 0)
+    previous_ready = _runtime_reproduction_ready_count(previous_pack)
+    current_ready = _runtime_reproduction_ready_count(current_pack)
+    previous_ledger_ready = int(previous_ledger.get("customer_ready_probe_count") or 0)
+    current_ledger_ready = int(current_ledger.get("customer_ready_probe_count") or 0)
+
+    regressions: list[str] = []
+    if previous_scoreboard and current_scoreboard:
+        if _runtime_delta_number(current_scoreboard.get("execution_integrity_score"), previous_scoreboard.get("execution_integrity_score")) < 0:
+            regressions.append("execution_integrity_score_decreased")
+    if previous_plan:
+        if current_p0 > previous_p0:
+            regressions.append("p0_gap_count_increased")
+        if current_queue > previous_queue:
+            regressions.append("queued_candidate_count_increased")
+    if previous_pack and current_ready < previous_ready:
+        regressions.append("customer_ready_reproduction_count_decreased")
+    if previous_ledger and current_ledger_ready < previous_ledger_ready:
+        regressions.append("customer_ready_probe_ledger_count_decreased")
+    if new_gap_types:
+        regressions.append("new_runtime_gap_types_detected")
+
+    has_previous = bool(previous_scoreboard or previous_plan or previous_pack or previous_ledger)
+    if not has_previous:
+        status = "no_previous_runtime_evidence_found"
+        next_action = "Capture this run as the baseline, then rerun after fixing the remediation plan gaps."
+    elif regressions:
+        status = "runtime_evidence_regression_detected"
+        next_action = "Stop customer handoff, inspect regression reasons, and rerun only after preserving previous customer-ready evidence."
+    elif current_p0 == 0 and current_queue == 0 and bool(current_maturity.get("customer_ready")):
+        status = "customer_ready_runtime_evidence_progress"
+        next_action = "No P0 remediation remains; prepare customer handoff and retain this run receipt as the new baseline."
+    elif resolved_gap_types or current_p0 < previous_p0 or current_queue < previous_queue or current_ready > previous_ready:
+        status = "runtime_evidence_improving"
+        next_action = "Continue the remediation loop with the remaining queued candidate_ids and preserve carried-forward evidence."
+    else:
+        status = "runtime_evidence_unchanged"
+        next_action = "Review persisting gap types; current rerun did not reduce runtime evidence blockers."
+
+    artifact_load_errors = [item for item in [scoreboard_error, plan_error, pack_error, ledger_error] if item]
+    return {
+        "engine": "runtime_evidence_progress_delta_v1_phase95",
+        "status": status,
+        "project_id": report.get("project_id"),
+        "has_previous_evidence": has_previous,
+        "previous_sources": {
+            "scoreboard": scoreboard_source,
+            "remediation_plan": plan_source,
+            "reproduction_pack": pack_source,
+            "probe_ledger": ledger_source,
+        },
+        "artifact_load_errors": artifact_load_errors,
+        "targeted_rerun": {
+            "enabled": bool((report.get("runtime_rerun_selection") or {}).get("enabled")) if isinstance(report.get("runtime_rerun_selection"), dict) else False,
+            "selected_probe_count": ((report.get("runtime_rerun_selection") or {}).get("selected_probe_count") if isinstance(report.get("runtime_rerun_selection"), dict) else 0),
+            "skipped_probe_count": ((report.get("runtime_rerun_selection") or {}).get("skipped_probe_count") if isinstance(report.get("runtime_rerun_selection"), dict) else 0),
+        },
+        "metrics": {
+            "execution_integrity_score": {
+                "previous": previous_scoreboard.get("execution_integrity_score", 0),
+                "current": current_scoreboard.get("execution_integrity_score", 0),
+                "delta": _runtime_delta_number(current_scoreboard.get("execution_integrity_score"), previous_scoreboard.get("execution_integrity_score")),
+            },
+            "execution_coverage_rate": {
+                "previous": previous_scoreboard.get("execution_coverage_rate", 0),
+                "current": current_scoreboard.get("execution_coverage_rate", 0),
+                "delta": _runtime_delta_number(current_scoreboard.get("execution_coverage_rate"), previous_scoreboard.get("execution_coverage_rate")),
+            },
+            "runtime_binding_success_rate": {
+                "previous": previous_scoreboard.get("runtime_binding_success_rate", 0),
+                "current": current_scoreboard.get("runtime_binding_success_rate", 0),
+                "delta": _runtime_delta_number(current_scoreboard.get("runtime_binding_success_rate"), previous_scoreboard.get("runtime_binding_success_rate")),
+            },
+            "p0_group_count": {"previous": previous_p0, "current": current_p0, "delta": current_p0 - previous_p0},
+            "queued_candidate_count": {"previous": previous_queue, "current": current_queue, "delta": current_queue - previous_queue},
+            "customer_ready_reproduction_count": {"previous": previous_ready, "current": current_ready, "delta": current_ready - previous_ready},
+            "customer_ready_probe_ledger_count": {"previous": previous_ledger_ready, "current": current_ledger_ready, "delta": current_ledger_ready - previous_ledger_ready},
+        },
+        "maturity": {
+            "previous_level": previous_maturity.get("level"),
+            "current_level": current_maturity.get("level"),
+            "previous_customer_ready": bool(previous_maturity.get("customer_ready")),
+            "current_customer_ready": bool(current_maturity.get("customer_ready")),
+        },
+        "resolved_gap_types": resolved_gap_types,
+        "new_gap_types": new_gap_types,
+        "persisting_gap_types": persisting_gap_types,
+        "regressions": regressions,
+        "carry_forward": {
+            "candidate_count": len((report.get("runtime_evidence_carry_forward") or {}).get("carried_forward_candidate_ids") or []) if isinstance(report.get("runtime_evidence_carry_forward"), dict) else 0,
+            "reproduction_count": (report.get("runtime_evidence_carry_forward") or {}).get("carried_forward_reproduction_count", 0) if isinstance(report.get("runtime_evidence_carry_forward"), dict) else 0,
+            "probe_ledger_count": (report.get("runtime_evidence_carry_forward") or {}).get("carried_forward_probe_ledger_count", 0) if isinstance(report.get("runtime_evidence_carry_forward"), dict) else 0,
+        },
+        "next_action": next_action,
+    }
+
+
+def _render_runtime_evidence_progress_delta_markdown(delta: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Evidence Progress Delta",
+        "",
+        f"- engine: `{delta.get('engine')}`",
+        f"- status: `{delta.get('status')}`",
+        f"- project: `{delta.get('project_id')}`",
+        f"- has previous evidence: `{delta.get('has_previous_evidence')}`",
+        f"- next action: {delta.get('next_action')}",
+        "",
+    ]
+    maturity = delta.get("maturity") if isinstance(delta.get("maturity"), dict) else {}
+    lines.extend([
+        "## Evidence maturity",
+        "",
+        f"- previous: `{maturity.get('previous_level')}` / customer-ready `{maturity.get('previous_customer_ready')}`",
+        f"- current: `{maturity.get('current_level')}` / customer-ready `{maturity.get('current_customer_ready')}`",
+        "",
+    ])
+    metrics = delta.get("metrics") if isinstance(delta.get("metrics"), dict) else {}
+    if metrics:
+        lines.extend(["## Metric deltas", "", "| Metric | Previous | Current | Delta |", "|---|---:|---:|---:|"])
+        for name, payload in metrics.items():
+            if not isinstance(payload, dict):
+                continue
+            lines.append(f"| `{name}` | {payload.get('previous')} | {payload.get('current')} | {payload.get('delta')} |")
+        lines.append("")
+    lines.extend([
+        "## Gap movement",
+        "",
+        f"- resolved gap types: `{json.dumps(delta.get('resolved_gap_types') or [], ensure_ascii=False)}`",
+        f"- persisting gap types: `{json.dumps(delta.get('persisting_gap_types') or [], ensure_ascii=False)}`",
+        f"- new gap types: `{json.dumps(delta.get('new_gap_types') or [], ensure_ascii=False)}`",
+        f"- regressions: `{json.dumps(delta.get('regressions') or [], ensure_ascii=False)}`",
+        "",
+    ])
+    carry = delta.get("carry_forward") if isinstance(delta.get("carry_forward"), dict) else {}
+    lines.extend([
+        "## Carry-forward preservation",
+        "",
+        f"- carried candidates: {carry.get('candidate_count', 0)}",
+        f"- carried reproduction packages: {carry.get('reproduction_count', 0)}",
+        f"- carried probe ledger entries: {carry.get('probe_ledger_count', 0)}",
+        "",
+    ])
+    sources = delta.get("previous_sources") if isinstance(delta.get("previous_sources"), dict) else {}
+    if any(sources.values()):
+        lines.extend(["## Previous artifact sources", ""])
+        for key, value in sources.items():
+            lines.append(f"- {key}: `{value}`")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _probe_has_strict_document_grounding(probe: dict[str, Any]) -> bool:
     refs = probe.get("source_refs") if isinstance(probe.get("source_refs"), list) else []
     kinds = {str(r.get("kind") or "") for r in refs if isinstance(r, dict)}
@@ -4038,6 +4346,10 @@ def run_grounded_probe_executor(
             "runtime_carry_forward_candidate_count": 0,
             "runtime_carry_forward_reproduction_count": 0,
             "runtime_carry_forward_probe_ledger_count": 0,
+            "runtime_progress_delta_status": "not_built",
+            "runtime_progress_delta_regression_count": 0,
+            "runtime_progress_delta_resolved_gap_count": 0,
+            "runtime_progress_delta_new_gap_count": 0,
             "phase94_added_probe_count": int(bug_discovery_expansion.get("added_probe_count") or 0),
             "phase94_added_p0_probe_count": int(bug_discovery_expansion.get("added_p0_probe_count") or 0),
             "phase94_multistep_flow_scenario_count": int(bug_discovery_expansion.get("multistep_flow_scenario_count") or 0),
@@ -4167,6 +4479,8 @@ def run_grounded_probe_executor(
     runtime_remediation_plan_md_path = output / "grounded_probe_runtime_evidence_remediation_plan.md"
     runtime_carry_forward_json_path = output / "grounded_probe_runtime_evidence_carry_forward.json"
     runtime_carry_forward_md_path = output / "grounded_probe_runtime_evidence_carry_forward.md"
+    runtime_progress_delta_json_path = output / "grounded_probe_runtime_evidence_progress_delta.json"
+    runtime_progress_delta_md_path = output / "grounded_probe_runtime_evidence_progress_delta.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -4241,6 +4555,8 @@ def run_grounded_probe_executor(
         "runtime_evidence_remediation_plan_md": str(runtime_remediation_plan_md_path),
         "runtime_evidence_carry_forward_json": str(runtime_carry_forward_json_path),
         "runtime_evidence_carry_forward_md": str(runtime_carry_forward_md_path),
+        "runtime_evidence_progress_delta_json": str(runtime_progress_delta_json_path),
+        "runtime_evidence_progress_delta_md": str(runtime_progress_delta_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -4348,6 +4664,13 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_remediation_plan_queued_candidate_count"] = report["runtime_evidence_remediation_plan"].get("queued_candidate_count", 0)
     _write_json(runtime_remediation_plan_json_path, report["runtime_evidence_remediation_plan"])
     runtime_remediation_plan_md_path.write_text(_render_runtime_evidence_remediation_plan_markdown(report["runtime_evidence_remediation_plan"]), encoding="utf-8")
+    report["runtime_evidence_progress_delta"] = _build_runtime_evidence_progress_delta(config, report)
+    report["summary"]["runtime_progress_delta_status"] = report["runtime_evidence_progress_delta"].get("status")
+    report["summary"]["runtime_progress_delta_regression_count"] = len(report["runtime_evidence_progress_delta"].get("regressions") or [])
+    report["summary"]["runtime_progress_delta_resolved_gap_count"] = len(report["runtime_evidence_progress_delta"].get("resolved_gap_types") or [])
+    report["summary"]["runtime_progress_delta_new_gap_count"] = len(report["runtime_evidence_progress_delta"].get("new_gap_types") or [])
+    _write_json(runtime_progress_delta_json_path, report["runtime_evidence_progress_delta"])
+    runtime_progress_delta_md_path.write_text(_render_runtime_evidence_progress_delta_markdown(report["runtime_evidence_progress_delta"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
     report["summary"]["runtime_sla_must_run_count"] = report["runtime_sla_execution_policy"].get("must_run_for_sla_count", 0)
     report["summary"]["runtime_sla_blocked_before_sla_count"] = report["runtime_sla_execution_policy"].get("blocked_before_sla_count", 0)
