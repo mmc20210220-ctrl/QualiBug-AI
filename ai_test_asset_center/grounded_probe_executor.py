@@ -2473,6 +2473,338 @@ def _build_runtime_evidence_scoreboard(report: dict[str, Any]) -> dict[str, Any]
     return scoreboard
 
 
+
+def _runtime_evidence_probe_binding_events(obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect binding events for one probe observation without relying on global state."""
+    events: list[dict[str, Any]] = []
+    req = obs.get("request") if isinstance(obs.get("request"), dict) else {}
+    body_binding = req.get("body_runtime_binding")
+    if isinstance(body_binding, dict):
+        events.append({
+            "source": body_binding.get("source") or "request_body",
+            "bound": bool(body_binding.get("bound")),
+            "kind": "target_request_body",
+        })
+    for bucket_name in ("fixture_receipts", "cleanup_receipts"):
+        for receipt in obs.get(bucket_name) or []:
+            if not isinstance(receipt, dict):
+                continue
+            binding = receipt.get("runtime_binding")
+            if isinstance(binding, dict) and binding:
+                events.append({
+                    "source": binding.get("source") or bucket_name,
+                    "bound": bool(binding.get("bound")),
+                    "kind": bucket_name,
+                    "path": receipt.get("path"),
+                })
+            body_binding = receipt.get("body_runtime_binding")
+            if isinstance(body_binding, dict):
+                events.append({
+                    "source": body_binding.get("source") or f"{bucket_name}_body",
+                    "bound": bool(body_binding.get("bound")),
+                    "kind": f"{bucket_name}_body",
+                    "path": receipt.get("path"),
+                })
+    for response in obs.get("responses") or []:
+        if not isinstance(response, dict):
+            continue
+        binding = response.get("runtime_binding")
+        if isinstance(binding, dict) and binding:
+            events.append({
+                "source": binding.get("source") or "flow_response",
+                "bound": bool(binding.get("bound")),
+                "kind": "flow_response",
+                "step": response.get("step"),
+            })
+        body_binding = response.get("request_body_runtime_binding")
+        if isinstance(body_binding, dict):
+            events.append({
+                "source": body_binding.get("source") or "flow_step_body",
+                "bound": bool(body_binding.get("bound")),
+                "kind": "flow_step_body",
+                "step": response.get("step"),
+            })
+    return events
+
+
+def _runtime_evidence_target_statuses(obs: dict[str, Any]) -> list[int]:
+    statuses: list[int] = []
+    response = obs.get("response") if isinstance(obs.get("response"), dict) else {}
+    if isinstance(response.get("status_code"), int):
+        statuses.append(int(response.get("status_code")))
+    for response in obs.get("responses") or []:
+        if isinstance(response, dict) and isinstance(response.get("status_code"), int):
+            statuses.append(int(response.get("status_code")))
+    return statuses
+
+
+def _runtime_evidence_probe_gap_types(decision: dict[str, Any], obs: dict[str, Any] | None) -> list[str]:
+    """Return deterministic per-probe blockers/gaps from actual run evidence."""
+    gaps: list[str] = []
+    if decision.get("decision") == "blocked":
+        gaps.append("blocked_decision")
+        reason = str(decision.get("reason") or "")
+        if reason:
+            gaps.append(f"blocked:{reason}")
+        return gaps
+    if not obs:
+        return ["missing_runtime_observation"]
+
+    statuses = _runtime_evidence_target_statuses(obs)
+    if not statuses:
+        gaps.append("missing_target_http_response")
+
+    fixture_receipts = [r for r in (obs.get("fixture_receipts") or []) if isinstance(r, dict)]
+    fixture_executed = _count_status(fixture_receipts, status="executed")
+    fixture_accepted = _count_status(fixture_receipts, status="executed", accepted=True)
+    if fixture_executed and fixture_accepted < fixture_executed:
+        gaps.append("fixture_setup_not_fully_accepted")
+
+    binding_events = _runtime_evidence_probe_binding_events(obs)
+    if binding_events and any(event.get("bound") is not True for event in binding_events):
+        gaps.append("runtime_binding_not_fully_bound")
+
+    cleanup_receipts = [r for r in (obs.get("cleanup_receipts") or []) if isinstance(r, dict)]
+    cleanup_executed = _count_status(cleanup_receipts, status="executed")
+    cleanup_accepted = _count_status(cleanup_receipts, status="executed", accepted=True)
+    if cleanup_executed and cleanup_accepted < cleanup_executed:
+        gaps.append("cleanup_not_fully_accepted")
+
+    snapshots_obj = obs.get("snapshots") if isinstance(obs.get("snapshots"), dict) else {}
+    snapshot_items = [
+        s
+        for phase in ("before", "after")
+        for s in ((snapshots_obj.get(phase) or []) if isinstance(snapshots_obj.get(phase), list) else [])
+        if isinstance(s, dict)
+    ]
+    if snapshot_items:
+        accepted = sum(1 for s in snapshot_items if isinstance(s.get("status_code"), int) and 200 <= int(s.get("status_code")) < 300)
+        if accepted < len(snapshot_items):
+            gaps.append("snapshot_not_fully_accepted")
+
+    verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+    verdict = str(verification.get("verdict") or "")
+    if verdict == "needs_more_evidence":
+        gaps.append("needs_more_evidence")
+    elif verdict == "inconclusive":
+        gaps.append("inconclusive_runtime_oracle")
+    return gaps
+
+
+def _runtime_evidence_probe_next_action(gap_types: list[str], obs: dict[str, Any] | None) -> str:
+    gap_set = set(gap_types)
+    if "blocked_decision" in gap_set:
+        return "Resolve the blocker reason in the decision ledger, then rerun this probe against the same candidate."
+    if "missing_runtime_observation" in gap_set:
+        return "Rerun with readonly/write execution enabled as appropriate so this candidate produces an observation."
+    if "missing_target_http_response" in gap_set:
+        return "Stabilize target reachability, URL rendering, auth headers, and timeout settings for this probe."
+    if "fixture_setup_not_fully_accepted" in gap_set:
+        return "Fix disposable fixture setup data or endpoint mapping before trusting downstream target evidence."
+    if "runtime_binding_not_fully_bound" in gap_set:
+        return "Improve response ID extraction and bind observed IDs into path, query, request body, snapshots, and cleanup."
+    if "snapshot_not_fully_accepted" in gap_set:
+        return "Repair before/after observer requests so the runtime oracle can compare business state deltas."
+    if "needs_more_evidence" in gap_set:
+        return "Add fixture-anchor checks, control actor baseline reads, or richer observer deltas for this candidate."
+    if "inconclusive_runtime_oracle" in gap_set:
+        return "Strengthen the oracle rule or invariant evidence that classifies this runtime response."
+    if "cleanup_not_fully_accepted" in gap_set:
+        return "Fix cleanup path/body binding or cleanup ordering so the disposable sandbox remains reusable."
+    verification = (obs or {}).get("verification") if isinstance((obs or {}).get("verification"), dict) else {}
+    verdict = str(verification.get("verdict") or "")
+    if verdict == "validated_candidate":
+        return "Package the reproduction trace, evidence snapshots, and fix verification plan for customer review."
+    if verdict == "falsified_or_protected":
+        return "Keep as protected baseline evidence and prioritize unresolved candidates first."
+    return "No immediate action; keep this probe in the runtime evidence ledger for trend analysis."
+
+
+def _runtime_evidence_probe_readiness_level(decision: dict[str, Any], obs: dict[str, Any] | None, gap_types: list[str]) -> str:
+    if decision.get("decision") == "blocked":
+        return "blocked_before_execution"
+    if not obs:
+        return "not_observed"
+    if "missing_target_http_response" in set(gap_types):
+        return "transport_or_runtime_gap"
+    verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+    verdict = str(verification.get("verdict") or "unknown")
+    if verdict == "validated_candidate" and not ({"runtime_binding_not_fully_bound", "fixture_setup_not_fully_accepted", "snapshot_not_fully_accepted"} & set(gap_types)):
+        return "customer_ready_candidate"
+    if verdict == "falsified_or_protected":
+        return "protected_or_falsified"
+    if verdict in {"needs_more_evidence", "inconclusive"}:
+        return "evidence_gap"
+    return "executed_unclassified"
+
+
+def _build_runtime_evidence_probe_ledger(report: dict[str, Any]) -> dict[str, Any]:
+    """Build an actionable per-probe ledger from the same factual runtime report.
+
+    Scoreboard metrics identify global weak points; this ledger maps those weak
+    points back to concrete candidate IDs so the next optimization cycle can act
+    on the exact probes that blocked customer-ready evidence.
+    """
+    decisions = [d for d in (report.get("decisions") or []) if isinstance(d, dict)]
+    observations = [o for o in (report.get("observations") or []) if isinstance(o, dict)]
+    write_observations = [o for o in (report.get("write_observations") or []) if isinstance(o, dict)]
+    obs_by_id: dict[str, dict[str, Any]] = {}
+    for obs in observations + write_observations:
+        cid = str(obs.get("candidate_id") or "")
+        if cid and cid not in obs_by_id:
+            obs_by_id[cid] = obs
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for decision in decisions:
+        cid = str(decision.get("candidate_id") or "")
+        obs = obs_by_id.get(cid)
+        seen.add(cid)
+        binding_events = _runtime_evidence_probe_binding_events(obs or {}) if obs else []
+        fixture_receipts = [r for r in ((obs or {}).get("fixture_receipts") or []) if isinstance(r, dict)]
+        cleanup_receipts = [r for r in ((obs or {}).get("cleanup_receipts") or []) if isinstance(r, dict)]
+        snapshots_obj = (obs or {}).get("snapshots") if isinstance((obs or {}).get("snapshots"), dict) else {}
+        snapshot_items = [
+            s
+            for phase in ("before", "after")
+            for s in ((snapshots_obj.get(phase) or []) if isinstance(snapshots_obj.get(phase), list) else [])
+            if isinstance(s, dict)
+        ]
+        verification = (obs or {}).get("verification") if isinstance((obs or {}).get("verification"), dict) else {}
+        statuses = _runtime_evidence_target_statuses(obs or {}) if obs else []
+        gap_types = _runtime_evidence_probe_gap_types(decision, obs)
+        entry = {
+            "candidate_id": cid,
+            "risk_type": (obs or decision).get("risk_type"),
+            "method": (obs or decision).get("method"),
+            "path": (obs or decision).get("path") or (((obs or {}).get("request") or {}).get("path") if isinstance((obs or {}).get("request"), dict) else None),
+            "decision": decision.get("decision") or "unknown",
+            "decision_reason": decision.get("reason"),
+            "observed": bool(obs),
+            "target_http_statuses": statuses,
+            "verdict": verification.get("verdict"),
+            "confidence": verification.get("confidence"),
+            "verification_reason": verification.get("reason"),
+            "fixture_setup": {
+                "request_count": len(fixture_receipts),
+                "executed_count": _count_status(fixture_receipts, status="executed"),
+                "accepted_count": _count_status(fixture_receipts, status="executed", accepted=True),
+            },
+            "runtime_binding": {
+                "event_count": len(binding_events),
+                "bound_count": sum(1 for event in binding_events if event.get("bound") is True),
+                "success_rate": _safe_rate(sum(1 for event in binding_events if event.get("bound") is True), len(binding_events)),
+                "sources": sorted({str(event.get("source") or "unknown") for event in binding_events}),
+            },
+            "snapshots": {
+                "request_count": len(snapshot_items),
+                "accepted_count": sum(1 for item in snapshot_items if isinstance(item.get("status_code"), int) and 200 <= int(item.get("status_code")) < 300),
+            },
+            "cleanup": {
+                "request_count": len(cleanup_receipts),
+                "executed_count": _count_status(cleanup_receipts, status="executed"),
+                "accepted_count": _count_status(cleanup_receipts, status="executed", accepted=True),
+            },
+            "gap_types": gap_types,
+            "readiness_level": _runtime_evidence_probe_readiness_level(decision, obs, gap_types),
+            "customer_ready": _runtime_evidence_probe_readiness_level(decision, obs, gap_types) == "customer_ready_candidate",
+            "next_action": _runtime_evidence_probe_next_action(gap_types, obs),
+        }
+        entries.append(entry)
+
+    for cid, obs in sorted(obs_by_id.items()):
+        if cid in seen:
+            continue
+        pseudo_decision = {"candidate_id": cid, "decision": "observed_without_decision"}
+        gap_types = _runtime_evidence_probe_gap_types(pseudo_decision, obs)
+        verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+        entries.append({
+            "candidate_id": cid,
+            "risk_type": obs.get("risk_type"),
+            "method": obs.get("method"),
+            "path": obs.get("path") or ((obs.get("request") or {}).get("path") if isinstance(obs.get("request"), dict) else None),
+            "decision": "observed_without_decision",
+            "decision_reason": None,
+            "observed": True,
+            "target_http_statuses": _runtime_evidence_target_statuses(obs),
+            "verdict": verification.get("verdict"),
+            "confidence": verification.get("confidence"),
+            "verification_reason": verification.get("reason"),
+            "gap_types": gap_types,
+            "readiness_level": _runtime_evidence_probe_readiness_level(pseudo_decision, obs, gap_types),
+            "customer_ready": _runtime_evidence_probe_readiness_level(pseudo_decision, obs, gap_types) == "customer_ready_candidate",
+            "next_action": _runtime_evidence_probe_next_action(gap_types, obs),
+        })
+
+    gap_counts: dict[str, int] = {}
+    readiness_counts: dict[str, int] = {}
+    for entry in entries:
+        readiness = str(entry.get("readiness_level") or "unknown")
+        readiness_counts[readiness] = readiness_counts.get(readiness, 0) + 1
+        for gap in entry.get("gap_types") or []:
+            gap_counts[str(gap)] = gap_counts.get(str(gap), 0) + 1
+
+    return {
+        "engine": "runtime_evidence_probe_ledger_v1_phase95",
+        "created_at": report.get("created_at"),
+        "project_id": report.get("project_id"),
+        "probe_count": len(decisions),
+        "entry_count": len(entries),
+        "customer_ready_probe_count": sum(1 for entry in entries if entry.get("customer_ready") is True),
+        "blocked_probe_count": readiness_counts.get("blocked_before_execution", 0),
+        "evidence_gap_probe_count": readiness_counts.get("evidence_gap", 0),
+        "validated_probe_count": sum(1 for entry in entries if entry.get("verdict") == "validated_candidate"),
+        "protected_probe_count": sum(1 for entry in entries if entry.get("verdict") == "falsified_or_protected"),
+        "readiness_counts": dict(sorted(readiness_counts.items())),
+        "top_probe_gap_types": dict(sorted(gap_counts.items(), key=lambda item: (-item[1], item[0]))[:20]),
+        "entries": entries,
+    }
+
+
+def _render_runtime_evidence_probe_ledger_markdown(ledger: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Evidence Probe Ledger",
+        "",
+        f"- engine: `{ledger.get('engine')}`",
+        f"- project: `{ledger.get('project_id')}`",
+        f"- probes total: {ledger.get('probe_count')}",
+        f"- ledger entries: {ledger.get('entry_count')}",
+        f"- customer-ready probes: {ledger.get('customer_ready_probe_count')}",
+        f"- blocked probes: {ledger.get('blocked_probe_count')}",
+        f"- evidence-gap probes: {ledger.get('evidence_gap_probe_count')}",
+        f"- readiness counts: `{json.dumps(ledger.get('readiness_counts') or {}, ensure_ascii=False)}`",
+        "",
+    ]
+    gaps = ledger.get("top_probe_gap_types") if isinstance(ledger.get("top_probe_gap_types"), dict) else {}
+    if gaps:
+        lines.extend(["## Top probe gap types", ""])
+        for gap, count in gaps.items():
+            lines.append(f"- {gap}: {count}")
+        lines.append("")
+    entries = [e for e in (ledger.get("entries") or []) if isinstance(e, dict)]
+    if entries:
+        lines.extend(["## Probe actions", "", "| Candidate | Decision | Readiness | Verdict | HTTP | Gaps | Next action |", "|---|---|---|---|---|---|---|"])
+        for entry in entries[:50]:
+            gaps_text = ", ".join(str(g) for g in (entry.get("gap_types") or [])) or "-"
+            statuses = ", ".join(str(s) for s in (entry.get("target_http_statuses") or [])) or "-"
+            lines.append(
+                "| "
+                + " | ".join([
+                    str(entry.get("candidate_id") or "-"),
+                    str(entry.get("decision") or "-"),
+                    str(entry.get("readiness_level") or "-"),
+                    str(entry.get("verdict") or "-"),
+                    statuses,
+                    gaps_text,
+                    str(entry.get("next_action") or "-"),
+                ]).replace("\n", " ")
+                + " |"
+            )
+        if len(entries) > 50:
+            lines.append(f"\n_Only the first 50 entries are shown; see JSON for all {len(entries)} probes._")
+        lines.append("")
+    return "\n".join(lines)
+
 def _render_runtime_evidence_scoreboard_markdown(scoreboard: dict[str, Any]) -> str:
     lines = [
         "# Runtime Evidence Scoreboard",
@@ -2732,6 +3064,9 @@ def run_grounded_probe_executor(
             "runtime_scoreboard_cleanup_success_rate": 0,
             "runtime_scoreboard_snapshot_success_rate": 0,
             "runtime_scoreboard_top_gap_count": 0,
+            "runtime_probe_ledger_entry_count": 0,
+            "runtime_probe_ledger_customer_ready_count": 0,
+            "runtime_probe_ledger_evidence_gap_count": 0,
             "runtime_sla_must_run_count": 0,
             "runtime_sla_blocked_before_sla_count": 0,
             "runtime_sla_gap_prioritized_action_count": 0,
@@ -2809,6 +3144,8 @@ def run_grounded_probe_executor(
     readiness_sla_md_path = output / "grounded_probe_runtime_evidence_readiness_sla_gate.md"
     runtime_scoreboard_json_path = output / "grounded_probe_runtime_evidence_scoreboard.json"
     runtime_scoreboard_md_path = output / "grounded_probe_runtime_evidence_scoreboard.md"
+    runtime_probe_ledger_json_path = output / "grounded_probe_runtime_evidence_probe_ledger.json"
+    runtime_probe_ledger_md_path = output / "grounded_probe_runtime_evidence_probe_ledger.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -2875,6 +3212,8 @@ def run_grounded_probe_executor(
         "runtime_evidence_readiness_sla_gate_md": str(readiness_sla_md_path),
         "runtime_evidence_scoreboard_json": str(runtime_scoreboard_json_path),
         "runtime_evidence_scoreboard_md": str(runtime_scoreboard_md_path),
+        "runtime_evidence_probe_ledger_json": str(runtime_probe_ledger_json_path),
+        "runtime_evidence_probe_ledger_md": str(runtime_probe_ledger_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -2955,6 +3294,12 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_scoreboard_customer_ready"] = bool(maturity.get("customer_ready"))
     _write_json(runtime_scoreboard_json_path, report["runtime_evidence_scoreboard"])
     runtime_scoreboard_md_path.write_text(_render_runtime_evidence_scoreboard_markdown(report["runtime_evidence_scoreboard"]), encoding="utf-8")
+    report["runtime_evidence_probe_ledger"] = _build_runtime_evidence_probe_ledger(report)
+    report["summary"]["runtime_probe_ledger_entry_count"] = report["runtime_evidence_probe_ledger"].get("entry_count", 0)
+    report["summary"]["runtime_probe_ledger_customer_ready_count"] = report["runtime_evidence_probe_ledger"].get("customer_ready_probe_count", 0)
+    report["summary"]["runtime_probe_ledger_evidence_gap_count"] = report["runtime_evidence_probe_ledger"].get("evidence_gap_probe_count", 0)
+    _write_json(runtime_probe_ledger_json_path, report["runtime_evidence_probe_ledger"])
+    runtime_probe_ledger_md_path.write_text(_render_runtime_evidence_probe_ledger_markdown(report["runtime_evidence_probe_ledger"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
     report["summary"]["runtime_sla_must_run_count"] = report["runtime_sla_execution_policy"].get("must_run_for_sla_count", 0)
     report["summary"]["runtime_sla_blocked_before_sla_count"] = report["runtime_sla_execution_policy"].get("blocked_before_sla_count", 0)
