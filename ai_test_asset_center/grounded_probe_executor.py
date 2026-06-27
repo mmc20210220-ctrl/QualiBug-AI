@@ -201,6 +201,29 @@ def _headers_from_config(config: dict[str, Any]) -> dict[str, str]:
     return {str(k): str(v) for k, v in headers.items()}
 
 
+def _fixture_control_headers(config: dict[str, Any]) -> dict[str, str]:
+    """Return privileged/test-environment headers for fixture setup and cleanup.
+
+    Negative probes (anonymous/cross-tenant/role-downgrade) intentionally mutate
+    the target request headers.  Disposable fixture setup/cleanup is different:
+    it must run as the configured sandbox/control actor, otherwise an anonymous
+    auth-boundary probe can fail before it ever reaches the boundary being
+    tested.
+    """
+    headers = _headers_from_config(config)
+    auto_cfg = config.get("auto_fixture") or config.get("auto_fixtures") or config.get("auto_test_data") or {}
+    if not isinstance(auto_cfg, dict):
+        auto_cfg = {}
+    profile = str(auto_cfg.get("credential_profile") or config.get("fixture_credential_profile") or "").strip()
+    resolved = config.get("_resolved_account_headers") if isinstance(config.get("_resolved_account_headers"), dict) else {}
+    if profile and isinstance(resolved.get(profile), dict) and resolved.get(profile):
+        headers = {str(k): str(v) for k, v in (resolved.get(profile) or {}).items()}
+    fixture_headers = config.get("fixture_headers") or config.get("auto_fixture_headers") or auto_cfg.get("headers") or {}
+    if isinstance(fixture_headers, dict):
+        headers.update({str(k): str(v) for k, v in fixture_headers.items()})
+    return headers
+
+
 def _negative_headers(headers: dict[str, str], names: list[str]) -> dict[str, str]:
     blocked = {str(n).lower() for n in names}
     return {k: v for k, v in headers.items() if k.lower() not in blocked}
@@ -823,6 +846,69 @@ def _find_negative_resource_values(value: Any, prefix: str = "") -> list[dict[st
     return hits[:30]
 
 
+def _replace_fixture_runtime_value(value: Any, old_id: str, new_id: str) -> Any:
+    if not old_id or not new_id or old_id == new_id:
+        return value
+    if isinstance(value, dict):
+        return {k: _replace_fixture_runtime_value(v, old_id, new_id) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_replace_fixture_runtime_value(v, old_id, new_id) for v in value]
+    if isinstance(value, str):
+        return value.replace(old_id, new_id)
+    return value
+
+
+def _bind_auto_fixture_response_id(config: dict[str, Any], probe: dict[str, Any], item: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+    bind_to = item.get("bind_response_id_to") or []
+    if isinstance(bind_to, str):
+        bind_to = [bind_to]
+    bind_fields = [str(x) for x in bind_to if str(x or "").strip()]
+    if not bind_fields:
+        return {}
+    response_id = _extract_id_like(response.get("payload"))
+    if not response_id:
+        return {"bound": False, "reason": "setup_response_missing_bindable_id", "bind_response_id_to": bind_fields}
+    bundle = _auto_fixture_bundle(config, probe)
+    old_id = str(((bundle.get("receipt") or {}).get("primary_fixture_id") if isinstance(bundle.get("receipt"), dict) else "") or "")
+    path_params = bundle.setdefault("path_params", {}) if isinstance(bundle, dict) else {}
+    if isinstance(path_params, dict):
+        for field in bind_fields:
+            path_params[field] = response_id
+    for key in ("request_body", "snapshots", "cleanup_requests"):
+        if key in bundle:
+            bundle[key] = _replace_fixture_runtime_value(bundle.get(key), old_id, response_id)
+    runtime_bindings = bundle.setdefault("runtime_bindings", [])
+    binding = {
+        "bound": True,
+        "source": "setup_response",
+        "response_id": response_id,
+        "previous_fixture_id": old_id,
+        "path_params": bind_fields,
+    }
+    if isinstance(runtime_bindings, list):
+        runtime_bindings.append(binding)
+    receipt = bundle.setdefault("receipt", {})
+    if isinstance(receipt, dict):
+        receipt["runtime_bound_fixture_id"] = response_id
+        receipt["runtime_bound_path_params"] = bind_fields
+    return binding
+
+
+def _effective_runtime_request(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, body: Any) -> tuple[dict[str, Any], dict[str, str], list[str]]:
+    path_params = _configured_path_params(config, probe, decision.method, decision.path)
+    rendered, missing = _render_path(decision.path, path_params)
+    headers = _headers_for_probe(probe, config)
+    request = {
+        "method": decision.method,
+        "url": _join_url(base_url, rendered),
+        "path": rendered,
+        "headers": _redact(headers),
+        "body": _redact(body),
+        "path_params_bound_at_execution": _redact(path_params),
+    }
+    return request, headers, missing
+
+
 def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, Any]], snapshots: dict[str, Any]) -> dict[str, Any]:
     risk_type = str(probe.get("risk_type") or "")
     expected = _expected_negative_statuses(probe)
@@ -982,15 +1068,21 @@ def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe:
         if missing:
             receipts.append({"status": "blocked", "reason": f"auto_fixture_missing_path_params:{','.join(missing)}", "path": item.get("path")})
             continue
-        response = _http_request(method, _join_url(base_url, path), _headers_for_probe(probe, config), body=item.get("body"), timeout=timeout)
+        headers = _fixture_control_headers(config)
+        if isinstance(item.get("headers"), dict):
+            headers.update({str(k): str(v) for k, v in (item.get("headers") or {}).items()})
+        response = _http_request(method, _join_url(base_url, path), headers, body=item.get("body"), timeout=timeout)
         code = response.get("status_code")
         accepted = bool(isinstance(code, int) and 200 <= int(code) < 300)
+        binding = _bind_auto_fixture_response_id(config, probe, item, response) if accepted else {}
         receipts.append({
             "status": "executed",
             "purpose": item.get("purpose") or key,
             "accepted": accepted,
             "method": method,
             "path": path,
+            "used_fixture_control_headers": True,
+            "runtime_binding": binding,
             "response": {"status_code": code, "error": response.get("error"), "payload": _redact(response.get("payload")), "duration_ms": response.get("duration_ms")},
         })
     return receipts
@@ -1146,23 +1238,25 @@ def _verify_flow_observation(probe: dict[str, Any], responses: list[dict[str, An
 
 
 def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, timeout: float) -> dict[str, Any]:
-    body, _reason = _configured_body(config, decision.candidate_id, decision.method, decision.path, probe)
-    headers = _headers_for_probe(probe, config)
     setup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "setup_requests", timeout)
     setup_blocked = any(r.get("status") == "blocked" for r in setup_receipts)
+    body, _reason = _configured_body(config, decision.candidate_id, decision.method, decision.path, probe)
+    effective_request, headers, missing = _effective_runtime_request(probe, decision, config, base_url, body)
     snapshots = {
-        "before": [] if setup_blocked else _execute_snapshots(config, base_url, probe, "before", timeout),
+        "before": [] if setup_blocked or missing else _execute_snapshots(config, base_url, probe, "before", timeout),
         "after": [],
     }
     replay_count = _configured_replay_count(config, probe) if decision.risk_type in {"idempotency_replay_probe", "async_external_event_probe"} else 1
     responses: list[dict[str, Any]] = []
-    if not setup_blocked:
+    if missing:
+        responses.append({"attempt": 1, "status_code": None, "error": f"runtime_missing_path_params_after_setup:{','.join(missing)}", "payload": {}})
+    elif not setup_blocked:
         probe_plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
         concurrency = probe_plan.get("concurrency") if isinstance(probe_plan.get("concurrency"), dict) else {}
         if probe_plan.get("strategy") == "concurrency_race_runtime_probe" and concurrency:
             responses.extend(_execute_parallel_write_attempts(
                 decision.method,
-                str(decision.request.get("url") or ""),
+                str(effective_request.get("url") or ""),
                 headers,
                 body,
                 attempts=int(concurrency.get("parallel_attempts") or 2),
@@ -1170,11 +1264,13 @@ def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config:
             ))
         else:
             for idx in range(replay_count):
-                response = _http_request(decision.method, str(decision.request.get("url") or ""), headers, body=body, timeout=timeout)
+                response = _http_request(decision.method, str(effective_request.get("url") or ""), headers, body=body, timeout=timeout)
                 responses.append(response | {"attempt": idx + 1})
         snapshots["after"] = _execute_snapshots(config, base_url, probe, "after", timeout)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout)
-    if not setup_blocked:
+    if missing:
+        verification = {"verdict": "inconclusive", "reason": f"runtime_missing_path_params_after_setup:{','.join(missing)}", "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
+    elif not setup_blocked:
         concurrency_verification = _verify_concurrency_observation(probe, responses, snapshots)
         verification = concurrency_verification or _verify_write_observation(probe, responses, snapshots)
     else:
@@ -1184,7 +1280,7 @@ def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config:
         "risk_type": decision.risk_type,
         "method": decision.method,
         "path": decision.path,
-        "request": decision.request,
+        "request": effective_request if not setup_blocked else (decision.request | {"setup_blocked": True}),
         "fixture_receipts": setup_receipts,
         "cleanup_receipts": cleanup_receipts,
         "responses": [
