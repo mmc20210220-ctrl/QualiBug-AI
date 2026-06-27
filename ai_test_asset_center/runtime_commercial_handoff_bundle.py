@@ -80,6 +80,7 @@ def _handoff_status(report: dict[str, Any]) -> tuple[str, str]:
     promotion_gate = _as_dict(report.get("runtime_evidence_promotion_gate"))
     delivery_manifest = _as_dict(report.get("runtime_evidence_customer_delivery_manifest"))
     manifest_verification = _as_dict(report.get("runtime_evidence_delivery_manifest_verification"))
+    secret_audit = _as_dict(report.get("commercial_handoff_secret_audit"))
     safety = _as_dict(report.get("onboarding_patch_safety_validation"))
     approval = _as_dict(report.get("write_sandbox_approval_packet"))
     gap = _as_dict(report.get("runtime_sla_gap_prioritizer"))
@@ -87,6 +88,8 @@ def _handoff_status(report: dict[str, Any]) -> tuple[str, str]:
 
     if str(safety.get("status") or "") == "unsafe_blocked" or safety.get("safe_to_send_to_customer") is False:
         return "handoff_blocked_by_patch_safety", "Do not send the onboarding patch until production targets, raw secrets or unsafe cleanup gaps are removed."
+    if secret_audit and secret_audit.get("safe_for_customer_handoff") is False:
+        return "handoff_blocked_by_secret_audit", "Commercial handoff/runtime evidence contains raw secret indicators; redact customer-facing artifacts before handoff."
     if approval.get("write_approval_required") and not approval.get("ready_for_customer_approval"):
         return "handoff_blocked_by_write_sandbox_approval", "Write-sandbox evidence is required or requested, but the customer approval packet is not ready."
     if promotion_gate and not promotion_gate.get("promotion_ready"):
@@ -137,6 +140,7 @@ def _signoff_checklist(report: dict[str, Any], status: str) -> list[dict[str, An
     gate = _as_dict(report.get("runtime_evidence_readiness_sla_gate"))
     approval = _as_dict(report.get("write_sandbox_approval_packet"))
     safety = _as_dict(report.get("onboarding_patch_safety_validation"))
+    secret_audit = _as_dict(report.get("commercial_handoff_secret_audit"))
     findings = [x for x in _as_list(report.get("findings")) if isinstance(x, dict)]
     p0p1 = [f for f in findings if str(f.get("priority")) in {"P0", "P1"}]
     minimum_failures = [str(x) for x in _as_list(gate.get("minimum_commercial_gate_failures")) if str(x)]
@@ -195,6 +199,16 @@ def _signoff_checklist(report: dict[str, Any], status: str) -> list[dict[str, An
             "required": True,
             "passed": bool(safety.get("safe_to_send_to_customer", True)) and str(safety.get("status") or "safe_to_send") != "unsafe_blocked",
             "text": "Verify onboarding patch preview contains placeholders/redactions only and declares cleanup for write lanes.",
+        },
+        {
+            "item_id": "HANDOFF-SECRET-AUDIT",
+            "owner": "security_owner",
+            "required": bool(secret_audit),
+            "passed": (not secret_audit) or bool(secret_audit.get("safe_for_customer_handoff")),
+            "text": "Verify commercial handoff and Phase95 runtime evidence artifacts do not contain raw credentials, bearer tokens, cookies or API keys.",
+            "secret_audit_status": secret_audit.get("status"),
+            "secret_audit_issue_count": secret_audit.get("issue_count", 0),
+            "runtime_evidence_issue_count": secret_audit.get("runtime_evidence_issue_count", 0),
         },
         {
             "item_id": "HANDOFF-WRITE-APPROVAL",
@@ -285,6 +299,9 @@ def build_commercial_handoff_bundle(report: dict[str, Any]) -> dict[str, Any]:
             "runtime_delivery_manifest_ready": bool(_as_dict(report.get("runtime_evidence_customer_delivery_manifest")).get("customer_ready")) if _as_dict(report.get("runtime_evidence_customer_delivery_manifest")) else None,
             "runtime_delivery_manifest_verification_status": _as_dict(report.get("runtime_evidence_delivery_manifest_verification")).get("status"),
             "runtime_delivery_manifest_verified": bool(_as_dict(report.get("runtime_evidence_delivery_manifest_verification")).get("verified")) if _as_dict(report.get("runtime_evidence_delivery_manifest_verification")) else None,
+            "commercial_handoff_secret_audit_status": _as_dict(report.get("commercial_handoff_secret_audit")).get("status"),
+            "commercial_handoff_safe_for_customer": bool(_as_dict(report.get("commercial_handoff_secret_audit")).get("safe_for_customer_handoff")) if _as_dict(report.get("commercial_handoff_secret_audit")) else None,
+            "runtime_evidence_secret_issue_count": _as_dict(report.get("commercial_handoff_secret_audit")).get("runtime_evidence_issue_count", 0),
             "validated_candidate_count": summary.get("validated_candidate_count", len(findings)),
             "finding_count_by_priority": _count_by_priority(findings),
             "p0_p1_finding_count": sum(1 for f in findings if str(f.get("priority")) in {"P0", "P1"}),
@@ -335,6 +352,9 @@ def render_commercial_handoff_markdown(bundle: dict[str, Any]) -> str:
         "runtime_delivery_manifest_ready",
         "runtime_delivery_manifest_verification_status",
         "runtime_delivery_manifest_verified",
+        "commercial_handoff_secret_audit_status",
+        "commercial_handoff_safe_for_customer",
+        "runtime_evidence_secret_issue_count",
         "validated_candidate_count",
         "p0_p1_finding_count",
         "runtime_sla_must_run_count",

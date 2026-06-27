@@ -31,7 +31,31 @@ HANDOFF_SECTIONS = [
     "write_sandbox_approval_packet",
     "runtime_sla_gap_prioritizer",
     "remediation_verification_artifact",
+    # Phase95 runtime evidence artifacts are customer-facing after promotion.
+    # They can include reconstructed curl commands, request metadata and
+    # reproduction traces, so scan them before commercial handoff/archive.
+    "runtime_evidence_scoreboard",
+    "runtime_evidence_probe_ledger",
+    "runtime_customer_reproduction_pack",
+    "runtime_evidence_remediation_plan",
+    "runtime_evidence_carry_forward",
+    "runtime_evidence_progress_delta",
+    "runtime_evidence_promotion_gate",
+    "runtime_evidence_customer_delivery_manifest",
+    "runtime_evidence_delivery_manifest_verification",
 ]
+
+RUNTIME_EVIDENCE_SECTIONS = {
+    "runtime_evidence_scoreboard",
+    "runtime_evidence_probe_ledger",
+    "runtime_customer_reproduction_pack",
+    "runtime_evidence_remediation_plan",
+    "runtime_evidence_carry_forward",
+    "runtime_evidence_progress_delta",
+    "runtime_evidence_promotion_gate",
+    "runtime_evidence_customer_delivery_manifest",
+    "runtime_evidence_delivery_manifest_verification",
+}
 
 
 def _is_safe_placeholder(value: Any) -> bool:
@@ -76,12 +100,15 @@ def _is_sensitive_metadata_key(path: str, key: str) -> bool:
 def audit_commercial_handoff_secrets(report: dict[str, Any]) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     scanned_sections: list[str] = []
+    scanned_runtime_evidence_sections: list[str] = []
     scanned_field_count = 0
 
     for section in HANDOFF_SECTIONS:
         if section not in report:
             continue
         scanned_sections.append(section)
+        if section in RUNTIME_EVIDENCE_SECTIONS:
+            scanned_runtime_evidence_sections.append(section)
         for path, key, value in _walk(report.get(section), f"$.{section}"):
             scanned_field_count += 1
             if isinstance(value, (dict, list)):
@@ -117,14 +144,23 @@ def audit_commercial_handoff_secrets(report: dict[str, Any]) -> dict[str, Any]:
         safe = True
         recommendation = "No raw secrets were detected in customer-facing handoff sections."
 
+    runtime_evidence_issue_count = sum(
+        1
+        for issue in issues
+        if str(issue.get("path") or "").split(".")[1:2] and str(issue.get("path") or "").split(".")[1] in RUNTIME_EVIDENCE_SECTIONS
+    )
+
     return {
         "engine": "runtime_handoff_secret_audit_v1_phase93l",
         "status": status,
         "safe_for_customer_handoff": safe,
         "issue_count": len(issues),
+        "runtime_evidence_issue_count": runtime_evidence_issue_count,
         "issues": issues,
         "scanned_sections": scanned_sections,
+        "scanned_runtime_evidence_sections": scanned_runtime_evidence_sections,
         "scanned_section_count": len(scanned_sections),
+        "scanned_runtime_evidence_section_count": len(scanned_runtime_evidence_sections),
         "scanned_field_count": scanned_field_count,
         "recommendation": recommendation,
         "customer_safe_note": "This audit is heuristic and complements, but does not replace, customer-side secret scanning before external distribution.",
@@ -139,7 +175,9 @@ def render_handoff_secret_audit_markdown(audit: dict[str, Any]) -> str:
         f"- status: `{audit.get('status')}`",
         f"- safe for customer handoff: `{audit.get('safe_for_customer_handoff')}`",
         f"- issue count: `{audit.get('issue_count')}`",
+        f"- runtime evidence issue count: `{audit.get('runtime_evidence_issue_count', 0)}`",
         f"- scanned sections: `{', '.join(str(x) for x in audit.get('scanned_sections') or [])}`",
+        f"- scanned runtime evidence sections: `{', '.join(str(x) for x in audit.get('scanned_runtime_evidence_sections') or [])}`",
         f"- recommendation: {audit.get('recommendation')}",
         "",
     ]
