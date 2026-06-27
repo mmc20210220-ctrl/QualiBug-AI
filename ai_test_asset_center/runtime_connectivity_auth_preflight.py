@@ -16,6 +16,7 @@ onboarding questions customers usually ask first:
 No raw tokens, cookies or passwords are returned in reports.
 """
 
+import base64
 import json
 import re
 import socket
@@ -27,6 +28,7 @@ Requester = Callable[[str, str, dict[str, str], Any, float], dict[str, Any]]
 Resolver = Callable[[str, int | None], list[Any]]
 
 AUTH_HEADER_NAMES = {"authorization", "cookie", "x-api-key", "x-auth-token", "x-session-id", "x-access-token"}
+AUTH_CHALLENGE_HEADER_NAMES = ("www-authenticate", "proxy-authenticate")
 TOKEN_RESPONSE_HEADER_NAMES = ("authorization", "x-auth-token", "x-access-token", "x-session-id")
 CSRF_RESPONSE_HEADER_NAMES = ("x-csrf-token", "x-xsrf-token", "csrf-token", "x-csrf")
 CSRF_COOKIE_NAMES = {"xsrf-token", "csrf-token", "csrftoken", "x-csrf-token"}
@@ -100,6 +102,14 @@ SAFE_METADATA_KEYS = {
     "token_expires_in_seconds",
     "token_expiry_kind",
     "refresh_succeeded",
+    "oauth_grant_type",
+    "oauth_client_auth_method",
+    "oauth_scope_present",
+    "oauth_audience_present",
+    "auth_challenge_scheme",
+    "auth_challenge_realm",
+    "auth_challenge_error",
+    "auth_challenge_description",
     "derived_header_names",
     "injected_header_names",
     "injected_body_fields",
@@ -223,6 +233,7 @@ def _http_edge_probe(base_url: str, timeout_seconds: float, requester: Requester
         "status_code": code,
         "error": resp.get("error"),
         "duration_ms": resp.get("duration_ms"),
+        "auth_challenge": _redact(_auth_challenge_from_response(resp)),
         "message": "HTTP edge is reachable" if reachable else "HTTP edge is not reachable",
     }
 
@@ -320,6 +331,37 @@ def _header_get(headers: dict[str, str], name: str) -> str:
         if k.lower() == name.lower():
             return v
     return ""
+
+
+def _parse_auth_challenge_header(value: str) -> dict[str, Any]:
+    text = str(value or "").strip()
+    if not text:
+        return {"present": False}
+    first = text.split(",", 1)[0].strip()
+    scheme = first.split(None, 1)[0] if first else ""
+    attrs: dict[str, str] = {}
+    for key, quoted, bare in re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)=(?:\"([^\"]*)\"|([^,\s]+))", text):
+        attrs[key.lower()] = quoted or bare
+    return {
+        "present": True,
+        "scheme": scheme.lower(),
+        "realm": attrs.get("realm"),
+        "error": attrs.get("error"),
+        "error_description": attrs.get("error_description"),
+        "token_url_present": bool(attrs.get("authorization_uri") or attrs.get("token_url") or attrs.get("token_endpoint")),
+        "raw_preview": text[:160],
+    }
+
+
+def _auth_challenge_from_response(resp: dict[str, Any]) -> dict[str, Any]:
+    headers = _headers(resp)
+    for wanted in AUTH_CHALLENGE_HEADER_NAMES:
+        value = _header_get(headers, wanted)
+        if value:
+            challenge = _parse_auth_challenge_header(value)
+            challenge["header_name"] = wanted
+            return challenge
+    return {"present": False}
 
 
 def _cookie_header_from_response(resp: dict[str, Any]) -> str:
@@ -661,6 +703,93 @@ def _refresh_session(
     return refreshed_headers if status_ok and (token or response_cookie) else current_headers, meta
 
 
+def _oauth_grant_type(auth_flow: dict[str, Any]) -> str:
+    auth_type = str(auth_flow.get("auth_type") or auth_flow.get("type") or "").lower()
+    grant = str(auth_flow.get("grant_type") or auth_flow.get("oauth_grant_type") or "").lower()
+    if grant:
+        return grant
+    if auth_type in {"oauth2_client_credentials", "client_credentials", "m2m"}:
+        return "client_credentials"
+    if auth_type in {"oauth2_password", "password_grant"}:
+        return "password"
+    return ""
+
+
+def _oauth_token_path(auth_flow: dict[str, Any]) -> str:
+    return str(
+        auth_flow.get("token_endpoint")
+        or auth_flow.get("oauth_token_path")
+        or auth_flow.get("oidc_token_path")
+        or auth_flow.get("auth_token_path")
+        or auth_flow.get("login_path")
+        or auth_flow.get("path")
+        or "/oauth/token"
+    )
+
+
+def _oauth_client_credentials(auth_flow: dict[str, Any], account: dict[str, Any]) -> tuple[str, str]:
+    client_id = str(
+        account.get("client_id")
+        or account.get("oauth_client_id")
+        or auth_flow.get("client_id")
+        or auth_flow.get("oauth_client_id")
+        or ""
+    )
+    client_secret = str(
+        account.get("client_secret")
+        or account.get("oauth_client_secret")
+        or auth_flow.get("client_secret")
+        or auth_flow.get("oauth_client_secret")
+        or ""
+    )
+    return client_id, client_secret
+
+
+def _apply_oauth_grant_body_and_headers(
+    *,
+    auth_flow: dict[str, Any],
+    account: dict[str, Any],
+    body: dict[str, Any],
+    headers: dict[str, str],
+    username_field: str,
+    password_field: str,
+) -> dict[str, Any]:
+    grant_type = _oauth_grant_type(auth_flow)
+    if not grant_type:
+        return {"enabled": False}
+    client_id, client_secret = _oauth_client_credentials(auth_flow, account)
+    client_auth_method = str(auth_flow.get("client_auth_method") or auth_flow.get("oauth_client_auth_method") or "body").lower()
+    body["grant_type"] = grant_type
+    if client_id and client_auth_method != "basic":
+        body.setdefault("client_id", client_id)
+    if client_secret and client_auth_method != "basic":
+        body.setdefault("client_secret", client_secret)
+    if client_auth_method == "basic" and client_id and client_secret:
+        raw = f"{client_id}:{client_secret}".encode("utf-8")
+        headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
+    scope = str(account.get("scope") or auth_flow.get("scope") or "")
+    audience = str(account.get("audience") or auth_flow.get("audience") or "")
+    if scope:
+        body.setdefault("scope", scope)
+    if audience:
+        body.setdefault("audience", audience)
+    if grant_type == "password":
+        body.setdefault("username", account.get("username") or account.get("user") or account.get("login") or "")
+        body.setdefault("password", account.get("password") or "")
+    elif grant_type == "client_credentials":
+        body.pop(username_field, None)
+        body.pop(password_field, None)
+    return {
+        "enabled": True,
+        "grant_type": grant_type,
+        "client_auth_method": client_auth_method,
+        "client_id_present": bool(client_id),
+        "client_secret_present": bool(client_secret),
+        "scope_present": bool(scope),
+        "audience_present": bool(audience),
+    }
+
+
 def _login_account(
     base_url: str,
     auth_flow: dict[str, Any],
@@ -671,8 +800,9 @@ def _login_account(
 ) -> tuple[dict[str, str], dict[str, Any]]:
     if requester is None:
         return {}, {"account": account_name, "login_attempted": False, "error": "requester_not_provided"}
-    login_path = str(auth_flow.get("login_path") or auth_flow.get("path") or "/login")
-    method = str(auth_flow.get("method") or "POST").upper()
+    oauth_grant = _oauth_grant_type(auth_flow)
+    login_path = _oauth_token_path(auth_flow) if oauth_grant else str(auth_flow.get("login_path") or auth_flow.get("path") or "/login")
+    method = str(auth_flow.get("method") or auth_flow.get("token_method") or "POST").upper()
     username_field = str(auth_flow.get("username_field") or "username")
     password_field = str(auth_flow.get("password_field") or "password")
     tenant_field = str(auth_flow.get("tenant_field") or "")
@@ -680,7 +810,7 @@ def _login_account(
     token_header = str(auth_flow.get("token_header_name") or "Authorization")
     token_prefix = str(auth_flow.get("token_header_prefix") or "Bearer")
     response_token_header = str(auth_flow.get("token_response_header") or auth_flow.get("token_header_response_name") or "")
-    body_format = str(auth_flow.get("body_format") or auth_flow.get("request_body_format") or "json").lower()
+    body_format = str(auth_flow.get("body_format") or auth_flow.get("request_body_format") or ("form" if oauth_grant else "json")).lower()
     extra_body = dict(auth_flow.get("extra_body") or {}) if isinstance(auth_flow.get("extra_body"), dict) else {}
     bootstrap_headers, bootstrap_body, bootstrap_meta = _bootstrap_auth_context(base_url, auth_flow, timeout_seconds, requester)
     body = dict(extra_body)
@@ -695,11 +825,24 @@ def _login_account(
     if bootstrap_cookie:
         headers["Cookie"] = _merge_cookie_headers(headers.get("Cookie", ""), bootstrap_cookie)
     headers.update({str(k): str(v) for k, v in bootstrap_headers.items()})
+    oauth_meta = _apply_oauth_grant_body_and_headers(
+        auth_flow=auth_flow,
+        account=account,
+        body=body,
+        headers=headers,
+        username_field=username_field,
+        password_field=password_field,
+    )
     if body_format in {"form", "urlencoded", "x-www-form-urlencoded", "form-urlencoded"}:
         headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
     elif body_format == "json":
         headers.setdefault("Content-Type", "application/json")
-    if not body[username_field] or not body[password_field]:
+    if oauth_meta.get("enabled"):
+        if oauth_meta.get("grant_type") == "password" and (not body.get("username") or not body.get("password")):
+            return {}, {"account": account_name, "login_attempted": False, "error": "missing_oauth_password_grant_credentials", "bootstrap": bootstrap_meta, "oauth": oauth_meta}
+        if not oauth_meta.get("client_id_present") or not oauth_meta.get("client_secret_present"):
+            return {}, {"account": account_name, "login_attempted": False, "error": "missing_oauth_client_credentials", "bootstrap": bootstrap_meta, "oauth": oauth_meta}
+    elif not body[username_field] or not body[password_field]:
         return {}, {"account": account_name, "login_attempted": False, "error": "missing_username_or_password", "bootstrap": bootstrap_meta}
     started = time.time()
     try:
@@ -740,6 +883,11 @@ def _login_account(
         "status_ok": status_ok,
         "expected_statuses": sorted(expected_login_statuses),
         "request_body_format": body_format,
+        "oauth_grant_type": oauth_meta.get("grant_type") if oauth_meta.get("enabled") else None,
+        "oauth_client_auth_method": oauth_meta.get("client_auth_method") if oauth_meta.get("enabled") else None,
+        "oauth_scope_present": oauth_meta.get("scope_present") if oauth_meta.get("enabled") else None,
+        "oauth_audience_present": oauth_meta.get("audience_present") if oauth_meta.get("enabled") else None,
+        "auth_challenge": _redact(_auth_challenge_from_response(resp)),
         "token_acquired": bool(token),
         "token_source": token_source,
         "token_json_path": token_path if token_path and token_path != token_source else token_path,
@@ -791,6 +939,7 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
     refresh_token_count = 0
     expiring_token_count = 0
     refresh_verified_count = 0
+    oauth_count = 0
     for name, raw_account in accounts.items():
         if not isinstance(raw_account, dict):
             continue
@@ -810,6 +959,8 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
             verified_count += 1
             if meta.get("refresh_succeeded"):
                 refresh_verified_count += 1
+        if meta.get("oauth_grant_type"):
+            oauth_count += 1
         meta["session_health"] = health
         events.append(meta)
         resolved_headers[str(name)] = headers
@@ -834,6 +985,7 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
         "refresh_token_acquired_count": refresh_token_count,
         "expiring_token_count": expiring_token_count,
         "token_refresh_verified_count": refresh_verified_count,
+        "oauth_session_count": oauth_count,
         "session_health_verified_count": verified_count,
         "derived_default_header_names": sorted(derived_default_headers.keys()),
         "events": events,
@@ -909,6 +1061,7 @@ def build_runtime_connectivity_auth_preflight(
         _check("url_parse_ok", bool(parsed.get("ok")), parsed.get("message") or "url parse unknown", severity="blocking" if needs_runtime else "warning", url=parsed),
         _check("url_host_resolves", bool(dns.get("ok")), dns.get("message") or "dns resolution unknown", severity="blocking" if needs_runtime else "warning", skipped=bool(dns.get("skipped")), dns=dns),
         _check("http_edge_reachable", bool(http_edge.get("ok")), http_edge.get("message") or "http reachability unknown", severity="blocking" if needs_runtime else "warning", skipped=bool(http_edge.get("skipped")), status_code=http_edge.get("status_code"), error=http_edge.get("error"), duration_ms=http_edge.get("duration_ms")),
+        _check("auth_challenge_observed", bool((http_edge.get("auth_challenge") or {}).get("present")), "HTTP edge exposed an auth challenge header" if (http_edge.get("auth_challenge") or {}).get("present") else "no WWW-Authenticate/Proxy-Authenticate challenge observed", severity="info", skipped=not bool((http_edge.get("auth_challenge") or {}).get("present")), scheme=(http_edge.get("auth_challenge") or {}).get("scheme"), realm=(http_edge.get("auth_challenge") or {}).get("realm")),
         _check("auth_configured", configured, "authentication inputs are configured" if configured else "no auth_flow/accounts/static auth headers configured", severity="warning"),
         _check("token_cookie_or_session_acquired", token_or_cookie, "token/cookie/session material was acquired" if token_or_cookie else "no token/cookie/session material acquired yet", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count")),
         _check("session_health_verified", health_verified, "authenticated session was verified by health/me endpoint" if health_verified else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth.get("session_health_verified_count")),
@@ -945,13 +1098,14 @@ def build_runtime_connectivity_auth_preflight(
         "refresh_token_acquired_count": int(auth.get("refresh_token_acquired_count") or 0),
         "expiring_token_count": expiring_token_count,
         "token_refresh_verified_count": refresh_verified_count,
+        "oauth_session_count": int(auth.get("oauth_session_count") or 0),
         "session_health_verified_count": int(auth.get("session_health_verified_count") or 0),
         "default_account": auth.get("default_account"),
         "blocked_reason": auth.get("blocked_reason"),
         "events": _redact(auth.get("events") or []),
     }
     return {
-        "engine": "runtime_connectivity_auth_preflight_v1_phase98",
+        "engine": "runtime_connectivity_auth_preflight_v1_phase100",
         "status": status,
         "ready_for_authenticated_runtime": bool(status in {"ready", "degraded"} and token_or_cookie and not blocking),
         "url_parse": parsed,

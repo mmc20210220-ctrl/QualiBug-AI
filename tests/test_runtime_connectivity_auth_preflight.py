@@ -368,3 +368,112 @@ def test_onboarding_preflight_exposes_refresh_readiness() -> None:
     assert report["auth_readiness"]["token_refresh_verified_count"] == 1
     check_names = {check["name"] for check in report["checks"]}
     assert "auth_session_refresh_ready" in check_names
+
+
+def _oauth_client_credentials_requester(method: str, url: str, headers: dict[str, str], body: Any, timeout: float) -> dict[str, Any]:
+    if url.endswith("/"):
+        return {
+            "status_code": 401,
+            "headers": {"WWW-Authenticate": 'Bearer realm="qualibug", error="invalid_token"'},
+            "duration_ms": 1,
+        }
+    if url.endswith("/oauth/token"):
+        assert method == "POST"
+        assert headers.get("Content-Type") == "application/x-www-form-urlencoded"
+        assert headers.get("Authorization", "").startswith("Basic ")
+        assert body["grant_type"] == "client_credentials"
+        assert body["scope"] == "orders:read inventory:read"
+        assert "username" not in body
+        assert "password" not in body
+        return {
+            "status_code": 200,
+            "payload": {"access_token": "oauth-access-secret", "expires_in": 900},
+            "duration_ms": 4,
+        }
+    if url.endswith("/api/me"):
+        assert headers.get("Authorization") == "Bearer oauth-access-secret"
+        return {"status_code": 200, "payload": {"client": "machine"}, "duration_ms": 2}
+    return {"status_code": 404, "duration_ms": 1}
+
+
+def test_oauth2_client_credentials_basic_auth_can_materialize_runtime_session_without_secret_leak() -> None:
+    report = build_runtime_connectivity_auth_preflight(
+        config={
+            "auth_flow": {
+                "auth_type": "oauth2_client_credentials",
+                "token_endpoint": "/oauth/token",
+                "client_auth_method": "basic",
+                "client_id": "machine-client",
+                "client_secret": "machine-client-secret",
+                "scope": "orders:read inventory:read",
+                "session_health_path": "/api/me",
+            },
+            "accounts": {"service_account": {"role": "service_account"}},
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_oauth_client_credentials_requester,
+        resolver=_resolver,
+    )
+
+    auth = report["auth_runtime"]
+    assert auth["mode"] == "account_login"
+    assert auth["successful_session_count"] == 1
+    assert auth["token_acquired_count"] == 1
+    assert auth["session_health_verified_count"] == 1
+    assert auth["oauth_session_count"] == 1
+    assert report["http_edge"]["auth_challenge"]["present"] is True
+    assert report["http_edge"]["auth_challenge"]["scheme"] == "bearer"
+    event = auth["events"][0]
+    assert event["oauth_grant_type"] == "client_credentials"
+    assert event["oauth_client_auth_method"] == "basic"
+    assert event["request_body_format"] == "form"
+
+    dumped = json.dumps(report, ensure_ascii=False)
+    assert "oauth-access-secret" not in dumped
+    assert "machine-client-secret" not in dumped
+
+
+def _oauth_password_grant_requester(method: str, url: str, headers: dict[str, str], body: Any, timeout: float) -> dict[str, Any]:
+    if url.endswith("/oauth/token"):
+        assert body["grant_type"] == "password"
+        assert body["username"] == "qa-user"
+        assert body["password"] == "qa-pass-secret"
+        assert body["client_id"] == "public-client"
+        assert body["client_secret"] == "public-client-secret"
+        return {"status_code": 200, "payload": {"access_token": "password-grant-secret"}, "duration_ms": 3}
+    if url.endswith("/api/me"):
+        assert headers.get("Authorization") == "Bearer password-grant-secret"
+        return {"status_code": 200, "payload": {"user": "qa-user"}, "duration_ms": 2}
+    return {"status_code": 200, "duration_ms": 1}
+
+
+def test_oauth2_password_grant_uses_account_credentials_and_remains_redacted() -> None:
+    report = build_runtime_connectivity_auth_preflight(
+        config={
+            "auth_flow": {
+                "grant_type": "password",
+                "token_endpoint": "/oauth/token",
+                "client_id": "public-client",
+                "client_secret": "public-client-secret",
+                "session_health_path": "/api/me",
+            },
+            "accounts": {"normal_user": {"username": "qa-user", "password": "qa-pass-secret"}},
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_oauth_password_grant_requester,
+        resolver=_resolver,
+    )
+
+    auth = report["auth_runtime"]
+    assert auth["oauth_session_count"] == 1
+    assert auth["session_health_verified_count"] == 1
+    assert auth["events"][0]["oauth_grant_type"] == "password"
+
+    dumped = json.dumps(report, ensure_ascii=False)
+    assert "password-grant-secret" not in dumped
+    assert "qa-pass-secret" not in dumped
+    assert "public-client-secret" not in dumped
