@@ -206,6 +206,7 @@ def _auth_readiness(config: dict[str, Any]) -> dict[str, Any]:
             "refresh_token_acquired_count": refresh_token_count,
             "expiring_token_count": expiring_token_count,
             "token_refresh_verified_count": refresh_verified_count,
+            "interactive_auth_blocker_count": int(runtime.get("interactive_auth_blocker_count") or 0),
             "refresh_ready": expiring_token_count == 0 or refresh_verified_count > 0,
             "message": f"{success} account session(s) derived by login flow" if success else "account login attempted but no usable token/cookie/session was derived",
         }
@@ -353,6 +354,7 @@ def run_runtime_onboarding_preflight(
     auth_runtime = connectivity_auth.get("auth_runtime") if isinstance(connectivity_auth.get("auth_runtime"), dict) else {}
     expiring_token_count = int(auth_runtime.get("expiring_token_count") or auth.get("expiring_token_count") or 0)
     token_refresh_verified_count = int(auth_runtime.get("token_refresh_verified_count") or auth.get("token_refresh_verified_count") or 0)
+    interactive_auth_blocker_count = int(auth_runtime.get("interactive_auth_blocker_count") or auth.get("interactive_auth_blocker_count") or 0)
 
     checks = [
         _check("base_url_configured", bool(base_url), "target base URL is configured" if base_url else "no target base URL; runtime execution will be plan-only", severity="blocking" if execute_readonly or allow_write_sandbox else "warning"),
@@ -361,7 +363,8 @@ def run_runtime_onboarding_preflight(
         _check("base_url_reachable", bool(reachability.get("ok")), reachability.get("message") or "reachability unknown", severity="blocking" if (execute_readonly or allow_write_sandbox) else "warning", skipped=bool(reachability.get("skipped")), status_code=reachability.get("status_code"), error=reachability.get("error"), duration_ms=reachability.get("duration_ms")),
         _check("non_production_target", not prod_like, prod_reason, severity="blocking"),
         _check("probe_plan_grounded", counts["total"] > 0 and counts["strictly_grounded"] == counts["total"], f"{counts['strictly_grounded']}/{counts['total']} probes have strict document grounding", severity="blocking"),
-        _check("auth_session_ready", bool(auth.get("ok")), auth.get("message") or "auth readiness unknown", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count"), token_acquired_count=auth.get("token_acquired_count"), cookie_acquired_count=auth.get("cookie_acquired_count"), session_health_verified_count=auth.get("session_health_verified_count")),
+        _check("auth_session_ready", bool(auth.get("ok")), auth.get("message") or "auth readiness unknown", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count"), token_acquired_count=auth.get("token_acquired_count"), cookie_acquired_count=auth.get("cookie_acquired_count"), session_health_verified_count=auth.get("session_health_verified_count"), interactive_auth_blocker_count=interactive_auth_blocker_count),
+        _check("interactive_auth_not_blocked", interactive_auth_blocker_count == 0, "no browser-only SSO/MFA/CAPTCHA/proxy/mTLS auth blocker was detected" if interactive_auth_blocker_count == 0 else "interactive auth blocker detected; provide a non-interactive auth path before runtime probes", severity="warning", skipped=interactive_auth_blocker_count == 0, interactive_auth_blocker_count=interactive_auth_blocker_count),
         _check("token_cookie_or_session_acquired", int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0, "token/cookie/session material was acquired" if int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0 else "no token/cookie/session material acquired yet", severity="warning", mode=auth_runtime.get("mode") or auth.get("mode"), successful_session_count=auth_runtime.get("successful_session_count") or auth.get("successful_session_count")),
         _check("session_health_verified", int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0, "authenticated session was verified by health/me endpoint" if int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0 else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count")),
         _check(

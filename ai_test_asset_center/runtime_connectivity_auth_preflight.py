@@ -110,6 +110,15 @@ SAFE_METADATA_KEYS = {
     "auth_challenge_realm",
     "auth_challenge_error",
     "auth_challenge_description",
+    "auth_blocker_type",
+    "auth_blocker_provider",
+    "auth_blocker_reason",
+    "auth_blocker_location",
+    "auth_blocker_signals",
+    "auth_blocker_remediation",
+    "interactive_auth_blocker_type",
+    "interactive_auth_blocker_provider",
+    "interactive_auth_blocker_reason",
     "derived_header_names",
     "injected_header_names",
     "injected_body_fields",
@@ -234,6 +243,7 @@ def _http_edge_probe(base_url: str, timeout_seconds: float, requester: Requester
         "error": resp.get("error"),
         "duration_ms": resp.get("duration_ms"),
         "auth_challenge": _redact(_auth_challenge_from_response(resp)),
+        "interactive_auth_blocker": _redact(_classify_interactive_auth_blocker(resp)),
         "message": "HTTP edge is reachable" if reachable else "HTTP edge is not reachable",
     }
 
@@ -362,6 +372,120 @@ def _auth_challenge_from_response(resp: dict[str, Any]) -> dict[str, Any]:
             challenge["header_name"] = wanted
             return challenge
     return {"present": False}
+
+
+
+def _safe_location_preview(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(text)
+        if parsed.scheme and parsed.netloc:
+            return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path or "/", "", "", ""))[:240]
+        return urllib.parse.urlunparse(("", "", parsed.path or text.split("?", 1)[0].split("#", 1)[0], "", "", ""))[:240]
+    except Exception:
+        return text.split("?", 1)[0].split("#", 1)[0][:240]
+
+
+def _response_text_for_classification(resp: dict[str, Any]) -> str:
+    payload = _jsonish_payload(resp)
+    if isinstance(payload, str):
+        return payload[:4000]
+    if isinstance(payload, dict):
+        safe: dict[str, Any] = {}
+        for key in ("error", "error_description", "message", "detail", "title", "reason"):
+            if key in payload:
+                safe[key] = payload.get(key)
+        return json.dumps(safe, ensure_ascii=False)[:4000] if safe else ""
+    return ""
+
+
+def _classify_interactive_auth_blocker(resp: dict[str, Any]) -> dict[str, Any]:
+    """Classify auth flows that cannot be solved by headless runtime probes.
+
+    Many enterprise environments put an IdP/browser ceremony in front of the
+    application.  A 302 to SAML/OIDC/MFA/CAPTCHA proves the URL is reachable,
+    but it also means runtime probes need a service account, direct token
+    endpoint, pre-minted session cookie, or customer-provided fixture token.
+    """
+    code = resp.get("status_code")
+    headers = _headers(resp)
+    location = _header_get(headers, "location")
+    challenge = _auth_challenge_from_response(resp)
+    haystack = " ".join(
+        str(part or "")
+        for part in (
+            location,
+            challenge.get("scheme"),
+            challenge.get("realm"),
+            challenge.get("error"),
+            challenge.get("error_description"),
+            _response_text_for_classification(resp),
+        )
+    ).lower()
+    signals: list[str] = []
+    provider = ""
+    blocker_type = ""
+    reason = ""
+
+    provider_patterns = (
+        ("okta", "okta"),
+        ("login.microsoftonline.com", "microsoft_entra_id"),
+        ("/adfs/", "adfs"),
+        ("auth0", "auth0"),
+        ("onelogin", "onelogin"),
+        ("pingidentity", "ping_identity"),
+        ("keycloak", "keycloak"),
+    )
+    for needle, name in provider_patterns:
+        if needle in haystack:
+            provider = name
+            signals.append(name)
+            break
+
+    if code == 407 or bool(_header_get(headers, "proxy-authenticate")):
+        blocker_type = "proxy_auth_required"
+        reason = "runner must authenticate to a corporate proxy before reaching the target environment"
+        signals.append("proxy_authenticate")
+    elif any(term in haystack for term in ("client certificate", "certificate_required", "mutual tls", "mtls", "x509", "ssl client")):
+        blocker_type = "mtls_required"
+        reason = "target requires a client certificate/mTLS that has not been provided to the runner"
+        signals.append("client_certificate")
+    elif any(term in haystack for term in ("recaptcha", "hcaptcha", "captcha")):
+        blocker_type = "captcha_required"
+        reason = "login flow requires CAPTCHA/human verification"
+        signals.append("captcha")
+    elif any(term in haystack for term in ("multi-factor", "multifactor", "two-factor", "2fa", "mfa", "one-time code", "otp", "authenticator app")):
+        blocker_type = "mfa_required"
+        reason = "login flow requires MFA/OTP and cannot be completed by non-interactive runtime probes"
+        signals.append("mfa")
+    elif any(term in haystack for term in ("samlrequest", "samlresponse", "/saml", "saml2")):
+        blocker_type = "saml_browser_sso"
+        reason = "login redirects into a SAML browser SSO ceremony"
+        signals.append("saml")
+    elif any(term in haystack for term in ("/authorize", "openid", "oidc", "authorization_code", "code_challenge", "login_hint")):
+        blocker_type = "oidc_browser_redirect"
+        reason = "login redirects into an OIDC/browser authorization flow"
+        signals.append("oidc")
+    elif isinstance(code, int) and 300 <= code < 400 and location and any(term in haystack for term in ("/login", "/sso", "signin", "identity", "idp")):
+        blocker_type = "browser_sso_redirect"
+        reason = "target redirects to an interactive browser login/SSO page"
+        signals.append("browser_redirect")
+
+    if not blocker_type:
+        return {"present": False}
+
+    return {
+        "present": True,
+        "auth_blocker_type": blocker_type,
+        "auth_blocker_provider": provider or None,
+        "auth_blocker_reason": reason,
+        "auth_blocker_location": _safe_location_preview(location),
+        "auth_blocker_signals": sorted(set(signals)),
+        "status_code": code,
+        "auth_blocker_remediation": "Provide a non-interactive auth option: service account/OAuth token endpoint, pre-minted test session cookie, fixture-backed auth token, or proxy/mTLS credentials for the runner.",
+    }
 
 
 def _cookie_header_from_response(resp: dict[str, Any]) -> str:
@@ -888,6 +1012,7 @@ def _login_account(
         "oauth_scope_present": oauth_meta.get("scope_present") if oauth_meta.get("enabled") else None,
         "oauth_audience_present": oauth_meta.get("audience_present") if oauth_meta.get("enabled") else None,
         "auth_challenge": _redact(_auth_challenge_from_response(resp)),
+        "interactive_auth_blocker": _redact(_classify_interactive_auth_blocker(resp)),
         "token_acquired": bool(token),
         "token_source": token_source,
         "token_json_path": token_path if token_path and token_path != token_source else token_path,
@@ -940,6 +1065,7 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
     expiring_token_count = 0
     refresh_verified_count = 0
     oauth_count = 0
+    interactive_blocker_count = 0
     for name, raw_account in accounts.items():
         if not isinstance(raw_account, dict):
             continue
@@ -961,6 +1087,8 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
                 refresh_verified_count += 1
         if meta.get("oauth_grant_type"):
             oauth_count += 1
+        if isinstance(meta.get("interactive_auth_blocker"), dict) and meta["interactive_auth_blocker"].get("present"):
+            interactive_blocker_count += 1
         meta["session_health"] = health
         events.append(meta)
         resolved_headers[str(name)] = headers
@@ -986,6 +1114,7 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
         "expiring_token_count": expiring_token_count,
         "token_refresh_verified_count": refresh_verified_count,
         "oauth_session_count": oauth_count,
+        "interactive_auth_blocker_count": interactive_blocker_count,
         "session_health_verified_count": verified_count,
         "derived_default_header_names": sorted(derived_default_headers.keys()),
         "events": events,
@@ -1056,12 +1185,24 @@ def build_runtime_connectivity_auth_preflight(
     expiring_token_count = int(auth.get("expiring_token_count") or 0)
     refresh_verified_count = int(auth.get("token_refresh_verified_count") or 0)
     refresh_ready = expiring_token_count == 0 or refresh_verified_count > 0
+    interactive_blocker_count = int(auth.get("interactive_auth_blocker_count") or 0)
+    edge_interactive_blocker = bool(((http_edge.get("interactive_auth_blocker") or {}) if isinstance(http_edge.get("interactive_auth_blocker"), dict) else {}).get("present"))
+    interactive_auth_blocked = interactive_blocker_count > 0 or edge_interactive_blocker
     needs_runtime = bool(execute_readonly or allow_write_sandbox)
     checks = [
         _check("url_parse_ok", bool(parsed.get("ok")), parsed.get("message") or "url parse unknown", severity="blocking" if needs_runtime else "warning", url=parsed),
         _check("url_host_resolves", bool(dns.get("ok")), dns.get("message") or "dns resolution unknown", severity="blocking" if needs_runtime else "warning", skipped=bool(dns.get("skipped")), dns=dns),
         _check("http_edge_reachable", bool(http_edge.get("ok")), http_edge.get("message") or "http reachability unknown", severity="blocking" if needs_runtime else "warning", skipped=bool(http_edge.get("skipped")), status_code=http_edge.get("status_code"), error=http_edge.get("error"), duration_ms=http_edge.get("duration_ms")),
         _check("auth_challenge_observed", bool((http_edge.get("auth_challenge") or {}).get("present")), "HTTP edge exposed an auth challenge header" if (http_edge.get("auth_challenge") or {}).get("present") else "no WWW-Authenticate/Proxy-Authenticate challenge observed", severity="info", skipped=not bool((http_edge.get("auth_challenge") or {}).get("present")), scheme=(http_edge.get("auth_challenge") or {}).get("scheme"), realm=(http_edge.get("auth_challenge") or {}).get("realm")),
+        _check(
+            "interactive_auth_not_blocked",
+            not interactive_auth_blocked,
+            "no browser-only SSO/MFA/CAPTCHA/proxy/mTLS auth blocker was detected" if not interactive_auth_blocked else "interactive or infrastructure auth blocker detected; runtime needs a non-interactive auth path",
+            severity="warning",
+            skipped=not interactive_auth_blocked,
+            edge_blocker=(http_edge.get("interactive_auth_blocker") or {}).get("auth_blocker_type") if isinstance(http_edge.get("interactive_auth_blocker"), dict) else None,
+            login_blocker_count=interactive_blocker_count,
+        ),
         _check("auth_configured", configured, "authentication inputs are configured" if configured else "no auth_flow/accounts/static auth headers configured", severity="warning"),
         _check("token_cookie_or_session_acquired", token_or_cookie, "token/cookie/session material was acquired" if token_or_cookie else "no token/cookie/session material acquired yet", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count")),
         _check("session_health_verified", health_verified, "authenticated session was verified by health/me endpoint" if health_verified else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth.get("session_health_verified_count")),
@@ -1099,13 +1240,14 @@ def build_runtime_connectivity_auth_preflight(
         "expiring_token_count": expiring_token_count,
         "token_refresh_verified_count": refresh_verified_count,
         "oauth_session_count": int(auth.get("oauth_session_count") or 0),
+        "interactive_auth_blocker_count": interactive_blocker_count,
         "session_health_verified_count": int(auth.get("session_health_verified_count") or 0),
         "default_account": auth.get("default_account"),
         "blocked_reason": auth.get("blocked_reason"),
         "events": _redact(auth.get("events") or []),
     }
     return {
-        "engine": "runtime_connectivity_auth_preflight_v1_phase100",
+        "engine": "runtime_connectivity_auth_preflight_v1_phase101",
         "status": status,
         "ready_for_authenticated_runtime": bool(status in {"ready", "degraded"} and token_or_cookie and not blocking),
         "url_parse": parsed,
@@ -1121,15 +1263,17 @@ def build_runtime_connectivity_auth_preflight(
         "checks": checks,
         "blocking_reasons": [str(c.get("name")) for c in blocking],
         "warning_reasons": [str(c.get("name")) for c in warnings],
-        "recommended_next_step": _recommended_next_step(status, blocking, warnings, token_or_cookie, health_verified, expiring_token_count, refresh_verified_count),
+        "recommended_next_step": _recommended_next_step(status, blocking, warnings, token_or_cookie, health_verified, expiring_token_count, refresh_verified_count, interactive_auth_blocked),
         "secret_redaction_policy": "No raw token, cookie, password or session secret is returned in this report.",
     }
 
 
-def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings: list[dict[str, Any]], token_or_cookie: bool, health_verified: bool, expiring_token_count: int = 0, refresh_verified_count: int = 0) -> str:
+def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings: list[dict[str, Any]], token_or_cookie: bool, health_verified: bool, expiring_token_count: int = 0, refresh_verified_count: int = 0, interactive_auth_blocked: bool = False) -> str:
     if blocking:
         names = ", ".join(str(c.get("name")) for c in blocking[:4])
         return f"Fix environment connectivity blockers before runtime probes: {names}."
+    if interactive_auth_blocked and not token_or_cookie:
+        return "Interactive SSO/MFA/CAPTCHA/proxy/mTLS auth was detected; provide a service account, direct OAuth token endpoint, pre-minted test session cookie, fixture-backed token, or runner proxy/mTLS credentials."
     if not token_or_cookie:
         return "Provide auth_flow plus test accounts, or static Authorization/Cookie headers, then rerun connectivity/auth preflight."
     if not health_verified:

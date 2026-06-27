@@ -477,3 +477,70 @@ def test_oauth2_password_grant_uses_account_credentials_and_remains_redacted() -
     assert "password-grant-secret" not in dumped
     assert "qa-pass-secret" not in dumped
     assert "public-client-secret" not in dumped
+
+
+def _saml_browser_sso_requester(method: str, url: str, headers: dict[str, str], body: Any, timeout: float) -> dict[str, Any]:
+    if url.endswith("/"):
+        return {"status_code": 200, "duration_ms": 1}
+    if url.endswith("/api/login"):
+        return {
+            "status_code": 302,
+            "headers": {"Location": "https://idp.example.com/sso/saml?SAMLRequest=saml-browser-secret&RelayState=session-secret"},
+            "duration_ms": 2,
+        }
+    if url.endswith("/api/me"):
+        return {"status_code": 401, "duration_ms": 1}
+    return {"status_code": 404, "duration_ms": 1}
+
+
+def test_browser_sso_redirect_is_classified_as_interactive_auth_blocker_without_leaking_location_query() -> None:
+    report = build_runtime_connectivity_auth_preflight(
+        config={
+            "auth_flow": {
+                "login_path": "/api/login",
+                "session_health_path": "/api/me",
+            },
+            "accounts": {"normal_user": {"username": "qa", "password": "pw", "role": "normal_user"}},
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_saml_browser_sso_requester,
+        resolver=_resolver,
+    )
+
+    auth = report["auth_runtime"]
+    assert auth["successful_session_count"] == 0
+    assert auth["interactive_auth_blocker_count"] == 1
+    blocker = auth["events"][0]["interactive_auth_blocker"]
+    assert blocker["present"] is True
+    assert blocker["auth_blocker_type"] == "saml_browser_sso"
+    assert blocker["auth_blocker_location"] == "https://idp.example.com/sso/saml"
+    checks = {item["name"]: item for item in report["checks"]}
+    assert checks["interactive_auth_not_blocked"]["status"] == "warning"
+    assert "service account" in report["recommended_next_step"]
+
+    dumped = json.dumps(report, ensure_ascii=False)
+    assert "saml-browser-secret" not in dumped
+    assert "RelayState=session-secret" not in dumped
+    assert "pw" not in dumped
+
+
+def test_onboarding_preflight_surfaces_interactive_auth_blockers() -> None:
+    report = run_runtime_onboarding_preflight(
+        plan=_grounded_read_plan(),
+        config={
+            "environment_kind": "sandbox",
+            "auth_flow": {"login_path": "/api/login", "session_health_path": "/api/me"},
+            "accounts": {"normal_user": {"username": "qa", "password": "pw", "role": "normal_user"}},
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_saml_browser_sso_requester,
+        resolver=_resolver,
+    )
+
+    assert report["auth_readiness"]["interactive_auth_blocker_count"] == 1
+    checks = {item["name"]: item for item in report["checks"]}
+    assert checks["interactive_auth_not_blocked"]["status"] == "warning"
