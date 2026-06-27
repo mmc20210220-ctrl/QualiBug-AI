@@ -129,6 +129,8 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 READ_METHODS = {"GET", "HEAD"}
 EXPECTED_AUTH_FAILURES = {401, 403, 404}
 DEFAULT_NEGATIVE_WRITE_FAILURES = {400, 401, 403, 404, 409, 422}
+AUTH_BOUNDARY_RISKS = {"auth_boundary_probe", "anonymous_auth_boundary_probe", "cross_tenant_auth_boundary_probe", "role_downgrade_auth_boundary_probe"}
+AUTH_HEADER_NAMES = ["Authorization", "Cookie", "X-Tenant-Id", "X-Org-Id", "X-Workspace-Id"]
 SANDBOX_CLEANUP_STRATEGIES = {"ephemeral_reset", "fixture_reset", "transaction_rollback", "auto_delete", "manual_disposable", "benchmark_reset", "qualibug_auto_fixture_cleanup"}
 PRODUCTION_HOST_RE = re.compile(r"(?:^|[.-])(?:prod|production|live)(?:[.-]|$)|^www\.", re.I)
 NON_PROD_HINT_RE = re.compile(r"(?:localhost|127\.0\.0\.1|0\.0\.0\.0|staging|stage|test|qa|uat|dev|sandbox|mock|local|preprod)", re.I)
@@ -202,6 +204,17 @@ def _headers_from_config(config: dict[str, Any]) -> dict[str, str]:
 def _negative_headers(headers: dict[str, str], names: list[str]) -> dict[str, str]:
     blocked = {str(n).lower() for n in names}
     return {k: v for k, v in headers.items() if k.lower() not in blocked}
+
+
+def _auth_boundary_plan(probe: dict[str, Any]) -> dict[str, Any]:
+    plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
+    auth = plan.get("auth_boundary") if isinstance(plan.get("auth_boundary"), dict) else {}
+    return auth if isinstance(auth, dict) else {}
+
+
+def _is_auth_boundary_risk(probe: dict[str, Any] | None = None, risk_type: str = "") -> bool:
+    risk = str(risk_type or ((probe or {}).get("risk_type") if isinstance(probe, dict) else "") or "")
+    return risk in AUTH_BOUNDARY_RISKS or bool(_auth_boundary_plan(probe or {}))
 
 
 def _join_url(base_url: str, path: str) -> str:
@@ -632,9 +645,20 @@ def _configured_replay_count(config: dict[str, Any], probe: dict[str, Any]) -> i
 
 def _headers_for_probe(probe: dict[str, Any], config: dict[str, Any]) -> dict[str, str]:
     headers = _headers_from_config(config)
-    probe_plan = probe.get("probe_plan") or {}
-    if str(probe.get("risk_type") or "") == "auth_boundary_probe":
-        headers = _negative_headers(headers, list(probe_plan.get("negative_headers") or ["Authorization"]))
+    probe_plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
+    auth_boundary = _auth_boundary_plan(probe)
+    if _is_auth_boundary_risk(probe):
+        actor = str(auth_boundary.get("actor") or "anonymous").lower()
+        profile = str(auth_boundary.get("credential_profile") or actor or "").strip()
+        resolved = config.get("_resolved_account_headers") if isinstance(config.get("_resolved_account_headers"), dict) else {}
+        if actor == "anonymous" or profile in {"", "no_credentials", "anonymous"}:
+            headers = _negative_headers(headers, list(probe_plan.get("negative_headers") or AUTH_HEADER_NAMES))
+        elif isinstance(resolved.get(profile), dict) and resolved.get(profile):
+            headers = dict(resolved.get(profile) or {})
+        elif isinstance(resolved.get(actor), dict) and resolved.get(actor):
+            headers = dict(resolved.get(actor) or {})
+        elif "tenant" in actor or "tenant" in profile:
+            headers["X-Tenant-Id"] = f"qb_auto_forbidden_{profile or actor}"
     # Per-candidate headers can add safe idempotency keys etc.  Values are supplied by the customer config, not invented.
     ep = probe.get("endpoint") or {}
     cid = str(probe.get("candidate_id") or "")
@@ -649,6 +673,12 @@ def _headers_for_probe(probe: dict[str, Any], config: dict[str, Any]) -> dict[st
         value = _get_mapping_value(per, cid, method, path)
         if isinstance(value, dict):
             headers.update({str(k): str(v) for k, v in value.items()})
+    auth_boundary = _auth_boundary_plan(probe)
+    if _is_auth_boundary_risk(probe):
+        actor = str(auth_boundary.get("actor") or "anonymous").lower()
+        profile = str(auth_boundary.get("credential_profile") or actor or "").strip()
+        if actor == "anonymous" or profile in {"", "no_credentials", "anonymous"}:
+            headers = _negative_headers(headers, list(probe_plan.get("negative_headers") or AUTH_HEADER_NAMES))
     return headers
 
 
@@ -724,14 +754,17 @@ def _verify_observation(probe: dict[str, Any], response: dict[str, Any]) -> dict
 
     if status is None:
         return {"verdict": "inconclusive", "reason": response.get("error") or "network_error", "confidence": 0.0, "payload_summary": summary, "sensitive_keys": sensitive_keys}
-    if risk_type == "auth_boundary_probe":
-        if int(status) in EXPECTED_AUTH_FAILURES:
-            return {"verdict": "falsified_or_protected", "reason": f"anonymous request rejected with HTTP {status}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys}
+    if _is_auth_boundary_risk(probe, risk_type):
+        auth = _auth_boundary_plan(probe)
+        actor = str(auth.get("actor") or "anonymous")
+        expected = _expected_negative_statuses(probe)
+        if int(status) in expected:
+            return {"verdict": "falsified_or_protected", "reason": f"{actor} access boundary rejected with HTTP {status}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys}
         if 200 <= int(status) < 300 and _has_business_data(payload):
-            return {"verdict": "validated_candidate", "reason": f"anonymous request returned HTTP {status} with non-empty business data", "confidence": 0.91, "payload_summary": summary, "sensitive_keys": sensitive_keys}
+            return {"verdict": "validated_candidate", "reason": f"{actor} access boundary returned HTTP {status} with non-empty business data", "confidence": 0.91, "payload_summary": summary, "sensitive_keys": sensitive_keys}
         if 200 <= int(status) < 300:
-            return {"verdict": "needs_more_evidence", "reason": f"anonymous HTTP {status} but no non-empty business payload", "confidence": 0.45, "payload_summary": summary, "sensitive_keys": sensitive_keys}
-        return {"verdict": "inconclusive", "reason": f"unexpected HTTP {status}", "confidence": 0.35, "payload_summary": summary, "sensitive_keys": sensitive_keys}
+            return {"verdict": "needs_more_evidence", "reason": f"{actor} HTTP {status} but no non-empty business payload", "confidence": 0.45, "payload_summary": summary, "sensitive_keys": sensitive_keys}
+        return {"verdict": "inconclusive", "reason": f"unexpected HTTP {status} for {actor} access boundary", "confidence": 0.35, "payload_summary": summary, "sensitive_keys": sensitive_keys}
 
     if risk_type == "audit_privacy_probe":
         if 200 <= int(status) < 300 and sensitive_keys:
@@ -753,7 +786,7 @@ def _expected_negative_statuses(probe: dict[str, Any]) -> set[int]:
     if statuses:
         return statuses
     risk_type = str(probe.get("risk_type") or "")
-    if risk_type == "auth_boundary_probe":
+    if _is_auth_boundary_risk(probe, risk_type):
         return EXPECTED_AUTH_FAILURES
     if risk_type == "ownership_scope_probe":
         return {403, 404}
@@ -832,7 +865,7 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
     if code in expected:
         return {"verdict": "falsified_or_protected", "reason": f"negative sandbox write was rejected with expected HTTP {code}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
 
-    if risk_type in {"auth_boundary_probe", "ownership_scope_probe", "state_transition_probe", "async_external_event_probe"}:
+    if _is_auth_boundary_risk(probe, risk_type) or risk_type in {"ownership_scope_probe", "state_transition_probe", "async_external_event_probe"}:
         if 200 <= code < 300:
             return {"verdict": "validated_candidate", "reason": f"negative sandbox write was accepted with HTTP {code}; expected one of {sorted(expected)}", "confidence": 0.86, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
         return {"verdict": "inconclusive", "reason": f"negative sandbox write returned unexpected HTTP {code}", "confidence": 0.38, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
@@ -1312,7 +1345,7 @@ def _render_pytest(report: dict[str, Any]) -> str:
     read_cases: list[dict[str, Any]] = []
     write_cases: list[dict[str, Any]] = []
     for decision in report.get("decisions") or []:
-        if decision.get("risk_type") == "auth_boundary_probe" and decision.get("method") in READ_METHODS and (decision.get("request") or {}).get("url"):
+        if str(decision.get("risk_type") or "") in AUTH_BOUNDARY_RISKS and decision.get("method") in READ_METHODS and (decision.get("request") or {}).get("url"):
             read_cases.append({"id": decision.get("candidate_id"), "method": decision.get("method"), "url": (decision.get("request") or {}).get("url"), "headers": (decision.get("request") or {}).get("headers") or {}})
         if decision.get("method") in WRITE_METHODS and decision.get("decision") == "execute_write_sandbox" and (decision.get("request") or {}).get("url"):
             write_cases.append({"id": decision.get("candidate_id"), "method": decision.get("method"), "url": (decision.get("request") or {}).get("url"), "headers": (decision.get("request") or {}).get("headers") or {}, "body": (decision.get("request") or {}).get("body") or {}})

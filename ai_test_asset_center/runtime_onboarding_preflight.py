@@ -18,6 +18,9 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 READ_METHODS = {"GET", "HEAD"}
 HIGH_VALUE_RUNTIME_RISKS = {
     "auth_boundary_probe",
+    "anonymous_auth_boundary_probe",
+    "cross_tenant_auth_boundary_probe",
+    "role_downgrade_auth_boundary_probe",
     "ownership_scope_probe",
     "audit_privacy_probe",
     "state_transition_probe",

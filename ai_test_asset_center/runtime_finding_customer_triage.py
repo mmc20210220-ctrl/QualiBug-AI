@@ -11,7 +11,7 @@ and product teams to act on.
 from typing import Any
 
 
-SECURITY_RISKS = {"auth_boundary_probe", "ownership_scope_probe", "audit_privacy_probe"}
+SECURITY_RISKS = {"auth_boundary_probe", "anonymous_auth_boundary_probe", "cross_tenant_auth_boundary_probe", "role_downgrade_auth_boundary_probe", "ownership_scope_probe", "audit_privacy_probe"}
 FINANCIAL_RESOURCE_RISKS = {"conservation_probe", "idempotency_replay_probe"}
 STATE_RISKS = {"state_transition_probe", "workflow_bypass_probe", "approval_flow_probe"}
 
