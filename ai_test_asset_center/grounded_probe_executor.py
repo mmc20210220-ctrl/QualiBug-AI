@@ -313,6 +313,38 @@ def _render_query(query: Any, path_params: dict[str, Any]) -> str:
     return urllib.parse.urlencode(rendered, doseq=True)
 
 
+def _append_query(path: str, query_string: str) -> str:
+    if not query_string:
+        return path
+    sep = "&" if "?" in str(path) else "?"
+    return f"{path}{sep}{query_string}"
+
+
+def _configured_query_params(config: dict[str, Any], probe: dict[str, Any], method: str, path: str) -> dict[str, Any]:
+    """Return query params for the runtime target request.
+
+    Generated probes and OpenAPI-derived endpoints can carry query parameters
+    such as ``tenant_id``, ``include=audit`` or ``line={line_id}``.  Before this
+    helper, main probe execution only rendered path params, while fixture
+    snapshots/cleanup already handled query binding.  That made the target probe
+    hit a broader or wrong resource slice than the observer evidence.
+    """
+    query: dict[str, Any] = {}
+    ep = probe.get("endpoint") if isinstance(probe.get("endpoint"), dict) else {}
+    if isinstance(ep.get("query"), dict):
+        query.update(ep.get("query") or {})
+    plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
+    if isinstance(plan.get("query"), dict):
+        query.update(plan.get("query") or {})
+    cid = str(probe.get("candidate_id") or "")
+    per = config.get("query_params") or config.get("queries") or {}
+    if isinstance(per, dict):
+        value = _get_mapping_value(per, cid, method, path)
+        if isinstance(value, dict):
+            query.update(value)
+    return query
+
+
 def _safe_payload_summary(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return {"type": "object", "keys": sorted(map(str, payload.keys()))[:30], "size": len(payload)}
@@ -738,6 +770,8 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
     candidate_id = str(probe.get("candidate_id") or "")
     merged_path_params = _configured_path_params(config, probe, method, path)
     rendered, missing = _render_path(path, merged_path_params)
+    query_string = _render_query(_configured_query_params(config, probe, method, path), merged_path_params)
+    request_path = _append_query(rendered, query_string)
 
     headers = _headers_for_probe(probe, config)
     body = None
@@ -746,8 +780,9 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
         body, body_reason = _configured_body(config, candidate_id, method, path, probe)
     req = {
         "method": method,
-        "url": _join_url(base_url, rendered),
-        "path": rendered,
+        "url": _join_url(base_url, request_path),
+        "path": request_path,
+        "query": _redact(_configured_query_params(config, probe, method, path)),
         "headers": _redact(headers),
         "body": _redact(body),
     }
@@ -766,7 +801,7 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
     # Probe config templates deliberately contain <FILL:...> placeholders.
     # Never execute read or write probes until the customer replaces them with
     # disposable-sandbox values.  Dry-run reports can still render placeholders.
-    if base_url and _has_unresolved_placeholder({"path": rendered, "headers": headers, "body": body}):
+    if base_url and _has_unresolved_placeholder({"path": rendered, "query": _configured_query_params(config, probe, method, path), "headers": headers, "body": body}):
         return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", "probe_config_contains_unresolved_placeholders", req)
     if method in WRITE_METHODS:
         approval_id = str(options.get("approval_id") or "")
@@ -1199,11 +1234,15 @@ def _bind_flow_response_id_to_runtime(
 def _effective_runtime_request(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, body: Any) -> tuple[dict[str, Any], dict[str, str], list[str]]:
     path_params = _configured_path_params(config, probe, decision.method, decision.path)
     rendered, missing = _render_path(decision.path, path_params)
+    query_params = _configured_query_params(config, probe, decision.method, decision.path)
+    query_string = _render_query(query_params, path_params)
+    request_path = _append_query(rendered, query_string)
     headers = _headers_for_probe(probe, config)
     request = {
         "method": decision.method,
-        "url": _join_url(base_url, rendered),
-        "path": rendered,
+        "url": _join_url(base_url, request_path),
+        "path": request_path,
+        "query": _redact(query_params),
         "headers": _redact(headers),
         "body": _redact(body),
         "path_params_bound_at_execution": _redact(path_params),
@@ -1609,7 +1648,9 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
             if missing:
                 responses.append({"attempt": idx + 1, "step": idx + 1, "status_code": None, "error": f"flow_step_missing_path_params:{','.join(missing)}", "payload": {}})
                 continue
-            response = _http_request(method, _join_url(base_url, path), headers, body=shared_body, timeout=timeout)
+            query_string = _render_query(step.get("query"), shared_params)
+            request_path = _append_query(path, query_string)
+            response = _http_request(method, _join_url(base_url, request_path), headers, body=shared_body, timeout=timeout)
             runtime_binding: dict[str, Any] = {}
             if isinstance(response.get("status_code"), int) and 200 <= int(response.get("status_code")) < 300:
                 bind_fields, bind_reason = _infer_flow_bind_fields(
@@ -1630,7 +1671,7 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
                 )
                 if runtime_binding:
                     shared_body = _replace_fixture_runtime_value(shared_body, str((runtime_binding.get("previous_values") or {}).get(bind_fields[0]) or ""), response_id)
-            responses.append(response | {"attempt": idx + 1, "step": idx + 1, "flow_action": step.get("action"), "flow_path": path, "runtime_binding": runtime_binding})
+            responses.append(response | {"attempt": idx + 1, "step": idx + 1, "flow_action": step.get("action"), "flow_path": request_path, "runtime_binding": runtime_binding})
         snapshots["after"] = _execute_snapshots(config, base_url, probe, "after", timeout)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout)
     verification = _verify_flow_observation(probe, responses, snapshots) if not setup_blocked else {"verdict": "inconclusive", "reason": "auto_fixture_setup_blocked", "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
