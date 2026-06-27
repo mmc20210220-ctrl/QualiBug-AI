@@ -960,6 +960,79 @@ def _extract_id_for_bind_fields(value: Any, bind_fields: list[str]) -> str:
     return _extract_id_like(value)
 
 
+def _payload_contains_scalar(value: Any, needle: str) -> bool:
+    target = str(needle or "").strip()
+    if not target:
+        return False
+    if isinstance(value, dict):
+        return any(_payload_contains_scalar(v, target) for v in value.values())
+    if isinstance(value, list):
+        return any(_payload_contains_scalar(v, target) for v in value[:50])
+    if value in (None, "", [], {}):
+        return False
+    text = str(value)
+    return text == target or target in text
+
+
+def _runtime_bound_fixture_ids(config: dict[str, Any], probe: dict[str, Any]) -> list[str]:
+    bundle = _auto_fixture_bundle(config, probe) if _auto_fixture_enabled(config) else {}
+    if not isinstance(bundle, dict):
+        return []
+    ids: list[str] = []
+    receipt = bundle.get("receipt") if isinstance(bundle.get("receipt"), dict) else {}
+    for value in [receipt.get("runtime_bound_fixture_id") if isinstance(receipt, dict) else None]:
+        text = str(value or "").strip()
+        if text and not text.startswith("qb_auto") and text not in ids:
+            ids.append(text)
+    bindings = bundle.get("runtime_bindings") if isinstance(bundle.get("runtime_bindings"), list) else []
+    for item in bindings:
+        if not isinstance(item, dict) or item.get("source") not in {"setup_response", "flow_step_response"}:
+            continue
+        text = str(item.get("response_id") or "").strip()
+        if text and not text.startswith("qb_auto") and text not in ids:
+            ids.append(text)
+    return ids[:12]
+
+
+def _anchor_auth_boundary_fixture_evidence(
+    probe: dict[str, Any],
+    verification: dict[str, Any],
+    response: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Require fixture-backed auth findings to prove the protected object leaked.
+
+    A 200 response with some business-looking payload is not enough for a
+    fixture-backed anonymous/cross-tenant/role-downgrade probe: list endpoints or
+    public metadata can also return business-shaped data.  Once setup has bound
+    a server-side fixture id, keep the candidate validated only when the negative
+    actor response contains that exact runtime id; otherwise downgrade to
+    needs-more-evidence instead of shipping a likely false positive.
+    """
+    if not _is_auth_boundary_risk(probe) or verification.get("verdict") != "validated_candidate":
+        return verification
+    bound_ids = _runtime_bound_fixture_ids(config, probe)
+    if not bound_ids:
+        return verification
+    payload = response.get("payload")
+    leaked = [rid for rid in bound_ids if _payload_contains_scalar(payload, rid)]
+    anchored = dict(verification)
+    anchored["fixture_evidence_anchor_ids"] = bound_ids
+    if leaked:
+        anchored["leaked_fixture_ids"] = leaked[:5]
+        anchored["evidence_anchor"] = "negative_actor_response_contains_runtime_bound_fixture_id"
+        anchored["confidence"] = max(float(anchored.get("confidence") or 0.0), 0.94)
+        anchored["reason"] = f"{anchored.get('reason')}; response contains runtime-bound fixture id(s) {leaked[:3]}"
+        return anchored
+    anchored["verdict"] = "needs_more_evidence"
+    anchored["confidence"] = min(float(anchored.get("confidence") or 0.0), 0.59)
+    anchored["reason"] = (
+        f"{verification.get('reason')}; response did not contain the runtime-bound fixture id(s) "
+        f"{bound_ids[:3]}, so the observed business payload may be public or unrelated"
+    )
+    return anchored
+
+
 def _find_negative_resource_values(value: Any, prefix: str = "") -> list[dict[str, Any]]:
     hits: list[dict[str, Any]] = []
     if isinstance(value, dict):
@@ -1448,6 +1521,7 @@ def _execute_read_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
     else:
         response = _http_request(decision.method, str(effective_request.get("url") or ""), headers, timeout=timeout)
         verification = _verify_observation(probe, response)
+        verification = _anchor_auth_boundary_fixture_evidence(probe, verification, response, config)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout) if setup_required else []
     return {
         "candidate_id": decision.candidate_id,
