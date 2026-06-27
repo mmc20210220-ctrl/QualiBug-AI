@@ -56,7 +56,7 @@ def _config(probe: dict[str, Any]) -> dict[str, Any]:
                         "method": "POST",
                         "path": "/api/v1/orders/{order_id}/lines",
                         "path_params": {"order_id": "qb_auto_order_1"},
-                        "body": {"id": "qb_auto_line_1"},
+                        "body": {"id": "qb_auto_line_1", "order_id": "qb_auto_order_1", "order_ref": "{order_id}"},
                         "bind_response_id_to": ["line_id"],
                     },
                 ],
@@ -116,3 +116,29 @@ def test_chained_setup_uses_prior_response_ids_for_later_fixture_paths_snapshots
     assert result["request"]["url"].endswith("/api/v1/orders/srv_order_chain_123/lines/srv_line_chain_456")
     assert result["fixture_receipts"][1]["path"] == "/api/v1/orders/srv_order_chain_123/lines"
     assert result["cleanup_receipts"][0]["path"].endswith("?hard=true&line=srv_line_chain_456")
+
+
+
+def test_chained_setup_binds_runtime_ids_inside_later_fixture_bodies(monkeypatch) -> None:
+    probe = _probe()
+    config = _config(probe)
+    calls: list[dict[str, Any]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body: Any = None, timeout: float = 10.0) -> dict[str, Any]:
+        calls.append({"method": method, "url": url, "body": body, "headers": dict(headers)})
+        if method == "POST" and url.endswith("/api/v1/orders"):
+            return {"status_code": 201, "payload": {"order_id": "srv_order_body_123"}, "duration_ms": 1}
+        if method == "POST" and url.endswith("/api/v1/orders/srv_order_body_123/lines"):
+            return {"status_code": 201, "payload": {"line_id": "srv_line_body_456"}, "duration_ms": 1}
+        return {"status_code": 200, "payload": {"id": "ok"}, "duration_ms": 1}
+
+    monkeypatch.setattr(gpe, "_http_request", fake_http)
+
+    result = _execute_write_probe(probe, _decision(probe), config, "http://sandbox", timeout=3.0)
+
+    line_create = next(c for c in calls if c["method"] == "POST" and c["url"].endswith("/api/v1/orders/srv_order_body_123/lines"))
+    assert line_create["body"]["order_id"] == "srv_order_body_123"
+    assert line_create["body"]["order_ref"] == "srv_order_body_123"
+    assert result["fixture_receipts"][1]["body_runtime_binding"]["bound"] is True
+    assert result["request"]["body"]["order_id"] == "srv_order_body_123"
+    assert result["request"]["body"]["line_id"] == "srv_line_body_456"

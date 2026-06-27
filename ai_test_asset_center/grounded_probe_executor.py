@@ -1072,18 +1072,23 @@ def _bind_auto_fixture_response_id(config: dict[str, Any], probe: dict[str, Any]
     bundle = _auto_fixture_bundle(config, probe)
     old_id = str(((bundle.get("receipt") or {}).get("primary_fixture_id") if isinstance(bundle.get("receipt"), dict) else "") or "")
     path_params = bundle.setdefault("path_params", {}) if isinstance(bundle, dict) else {}
+    previous_values: dict[str, str] = {}
     if isinstance(path_params, dict):
         for field in bind_fields:
+            previous_values[field] = str(path_params.get(field) or "")
             path_params[field] = response_id
-    for key in ("request_body", "snapshots", "cleanup_requests"):
-        if key in bundle:
-            bundle[key] = _replace_fixture_runtime_value(bundle.get(key), old_id, response_id)
+    replace_from = [old_id] + [v for v in previous_values.values() if v]
+    for previous in dict.fromkeys([v for v in replace_from if v and v != response_id]):
+        for key in ("request_body", "setup_requests", "snapshots", "cleanup_requests"):
+            if key in bundle:
+                bundle[key] = _replace_fixture_runtime_value(bundle.get(key), previous, response_id)
     runtime_bindings = bundle.setdefault("runtime_bindings", [])
     binding = {
         "bound": True,
         "source": "setup_response",
         "response_id": response_id,
         "previous_fixture_id": old_id,
+        "previous_values": previous_values,
         "path_params": bind_fields,
     }
     if isinstance(runtime_bindings, list):
@@ -1169,7 +1174,7 @@ def _bind_flow_response_id_to_runtime(
                 old_values.setdefault(field, str(bundle_params.get(field) or ""))
                 bundle_params[field] = response_id
         for old_id in [v for v in old_values.values() if v and v != response_id]:
-            for key in ("request_body", "snapshots", "cleanup_requests"):
+            for key in ("request_body", "setup_requests", "snapshots", "cleanup_requests"):
                 if key in bundle:
                     bundle[key] = _replace_fixture_runtime_value(bundle.get(key), old_id, response_id)
         runtime_bindings = bundle.setdefault("runtime_bindings", [])
@@ -1390,6 +1395,48 @@ def _fixture_item_path_params(config: dict[str, Any], probe: dict[str, Any], ite
     return path_params
 
 
+def _render_fixture_runtime_value(value: Any, path_params: dict[str, Any], original_params: dict[str, Any] | None = None) -> Any:
+    """Render observed runtime ids into fixture bodies/queries.
+
+    Fixture bodies generated before execution often carry either ``{order_id}``
+    placeholders or QualiBug-generated ids such as ``qb_auto_order_1``.  After
+    earlier setup steps return real server ids, later fixture bodies must use the
+    same observed ids as the path/query; otherwise the child object can be
+    created under the right URL but still reference the stale parent id in JSON.
+    """
+    originals = original_params if isinstance(original_params, dict) else {}
+    if isinstance(value, dict):
+        return {k: _render_fixture_runtime_value(v, path_params, originals) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_render_fixture_runtime_value(v, path_params, originals) for v in value]
+    if isinstance(value, str):
+        rendered = value
+        for key, replacement in (path_params or {}).items():
+            rendered = rendered.replace("{" + str(key) + "}", str(replacement))
+        for key, original in originals.items():
+            replacement = path_params.get(key)
+            if replacement is None or replacement == original:
+                continue
+            if _generated_fixture_value(original):
+                rendered = rendered.replace(str(original), str(replacement))
+        return rendered
+    return value
+
+
+def _fixture_request_body(config: dict[str, Any], probe: dict[str, Any], item: dict[str, Any], path_params: dict[str, Any]) -> Any:
+    body = item.get("body")
+    if body is None:
+        return None
+    originals = item.get("path_params") if isinstance(item.get("path_params"), dict) else {}
+    return _render_fixture_runtime_value(body, path_params, originals)
+
+
+def _runtime_body_binding_summary(original: Any, rendered: Any) -> dict[str, Any]:
+    if original == rendered:
+        return {"bound": False}
+    return {"bound": True, "original": _safe_payload_summary(original), "rendered": _safe_payload_summary(rendered)}
+
+
 def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe: dict[str, Any], key: str, timeout: float) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
     for item in _auto_fixture_requests(config, probe, key):
@@ -1407,7 +1454,8 @@ def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe:
         headers = _fixture_control_headers(config)
         if isinstance(item.get("headers"), dict):
             headers.update({str(k): str(v) for k, v in (item.get("headers") or {}).items()})
-        response = _http_request(method, _join_url(base_url, request_path), headers, body=item.get("body"), timeout=timeout)
+        request_body = _fixture_request_body(config, probe, item, path_params)
+        response = _http_request(method, _join_url(base_url, request_path), headers, body=request_body, timeout=timeout)
         code = response.get("status_code")
         accepted = bool(isinstance(code, int) and 200 <= int(code) < 300)
         binding = _bind_auto_fixture_response_id(config, probe, item, response) if accepted else {}
@@ -1419,6 +1467,7 @@ def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe:
             "path": request_path,
             "used_fixture_control_headers": True,
             "path_params_bound_at_execution": _redact(path_params),
+            "body_runtime_binding": _runtime_body_binding_summary(item.get("body"), request_body),
             "runtime_binding": binding,
             "response": {"status_code": code, "error": response.get("error"), "payload": _redact(response.get("payload")), "duration_ms": response.get("duration_ms")},
         })
