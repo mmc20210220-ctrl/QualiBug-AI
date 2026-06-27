@@ -585,6 +585,143 @@ def _load_previous_execution_report(config: dict[str, Any]) -> dict[str, Any] | 
             continue
     return None
 
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def _runtime_rerun_manifest_from_value(value: Any) -> tuple[dict[str, Any] | None, str]:
+    """Load an optional remediation rerun manifest from config.
+
+    The remediation plan created by ``_build_runtime_evidence_remediation_plan``
+    already contains a deterministic ``rerun_manifest``.  This loader lets a
+    follow-up run consume either that full plan, the manifest object itself, or
+    a JSON file path without silently falling back to a full probe run.
+    """
+    if not value:
+        return None, ""
+    if isinstance(value, dict):
+        if isinstance(value.get("rerun_manifest"), dict):
+            return dict(value.get("rerun_manifest") or {}), "inline_remediation_plan"
+        return dict(value), "inline_rerun_manifest"
+    try:
+        path = Path(str(value)).expanduser()
+        if path.exists() and path.is_file():
+            loaded = _read_json(path)
+            if isinstance(loaded, dict):
+                if isinstance(loaded.get("rerun_manifest"), dict):
+                    return dict(loaded.get("rerun_manifest") or {}), str(path)
+                return loaded, str(path)
+    except Exception:
+        return None, ""
+    return None, ""
+
+
+def _runtime_rerun_selection_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve an optional candidate-id allowlist for remediation reruns.
+
+    Supported config keys intentionally accept both a full remediation plan and
+    a bare rerun manifest so the previous run can feed the next run directly:
+
+    - ``runtime_evidence_rerun_manifest``
+    - ``runtime_evidence_rerun_manifest_path``
+    - ``runtime_evidence_remediation_plan``
+    - ``runtime_evidence_remediation_plan_path``
+    - ``runtime_rerun_candidate_ids``
+    """
+    sources: list[str] = []
+    candidate_ids: list[str] = []
+    excluded_ready: list[str] = []
+
+    for key in (
+        "runtime_evidence_rerun_manifest",
+        "runtime_evidence_rerun_manifest_path",
+        "runtime_evidence_remediation_plan",
+        "runtime_evidence_remediation_plan_path",
+        "runtime_remediation_plan_path",
+    ):
+        manifest, source = _runtime_rerun_manifest_from_value(config.get(key))
+        if not manifest:
+            continue
+        sources.append(f"{key}:{source or 'inline'}")
+        candidate_ids.extend(str(v) for v in (manifest.get("candidate_ids") or []) if str(v).strip())
+        excluded_ready.extend(str(v) for v in (manifest.get("customer_ready_candidate_ids_excluded") or []) if str(v).strip())
+
+    direct = config.get("runtime_rerun_candidate_ids") or config.get("rerun_candidate_ids")
+    if isinstance(direct, str):
+        direct_values = [part.strip() for part in re.split(r"[,\s]+", direct) if part.strip()]
+    elif isinstance(direct, list):
+        direct_values = [str(v).strip() for v in direct if str(v).strip()]
+    else:
+        direct_values = []
+    if direct_values:
+        sources.append("runtime_rerun_candidate_ids")
+        candidate_ids.extend(direct_values)
+
+    enabled = bool(sources) or bool(config.get("enable_runtime_rerun_manifest"))
+    return {
+        "enabled": enabled,
+        "sources": sources,
+        "candidate_ids": _dedupe(candidate_ids),
+        "customer_ready_candidate_ids_excluded": _dedupe(excluded_ready),
+    }
+
+
+def _apply_runtime_rerun_selection(probes: list[dict[str, Any]], config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Filter probes for a targeted remediation rerun and return an audit receipt.
+
+    If a previous remediation plan says only ``WRITE-BINDING-GAP`` needs a
+    rerun, the executor should not waste time replaying already
+    customer-ready probes.  The receipt is added to the runtime report so the
+    run remains auditable.
+    """
+    selection = _runtime_rerun_selection_from_config(config)
+    available_ids = [str(p.get("candidate_id") or "") for p in probes if str(p.get("candidate_id") or "").strip()]
+    available_set = set(available_ids)
+    candidate_ids = list(selection.get("candidate_ids") or [])
+    if not selection.get("enabled"):
+        return probes, {
+            "enabled": False,
+            "status": "disabled_full_probe_plan_selected",
+            "available_candidate_count": len(available_set),
+            "selected_probe_count": len(probes),
+            "skipped_probe_count": 0,
+            "candidate_ids": [],
+            "missing_candidate_ids": [],
+            "customer_ready_candidate_ids_excluded": [],
+            "sources": [],
+        }
+
+    selected_set = set(candidate_ids)
+    filtered = [p for p in probes if str(p.get("candidate_id") or "") in selected_set]
+    missing = [cid for cid in candidate_ids if cid not in available_set]
+    if not candidate_ids:
+        status = "empty_rerun_queue_no_probes_selected"
+    elif not filtered:
+        status = "no_matching_rerun_candidates"
+    else:
+        status = "targeted_runtime_rerun_selection_applied"
+    return filtered, {
+        "enabled": True,
+        "status": status,
+        "available_candidate_count": len(available_set),
+        "requested_candidate_count": len(candidate_ids),
+        "candidate_ids": candidate_ids,
+        "selected_probe_count": len(filtered),
+        "skipped_probe_count": max(0, len(probes) - len(filtered)),
+        "missing_candidate_ids": missing,
+        "customer_ready_candidate_ids_excluded": list(selection.get("customer_ready_candidate_ids_excluded") or []),
+        "sources": list(selection.get("sources") or []),
+    }
+
 def _probe_has_strict_document_grounding(probe: dict[str, Any]) -> bool:
     refs = probe.get("source_refs") if isinstance(probe.get("source_refs"), list) else []
     kinds = {str(r.get("kind") or "") for r in refs if isinstance(r, dict)}
@@ -3497,8 +3634,15 @@ def run_grounded_probe_executor(
     original_probes = list(plan.get("probes") or [])
     bug_discovery_expansion = expand_bug_discovery_probes(plan, input_dir=config.get("input_dir"), config=config)
     probes = original_probes + list(bug_discovery_expansion.get("probes") or [])
+    runtime_rerun_selection: dict[str, Any]
+    probes, runtime_rerun_selection = _apply_runtime_rerun_selection(probes, config)
     if max_probes and max_probes > 0:
+        before_max = len(probes)
         probes = probes[:max_probes]
+        if runtime_rerun_selection.get("enabled"):
+            runtime_rerun_selection["selected_probe_count_before_max_probes"] = before_max
+            runtime_rerun_selection["selected_probe_count"] = len(probes)
+            runtime_rerun_selection["max_probes_applied"] = int(max_probes)
     options = {"execute_readonly": execute_readonly, "allow_write_sandbox": allow_write_sandbox, "approval_id": approval_id}
     preflight = run_runtime_onboarding_preflight(
         plan={**plan, "probes": probes},
@@ -3564,6 +3708,7 @@ def run_grounded_probe_executor(
         "execute_readonly": bool(execute_readonly),
         "allow_write_sandbox": bool(allow_write_sandbox),
         "approval_id_present": bool(approval_id),
+        "runtime_rerun_selection": runtime_rerun_selection,
         "governance": {
             "input_only": True,
             "oracle_files_read": False,
@@ -3624,6 +3769,11 @@ def run_grounded_probe_executor(
         "summary": {
             "probe_count": len(probes),
             "original_probe_count": len(original_probes),
+            "runtime_rerun_selection_enabled": bool(runtime_rerun_selection.get("enabled")),
+            "runtime_rerun_selection_status": runtime_rerun_selection.get("status"),
+            "runtime_rerun_selected_probe_count": runtime_rerun_selection.get("selected_probe_count", len(probes)),
+            "runtime_rerun_skipped_probe_count": runtime_rerun_selection.get("skipped_probe_count", 0),
+            "runtime_rerun_missing_candidate_count": len(runtime_rerun_selection.get("missing_candidate_ids") or []),
             "phase94_added_probe_count": int(bug_discovery_expansion.get("added_probe_count") or 0),
             "phase94_added_p0_probe_count": int(bug_discovery_expansion.get("added_p0_probe_count") or 0),
             "phase94_multistep_flow_scenario_count": int(bug_discovery_expansion.get("multistep_flow_scenario_count") or 0),
