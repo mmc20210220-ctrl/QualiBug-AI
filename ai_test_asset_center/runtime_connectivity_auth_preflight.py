@@ -26,7 +26,10 @@ from typing import Any, Callable
 Requester = Callable[[str, str, dict[str, str], Any, float], dict[str, Any]]
 Resolver = Callable[[str, int | None], list[Any]]
 
-AUTH_HEADER_NAMES = {"authorization", "cookie", "x-api-key", "x-auth-token", "x-session-id"}
+AUTH_HEADER_NAMES = {"authorization", "cookie", "x-api-key", "x-auth-token", "x-session-id", "x-access-token"}
+TOKEN_RESPONSE_HEADER_NAMES = ("authorization", "x-auth-token", "x-access-token", "x-session-id")
+CSRF_RESPONSE_HEADER_NAMES = ("x-csrf-token", "x-xsrf-token", "csrf-token", "x-csrf")
+CSRF_COOKIE_NAMES = {"xsrf-token", "csrf-token", "csrftoken", "x-csrf-token"}
 TOKEN_PATHS = (
     "token",
     "access_token",
@@ -48,8 +51,26 @@ SESSION_HEALTH_PATH_KEYS = (
     "profile_path",
     "whoami_path",
 )
+CSRF_TOKEN_PATHS = (
+    "csrf_token",
+    "csrfToken",
+    "xsrfToken",
+    "data.csrf_token",
+    "data.csrfToken",
+    "result.csrf_token",
+    "result.csrfToken",
+)
 PLACEHOLDER_RE = re.compile(r"<\s*(?:FILL|TODO|REQUIRED|SANDBOX|REPLACE)[^>]*>", re.I)
 SECRET_KEY_RE = re.compile(r"(?:password|passwd|secret|token|authorization|cookie|api[_-]?key|session)", re.I)
+SAFE_METADATA_KEYS = {
+    "token_json_path",
+    "token_source",
+    "csrf_source",
+    "derived_header_names",
+    "injected_header_names",
+    "injected_body_fields",
+    "header_names",
+}
 
 
 def _redact(value: Any, key: str = "") -> Any:
@@ -60,6 +81,8 @@ def _redact(value: Any, key: str = "") -> Any:
     if value is None or isinstance(value, (int, float, bool)):
         return value
     text = str(value)
+    if str(key) in SAFE_METADATA_KEYS:
+        return text[:500]
     if SECRET_KEY_RE.search(str(key)) or SECRET_KEY_RE.search(text):
         return f"<REDACTED:{len(text)}>"
     return text[:500]
@@ -244,6 +267,171 @@ def _cookie_header_from_response(resp: dict[str, Any]) -> str:
     return "; ".join(dict.fromkeys(cookies))
 
 
+def _cookie_map(cookie_header: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for chunk in str(cookie_header or "").split(";"):
+        if "=" not in chunk:
+            continue
+        name, value = chunk.split("=", 1)
+        name = name.strip()
+        if name:
+            out[name.lower()] = value.strip()
+    return out
+
+
+def _merge_cookie_headers(*cookie_headers: str) -> str:
+    merged: dict[str, str] = {}
+    order: list[str] = []
+    for header in cookie_headers:
+        for chunk in str(header or "").split(";"):
+            if "=" not in chunk:
+                continue
+            name, value = chunk.split("=", 1)
+            clean = name.strip()
+            if not clean:
+                continue
+            key = clean.lower()
+            if key not in merged:
+                order.append(key)
+            merged[key] = f"{clean}={value.strip()}"
+    return "; ".join(merged[key] for key in order if key in merged)
+
+
+def _extract_header_token(resp: dict[str, Any], preferred_header: str = "") -> tuple[str | None, str | None]:
+    headers = _headers(resp)
+    candidates = [preferred_header.lower()] if preferred_header else []
+    candidates.extend(h for h in TOKEN_RESPONSE_HEADER_NAMES if h not in candidates)
+    for wanted in candidates:
+        if not wanted:
+            continue
+        for name, value in headers.items():
+            if name.lower() == wanted and value:
+                return str(value), name
+    return None, None
+
+
+def _format_token_header_value(token: str, token_header: str, token_prefix: str) -> str:
+    value = str(token or "")
+    if not value:
+        return ""
+    if token_header.lower() != "authorization" or not token_prefix:
+        return value
+    if re.match(r"^[A-Za-z]+\s+", value):
+        return value
+    return f"{token_prefix} {value}"
+
+
+def _extract_csrf_from_html(text: str) -> tuple[str | None, str | None]:
+    if not text:
+        return None, None
+    patterns = (
+        r"<meta[^>]+name=[\"'](?:csrf-token|_csrf|csrf)[\"'][^>]+content=[\"']([^\"']+)[\"']",
+        r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+name=[\"'](?:csrf-token|_csrf|csrf)[\"']",
+        r"<input[^>]+name=[\"'](?:_csrf|csrf_token|csrf)[\"'][^>]+value=[\"']([^\"']+)[\"']",
+        r"<input[^>]+value=[\"']([^\"']+)[\"'][^>]+name=[\"'](?:_csrf|csrf_token|csrf)[\"']",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            return match.group(1), "html"
+    return None, None
+
+
+def _extract_csrf_token(resp: dict[str, Any], preferred_path: str = "") -> tuple[str | None, str | None]:
+    payload = _jsonish_payload(resp)
+    paths = [preferred_path] if preferred_path else []
+    paths.extend(path for path in CSRF_TOKEN_PATHS if path not in paths)
+    for path in paths:
+        value = _json_path_get(payload, path)
+        if value:
+            return str(value), path
+    headers = _headers(resp)
+    for wanted in CSRF_RESPONSE_HEADER_NAMES:
+        for name, value in headers.items():
+            if name.lower() == wanted and value:
+                return str(value), name
+    if isinstance(payload, str):
+        html_token, html_source = _extract_csrf_from_html(payload)
+        if html_token:
+            return html_token, html_source
+    cookie_header = _cookie_header_from_response(resp)
+    cookies = _cookie_map(cookie_header)
+    for name in CSRF_COOKIE_NAMES:
+        if cookies.get(name):
+            return urllib.parse.unquote(cookies[name]), f"cookie:{name}"
+    return None, None
+
+
+def _login_expected_statuses(auth_flow: dict[str, Any]) -> set[int]:
+    raw = auth_flow.get("login_expected_statuses") or auth_flow.get("login_success_statuses")
+    if isinstance(raw, list):
+        out = {int(x) for x in raw if str(x).isdigit()}
+        return out or set(range(200, 300))
+    return set(range(200, 300))
+
+
+def _bootstrap_auth_context(
+    base_url: str,
+    auth_flow: dict[str, Any],
+    timeout_seconds: float,
+    requester: Requester | None,
+) -> tuple[dict[str, str], dict[str, Any], dict[str, Any]]:
+    path = str(
+        auth_flow.get("bootstrap_path")
+        or auth_flow.get("csrf_path")
+        or auth_flow.get("csrf_token_path")
+        or auth_flow.get("handshake_path")
+        or ""
+    )
+    if not path:
+        return {}, {}, {"attempted": False, "configured": False}
+    if requester is None:
+        return {}, {}, {"attempted": False, "configured": True, "error": "requester_not_provided"}
+
+    method = str(auth_flow.get("bootstrap_method") or "GET").upper()
+    headers = dict(auth_flow.get("bootstrap_headers") or {}) if isinstance(auth_flow.get("bootstrap_headers"), dict) else {}
+    started = time.time()
+    try:
+        resp = requester(method, _join_url(base_url, path), {str(k): str(v) for k, v in headers.items()}, None, min(float(timeout_seconds or 10.0), 10.0))
+    except Exception as exc:  # pragma: no cover - defensive guard around injected requester
+        return {}, {}, {
+            "attempted": True,
+            "configured": True,
+            "path": path,
+            "error": f"{type(exc).__name__}: {exc}",
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+
+    csrf_token, csrf_source = _extract_csrf_token(resp, str(auth_flow.get("csrf_json_path") or auth_flow.get("csrf_path_json") or ""))
+    cookie = _cookie_header_from_response(resp)
+    out_headers: dict[str, str] = {}
+    out_body: dict[str, Any] = {}
+    if cookie:
+        out_headers["Cookie"] = cookie
+    csrf_header_name = str(auth_flow.get("csrf_header_name") or "X-CSRF-Token")
+    csrf_body_field = str(auth_flow.get("csrf_body_field") or "")
+    inject_body = bool(auth_flow.get("csrf_in_body") or csrf_body_field)
+    if csrf_token and csrf_header_name:
+        out_headers[csrf_header_name] = csrf_token
+    if csrf_token and inject_body:
+        out_body[csrf_body_field or "csrf_token"] = csrf_token
+
+    code = resp.get("status_code")
+    return out_headers, out_body, {
+        "attempted": True,
+        "configured": True,
+        "path": path,
+        "status_code": code,
+        "status_ok": isinstance(code, int) and 100 <= int(code) < 500,
+        "csrf_acquired": bool(csrf_token),
+        "csrf_source": csrf_source,
+        "cookie_acquired": bool(cookie),
+        "injected_header_names": sorted(out_headers.keys()),
+        "injected_body_fields": sorted(out_body.keys()),
+        "duration_ms": resp.get("duration_ms") or int((time.time() - started) * 1000),
+    }
+
+
 def _configured_auth_headers(config: dict[str, Any]) -> dict[str, str]:
     headers: dict[str, str] = {}
     raw_headers = config.get("default_headers") if isinstance(config.get("default_headers"), dict) else {}
@@ -332,45 +520,69 @@ def _login_account(
     token_json_path = str(auth_flow.get("token_json_path") or auth_flow.get("token_path") or "")
     token_header = str(auth_flow.get("token_header_name") or "Authorization")
     token_prefix = str(auth_flow.get("token_header_prefix") or "Bearer")
+    response_token_header = str(auth_flow.get("token_response_header") or auth_flow.get("token_header_response_name") or "")
+    body_format = str(auth_flow.get("body_format") or auth_flow.get("request_body_format") or "json").lower()
     extra_body = dict(auth_flow.get("extra_body") or {}) if isinstance(auth_flow.get("extra_body"), dict) else {}
+    bootstrap_headers, bootstrap_body, bootstrap_meta = _bootstrap_auth_context(base_url, auth_flow, timeout_seconds, requester)
     body = dict(extra_body)
+    body.update(bootstrap_body)
     body[username_field] = account.get("username") or account.get("user") or account.get("login") or ""
     body[password_field] = account.get("password") or ""
     if tenant_field and account.get("tenant_id"):
         body[tenant_field] = account.get("tenant_id")
     headers = dict(auth_flow.get("headers") or {}) if isinstance(auth_flow.get("headers"), dict) else {}
+    headers = {str(k): str(v) for k, v in headers.items()}
+    bootstrap_cookie = bootstrap_headers.pop("Cookie", "")
+    if bootstrap_cookie:
+        headers["Cookie"] = _merge_cookie_headers(headers.get("Cookie", ""), bootstrap_cookie)
+    headers.update({str(k): str(v) for k, v in bootstrap_headers.items()})
+    if body_format in {"form", "urlencoded", "x-www-form-urlencoded", "form-urlencoded"}:
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    elif body_format == "json":
+        headers.setdefault("Content-Type", "application/json")
     if not body[username_field] or not body[password_field]:
-        return {}, {"account": account_name, "login_attempted": False, "error": "missing_username_or_password"}
+        return {}, {"account": account_name, "login_attempted": False, "error": "missing_username_or_password", "bootstrap": bootstrap_meta}
     started = time.time()
     try:
-        resp = requester(method, _join_url(base_url, login_path), {str(k): str(v) for k, v in headers.items()}, body, min(float(timeout_seconds or 10.0), 10.0))
+        resp = requester(method, _join_url(base_url, login_path), headers, body, min(float(timeout_seconds or 10.0), 10.0))
     except Exception as exc:  # pragma: no cover - defensive guard around injected requester
-        return {}, {"account": account_name, "login_attempted": True, "error": f"{type(exc).__name__}: {exc}", "duration_ms": int((time.time() - started) * 1000)}
+        return {}, {"account": account_name, "login_attempted": True, "error": f"{type(exc).__name__}: {exc}", "bootstrap": bootstrap_meta, "duration_ms": int((time.time() - started) * 1000)}
     payload = _jsonish_payload(resp)
     token, token_path = _extract_token(payload, token_json_path)
-    cookie = _cookie_header_from_response(resp)
+    token_source = token_path
+    if not token:
+        token, token_source = _extract_header_token(resp, response_token_header)
+    response_cookie = _cookie_header_from_response(resp)
+    cookie = _merge_cookie_headers(headers.get("Cookie", ""), response_cookie)
     derived_headers: dict[str, str] = {}
     if token:
-        if token_header.lower() == "authorization" and token_prefix:
-            derived_headers[token_header] = f"{token_prefix} {token}"
-        else:
-            derived_headers[token_header] = token
+        derived_headers[token_header] = _format_token_header_value(token, token_header, token_prefix)
     if cookie:
         derived_headers["Cookie"] = cookie
+    csrf_header_name = str(auth_flow.get("csrf_header_name") or "X-CSRF-Token")
+    if headers.get(csrf_header_name):
+        derived_headers.setdefault(csrf_header_name, headers[csrf_header_name])
     if account.get("tenant_id"):
         tenant_header = str(auth_flow.get("tenant_header_name") or "X-Tenant-Id")
         derived_headers.setdefault(tenant_header, str(account.get("tenant_id")))
     code = resp.get("status_code")
-    status_ok = isinstance(code, int) and 200 <= int(code) < 300
+    expected_login_statuses = _login_expected_statuses(auth_flow)
+    status_ok = isinstance(code, int) and int(code) in expected_login_statuses
     meta = {
         "account": account_name,
         "role": account.get("role") or account_name,
         "login_attempted": True,
         "status_code": code,
         "status_ok": status_ok,
+        "expected_statuses": sorted(expected_login_statuses),
+        "request_body_format": body_format,
         "token_acquired": bool(token),
-        "token_json_path": token_path,
-        "cookie_acquired": bool(cookie),
+        "token_source": token_source,
+        "token_json_path": token_path if token_path and token_path != token_source else token_path,
+        "cookie_acquired": bool(response_cookie),
+        "bootstrap_cookie_reused": bool(headers.get("Cookie") and not response_cookie),
+        "csrf_acquired": bool(bootstrap_meta.get("csrf_acquired")),
+        "bootstrap": bootstrap_meta,
         "derived_header_names": sorted(derived_headers.keys()),
         "duration_ms": resp.get("duration_ms") or int((time.time() - started) * 1000),
     }
@@ -404,6 +616,7 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
     verified_count = 0
     token_count = 0
     cookie_count = 0
+    csrf_count = 0
     for name, raw_account in accounts.items():
         if not isinstance(raw_account, dict):
             continue
@@ -415,6 +628,7 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
         headers, meta = _login_account(base_url, auth_flow, str(name), account, timeout_seconds, requester)
         token_count += 1 if meta.get("token_acquired") else 0
         cookie_count += 1 if meta.get("cookie_acquired") else 0
+        csrf_count += 1 if meta.get("csrf_acquired") else 0
         health = _verify_session(base_url, headers, auth_flow, config, timeout_seconds, requester) if headers else {"ok": False, "skipped": True, "message": "no auth headers derived"}
         if health.get("ok"):
             verified_count += 1
@@ -438,6 +652,7 @@ def _probe_account_login(base_url: str, config: dict[str, Any], auth_flow: dict[
         "successful_session_count": successful,
         "token_acquired_count": token_count,
         "cookie_acquired_count": cookie_count,
+        "csrf_token_acquired_count": csrf_count,
         "session_health_verified_count": verified_count,
         "derived_default_header_names": sorted(derived_default_headers.keys()),
         "events": events,
@@ -532,13 +747,14 @@ def build_runtime_connectivity_auth_preflight(
         "successful_session_count": int(auth.get("successful_session_count") or 0),
         "token_acquired_count": int(auth.get("token_acquired_count") or 0),
         "cookie_acquired_count": int(auth.get("cookie_acquired_count") or 0),
+        "csrf_token_acquired_count": int(auth.get("csrf_token_acquired_count") or 0),
         "session_health_verified_count": int(auth.get("session_health_verified_count") or 0),
         "default_account": auth.get("default_account"),
         "blocked_reason": auth.get("blocked_reason"),
         "events": _redact(auth.get("events") or []),
     }
     return {
-        "engine": "runtime_connectivity_auth_preflight_v1_phase97",
+        "engine": "runtime_connectivity_auth_preflight_v1_phase98",
         "status": status,
         "ready_for_authenticated_runtime": bool(status in {"ready", "degraded"} and token_or_cookie and not blocking),
         "url_parse": parsed,
