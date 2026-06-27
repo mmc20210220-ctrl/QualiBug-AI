@@ -868,6 +868,98 @@ def _extract_id_like(value: Any) -> str:
     return ""
 
 
+def _normalized_id_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _scalar_id_value(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, (dict, list)):
+        return ""
+    return str(value)
+
+
+def _find_value_for_normalized_keys(value: Any, keys: set[str]) -> str:
+    if not keys:
+        return ""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _normalized_id_key(key) in keys:
+                hit = _scalar_id_value(item)
+                if hit:
+                    return hit
+        for item in value.values():
+            hit = _find_value_for_normalized_keys(item, keys)
+            if hit:
+                return hit
+    elif isinstance(value, list):
+        for item in value[:10]:
+            hit = _find_value_for_normalized_keys(item, keys)
+            if hit:
+                return hit
+    return ""
+
+
+def _resource_aliases_for_bind_field(field: str) -> set[str]:
+    raw = str(field or "").strip().strip("{}")
+    if not raw:
+        return set()
+    # Convert common camelCase path params to token form before suffix removal.
+    tokenized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw)
+    parts = [p for p in re.split(r"[^A-Za-z0-9]+", tokenized) if p]
+    if len(parts) >= 2 and parts[-1].lower() in {"id", "uuid", "code"}:
+        base = "_".join(parts[:-1])
+    else:
+        normalized = _normalized_id_key(raw)
+        base = re.sub(r"(?:id|uuid|code)$", "", normalized)
+    aliases = {_normalized_id_key(base)} if base else set()
+    aliases |= {_normalized_id_key(base + "s") for base in list(aliases) if base}
+    return {a for a in aliases if a}
+
+
+def _find_id_under_resource_alias(value: Any, aliases: set[str]) -> str:
+    if not aliases:
+        return ""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _normalized_id_key(key) in aliases:
+                hit = _extract_id_like(item)
+                if hit:
+                    return hit
+        for item in value.values():
+            hit = _find_id_under_resource_alias(item, aliases)
+            if hit:
+                return hit
+    elif isinstance(value, list):
+        for item in value[:10]:
+            hit = _find_id_under_resource_alias(item, aliases)
+            if hit:
+                return hit
+    return ""
+
+
+def _extract_id_for_bind_fields(value: Any, bind_fields: list[str]) -> str:
+    """Extract the server id that matches the path param being rebound.
+
+    Generic response parsing often sees many ``id`` fields (customer.id, user.id,
+    order.id).  When runtime binding knows the target path param (for example
+    ``order_id``), prefer exact response keys such as ``order_id``/``orderId`` or
+    nested resource objects such as ``order.id`` before falling back to the first
+    generic id.
+    """
+    fields = [str(f or "").strip().strip("{}") for f in bind_fields if str(f or "").strip()]
+    exact_keys = {_normalized_id_key(f) for f in fields if _normalized_id_key(f)}
+    hit = _find_value_for_normalized_keys(value, exact_keys)
+    if hit:
+        return hit
+    for field in fields:
+        hit = _find_id_under_resource_alias(value, _resource_aliases_for_bind_field(field))
+        if hit:
+            return hit
+    return _extract_id_like(value)
+
+
 def _find_negative_resource_values(value: Any, prefix: str = "") -> list[dict[str, Any]]:
     hits: list[dict[str, Any]] = []
     if isinstance(value, dict):
@@ -901,7 +993,7 @@ def _bind_auto_fixture_response_id(config: dict[str, Any], probe: dict[str, Any]
     bind_fields = [str(x) for x in bind_to if str(x or "").strip()]
     if not bind_fields:
         return {}
-    response_id = _extract_id_like(response.get("payload"))
+    response_id = _extract_id_for_bind_fields(response.get("payload"), bind_fields)
     if not response_id:
         return {"bound": False, "reason": "setup_response_missing_bindable_id", "bind_response_id_to": bind_fields}
     bundle = _auto_fixture_bundle(config, probe)
@@ -1357,7 +1449,6 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
             response = _http_request(method, _join_url(base_url, path), headers, body=shared_body, timeout=timeout)
             runtime_binding: dict[str, Any] = {}
             if isinstance(response.get("status_code"), int) and 200 <= int(response.get("status_code")) < 300:
-                response_id = _extract_id_like(response.get("payload"))
                 bind_fields, bind_reason = _infer_flow_bind_fields(
                     step=step,
                     steps=steps[:8],
@@ -1365,6 +1456,7 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
                     decision_path=decision.path,
                     path_params=shared_params,
                 )
+                response_id = _extract_id_for_bind_fields(response.get("payload"), bind_fields)
                 runtime_binding = _bind_flow_response_id_to_runtime(
                     config,
                     probe,
