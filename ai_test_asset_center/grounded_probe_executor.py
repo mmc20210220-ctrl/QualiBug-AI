@@ -722,6 +722,239 @@ def _apply_runtime_rerun_selection(probes: list[dict[str, Any]], config: dict[st
         "sources": list(selection.get("sources") or []),
     }
 
+
+def _runtime_carry_forward_candidate_ids(config: dict[str, Any], runtime_rerun_selection: dict[str, Any]) -> list[str]:
+    explicit = config.get("runtime_evidence_carry_forward_candidate_ids") or config.get("carry_forward_candidate_ids")
+    if isinstance(explicit, str):
+        values = [part.strip() for part in re.split(r"[,\s]+", explicit) if part.strip()]
+    elif isinstance(explicit, list):
+        values = [str(value).strip() for value in explicit if str(value).strip()]
+    else:
+        values = []
+    values.extend(str(value) for value in (runtime_rerun_selection.get("customer_ready_candidate_ids_excluded") or []) if str(value).strip())
+    return _dedupe(values)
+
+
+def _runtime_carry_forward_artifact_paths(config: dict[str, Any], runtime_rerun_selection: dict[str, Any]) -> dict[str, list[Path]]:
+    """Resolve previous-run artifacts that can be carried into a targeted rerun.
+
+    A targeted rerun deliberately skips already customer-ready probes.  Without
+    this carry-forward step, the follow-up run's reproduction pack would appear
+    to have lost those customer-ready findings.  We only consume explicit paths
+    or artifacts colocated with the remediation plan path that selected this
+    rerun.
+    """
+    pack_paths: list[Path] = []
+    ledger_paths: list[Path] = []
+
+    def add_path(bucket: list[Path], value: Any) -> None:
+        if not value:
+            return
+        try:
+            path = Path(str(value)).expanduser()
+        except Exception:
+            return
+        if path.exists() and path.is_file():
+            bucket.append(path)
+
+    for key in (
+        "runtime_evidence_previous_reproduction_pack_path",
+        "runtime_customer_reproduction_pack_path",
+        "runtime_evidence_carry_forward_reproduction_pack_path",
+    ):
+        add_path(pack_paths, config.get(key))
+    for key in (
+        "runtime_evidence_previous_probe_ledger_path",
+        "runtime_evidence_probe_ledger_path",
+        "runtime_evidence_carry_forward_probe_ledger_path",
+    ):
+        add_path(ledger_paths, config.get(key))
+
+    for source in runtime_rerun_selection.get("sources") or []:
+        raw = str(source).split(":", 1)[1] if ":" in str(source) else str(source)
+        if not raw or raw.startswith("inline"):
+            continue
+        try:
+            path = Path(raw).expanduser()
+        except Exception:
+            continue
+        if not path.exists():
+            continue
+        base_dir = path.parent if path.is_file() else path
+        add_path(pack_paths, base_dir / "grounded_probe_runtime_customer_reproduction_pack.json")
+        add_path(ledger_paths, base_dir / "grounded_probe_runtime_evidence_probe_ledger.json")
+
+    return {"reproduction_pack_paths": _dedupe_paths(pack_paths), "probe_ledger_paths": _dedupe_paths(ledger_paths)}
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _json_clone(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    except Exception:
+        return value
+
+
+def _runtime_carry_forward_package_ready(package: dict[str, Any]) -> bool:
+    if package.get("customer_ready") is not True:
+        return False
+    gate = package.get("reproduction_readiness_gate") if isinstance(package.get("reproduction_readiness_gate"), dict) else {}
+    if gate:
+        if gate.get("customer_ready") is not True:
+            return False
+        if gate.get("blockers"):
+            return False
+    trace = package.get("reproduction_trace") if isinstance(package.get("reproduction_trace"), list) else []
+    if not trace:
+        return False
+    return True
+
+
+def _build_runtime_evidence_carry_forward(config: dict[str, Any], runtime_rerun_selection: dict[str, Any]) -> dict[str, Any]:
+    """Carry previous customer-ready evidence into targeted reruns.
+
+    The executor may run only remediation candidates while excluding known-good
+    customer-ready candidates.  This artifact preserves those previous ready
+    findings in the new report, but only when the prior reproduction package was
+    itself customer-ready and blocker-free.
+    """
+    candidate_ids = _runtime_carry_forward_candidate_ids(config, runtime_rerun_selection)
+    enabled = bool(candidate_ids) and bool(runtime_rerun_selection.get("enabled"))
+    paths = _runtime_carry_forward_artifact_paths(config, runtime_rerun_selection)
+    carried_packages: list[dict[str, Any]] = []
+    carried_ledger_entries: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    candidate_set = set(candidate_ids)
+
+    if enabled:
+        for pack_path in paths["reproduction_pack_paths"]:
+            try:
+                pack = _read_json(pack_path)
+            except Exception as exc:
+                blocked.append({"source": str(pack_path), "reason": f"reproduction_pack_load_failed:{type(exc).__name__}"})
+                continue
+            for package in pack.get("packages") or []:
+                if not isinstance(package, dict):
+                    continue
+                cid = str(package.get("candidate_id") or "")
+                if cid not in candidate_set:
+                    continue
+                if not _runtime_carry_forward_package_ready(package):
+                    blocked.append({
+                        "candidate_id": cid,
+                        "source": str(pack_path),
+                        "reason": "previous_reproduction_package_not_customer_ready_or_missing_trace",
+                    })
+                    continue
+                cloned = _json_clone(package)
+                cloned["carried_forward"] = True
+                cloned["carry_forward_source"] = str(pack_path)
+                cloned["carry_forward_reason"] = "targeted_rerun_excluded_previously_customer_ready_candidate"
+                carried_packages.append(cloned)
+
+        for ledger_path in paths["probe_ledger_paths"]:
+            try:
+                ledger = _read_json(ledger_path)
+            except Exception as exc:
+                blocked.append({"source": str(ledger_path), "reason": f"probe_ledger_load_failed:{type(exc).__name__}"})
+                continue
+            for entry in ledger.get("entries") or []:
+                if not isinstance(entry, dict):
+                    continue
+                cid = str(entry.get("candidate_id") or "")
+                if cid not in candidate_set:
+                    continue
+                if entry.get("customer_ready") is not True:
+                    blocked.append({"candidate_id": cid, "source": str(ledger_path), "reason": "previous_probe_ledger_entry_not_customer_ready"})
+                    continue
+                cloned = _json_clone(entry)
+                cloned["carried_forward"] = True
+                cloned["carry_forward_source"] = str(ledger_path)
+                cloned["next_action"] = "Carried forward from previous customer-ready evidence; rerun only if auth, endpoint, fixture, or oracle semantics changed."
+                carried_ledger_entries.append(cloned)
+
+    carried_package_ids: list[str] = []
+    for package in carried_packages:
+        cid = str(package.get("candidate_id") or "")
+        if cid and cid not in carried_package_ids:
+            carried_package_ids.append(cid)
+    carried_ledger_ids: list[str] = []
+    for entry in carried_ledger_entries:
+        cid = str(entry.get("candidate_id") or "")
+        if cid and cid not in carried_ledger_ids:
+            carried_ledger_ids.append(cid)
+
+    return {
+        "engine": "runtime_evidence_carry_forward_v1_phase95",
+        "enabled": enabled,
+        "status": (
+            "customer_ready_evidence_carried_forward" if carried_package_ids or carried_ledger_ids else
+            "enabled_but_no_customer_ready_evidence_found" if enabled else
+            "disabled_no_targeted_rerun_or_no_excluded_candidates"
+        ),
+        "candidate_ids_requested": candidate_ids,
+        "carried_forward_candidate_ids": _dedupe(carried_package_ids + carried_ledger_ids),
+        "carried_forward_reproduction_count": len(carried_packages),
+        "carried_forward_probe_ledger_count": len(carried_ledger_entries),
+        "blocked_candidate_count": len(blocked),
+        "blocked_candidates": blocked[:50],
+        "source_paths": {
+            "reproduction_packs": [str(path) for path in paths["reproduction_pack_paths"]],
+            "probe_ledgers": [str(path) for path in paths["probe_ledger_paths"]],
+        },
+        "packages": carried_packages,
+        "probe_ledger_entries": carried_ledger_entries,
+    }
+
+
+def _render_runtime_evidence_carry_forward_markdown(carry: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Evidence Carry Forward",
+        "",
+        f"- engine: `{carry.get('engine')}`",
+        f"- status: `{carry.get('status')}`",
+        f"- enabled: `{carry.get('enabled')}`",
+        f"- requested candidates: `{json.dumps(carry.get('candidate_ids_requested') or [], ensure_ascii=False)}`",
+        f"- carried candidates: `{json.dumps(carry.get('carried_forward_candidate_ids') or [], ensure_ascii=False)}`",
+        f"- carried reproduction packages: {carry.get('carried_forward_reproduction_count')}",
+        f"- carried probe ledger entries: {carry.get('carried_forward_probe_ledger_count')}",
+        f"- blocked candidates: {carry.get('blocked_candidate_count')}",
+        "",
+    ]
+    packages = [p for p in (carry.get("packages") or []) if isinstance(p, dict)]
+    if packages:
+        lines.extend(["## Carried customer-ready reproduction packages", "", "| Candidate | Finding | Readiness | Source |", "|---|---|---|---|"])
+        for package in packages[:50]:
+            lines.append(
+                "| "
+                + " | ".join([
+                    str(package.get("candidate_id") or "-"),
+                    str(package.get("finding_id") or "-"),
+                    str(package.get("readiness_level") or "-"),
+                    str(package.get("carry_forward_source") or "-").replace("|", "\\|"),
+                ])
+                + " |"
+            )
+        lines.append("")
+    blocked = [b for b in (carry.get("blocked_candidates") or []) if isinstance(b, dict)]
+    if blocked:
+        lines.extend(["## Carry-forward blockers", ""])
+        for item in blocked[:50]:
+            lines.append(f"- `{item.get('candidate_id') or '-'}`: {item.get('reason')} ({item.get('source')})")
+        lines.append("")
+    return "\n".join(lines)
+
 def _probe_has_strict_document_grounding(probe: dict[str, Any]) -> bool:
     refs = probe.get("source_refs") if isinstance(probe.get("source_refs"), list) else []
     kinds = {str(r.get("kind") or "") for r in refs if isinstance(r, dict)}
@@ -2873,6 +3106,17 @@ def _build_runtime_evidence_probe_ledger(report: dict[str, Any]) -> dict[str, An
             "next_action": _runtime_evidence_probe_next_action(gap_types, obs),
         })
 
+    carry_forward = report.get("runtime_evidence_carry_forward") if isinstance(report.get("runtime_evidence_carry_forward"), dict) else {}
+    current_ids = {str(entry.get("candidate_id") or "") for entry in entries if entry.get("candidate_id")}
+    for carried_entry in carry_forward.get("probe_ledger_entries") or []:
+        if not isinstance(carried_entry, dict):
+            continue
+        cid = str(carried_entry.get("candidate_id") or "")
+        if not cid or cid in current_ids:
+            continue
+        entries.append(carried_entry)
+        current_ids.add(cid)
+
     gap_counts: dict[str, int] = {}
     readiness_counts: dict[str, int] = {}
     for entry in entries:
@@ -2888,6 +3132,7 @@ def _build_runtime_evidence_probe_ledger(report: dict[str, Any]) -> dict[str, An
         "probe_count": len(decisions),
         "entry_count": len(entries),
         "customer_ready_probe_count": sum(1 for entry in entries if entry.get("customer_ready") is True),
+        "carried_forward_probe_count": sum(1 for entry in entries if entry.get("carried_forward") is True),
         "blocked_probe_count": readiness_counts.get("blocked_before_execution", 0),
         "evidence_gap_probe_count": readiness_counts.get("evidence_gap", 0),
         "validated_probe_count": sum(1 for entry in entries if entry.get("verdict") == "validated_candidate"),
@@ -3213,6 +3458,19 @@ def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[st
             "customer_triage": _redact(finding.get("customer_triage") or {}),
         })
 
+    carry_forward = report.get("runtime_evidence_carry_forward") if isinstance(report.get("runtime_evidence_carry_forward"), dict) else {}
+    current_package_ids = {str(item.get("candidate_id") or "") for item in packages if item.get("candidate_id")}
+    carried_forward_count = 0
+    for carried_package in carry_forward.get("packages") or []:
+        if not isinstance(carried_package, dict):
+            continue
+        cid = str(carried_package.get("candidate_id") or "")
+        if not cid or cid in current_package_ids:
+            continue
+        packages.append(carried_package)
+        current_package_ids.add(cid)
+        carried_forward_count += 1
+
     customer_ready_count = sum(1 for item in packages if item.get("customer_ready") is True)
     blocker_counts: dict[str, int] = {}
     for item in packages:
@@ -3225,6 +3483,7 @@ def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[st
         "project_id": report.get("project_id"),
         "finding_count": len(packages),
         "customer_ready_reproduction_count": customer_ready_count,
+        "carried_forward_reproduction_count": carried_forward_count,
         "blocked_reproduction_count": len(packages) - customer_ready_count,
         "status": "ready" if customer_ready_count else ("blocked_reproduction_evidence_gap" if packages else "empty_no_validated_runtime_findings"),
         "reproduction_readiness_blocker_counts": dict(sorted(blocker_counts.items(), key=lambda item: (-item[1], item[0]))),
@@ -3770,10 +4029,15 @@ def run_grounded_probe_executor(
             "probe_count": len(probes),
             "original_probe_count": len(original_probes),
             "runtime_rerun_selection_enabled": bool(runtime_rerun_selection.get("enabled")),
+            "runtime_evidence_carry_forward_supported": True,
             "runtime_rerun_selection_status": runtime_rerun_selection.get("status"),
             "runtime_rerun_selected_probe_count": runtime_rerun_selection.get("selected_probe_count", len(probes)),
             "runtime_rerun_skipped_probe_count": runtime_rerun_selection.get("skipped_probe_count", 0),
             "runtime_rerun_missing_candidate_count": len(runtime_rerun_selection.get("missing_candidate_ids") or []),
+            "runtime_carry_forward_status": "not_built",
+            "runtime_carry_forward_candidate_count": 0,
+            "runtime_carry_forward_reproduction_count": 0,
+            "runtime_carry_forward_probe_ledger_count": 0,
             "phase94_added_probe_count": int(bug_discovery_expansion.get("added_probe_count") or 0),
             "phase94_added_p0_probe_count": int(bug_discovery_expansion.get("added_p0_probe_count") or 0),
             "phase94_multistep_flow_scenario_count": int(bug_discovery_expansion.get("multistep_flow_scenario_count") or 0),
@@ -3901,6 +4165,8 @@ def run_grounded_probe_executor(
     runtime_repro_pack_md_path = output / "grounded_probe_runtime_customer_reproduction_pack.md"
     runtime_remediation_plan_json_path = output / "grounded_probe_runtime_evidence_remediation_plan.json"
     runtime_remediation_plan_md_path = output / "grounded_probe_runtime_evidence_remediation_plan.md"
+    runtime_carry_forward_json_path = output / "grounded_probe_runtime_evidence_carry_forward.json"
+    runtime_carry_forward_md_path = output / "grounded_probe_runtime_evidence_carry_forward.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -3973,6 +4239,8 @@ def run_grounded_probe_executor(
         "runtime_customer_reproduction_pack_md": str(runtime_repro_pack_md_path),
         "runtime_evidence_remediation_plan_json": str(runtime_remediation_plan_json_path),
         "runtime_evidence_remediation_plan_md": str(runtime_remediation_plan_md_path),
+        "runtime_evidence_carry_forward_json": str(runtime_carry_forward_json_path),
+        "runtime_evidence_carry_forward_md": str(runtime_carry_forward_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -4032,6 +4300,13 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_runbook_step_count"] = len(report["runtime_execution_runbook"].get("steps") or [])
     _write_json(runtime_runbook_json_path, report["runtime_execution_runbook"])
     runtime_runbook_md_path.write_text(render_runtime_execution_runbook_markdown(report["runtime_execution_runbook"]), encoding="utf-8")
+    report["runtime_evidence_carry_forward"] = _build_runtime_evidence_carry_forward(config, runtime_rerun_selection)
+    report["summary"]["runtime_carry_forward_status"] = report["runtime_evidence_carry_forward"].get("status")
+    report["summary"]["runtime_carry_forward_candidate_count"] = len(report["runtime_evidence_carry_forward"].get("carried_forward_candidate_ids") or [])
+    report["summary"]["runtime_carry_forward_reproduction_count"] = report["runtime_evidence_carry_forward"].get("carried_forward_reproduction_count", 0)
+    report["summary"]["runtime_carry_forward_probe_ledger_count"] = report["runtime_evidence_carry_forward"].get("carried_forward_probe_ledger_count", 0)
+    _write_json(runtime_carry_forward_json_path, report["runtime_evidence_carry_forward"])
+    runtime_carry_forward_md_path.write_text(_render_runtime_evidence_carry_forward_markdown(report["runtime_evidence_carry_forward"]), encoding="utf-8")
     report["runtime_evidence_readiness_sla_gate"] = build_runtime_evidence_readiness_sla_gate(report)
     report["summary"]["runtime_evidence_readiness_score"] = report["runtime_evidence_readiness_sla_gate"].get("commercial_readiness_score", 0)
     report["summary"]["runtime_evidence_sla_gate_passed"] = bool(report["runtime_evidence_readiness_sla_gate"].get("sla_gate_passed"))
@@ -4056,12 +4331,14 @@ def run_grounded_probe_executor(
     report["runtime_evidence_probe_ledger"] = _build_runtime_evidence_probe_ledger(report)
     report["summary"]["runtime_probe_ledger_entry_count"] = report["runtime_evidence_probe_ledger"].get("entry_count", 0)
     report["summary"]["runtime_probe_ledger_customer_ready_count"] = report["runtime_evidence_probe_ledger"].get("customer_ready_probe_count", 0)
+    report["summary"]["runtime_probe_ledger_carried_forward_count"] = report["runtime_evidence_probe_ledger"].get("carried_forward_probe_count", 0)
     report["summary"]["runtime_probe_ledger_evidence_gap_count"] = report["runtime_evidence_probe_ledger"].get("evidence_gap_probe_count", 0)
     _write_json(runtime_probe_ledger_json_path, report["runtime_evidence_probe_ledger"])
     runtime_probe_ledger_md_path.write_text(_render_runtime_evidence_probe_ledger_markdown(report["runtime_evidence_probe_ledger"]), encoding="utf-8")
     report["runtime_customer_reproduction_pack"] = _build_runtime_customer_reproduction_pack(report)
     report["summary"]["runtime_reproduction_pack_finding_count"] = report["runtime_customer_reproduction_pack"].get("finding_count", 0)
     report["summary"]["runtime_reproduction_pack_customer_ready_count"] = report["runtime_customer_reproduction_pack"].get("customer_ready_reproduction_count", 0)
+    report["summary"]["runtime_reproduction_pack_carried_forward_count"] = report["runtime_customer_reproduction_pack"].get("carried_forward_reproduction_count", 0)
     report["summary"]["runtime_reproduction_pack_status"] = report["runtime_customer_reproduction_pack"].get("status")
     _write_json(runtime_repro_pack_json_path, report["runtime_customer_reproduction_pack"])
     runtime_repro_pack_md_path.write_text(_render_runtime_customer_reproduction_pack_markdown(report["runtime_customer_reproduction_pack"]), encoding="utf-8")
