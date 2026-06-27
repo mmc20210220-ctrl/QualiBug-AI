@@ -41,6 +41,7 @@ Customers provide only test/staging URL and accounts by default; manual request
 bodies remain an advanced override.  Runtime reports keep secrets redacted.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -1444,6 +1445,221 @@ def _render_runtime_evidence_promotion_gate_markdown(gate: dict[str, Any]) -> st
         f"- blocked candidates: `{json.dumps(blocked, ensure_ascii=False)}`",
         "",
     ])
+    return "\n".join(lines)
+
+
+
+_RUNTIME_DELIVERY_REQUIRED_OUTPUT_KEYS = [
+    "runtime_evidence_scoreboard_json",
+    "runtime_evidence_probe_ledger_json",
+    "runtime_customer_reproduction_pack_json",
+    "runtime_evidence_remediation_plan_json",
+    "runtime_evidence_carry_forward_json",
+    "runtime_evidence_progress_delta_json",
+    "runtime_evidence_promotion_gate_json",
+]
+
+_RUNTIME_DELIVERY_OPTIONAL_OUTPUT_KEYS = [
+    "runtime_evidence_scoreboard_md",
+    "runtime_evidence_probe_ledger_md",
+    "runtime_customer_reproduction_pack_md",
+    "runtime_evidence_remediation_plan_md",
+    "runtime_evidence_carry_forward_md",
+    "runtime_evidence_progress_delta_md",
+    "runtime_evidence_promotion_gate_md",
+]
+
+
+def _runtime_file_sha256(path_text: str) -> tuple[bool, int, str | None, str | None]:
+    if not path_text:
+        return False, 0, None, "missing_path"
+    try:
+        path = Path(path_text)
+    except Exception:
+        return False, 0, None, "invalid_path"
+    if not path.exists() or not path.is_file():
+        return False, 0, None, "missing_or_not_file"
+    h = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                h.update(chunk)
+    except Exception as exc:  # pragma: no cover - defensive filesystem guard
+        return False, size, None, f"hash_failed:{type(exc).__name__}"
+    return True, size, h.hexdigest(), None
+
+
+def _runtime_delivery_artifact_entry(outputs: dict[str, Any], key: str, *, required: bool) -> dict[str, Any]:
+    path_text = str(outputs.get(key) or "")
+    exists, byte_size, sha, error = _runtime_file_sha256(path_text)
+    return {
+        "artifact_key": key,
+        "path": path_text,
+        "required": required,
+        "exists": exists,
+        "byte_size": byte_size,
+        "sha256": sha,
+        "hash_status": "hashed" if sha else "missing_or_unhashable",
+        "hash_error": None if sha else error,
+    }
+
+
+def _runtime_delivery_baseline_id(project_id: Any, artifact_entries: list[dict[str, Any]], approved_candidate_ids: list[str]) -> str:
+    material = {
+        "project_id": project_id,
+        "approved_customer_ready_candidate_ids": sorted(approved_candidate_ids),
+        "artifact_hashes": [
+            {
+                "artifact_key": entry.get("artifact_key"),
+                "sha256": entry.get("sha256"),
+                "byte_size": entry.get("byte_size"),
+            }
+            for entry in artifact_entries
+            if entry.get("sha256")
+        ],
+    }
+    digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+    return "qbruntime-" + digest[:20]
+
+
+def _build_runtime_evidence_customer_delivery_manifest(report: dict[str, Any]) -> dict[str, Any]:
+    """Freeze a promoted runtime evidence run into a customer delivery manifest.
+
+    The promotion gate answers whether the current run is customer-ready.  This
+    manifest gives that decision an auditable handoff surface: every runtime
+    evidence artifact needed to defend the decision is hashed, required artifact
+    gaps are explicit, and the approved customer-ready candidate set is fixed in
+    one deterministic baseline id.
+    """
+    outputs = report.get("outputs") if isinstance(report.get("outputs"), dict) else {}
+    gate = report.get("runtime_evidence_promotion_gate") if isinstance(report.get("runtime_evidence_promotion_gate"), dict) else {}
+    pack = report.get("runtime_customer_reproduction_pack") if isinstance(report.get("runtime_customer_reproduction_pack"), dict) else {}
+    ledger = report.get("runtime_evidence_probe_ledger") if isinstance(report.get("runtime_evidence_probe_ledger"), dict) else {}
+    progress = report.get("runtime_evidence_progress_delta") if isinstance(report.get("runtime_evidence_progress_delta"), dict) else {}
+
+    artifact_entries: list[dict[str, Any]] = []
+    for key in _RUNTIME_DELIVERY_REQUIRED_OUTPUT_KEYS:
+        artifact_entries.append(_runtime_delivery_artifact_entry(outputs, key, required=True))
+    for key in _RUNTIME_DELIVERY_OPTIONAL_OUTPUT_KEYS:
+        if outputs.get(key):
+            artifact_entries.append(_runtime_delivery_artifact_entry(outputs, key, required=False))
+
+    missing_required = [entry for entry in artifact_entries if entry.get("required") and not entry.get("sha256")]
+    approved_candidate_ids = [str(cid) for cid in (gate.get("approved_customer_ready_candidate_ids") or []) if str(cid).strip()]
+    blocked_candidate_ids = [str(cid) for cid in (gate.get("blocked_candidate_ids") or []) if str(cid).strip()]
+    promotion_ready = bool(gate.get("promotion_ready"))
+
+    blockers: list[str] = []
+    if not promotion_ready:
+        blockers.append("runtime_promotion_gate_not_approved")
+    if missing_required:
+        blockers.append("required_runtime_delivery_artifacts_missing_or_unhashable")
+    if not approved_candidate_ids:
+        blockers.append("no_approved_customer_ready_candidates")
+
+    if not blockers:
+        status = "customer_ready_runtime_delivery_manifest_ready"
+        next_action = "Freeze these artifact hashes with the customer handoff package and use the approved candidate list as the delivery baseline."
+    elif "required_runtime_delivery_artifacts_missing_or_unhashable" in blockers:
+        status = "runtime_delivery_manifest_missing_required_artifacts"
+        next_action = "Regenerate runtime evidence artifacts before freezing a customer delivery baseline."
+    else:
+        status = "runtime_delivery_manifest_blocked_by_promotion_gate"
+        next_action = "Resolve the promotion gate blockers before freezing a customer delivery baseline."
+
+    baseline_id = _runtime_delivery_baseline_id(report.get("project_id"), artifact_entries, approved_candidate_ids)
+    return {
+        "engine": "runtime_evidence_customer_delivery_manifest_v1_phase95",
+        "status": status,
+        "project_id": report.get("project_id"),
+        "created_at": report.get("created_at"),
+        "delivery_baseline_id": baseline_id,
+        "customer_ready": not blockers,
+        "promotion_gate_status": gate.get("status"),
+        "promotion_ready": promotion_ready,
+        "blockers": _dedupe(blockers),
+        "promotion_gate_blockers": gate.get("blockers") or [],
+        "approved_customer_ready_candidate_ids": _dedupe(approved_candidate_ids),
+        "approved_customer_ready_candidate_count": len(_dedupe(approved_candidate_ids)),
+        "blocked_candidate_ids": _dedupe(blocked_candidate_ids),
+        "blocked_candidate_count": len(_dedupe(blocked_candidate_ids)),
+        "customer_ready_reproduction_count": int(pack.get("customer_ready_reproduction_count") or 0),
+        "probe_ledger_customer_ready_count": int(ledger.get("customer_ready_probe_count") or 0),
+        "progress_delta_status": progress.get("status"),
+        "progress_regression_count": len(progress.get("regressions") or []),
+        "required_artifact_count": len(_RUNTIME_DELIVERY_REQUIRED_OUTPUT_KEYS),
+        "hashed_required_artifact_count": sum(1 for entry in artifact_entries if entry.get("required") and entry.get("sha256")),
+        "missing_required_artifact_count": len(missing_required),
+        "missing_required_artifacts": [
+            {
+                "artifact_key": entry.get("artifact_key"),
+                "path": entry.get("path"),
+                "reason": entry.get("hash_error") or entry.get("hash_status"),
+            }
+            for entry in missing_required
+        ],
+        "artifact_manifest": artifact_entries,
+        "artifact_count": len(artifact_entries),
+        "hashed_artifact_count": sum(1 for entry in artifact_entries if entry.get("sha256")),
+        "next_action": next_action,
+        "customer_safe_note": "This manifest stores artifact hashes, paths and candidate ids only; it does not include raw tokens, cookies or customer secrets.",
+    }
+
+
+def _render_runtime_evidence_customer_delivery_manifest_markdown(manifest: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Evidence Customer Delivery Manifest",
+        "",
+        f"- engine: `{manifest.get('engine')}`",
+        f"- status: `{manifest.get('status')}`",
+        f"- project: `{manifest.get('project_id')}`",
+        f"- delivery baseline id: `{manifest.get('delivery_baseline_id')}`",
+        f"- customer ready: `{manifest.get('customer_ready')}`",
+        f"- promotion gate: `{manifest.get('promotion_gate_status')}` / ready `{manifest.get('promotion_ready')}`",
+        f"- approved candidates: `{json.dumps(manifest.get('approved_customer_ready_candidate_ids') or [], ensure_ascii=False)}`",
+        f"- blocked candidates: `{json.dumps(manifest.get('blocked_candidate_ids') or [], ensure_ascii=False)}`",
+        f"- required artifacts hashed: {manifest.get('hashed_required_artifact_count')}/{manifest.get('required_artifact_count')}",
+        f"- next action: {manifest.get('next_action')}",
+        "",
+        "## Blockers",
+        "",
+    ]
+    blockers = manifest.get("blockers") or []
+    if blockers:
+        for blocker in blockers:
+            lines.append(f"- `{blocker}`")
+    else:
+        lines.append("- none")
+    lines.append("")
+
+    missing = [item for item in (manifest.get("missing_required_artifacts") or []) if isinstance(item, dict)]
+    if missing:
+        lines.extend(["## Missing required runtime artifacts", ""])
+        for item in missing:
+            lines.append(f"- `{item.get('artifact_key')}` — {item.get('reason')} — `{item.get('path')}`")
+        lines.append("")
+
+    lines.extend(["## Runtime evidence artifact hashes", "", "| Artifact | Required | Status | Bytes | SHA256 |", "|---|---:|---|---:|---|"])
+    for entry in manifest.get("artifact_manifest") or []:
+        if not isinstance(entry, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join([
+                f"`{entry.get('artifact_key')}`",
+                "yes" if entry.get("required") else "no",
+                str(entry.get("hash_status") or "-"),
+                str(entry.get("byte_size") or 0),
+                f"`{entry.get('sha256') or '-'}`",
+            ])
+            + " |"
+        )
+    lines.extend(["", f"> {manifest.get('customer_safe_note')}"])
     return "\n".join(lines)
 
 def _probe_has_strict_document_grounding(probe: dict[str, Any]) -> bool:
@@ -4537,6 +4753,11 @@ def run_grounded_probe_executor(
             "runtime_promotion_gate_ready": False,
             "runtime_promotion_gate_blocker_count": 0,
             "runtime_promotion_gate_approved_candidate_count": 0,
+            "runtime_delivery_manifest_status": "not_built",
+            "runtime_delivery_manifest_ready": False,
+            "runtime_delivery_manifest_hashed_required_artifact_count": 0,
+            "runtime_delivery_manifest_missing_required_artifact_count": 0,
+            "runtime_delivery_manifest_baseline_id": "",
             "phase94_added_probe_count": int(bug_discovery_expansion.get("added_probe_count") or 0),
             "phase94_added_p0_probe_count": int(bug_discovery_expansion.get("added_p0_probe_count") or 0),
             "phase94_multistep_flow_scenario_count": int(bug_discovery_expansion.get("multistep_flow_scenario_count") or 0),
@@ -4670,6 +4891,8 @@ def run_grounded_probe_executor(
     runtime_progress_delta_md_path = output / "grounded_probe_runtime_evidence_progress_delta.md"
     runtime_promotion_gate_json_path = output / "grounded_probe_runtime_evidence_promotion_gate.json"
     runtime_promotion_gate_md_path = output / "grounded_probe_runtime_evidence_promotion_gate.md"
+    runtime_delivery_manifest_json_path = output / "grounded_probe_runtime_evidence_customer_delivery_manifest.json"
+    runtime_delivery_manifest_md_path = output / "grounded_probe_runtime_evidence_customer_delivery_manifest.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -4748,6 +4971,8 @@ def run_grounded_probe_executor(
         "runtime_evidence_progress_delta_md": str(runtime_progress_delta_md_path),
         "runtime_evidence_promotion_gate_json": str(runtime_promotion_gate_json_path),
         "runtime_evidence_promotion_gate_md": str(runtime_promotion_gate_md_path),
+        "runtime_evidence_customer_delivery_manifest_json": str(runtime_delivery_manifest_json_path),
+        "runtime_evidence_customer_delivery_manifest_md": str(runtime_delivery_manifest_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -4869,6 +5094,14 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_promotion_gate_approved_candidate_count"] = report["runtime_evidence_promotion_gate"].get("approved_customer_ready_candidate_count", 0)
     _write_json(runtime_promotion_gate_json_path, report["runtime_evidence_promotion_gate"])
     runtime_promotion_gate_md_path.write_text(_render_runtime_evidence_promotion_gate_markdown(report["runtime_evidence_promotion_gate"]), encoding="utf-8")
+    report["runtime_evidence_customer_delivery_manifest"] = _build_runtime_evidence_customer_delivery_manifest(report)
+    report["summary"]["runtime_delivery_manifest_status"] = report["runtime_evidence_customer_delivery_manifest"].get("status")
+    report["summary"]["runtime_delivery_manifest_ready"] = bool(report["runtime_evidence_customer_delivery_manifest"].get("customer_ready"))
+    report["summary"]["runtime_delivery_manifest_hashed_required_artifact_count"] = report["runtime_evidence_customer_delivery_manifest"].get("hashed_required_artifact_count", 0)
+    report["summary"]["runtime_delivery_manifest_missing_required_artifact_count"] = report["runtime_evidence_customer_delivery_manifest"].get("missing_required_artifact_count", 0)
+    report["summary"]["runtime_delivery_manifest_baseline_id"] = report["runtime_evidence_customer_delivery_manifest"].get("delivery_baseline_id", "")
+    _write_json(runtime_delivery_manifest_json_path, report["runtime_evidence_customer_delivery_manifest"])
+    runtime_delivery_manifest_md_path.write_text(_render_runtime_evidence_customer_delivery_manifest_markdown(report["runtime_evidence_customer_delivery_manifest"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
     report["summary"]["runtime_sla_must_run_count"] = report["runtime_sla_execution_policy"].get("must_run_for_sla_count", 0)
     report["summary"]["runtime_sla_blocked_before_sla_count"] = report["runtime_sla_execution_policy"].get("blocked_before_sla_count", 0)
