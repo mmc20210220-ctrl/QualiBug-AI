@@ -311,6 +311,29 @@ def _try_reachability(base_url: str, timeout_seconds: float, requester: Requeste
     return {"ok": reachable, "status_code": code, "error": resp.get("error"), "duration_ms": resp.get("duration_ms"), "message": "base_url network edge is reachable" if reachable else "base_url is not reachable"}
 
 
+def _plan_api_smoke_paths(probes: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for probe in probes:
+        ep = probe.get("endpoint") if isinstance(probe.get("endpoint"), dict) else {}
+        method = str(ep.get("method") or "GET").upper()
+        if method not in READ_METHODS:
+            continue
+        path = str(ep.get("path") or ep.get("url") or ep.get("route") or "")
+        if not path or _contains_placeholder(path):
+            continue
+        parsed = urllib.parse.urlparse(path)
+        safe_path = urllib.parse.urlunparse(("", "", parsed.path or "/", "", "", ""))
+        key = f"{method} {safe_path}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"method": method, "path": path, "source": "probe_plan_sample"})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def run_runtime_onboarding_preflight(
     *,
     plan: dict[str, Any],
@@ -325,8 +348,13 @@ def run_runtime_onboarding_preflight(
     probes = [p for p in (plan.get("probes") or []) if isinstance(p, dict)]
     counts = _probe_counts(probes)
     prod_like, prod_reason = _is_production_like(config, base_url)
+    connectivity_config = dict(config or {})
+    if not any(connectivity_config.get(k) for k in ("api_smoke_paths", "protected_smoke_paths", "authenticated_smoke_paths", "runtime_smoke_paths", "probe_sample_paths", "_probe_sample_paths")):
+        plan_smoke_paths = _plan_api_smoke_paths(probes)
+        if plan_smoke_paths:
+            connectivity_config["_probe_sample_paths"] = plan_smoke_paths
     connectivity_auth = build_runtime_connectivity_auth_preflight(
-        config=config,
+        config=connectivity_config,
         base_url=base_url,
         execute_readonly=execute_readonly,
         allow_write_sandbox=allow_write_sandbox,
@@ -355,6 +383,9 @@ def run_runtime_onboarding_preflight(
     expiring_token_count = int(auth_runtime.get("expiring_token_count") or auth.get("expiring_token_count") or 0)
     token_refresh_verified_count = int(auth_runtime.get("token_refresh_verified_count") or auth.get("token_refresh_verified_count") or 0)
     interactive_auth_blocker_count = int(auth_runtime.get("interactive_auth_blocker_count") or auth.get("interactive_auth_blocker_count") or 0)
+    api_smoke = connectivity_auth.get("authenticated_api_smoke") if isinstance(connectivity_auth.get("authenticated_api_smoke"), dict) else {}
+    api_smoke_configured = bool(api_smoke.get("configured"))
+    api_smoke_ok = bool(api_smoke.get("ok"))
 
     checks = [
         _check("base_url_configured", bool(base_url), "target base URL is configured" if base_url else "no target base URL; runtime execution will be plan-only", severity="blocking" if execute_readonly or allow_write_sandbox else "warning"),
@@ -367,6 +398,7 @@ def run_runtime_onboarding_preflight(
         _check("interactive_auth_not_blocked", interactive_auth_blocker_count == 0, "no browser-only SSO/MFA/CAPTCHA/proxy/mTLS auth blocker was detected" if interactive_auth_blocker_count == 0 else "interactive auth blocker detected; provide a non-interactive auth path before runtime probes", severity="warning", skipped=interactive_auth_blocker_count == 0, interactive_auth_blocker_count=interactive_auth_blocker_count),
         _check("token_cookie_or_session_acquired", int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0, "token/cookie/session material was acquired" if int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0 else "no token/cookie/session material acquired yet", severity="warning", mode=auth_runtime.get("mode") or auth.get("mode"), successful_session_count=auth_runtime.get("successful_session_count") or auth.get("successful_session_count")),
         _check("session_health_verified", int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0, "authenticated session was verified by health/me endpoint" if int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0 else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count")),
+        _check("authenticated_api_smoke_verified", (not api_smoke_configured) or api_smoke_ok, api_smoke.get("message") or "authenticated API smoke unknown", severity="warning", skipped=not api_smoke_configured, configured_path_count=api_smoke.get("configured_path_count"), passed_count=api_smoke.get("passed_count"), failed_count=api_smoke.get("failed_count"), auth_rejected_count=api_smoke.get("auth_rejected_count"), html_or_browser_response_count=api_smoke.get("html_or_browser_response_count"), login_redirect_count=api_smoke.get("login_redirect_count")),
         _check(
             "auth_session_refresh_ready",
             expiring_token_count == 0 or token_refresh_verified_count > 0,
@@ -396,6 +428,7 @@ def run_runtime_onboarding_preflight(
         and (bool(auth.get("ok")) or counts["read_only"] == 0)
         and (sandbox.get("ok") if counts["write"] else True)
         and snapshots.get("ok")
+        and ((not api_smoke_configured) or api_smoke_ok)
     )
     if not base_url and not execute_readonly and not allow_write_sandbox:
         overall = "plan_only"

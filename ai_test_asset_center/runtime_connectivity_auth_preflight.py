@@ -53,6 +53,14 @@ SESSION_HEALTH_PATH_KEYS = (
     "profile_path",
     "whoami_path",
 )
+API_SMOKE_PATH_KEYS = (
+    "api_smoke_paths",
+    "protected_smoke_paths",
+    "authenticated_smoke_paths",
+    "runtime_smoke_paths",
+    "probe_sample_paths",
+    "_probe_sample_paths",
+)
 CSRF_TOKEN_PATHS = (
     "csrf_token",
     "csrfToken",
@@ -123,6 +131,11 @@ SAFE_METADATA_KEYS = {
     "injected_header_names",
     "injected_body_fields",
     "header_names",
+    "path",
+    "method",
+    "issue",
+    "content_type",
+    "location",
 }
 
 
@@ -735,6 +748,184 @@ def _verify_session(base_url: str, headers: dict[str, str], auth_flow: dict[str,
     }
 
 
+def _as_status_set(raw: Any, default: set[int]) -> set[int]:
+    if isinstance(raw, list):
+        out: set[int] = set()
+        for value in raw:
+            try:
+                out.add(int(value))
+            except Exception:
+                continue
+        return out or default
+    return default
+
+
+def _safe_path_preview(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(text)
+        return urllib.parse.urlunparse(("", "", parsed.path or "/", "", "", ""))[:240]
+    except Exception:
+        return text.split("?", 1)[0].split("#", 1)[0][:240]
+
+
+def _configured_api_smoke_paths(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw: Any = None
+    for key in API_SMOKE_PATH_KEYS:
+        if config.get(key):
+            raw = config.get(key)
+            break
+    if raw is None and isinstance(config.get("api_smoke"), dict):
+        raw = config["api_smoke"].get("paths") or config["api_smoke"].get("endpoints")
+    if isinstance(raw, str):
+        raw_items = [raw]
+    elif isinstance(raw, list):
+        raw_items = raw
+    else:
+        raw_items = []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if isinstance(item, str):
+            path = item
+            method = "GET"
+            expected = None
+        elif isinstance(item, dict):
+            path = str(item.get("path") or item.get("url") or item.get("route") or "")
+            method = str(item.get("method") or "GET").upper()
+            expected = item.get("expected_statuses") or item.get("success_statuses")
+        else:
+            continue
+        if not path or _contains_placeholder(path):
+            continue
+        if method not in {"GET", "HEAD"}:
+            method = "GET"
+        key = f"{method} {_safe_path_preview(path)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"method": method, "path": path, "expected_statuses": expected})
+        if len(out) >= 5:
+            break
+    return out
+
+
+def _content_type(resp: dict[str, Any]) -> str:
+    headers = _headers(resp)
+    return _header_get(headers, "content-type").split(";", 1)[0].strip().lower()
+
+
+def _smoke_failure_issue(resp: dict[str, Any], expected_statuses: set[int]) -> str:
+    code = resp.get("status_code")
+    blocker = _classify_interactive_auth_blocker(resp)
+    if blocker.get("present"):
+        return str(blocker.get("auth_blocker_type") or "interactive_auth_blocker")
+    headers = _headers(resp)
+    location = _header_get(headers, "location")
+    if isinstance(code, int) and 300 <= code < 400 and location:
+        return "unexpected_redirect"
+    if isinstance(code, int) and int(code) in {401, 403}:
+        return "auth_material_not_accepted_by_api"
+    if isinstance(code, int) and int(code) == 404:
+        return "api_base_path_or_route_not_found"
+    ctype = _content_type(resp)
+    text = _response_text_for_classification(resp).lower()
+    if ctype == "text/html" or "<html" in text or "<!doctype html" in text:
+        return "html_or_browser_page_returned_instead_of_api"
+    if isinstance(code, int) and int(code) not in expected_statuses:
+        return "unexpected_status_code"
+    return ""
+
+
+def _api_smoke_expected_statuses(config: dict[str, Any], item: dict[str, Any]) -> set[int]:
+    default = set(range(200, 400))
+    raw = item.get("expected_statuses") or config.get("api_smoke_expected_statuses")
+    if raw is None and isinstance(config.get("api_smoke"), dict):
+        raw = config["api_smoke"].get("expected_statuses")
+    return _as_status_set(raw, default)
+
+
+def _probe_authenticated_api_smoke(
+    base_url: str,
+    config: dict[str, Any],
+    auth: dict[str, Any],
+    timeout_seconds: float,
+    requester: Requester | None,
+) -> dict[str, Any]:
+    paths = _configured_api_smoke_paths(config)
+    if not paths:
+        return {"configured": False, "attempted": False, "ok": True, "message": "authenticated API smoke paths not configured", "events": []}
+    if requester is None:
+        return {"configured": True, "attempted": False, "ok": False, "message": "requester not provided", "configured_path_count": len(paths), "events": []}
+    headers = auth.get("_derived_default_headers") if isinstance(auth.get("_derived_default_headers"), dict) else {}
+    if not headers:
+        headers = _configured_auth_headers(config)
+    if not headers:
+        return {"configured": True, "attempted": False, "ok": False, "message": "no auth headers available for authenticated API smoke", "configured_path_count": len(paths), "events": []}
+
+    events: list[dict[str, Any]] = []
+    passed = 0
+    html_like = 0
+    login_redirects = 0
+    auth_rejected = 0
+    for item in paths:
+        method = str(item.get("method") or "GET").upper()
+        path = str(item.get("path") or "")
+        expected = _api_smoke_expected_statuses(config, item)
+        started = time.time()
+        try:
+            resp = requester(method, _join_url(base_url, path), dict(headers), None, min(float(timeout_seconds or 10.0), 5.0))
+        except Exception as exc:  # pragma: no cover - defensive guard around injected requester
+            events.append({"method": method, "path": _safe_path_preview(path), "ok": False, "error": f"{type(exc).__name__}: {exc}", "duration_ms": int((time.time() - started) * 1000)})
+            continue
+        code = resp.get("status_code")
+        issue = _smoke_failure_issue(resp, expected)
+        ok = isinstance(code, int) and int(code) in expected and not issue
+        if ok:
+            passed += 1
+        if issue == "html_or_browser_page_returned_instead_of_api":
+            html_like += 1
+        if issue in {"unexpected_redirect", "browser_sso_redirect", "oidc_browser_redirect", "saml_browser_sso"}:
+            login_redirects += 1
+        if issue == "auth_material_not_accepted_by_api":
+            auth_rejected += 1
+        headers_resp = _headers(resp)
+        location = _safe_location_preview(_header_get(headers_resp, "location"))
+        events.append(
+            {
+                "method": method,
+                "path": _safe_path_preview(path),
+                "ok": ok,
+                "status_code": code,
+                "expected_statuses": sorted(expected),
+                "issue": issue or None,
+                "content_type": _content_type(resp) or None,
+                "location": location or None,
+                "duration_ms": resp.get("duration_ms") or int((time.time() - started) * 1000),
+            }
+        )
+
+    attempted = len(events)
+    failed = attempted - passed
+    return {
+        "configured": True,
+        "attempted": bool(attempted),
+        "ok": bool(attempted and failed == 0),
+        "configured_path_count": len(paths),
+        "attempted_count": attempted,
+        "passed_count": passed,
+        "failed_count": failed,
+        "html_or_browser_response_count": html_like,
+        "login_redirect_count": login_redirects,
+        "auth_rejected_count": auth_rejected,
+        "events": events,
+        "message": "authenticated API smoke paths verified" if attempted and failed == 0 else "authenticated API smoke paths failed or were not attempted",
+    }
+
+
 def _refresh_expected_statuses(auth_flow: dict[str, Any]) -> set[int]:
     raw = auth_flow.get("refresh_expected_statuses") or auth_flow.get("refresh_success_statuses")
     if isinstance(raw, list):
@@ -1178,6 +1369,7 @@ def build_runtime_connectivity_auth_preflight(
     dns = _resolve_host(str(parsed.get("host") or ""), parsed.get("port"), resolver) if parsed.get("ok") else {"ok": False, "skipped": True, "message": "url parse failed"}
     http_edge = _http_edge_probe(base_url, timeout_seconds, requester, safety_skip_http=safety_skip_http or not bool(parsed.get("ok")), skip_reason=safety_skip_reason or "url parse failed")
     auth = _auth_materialization_probe(base_url=base_url, config=cfg, timeout_seconds=timeout_seconds, requester=requester, safety_skip_http=safety_skip_http or not bool(parsed.get("ok")), skip_reason=safety_skip_reason or "url parse failed")
+    api_smoke = _probe_authenticated_api_smoke(base_url, cfg, auth, timeout_seconds, requester) if not (safety_skip_http or not bool(parsed.get("ok"))) else {"configured": bool(_configured_api_smoke_paths(cfg)), "attempted": False, "ok": False, "skipped": True, "message": safety_skip_reason or "api smoke skipped by safety policy", "events": []}
 
     configured = bool(auth.get("configured"))
     token_or_cookie = int(auth.get("successful_session_count") or 0) > 0
@@ -1188,6 +1380,8 @@ def build_runtime_connectivity_auth_preflight(
     interactive_blocker_count = int(auth.get("interactive_auth_blocker_count") or 0)
     edge_interactive_blocker = bool(((http_edge.get("interactive_auth_blocker") or {}) if isinstance(http_edge.get("interactive_auth_blocker"), dict) else {}).get("present"))
     interactive_auth_blocked = interactive_blocker_count > 0 or edge_interactive_blocker
+    api_smoke_configured = bool(api_smoke.get("configured"))
+    api_smoke_ok = bool(api_smoke.get("ok"))
     needs_runtime = bool(execute_readonly or allow_write_sandbox)
     checks = [
         _check("url_parse_ok", bool(parsed.get("ok")), parsed.get("message") or "url parse unknown", severity="blocking" if needs_runtime else "warning", url=parsed),
@@ -1206,6 +1400,7 @@ def build_runtime_connectivity_auth_preflight(
         _check("auth_configured", configured, "authentication inputs are configured" if configured else "no auth_flow/accounts/static auth headers configured", severity="warning"),
         _check("token_cookie_or_session_acquired", token_or_cookie, "token/cookie/session material was acquired" if token_or_cookie else "no token/cookie/session material acquired yet", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count")),
         _check("session_health_verified", health_verified, "authenticated session was verified by health/me endpoint" if health_verified else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth.get("session_health_verified_count")),
+        _check("authenticated_api_smoke_verified", (not api_smoke_configured) or api_smoke_ok, api_smoke.get("message") or "authenticated API smoke unknown", severity="warning", skipped=not api_smoke_configured, configured_path_count=api_smoke.get("configured_path_count"), passed_count=api_smoke.get("passed_count"), failed_count=api_smoke.get("failed_count"), html_or_browser_response_count=api_smoke.get("html_or_browser_response_count"), login_redirect_count=api_smoke.get("login_redirect_count"), auth_rejected_count=api_smoke.get("auth_rejected_count")),
         _check(
             "token_refresh_ready",
             refresh_ready,
@@ -1241,19 +1436,23 @@ def build_runtime_connectivity_auth_preflight(
         "token_refresh_verified_count": refresh_verified_count,
         "oauth_session_count": int(auth.get("oauth_session_count") or 0),
         "interactive_auth_blocker_count": interactive_blocker_count,
+        "api_smoke_configured": api_smoke_configured,
+        "api_smoke_passed_count": int(api_smoke.get("passed_count") or 0),
+        "api_smoke_failed_count": int(api_smoke.get("failed_count") or 0),
         "session_health_verified_count": int(auth.get("session_health_verified_count") or 0),
         "default_account": auth.get("default_account"),
         "blocked_reason": auth.get("blocked_reason"),
         "events": _redact(auth.get("events") or []),
     }
     return {
-        "engine": "runtime_connectivity_auth_preflight_v1_phase101",
+        "engine": "runtime_connectivity_auth_preflight_v1_phase102",
         "status": status,
-        "ready_for_authenticated_runtime": bool(status in {"ready", "degraded"} and token_or_cookie and not blocking),
+        "ready_for_authenticated_runtime": bool(status in {"ready", "degraded"} and token_or_cookie and not blocking and ((not api_smoke_configured) or api_smoke_ok)),
         "url_parse": parsed,
         "dns_resolution": dns,
         "http_edge": http_edge,
         "auth_materialization": _redact({k: v for k, v in auth.items() if not str(k).startswith("_")}),
+        "authenticated_api_smoke": _redact(api_smoke),
         "auth_runtime": auth_runtime,
         "resolved_runtime_overrides": {
             "default_header_names": sorted((auth.get("_derived_default_headers") or {}).keys()) if isinstance(auth.get("_derived_default_headers"), dict) else [],
@@ -1263,12 +1462,12 @@ def build_runtime_connectivity_auth_preflight(
         "checks": checks,
         "blocking_reasons": [str(c.get("name")) for c in blocking],
         "warning_reasons": [str(c.get("name")) for c in warnings],
-        "recommended_next_step": _recommended_next_step(status, blocking, warnings, token_or_cookie, health_verified, expiring_token_count, refresh_verified_count, interactive_auth_blocked),
+        "recommended_next_step": _recommended_next_step(status, blocking, warnings, token_or_cookie, health_verified, expiring_token_count, refresh_verified_count, interactive_auth_blocked, api_smoke_configured, api_smoke_ok),
         "secret_redaction_policy": "No raw token, cookie, password or session secret is returned in this report.",
     }
 
 
-def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings: list[dict[str, Any]], token_or_cookie: bool, health_verified: bool, expiring_token_count: int = 0, refresh_verified_count: int = 0, interactive_auth_blocked: bool = False) -> str:
+def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings: list[dict[str, Any]], token_or_cookie: bool, health_verified: bool, expiring_token_count: int = 0, refresh_verified_count: int = 0, interactive_auth_blocked: bool = False, api_smoke_configured: bool = False, api_smoke_ok: bool = True) -> str:
     if blocking:
         names = ", ".join(str(c.get("name")) for c in blocking[:4])
         return f"Fix environment connectivity blockers before runtime probes: {names}."
@@ -1280,6 +1479,8 @@ def _recommended_next_step(status: str, blocking: list[dict[str, Any]], warnings
         return "Token/cookie was acquired, but session health is not verified; add session_health_path/me_path for stronger readiness proof."
     if expiring_token_count and not refresh_verified_count:
         return "Session token expiry was observed; add refresh_path/refresh_token mapping so long runtime probes can renew auth safely."
+    if api_smoke_configured and not api_smoke_ok:
+        return "Auth session was acquired, but authenticated API smoke failed; verify api base path, role scope, tenant headers, and login redirects before full probes."
     if warnings:
         names = ", ".join(str(c.get("name")) for c in warnings[:4])
         return f"Authenticated runtime can continue in degraded mode; improve: {names}."

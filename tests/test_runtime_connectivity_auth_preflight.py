@@ -22,6 +22,9 @@ def _auth_requester(method: str, url: str, headers: dict[str, str], body: Any, t
     if url.endswith("/api/me"):
         assert "Authorization" in headers or "Cookie" in headers
         return {"status_code": 200, "payload": {"user": "qa"}, "duration_ms": 2}
+    if url.endswith("/api/v1/orders"):
+        assert "Authorization" in headers or "Cookie" in headers
+        return {"status_code": 200, "headers": {"Content-Type": "application/json"}, "payload": {"items": []}, "duration_ms": 2}
     return {"status_code": 401, "duration_ms": 1}
 
 
@@ -544,3 +547,116 @@ def test_onboarding_preflight_surfaces_interactive_auth_blockers() -> None:
     assert report["auth_readiness"]["interactive_auth_blocker_count"] == 1
     checks = {item["name"]: item for item in report["checks"]}
     assert checks["interactive_auth_not_blocked"]["status"] == "warning"
+
+
+def _api_smoke_success_requester(method: str, url: str, headers: dict[str, str], body: Any, timeout: float) -> dict[str, Any]:
+    if url.endswith("/"):
+        return {"status_code": 200, "duration_ms": 1}
+    if url.endswith("/api/login"):
+        return {"status_code": 200, "payload": {"access_token": "api-smoke-token-secret"}, "duration_ms": 2}
+    if url.endswith("/api/me"):
+        assert headers.get("Authorization") == "Bearer api-smoke-token-secret"
+        return {"status_code": 200, "payload": {"user": "qa"}, "duration_ms": 1}
+    if url.endswith("/api/v1/orders"):
+        assert headers.get("Authorization") == "Bearer api-smoke-token-secret"
+        return {"status_code": 200, "headers": {"Content-Type": "application/json; charset=utf-8"}, "payload": {"items": []}, "duration_ms": 2}
+    return {"status_code": 404, "duration_ms": 1}
+
+
+def test_authenticated_api_smoke_verifies_real_api_base_path_without_secret_leak() -> None:
+    report = build_runtime_connectivity_auth_preflight(
+        config={
+            "auth_flow": {"login_path": "/api/login", "session_health_path": "/api/me"},
+            "accounts": {"normal_user": {"username": "qa", "password": "pw", "role": "normal_user"}},
+            "api_smoke_paths": ["/api/v1/orders"],
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_api_smoke_success_requester,
+        resolver=_resolver,
+    )
+
+    smoke = report["authenticated_api_smoke"]
+    assert smoke["configured"] is True
+    assert smoke["ok"] is True
+    assert smoke["passed_count"] == 1
+    assert smoke["events"][0]["content_type"] == "application/json"
+    assert report["ready_for_authenticated_runtime"] is True
+    checks = {item["name"]: item for item in report["checks"]}
+    assert checks["authenticated_api_smoke_verified"]["status"] == "passed"
+
+    dumped = json.dumps(report, ensure_ascii=False)
+    assert "api-smoke-token-secret" not in dumped
+    assert "pw" not in dumped
+
+
+def _api_smoke_html_login_requester(method: str, url: str, headers: dict[str, str], body: Any, timeout: float) -> dict[str, Any]:
+    if url.endswith("/"):
+        return {"status_code": 200, "duration_ms": 1}
+    if url.endswith("/api/login"):
+        return {"status_code": 200, "payload": {"access_token": "wrong-base-token-secret"}, "duration_ms": 2}
+    if url.endswith("/api/me"):
+        return {"status_code": 200, "payload": {"user": "qa"}, "duration_ms": 1}
+    if "/api/v1/orders" in url:
+        return {
+            "status_code": 200,
+            "headers": {"Content-Type": "text/html; charset=utf-8"},
+            "text": "<html><form action='/login'>login</form></html>",
+            "duration_ms": 2,
+        }
+    return {"status_code": 404, "duration_ms": 1}
+
+
+def test_authenticated_api_smoke_flags_html_login_or_wrong_api_base_path() -> None:
+    report = build_runtime_connectivity_auth_preflight(
+        config={
+            "auth_flow": {"login_path": "/api/login", "session_health_path": "/api/me"},
+            "accounts": {"normal_user": {"username": "qa", "password": "pw", "role": "normal_user"}},
+            "api_smoke_paths": ["/api/v1/orders?customer=secret-customer-id"],
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_api_smoke_html_login_requester,
+        resolver=_resolver,
+    )
+
+    smoke = report["authenticated_api_smoke"]
+    assert smoke["configured"] is True
+    assert smoke["ok"] is False
+    assert smoke["failed_count"] == 1
+    assert smoke["html_or_browser_response_count"] == 1
+    assert smoke["events"][0]["path"] == "/api/v1/orders"
+    assert smoke["events"][0]["issue"] == "html_or_browser_page_returned_instead_of_api"
+    assert report["ready_for_authenticated_runtime"] is False
+    checks = {item["name"]: item for item in report["checks"]}
+    assert checks["authenticated_api_smoke_verified"]["status"] == "warning"
+    assert "api base path" in report["recommended_next_step"]
+
+    dumped = json.dumps(report, ensure_ascii=False)
+    assert "wrong-base-token-secret" not in dumped
+    assert "secret-customer-id" not in dumped
+
+
+def test_onboarding_preflight_derives_authenticated_smoke_paths_from_read_probe_plan() -> None:
+    report = run_runtime_onboarding_preflight(
+        plan=_grounded_read_plan(),
+        config={
+            "environment_kind": "sandbox",
+            "auth_flow": {"login_path": "/api/login", "session_health_path": "/api/me"},
+            "accounts": {"normal_user": {"username": "qa", "password": "pw", "role": "normal_user"}},
+        },
+        base_url="http://sandbox.example.test",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_api_smoke_success_requester,
+        resolver=_resolver,
+    )
+
+    smoke = report["connectivity_auth_preflight"]["authenticated_api_smoke"]
+    assert smoke["configured"] is True
+    assert smoke["passed_count"] == 1
+    assert smoke["events"][0]["path"] == "/api/v1/orders"
+    checks = {item["name"]: item for item in report["checks"]}
+    assert checks["authenticated_api_smoke_verified"]["status"] == "passed"
