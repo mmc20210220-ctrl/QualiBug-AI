@@ -1871,6 +1871,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "- Phase93C: onboarding remediation kit gives customers exact safe setup actions and config patch templates",
         "- Phase93D: runtime execution runbook sequences preflight, read-only, write-sandbox and fix-verification runs",
         "- Phase93E: runtime evidence readiness SLA gate quantifies commercial evidence coverage",
+        "- Phase95B: runtime evidence scoreboard reports actual execution, setup, binding, snapshot and cleanup rates",
         "- Phase93F: SLA-gated execution policy separates must-run, degraded, blocked and supplemental probes",
         "- Phase93G: SLA gap prioritizer generates the smallest next onboarding delta patch",
         "- Phase93H: onboarding patch safety validator blocks production targets, raw secrets and unsafe cleanup gaps",
@@ -1908,6 +1909,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- onboarding remediation actions: `{((report.get('onboarding_remediation_kit') or {}).get('action_count'))}`",
         f"- runtime runbook status: `{((report.get('runtime_execution_runbook') or {}).get('status'))}`",
         f"- runtime evidence SLA gate: `{((report.get('runtime_evidence_readiness_sla_gate') or {}).get('status'))}` / score `{((report.get('runtime_evidence_readiness_sla_gate') or {}).get('commercial_readiness_score'))}`",
+        f"- runtime evidence scoreboard integrity: `{summary.get('runtime_execution_integrity_score')}`; binding success `{summary.get('runtime_scoreboard_binding_success_rate')}%`",
         f"- runtime SLA policy: `{((report.get('runtime_sla_execution_policy') or {}).get('status'))}`",
         f"- write sandbox approval: `{((report.get('write_sandbox_approval_packet') or {}).get('status'))}`",
         f"- commercial handoff bundle: `{((report.get('commercial_handoff_bundle') or {}).get('status'))}`",
@@ -2054,6 +2056,262 @@ def _finding_from_observation(obs: dict[str, Any], finding_no: int, source: str)
     finding["priority"] = triage.get("priority")
     finding["customer_impact_summary"] = triage.get("customer_impact_summary")
     return finding
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round((float(numerator) / float(denominator)) * 100.0, 2)
+
+
+def _count_status(receipts: list[dict[str, Any]], *, status: str | None = None, accepted: bool | None = None) -> int:
+    total = 0
+    for receipt in receipts:
+        if status is not None and receipt.get("status") != status:
+            continue
+        if accepted is not None and bool(receipt.get("accepted")) is not accepted:
+            continue
+        total += 1
+    return total
+
+
+def _collect_runtime_binding_events(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for obs in observations:
+        cid = str(obs.get("candidate_id") or "")
+        req = obs.get("request") if isinstance(obs.get("request"), dict) else {}
+        body_binding = req.get("body_runtime_binding")
+        if isinstance(body_binding, dict):
+            events.append({
+                "candidate_id": cid,
+                "source": body_binding.get("source") or "request_body",
+                "bound": bool(body_binding.get("bound")),
+                "kind": "target_request_body",
+            })
+        for bucket_name in ("fixture_receipts", "cleanup_receipts"):
+            for receipt in obs.get(bucket_name) or []:
+                if not isinstance(receipt, dict):
+                    continue
+                binding = receipt.get("runtime_binding")
+                if isinstance(binding, dict) and binding:
+                    events.append({
+                        "candidate_id": cid,
+                        "source": binding.get("source") or bucket_name,
+                        "bound": bool(binding.get("bound")),
+                        "kind": bucket_name,
+                        "path": receipt.get("path"),
+                    })
+                body_binding = receipt.get("body_runtime_binding")
+                if isinstance(body_binding, dict):
+                    events.append({
+                        "candidate_id": cid,
+                        "source": body_binding.get("source") or f"{bucket_name}_body",
+                        "bound": bool(body_binding.get("bound")),
+                        "kind": f"{bucket_name}_body",
+                        "path": receipt.get("path"),
+                    })
+        for response in obs.get("responses") or []:
+            if not isinstance(response, dict):
+                continue
+            binding = response.get("runtime_binding")
+            if isinstance(binding, dict) and binding:
+                events.append({
+                    "candidate_id": cid,
+                    "source": binding.get("source") or "flow_response",
+                    "bound": bool(binding.get("bound")),
+                    "kind": "flow_response",
+                    "step": response.get("step"),
+                })
+            body_binding = response.get("request_body_runtime_binding")
+            if isinstance(body_binding, dict):
+                events.append({
+                    "candidate_id": cid,
+                    "source": body_binding.get("source") or "flow_step_body",
+                    "bound": bool(body_binding.get("bound")),
+                    "kind": "flow_step_body",
+                    "step": response.get("step"),
+                })
+    return events
+
+
+def _execution_failure_reasons(decisions: list[dict[str, Any]], observations: list[dict[str, Any]]) -> dict[str, int]:
+    reasons: dict[str, int] = {}
+    for decision in decisions:
+        if decision.get("decision") == "blocked":
+            reason = str(decision.get("reason") or "blocked")
+            reasons[reason] = reasons.get(reason, 0) + 1
+    for obs in observations:
+        verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+        verdict = str(verification.get("verdict") or "")
+        if verdict in {"inconclusive", "needs_more_evidence"}:
+            reason = str(verification.get("reason") or verdict)
+            reasons[reason] = reasons.get(reason, 0) + 1
+        response = obs.get("response") if isinstance(obs.get("response"), dict) else {}
+        if response.get("error"):
+            reason = str(response.get("error"))
+            reasons[reason] = reasons.get(reason, 0) + 1
+        for response in obs.get("responses") or []:
+            if isinstance(response, dict) and response.get("error"):
+                reason = str(response.get("error"))
+                reasons[reason] = reasons.get(reason, 0) + 1
+    return dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))[:20])
+
+
+def _build_runtime_evidence_scoreboard(report: dict[str, Any]) -> dict[str, Any]:
+    """Build a factual run ledger from the actual runtime report.
+
+    This deliberately avoids extrapolation: every count is derived from observed
+    decisions, HTTP responses, fixture receipts, snapshots and findings already
+    present in the execution report.  It gives customers a concrete answer to
+    "how much of this run really executed against runtime evidence?"
+    """
+    decisions = [d for d in (report.get("decisions") or []) if isinstance(d, dict)]
+    observations = [o for o in (report.get("observations") or []) if isinstance(o, dict)]
+    write_observations = [o for o in (report.get("write_observations") or []) if isinstance(o, dict)]
+    all_obs = observations + write_observations
+    findings = [f for f in (report.get("findings") or []) if isinstance(f, dict)]
+
+    decision_counts: dict[str, int] = {}
+    for decision in decisions:
+        key = str(decision.get("decision") or "unknown")
+        decision_counts[key] = decision_counts.get(key, 0) + 1
+
+    verdict_counts: dict[str, int] = {}
+    for obs in all_obs:
+        verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+        verdict = str(verification.get("verdict") or "unknown")
+        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+
+    fixture_receipts = [r for obs in all_obs for r in (obs.get("fixture_receipts") or []) if isinstance(r, dict)]
+    cleanup_receipts = [r for obs in all_obs for r in (obs.get("cleanup_receipts") or []) if isinstance(r, dict)]
+    snapshots = [
+        s
+        for obs in write_observations
+        for phase in ("before", "after")
+        for s in (((obs.get("snapshots") or {}).get(phase)) or [])
+        if isinstance(s, dict)
+    ]
+    snapshot_accepted = sum(1 for s in snapshots if isinstance(s.get("status_code"), int) and 200 <= int(s.get("status_code")) < 300)
+    target_responses = sum(1 for obs in observations if isinstance((obs.get("response") or {}).get("status_code"), int))
+    write_target_responses = sum(1 for obs in write_observations for r in (obs.get("responses") or []) if isinstance(r, dict) and isinstance(r.get("status_code"), int))
+    runtime_binding_events = _collect_runtime_binding_events(all_obs)
+    bound_events = [e for e in runtime_binding_events if e.get("bound") is True]
+    binding_sources: dict[str, int] = {}
+    for event in bound_events:
+        source = str(event.get("source") or "unknown")
+        binding_sources[source] = binding_sources.get(source, 0) + 1
+
+    query_bound_request_count = sum(
+        1
+        for obs in all_obs
+        if isinstance(obs.get("request"), dict) and "?" in str((obs.get("request") or {}).get("path") or "")
+    ) + sum(
+        1
+        for obs in write_observations
+        for response in (obs.get("responses") or [])
+        if isinstance(response, dict) and "?" in str(response.get("flow_path") or "")
+    )
+
+    fixture_setup_executed = _count_status(fixture_receipts, status="executed")
+    fixture_setup_accepted = _count_status(fixture_receipts, status="executed", accepted=True)
+    cleanup_executed = _count_status(cleanup_receipts, status="executed")
+    cleanup_accepted = _count_status(cleanup_receipts, status="executed", accepted=True)
+    observations_total = len(all_obs)
+    executed_probe_count = len(observations) + len(write_observations)
+    validated_count = verdict_counts.get("validated_candidate", 0)
+    protected_count = verdict_counts.get("falsified_or_protected", 0)
+    needs_more_count = verdict_counts.get("needs_more_evidence", 0)
+    inconclusive_count = verdict_counts.get("inconclusive", 0)
+
+    execution_integrity_score = round(
+        min(100.0,
+            _safe_rate(executed_probe_count, max(1, len(decisions))) * 0.30
+            + _safe_rate(fixture_setup_accepted, max(1, fixture_setup_executed)) * 0.20
+            + _safe_rate(len(bound_events), max(1, len(runtime_binding_events))) * 0.20
+            + _safe_rate(cleanup_accepted, max(1, cleanup_executed)) * 0.15
+            + _safe_rate(validated_count + protected_count, max(1, observations_total)) * 0.15
+        ),
+        2,
+    )
+
+    return {
+        "engine": "runtime_evidence_scoreboard_v1_phase95_runtime_ledger",
+        "created_at": report.get("created_at"),
+        "project_id": report.get("project_id"),
+        "probe_count": len(decisions),
+        "executed_probe_count": executed_probe_count,
+        "executed_readonly_count": len(observations),
+        "executed_write_sandbox_count": len(write_observations),
+        "target_http_response_count": target_responses + write_target_responses,
+        "decision_counts": decision_counts,
+        "verdict_counts": verdict_counts,
+        "validated_candidate_count": validated_count,
+        "protected_or_falsified_count": protected_count,
+        "needs_more_evidence_count": needs_more_count,
+        "inconclusive_count": inconclusive_count,
+        "finding_count": len(findings),
+        "fixture_setup_request_count": len(fixture_receipts),
+        "fixture_setup_executed_count": fixture_setup_executed,
+        "fixture_setup_accepted_count": fixture_setup_accepted,
+        "fixture_setup_success_rate": _safe_rate(fixture_setup_accepted, fixture_setup_executed),
+        "cleanup_request_count": len(cleanup_receipts),
+        "cleanup_executed_count": cleanup_executed,
+        "cleanup_accepted_count": cleanup_accepted,
+        "cleanup_success_rate": _safe_rate(cleanup_accepted, cleanup_executed),
+        "snapshot_request_count": len(snapshots),
+        "snapshot_accepted_count": snapshot_accepted,
+        "snapshot_success_rate": _safe_rate(snapshot_accepted, len(snapshots)),
+        "runtime_binding_event_count": len(runtime_binding_events),
+        "runtime_binding_success_count": len(bound_events),
+        "runtime_binding_success_rate": _safe_rate(len(bound_events), len(runtime_binding_events)),
+        "runtime_binding_sources": dict(sorted(binding_sources.items())),
+        "query_bound_request_count": query_bound_request_count,
+        "execution_integrity_score": execution_integrity_score,
+        "top_failure_or_gap_reasons": _execution_failure_reasons(decisions, all_obs),
+    }
+
+
+def _render_runtime_evidence_scoreboard_markdown(scoreboard: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Evidence Scoreboard",
+        "",
+        f"- engine: `{scoreboard.get('engine')}`",
+        f"- project: `{scoreboard.get('project_id')}`",
+        f"- execution integrity score: `{scoreboard.get('execution_integrity_score')}`",
+        "",
+        "## Execution coverage",
+        "",
+        f"- probes total: {scoreboard.get('probe_count')}",
+        f"- probes executed: {scoreboard.get('executed_probe_count')}",
+        f"- target HTTP responses: {scoreboard.get('target_http_response_count')}",
+        f"- decisions: `{json.dumps(scoreboard.get('decision_counts') or {}, ensure_ascii=False)}`",
+        f"- verdicts: `{json.dumps(scoreboard.get('verdict_counts') or {}, ensure_ascii=False)}`",
+        "",
+        "## Runtime evidence health",
+        "",
+        f"- fixture setup accepted/executed: {scoreboard.get('fixture_setup_accepted_count')}/{scoreboard.get('fixture_setup_executed_count')} ({scoreboard.get('fixture_setup_success_rate')}%)",
+        f"- runtime id/body binding success: {scoreboard.get('runtime_binding_success_count')}/{scoreboard.get('runtime_binding_event_count')} ({scoreboard.get('runtime_binding_success_rate')}%)",
+        f"- snapshots accepted/total: {scoreboard.get('snapshot_accepted_count')}/{scoreboard.get('snapshot_request_count')} ({scoreboard.get('snapshot_success_rate')}%)",
+        f"- cleanup accepted/executed: {scoreboard.get('cleanup_accepted_count')}/{scoreboard.get('cleanup_executed_count')} ({scoreboard.get('cleanup_success_rate')}%)",
+        f"- query-bound target or flow requests: {scoreboard.get('query_bound_request_count')}",
+        f"- binding sources: `{json.dumps(scoreboard.get('runtime_binding_sources') or {}, ensure_ascii=False)}`",
+        "",
+        "## Findings",
+        "",
+        f"- validated candidates: {scoreboard.get('validated_candidate_count')}",
+        f"- protected/falsified: {scoreboard.get('protected_or_falsified_count')}",
+        f"- needs more evidence: {scoreboard.get('needs_more_evidence_count')}",
+        f"- inconclusive: {scoreboard.get('inconclusive_count')}",
+        f"- customer-ready finding count: {scoreboard.get('finding_count')}",
+        "",
+    ]
+    gaps = scoreboard.get("top_failure_or_gap_reasons") or {}
+    if gaps:
+        lines.extend(["## Top failure or evidence-gap reasons", ""])
+        for reason, count in gaps.items():
+            lines.append(f"- {reason}: {count}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def run_grounded_probe_executor(
@@ -2243,6 +2501,12 @@ def run_grounded_probe_executor(
             "runtime_runbook_step_count": 0,
             "runtime_evidence_readiness_score": 0,
             "runtime_evidence_sla_gate_passed": False,
+            "runtime_execution_integrity_score": 0,
+            "runtime_scoreboard_binding_success_rate": 0,
+            "runtime_scoreboard_fixture_setup_success_rate": 0,
+            "runtime_scoreboard_cleanup_success_rate": 0,
+            "runtime_scoreboard_snapshot_success_rate": 0,
+            "runtime_scoreboard_top_gap_count": 0,
             "runtime_sla_must_run_count": 0,
             "runtime_sla_blocked_before_sla_count": 0,
             "runtime_sla_gap_prioritized_action_count": 0,
@@ -2318,6 +2582,8 @@ def run_grounded_probe_executor(
     runtime_runbook_md_path = output / "grounded_probe_runtime_execution_runbook.md"
     readiness_sla_json_path = output / "grounded_probe_runtime_evidence_readiness_sla_gate.json"
     readiness_sla_md_path = output / "grounded_probe_runtime_evidence_readiness_sla_gate.md"
+    runtime_scoreboard_json_path = output / "grounded_probe_runtime_evidence_scoreboard.json"
+    runtime_scoreboard_md_path = output / "grounded_probe_runtime_evidence_scoreboard.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -2382,6 +2648,8 @@ def run_grounded_probe_executor(
         "runtime_execution_runbook_md": str(runtime_runbook_md_path),
         "runtime_evidence_readiness_sla_gate_json": str(readiness_sla_json_path),
         "runtime_evidence_readiness_sla_gate_md": str(readiness_sla_md_path),
+        "runtime_evidence_scoreboard_json": str(runtime_scoreboard_json_path),
+        "runtime_evidence_scoreboard_md": str(runtime_scoreboard_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -2446,6 +2714,15 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_evidence_sla_gate_passed"] = bool(report["runtime_evidence_readiness_sla_gate"].get("sla_gate_passed"))
     _write_json(readiness_sla_json_path, report["runtime_evidence_readiness_sla_gate"])
     readiness_sla_md_path.write_text(render_runtime_evidence_readiness_markdown(report["runtime_evidence_readiness_sla_gate"]), encoding="utf-8")
+    report["runtime_evidence_scoreboard"] = _build_runtime_evidence_scoreboard(report)
+    report["summary"]["runtime_execution_integrity_score"] = report["runtime_evidence_scoreboard"].get("execution_integrity_score", 0)
+    report["summary"]["runtime_scoreboard_binding_success_rate"] = report["runtime_evidence_scoreboard"].get("runtime_binding_success_rate", 0)
+    report["summary"]["runtime_scoreboard_fixture_setup_success_rate"] = report["runtime_evidence_scoreboard"].get("fixture_setup_success_rate", 0)
+    report["summary"]["runtime_scoreboard_cleanup_success_rate"] = report["runtime_evidence_scoreboard"].get("cleanup_success_rate", 0)
+    report["summary"]["runtime_scoreboard_snapshot_success_rate"] = report["runtime_evidence_scoreboard"].get("snapshot_success_rate", 0)
+    report["summary"]["runtime_scoreboard_top_gap_count"] = len(report["runtime_evidence_scoreboard"].get("top_failure_or_gap_reasons") or {})
+    _write_json(runtime_scoreboard_json_path, report["runtime_evidence_scoreboard"])
+    runtime_scoreboard_md_path.write_text(_render_runtime_evidence_scoreboard_markdown(report["runtime_evidence_scoreboard"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
     report["summary"]["runtime_sla_must_run_count"] = report["runtime_sla_execution_policy"].get("must_run_for_sla_count", 0)
     report["summary"]["runtime_sla_blocked_before_sla_count"] = report["runtime_sla_execution_policy"].get("blocked_before_sla_count", 0)
