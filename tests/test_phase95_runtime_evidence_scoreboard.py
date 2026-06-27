@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai_test_asset_center.grounded_probe_executor import (
+    _build_probe_outcomes,
     _build_runtime_evidence_scoreboard,
     _render_runtime_evidence_scoreboard_markdown,
 )
@@ -124,3 +125,61 @@ def test_runtime_evidence_scoreboard_markdown_is_customer_readable() -> None:
     assert "fixture setup accepted/executed: 4/5" in markdown
     assert "runtime id/body binding success: 7/8" in markdown
     assert "needs more observer evidence: 1" in markdown
+
+
+def test_probe_outcomes_make_protected_and_blocked_probes_auditable() -> None:
+    outcomes = _build_probe_outcomes(
+        decisions=[
+            {"candidate_id": "READ-PROTECTED", "decision": "execute_readonly", "method": "GET", "path": "/admin/orders"},
+            {"candidate_id": "READ-NO-FINDING", "decision": "execute_readonly", "method": "GET", "path": "/orders"},
+            {"candidate_id": "WRITE-BUG", "decision": "execute_write_sandbox", "method": "POST", "path": "/orders/pay"},
+            {"candidate_id": "BLOCKED", "decision": "blocked", "method": "POST", "path": "/orders/{id}", "reason": "missing_path_params:id"},
+        ],
+        observations=[
+            {
+                "candidate_id": "READ-PROTECTED",
+                "risk_type": "auth_boundary_probe",
+                "method": "GET",
+                "path": "/admin/orders",
+                "response": {"status_code": 403},
+                "verification": {"verdict": "falsified_or_protected", "reason": "anonymous rejected"},
+            },
+            {
+                "candidate_id": "READ-NO-FINDING",
+                "risk_type": "read_contract_probe",
+                "method": "GET",
+                "path": "/orders",
+                "response": {"status_code": 200},
+                "verification": {"verdict": "observed_no_finding", "reason": "response matched documented contract"},
+            }
+        ],
+        write_observations=[
+            {
+                "candidate_id": "WRITE-BUG",
+                "risk_type": "state_transition_probe",
+                "method": "POST",
+                "path": "/orders/pay",
+                "responses": [{"status_code": 200}],
+                "verification": {"verdict": "validated_candidate", "reason": "paid cancelled order"},
+            }
+        ],
+        findings=[
+            {"candidate_id": "WRITE-BUG", "finding_id": "GPF-0001", "customer_ready": True},
+        ],
+    )
+
+    by_id = {item["candidate_id"]: item for item in outcomes}
+
+    assert by_id["READ-PROTECTED"]["outcome"] == "falsified_or_protected"
+    assert by_id["READ-PROTECTED"]["role"] == "protected_baseline"
+    assert by_id["READ-PROTECTED"]["customer_countable_bug"] is False
+    assert by_id["READ-PROTECTED"]["http_statuses"] == [403]
+    assert by_id["READ-NO-FINDING"]["outcome"] == "observed_no_finding"
+    assert by_id["READ-NO-FINDING"]["role"] == "no_finding_observed"
+    assert by_id["READ-NO-FINDING"]["customer_countable_bug"] is False
+    assert by_id["WRITE-BUG"]["outcome"] == "validated_candidate"
+    assert by_id["WRITE-BUG"]["role"] == "customer_finding"
+    assert by_id["WRITE-BUG"]["finding_id"] == "GPF-0001"
+    assert by_id["WRITE-BUG"]["customer_countable_bug"] is True
+    assert by_id["BLOCKED"]["outcome"] == "blocked_before_execution"
+    assert by_id["BLOCKED"]["role"] == "blocked_before_execution"

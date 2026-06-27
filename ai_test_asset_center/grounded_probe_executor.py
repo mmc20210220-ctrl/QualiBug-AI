@@ -3229,6 +3229,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- validated candidates: {summary.get('validated_candidate_count')}",
         f"- protected/falsified: {summary.get('protected_count')}",
         f"- needs more evidence: {summary.get('needs_more_evidence_count')}",
+        f"- probe outcomes: `{json.dumps((summary.get('probe_outcome_counts') or {}), ensure_ascii=False)}`",
         f"- customer delivery index: `{(report.get('customer_delivery_index') or {}).get('engine')}`",
         f"- by priority: `{json.dumps(((report.get('customer_delivery_index') or {}).get('by_priority') or {}), ensure_ascii=False)}`",
         f"- auto fixture setup requests: {summary.get('auto_fixture_setup_request_count')}",
@@ -3253,9 +3254,24 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- handoff receipt comparison: `{((report.get('handoff_receipt_comparison') or {}).get('status'))}` / changes `{((report.get('handoff_receipt_comparison') or {}).get('change_count'))}`",
         f"- handoff rerun audit gate: `{((report.get('handoff_rerun_audit_gate') or {}).get('status'))}` / closure allowed `{((report.get('handoff_rerun_audit_gate') or {}).get('closure_verification_allowed'))}`",
         "",
+        "## Probe Outcomes",
+        "",
+        "| Candidate | Outcome | Role | Endpoint | HTTP | Reason |",
+        "|---|---|---|---|---|---|",
+    ]
+    for outcome in (report.get("probe_outcomes") or [])[:80]:
+        lines.append(
+            f"| `{outcome.get('candidate_id')}` | `{outcome.get('outcome')}` | `{outcome.get('role')}` | "
+            f"`{outcome.get('method')} {outcome.get('path')}` | `{','.join(str(x) for x in (outcome.get('http_statuses') or []))}` | "
+            f"{str(outcome.get('reason') or '')[:180]} |"
+        )
+    if len(report.get("probe_outcomes") or []) > 80:
+        lines.append(f"| ... | ... | ... | ... | ... | first 80 of {len(report.get('probe_outcomes') or [])} shown |")
+    lines.extend([
+        "",
         "## Runtime findings",
         "",
-    ]
+    ])
     findings = report.get("findings") or []
     if not findings:
         lines.append("No runtime-validated candidates were produced in this run.")
@@ -3390,6 +3406,130 @@ def _finding_from_observation(obs: dict[str, Any], finding_no: int, source: str)
     finding["priority"] = triage.get("priority")
     finding["customer_impact_summary"] = triage.get("customer_impact_summary")
     return finding
+
+
+def _observation_status_codes(obs: dict[str, Any]) -> list[int]:
+    codes: list[int] = []
+    if isinstance(obs.get("response"), dict):
+        code = (obs.get("response") or {}).get("status_code")
+        if isinstance(code, int):
+            codes.append(code)
+    for response in obs.get("responses") or []:
+        if not isinstance(response, dict):
+            continue
+        code = response.get("status_code")
+        if isinstance(code, int):
+            codes.append(code)
+    return codes
+
+
+def _probe_outcome_role(verdict: str) -> str:
+    if verdict == "validated_candidate":
+        return "customer_finding"
+    if verdict == "falsified_or_protected":
+        return "protected_baseline"
+    if verdict == "needs_more_evidence":
+        return "evidence_gap"
+    if verdict == "observed_no_finding":
+        return "no_finding_observed"
+    if verdict == "blocked_before_execution":
+        return "blocked_before_execution"
+    if verdict == "dry_run_only":
+        return "dry_run_only"
+    return "runtime_observation"
+
+
+def _build_probe_outcomes(
+    decisions: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    write_observations: list[dict[str, Any]],
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build one compact, customer-auditable outcome row for every probe."""
+    obs_by_candidate: dict[str, dict[str, Any]] = {}
+    for obs in observations + write_observations:
+        candidate_id = str(obs.get("candidate_id") or "")
+        if candidate_id:
+            obs_by_candidate[candidate_id] = obs
+
+    finding_by_candidate = {
+        str(finding.get("candidate_id") or ""): finding
+        for finding in findings
+        if isinstance(finding, dict) and finding.get("candidate_id")
+    }
+
+    outcomes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for decision in decisions:
+        candidate_id = str(decision.get("candidate_id") or "")
+        seen.add(candidate_id)
+        obs = obs_by_candidate.get(candidate_id)
+        if obs:
+            verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+            verdict = str(verification.get("verdict") or "needs_more_evidence")
+            finding = finding_by_candidate.get(candidate_id) or {}
+            outcomes.append({
+                "candidate_id": candidate_id,
+                "decision": decision.get("decision"),
+                "outcome": verdict,
+                "status": verdict,
+                "role": _probe_outcome_role(verdict),
+                "finding_id": finding.get("finding_id") or "",
+                "risk_type": obs.get("risk_type") or decision.get("risk_type"),
+                "method": obs.get("method") or decision.get("method"),
+                "path": obs.get("path") or decision.get("path"),
+                "http_statuses": _observation_status_codes(obs),
+                "reason": verification.get("reason") or decision.get("reason") or "",
+                "customer_countable_bug": verdict == "validated_candidate",
+                "customer_ready": bool(finding.get("customer_ready")),
+            })
+            continue
+
+        decision_name = str(decision.get("decision") or "not_executed")
+        if decision_name == "blocked":
+            outcome = "blocked_before_execution"
+        elif decision_name == "dry_run_only":
+            outcome = "dry_run_only"
+        else:
+            outcome = "not_observed"
+        outcomes.append({
+            "candidate_id": candidate_id,
+            "decision": decision.get("decision"),
+            "outcome": outcome,
+            "status": outcome,
+            "role": _probe_outcome_role(outcome),
+            "finding_id": "",
+            "risk_type": decision.get("risk_type"),
+            "method": decision.get("method"),
+            "path": decision.get("path"),
+            "http_statuses": [],
+            "reason": decision.get("reason") or "",
+            "customer_countable_bug": False,
+            "customer_ready": False,
+        })
+
+    for candidate_id, obs in obs_by_candidate.items():
+        if candidate_id in seen:
+            continue
+        verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+        verdict = str(verification.get("verdict") or "needs_more_evidence")
+        finding = finding_by_candidate.get(candidate_id) or {}
+        outcomes.append({
+            "candidate_id": candidate_id,
+            "decision": "observed_without_decision",
+            "outcome": verdict,
+            "status": verdict,
+            "role": _probe_outcome_role(verdict),
+            "finding_id": finding.get("finding_id") or "",
+            "risk_type": obs.get("risk_type"),
+            "method": obs.get("method"),
+            "path": obs.get("path"),
+            "http_statuses": _observation_status_codes(obs),
+            "reason": verification.get("reason") or "",
+            "customer_countable_bug": verdict == "validated_candidate",
+            "customer_ready": bool(finding.get("customer_ready")),
+        })
+    return outcomes
 
 
 def _safe_rate(numerator: int, denominator: int) -> float:
@@ -4920,6 +5060,11 @@ def run_grounded_probe_executor(
         if isinstance(s, dict) and s.get("observer_kind")
     })
     customer_delivery_index = build_customer_delivery_index(findings)
+    probe_outcomes = _build_probe_outcomes(decisions, observations, write_observations, findings)
+    probe_outcome_counts = {
+        outcome: sum(1 for item in probe_outcomes if item.get("outcome") == outcome)
+        for outcome in sorted({str(item.get("outcome")) for item in probe_outcomes if item.get("outcome")})
+    }
     report = {
         "engine": "grounded_probe_executor_v41_phase93z",
         "mode": "document_grounded_probe_execution",
@@ -5028,6 +5173,8 @@ def run_grounded_probe_executor(
             "validated_candidate_count": len(findings),
             "protected_count": protected,
             "needs_more_evidence_count": needs_more,
+            "probe_outcome_count": len(probe_outcomes),
+            "probe_outcome_counts": probe_outcome_counts,
             "auto_fixture_setup_request_count": fixture_setup_count,
             "auto_fixture_cleanup_request_count": fixture_cleanup_count,
             "auto_snapshot_request_count": snapshot_count,
@@ -5125,6 +5272,7 @@ def run_grounded_probe_executor(
         "decisions": annotate_decisions_with_capability(decisions, runtime_capability_matrix),
         "observations": observations,
         "write_observations": write_observations,
+        "probe_outcomes": probe_outcomes,
         "findings": findings,
     }
 
