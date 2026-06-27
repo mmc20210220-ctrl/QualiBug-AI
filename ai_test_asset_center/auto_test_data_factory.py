@@ -24,6 +24,18 @@ import yaml
 BLOCKED_INPUT_PART_RE = re.compile(r"(?:oracle|ground[_-]?truth|bug[_-]?matrix|answer|solution|seed)", re.I)
 PATH_PARAM_RE = re.compile(r"\{([^{}]+)\}")
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+MUTATION_FIELD_RE = {
+    "resource": re.compile(r"(?:amount|price|balance|quota|point|credit|stock|inventory|quantity|qty|limit|total|积分|额度|余额|库存|金额|数量)", re.I),
+    "tenant": re.compile(r"(?:tenant|org|owner|user|account|member|customer|object|resource|租户|组织|归属|用户)", re.I),
+    "idempotency": re.compile(r"(?:idempotency|business[_-]?key|request[_-]?id|external[_-]?event[_-]?id|event[_-]?id|dedupe|幂等|业务键)", re.I),
+    "state": re.compile(r"(?:status|state|stage|phase|from[_-]?status|target[_-]?status|状态)", re.I),
+}
+MUTATION_DEFAULT_FIELD = {
+    "resource": "amount",
+    "tenant": "tenant_id",
+    "idempotency": "idempotency_key",
+    "state": "status",
+}
 
 
 def _now_seed() -> str:
@@ -163,12 +175,98 @@ def _schema_value(name: str, schema: dict[str, Any], seed: str) -> Any:
     return f"qb_auto_{re.sub(r'[^a-z0-9_]+', '_', lname).strip('_') or 'value'}_{seed}"
 
 
+
+def _mutation_plan(probe: dict[str, Any]) -> dict[str, Any]:
+    plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
+    mutation = plan.get("mutation") if isinstance(plan.get("mutation"), dict) else {}
+    return mutation if isinstance(mutation, dict) else {}
+
+
+def _materialize_mutation_value(raw_value: Any, selector: str, seed: str) -> Any:
+    """Convert mutation placeholders into concrete qb_auto values.
+
+    Probe planning may intentionally use symbolic placeholders such as
+    ``<SAME_AS_PREVIOUS_ATTEMPT>``.  The runtime factory must turn them into
+    deterministic disposable values so the probe actually exercises the
+    intended boundary instead of silently falling back to a generic body.
+    """
+    if not isinstance(raw_value, str):
+        return raw_value
+    marker = raw_value.strip()
+    if marker in {"<SAME_AS_PREVIOUS_ATTEMPT>", "<SAME_KEY_DIFFERENT_PAYLOAD>"}:
+        return f"qb_auto_idempotency_key_{seed}"
+    if marker == "qb_auto_tenant_b_foreign_object":
+        return f"qb_auto_tenant_b_foreign_object_{seed}"
+    if marker == "qb_auto_owner_b":
+        return f"qb_auto_owner_b_{seed}"
+    if marker == "":
+        return ""
+    return raw_value
+
+
+def _set_matching_mutation_fields(value: Any, selector_re: re.Pattern[str], mutation_value: Any, prefix: str = "") -> list[str]:
+    applied: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if selector_re.search(str(key)) and not isinstance(child, (dict, list)):
+                value[key] = mutation_value
+                applied.append(path)
+                continue
+            applied.extend(_set_matching_mutation_fields(child, selector_re, mutation_value, path))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value[:20]):
+            path = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+            applied.extend(_set_matching_mutation_fields(child, selector_re, mutation_value, path))
+    return applied[:20]
+
+
+def _ensure_mutation_field(body: dict[str, Any], selector: str, mutation_value: Any) -> str:
+    field = MUTATION_DEFAULT_FIELD.get(selector) or "qualibug_mutation_value"
+    body[field] = mutation_value
+    return field
+
+
+def _apply_mutation_to_body(body: dict[str, Any], probe: dict[str, Any], seed: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    mutation = _mutation_plan(probe)
+    if not mutation:
+        return body, {"applied": False, "reason": "no_probe_plan_mutation"}
+    selector = str(mutation.get("field_selector") or "").strip().lower()
+    selector_re = MUTATION_FIELD_RE.get(selector)
+    mutation_value = _materialize_mutation_value(mutation.get("value"), selector, seed)
+    if not selector_re:
+        return body, {
+            "applied": False,
+            "reason": f"unsupported_mutation_field_selector:{selector or 'missing'}",
+            "mutation_kind": mutation.get("mutation_kind"),
+        }
+    applied_fields = _set_matching_mutation_fields(body, selector_re, mutation_value)
+    fallback_fields: list[str] = []
+    if not applied_fields:
+        fallback_fields.append(_ensure_mutation_field(body, selector, mutation_value))
+    body["qualibug_mutation_trace"] = {
+        "mutation_kind": mutation.get("mutation_kind"),
+        "field_selector": selector,
+        "applied_fields": applied_fields or fallback_fields,
+        "fallback_fields_added": fallback_fields,
+    }
+    return body, {
+        "applied": True,
+        "mutation_kind": mutation.get("mutation_kind"),
+        "field_selector": selector,
+        "requested_value": mutation.get("value"),
+        "materialized_value_preview": mutation_value if isinstance(mutation_value, (int, float, bool)) else str(mutation_value)[:120],
+        "applied_fields": applied_fields or fallback_fields,
+        "fallback_fields_added": fallback_fields,
+    }
+
+
 def _risk_augmented_body(probe: dict[str, Any], seed: str, path_params: dict[str, Any]) -> dict[str, Any]:
     risk = str(probe.get("risk_type") or "")
     plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
     object_id = str(next(iter(path_params.values()), f"qb_auto_object_{seed}"))
     body: dict[str, Any] = {}
-    if risk in {"ownership_scope_probe", "auth_boundary_probe"}:
+    if risk in {"ownership_scope_probe", "auth_boundary_probe", "cross_tenant_auth_boundary_probe", "role_downgrade_auth_boundary_probe"}:
         body.update({
             "tenant_id": f"qb_auto_tenant_a_{seed}",
             "object_id": object_id,
@@ -176,7 +274,8 @@ def _risk_augmented_body(probe: dict[str, Any], seed: str, path_params: dict[str
             "org_id": f"qb_auto_org_a_{seed}",
         })
     if risk == "state_transition_probe":
-        terminal = (plan.get("terminal_states") or ["cancelled"])[0]
+        mutation = _mutation_plan(probe)
+        terminal = mutation.get("value") if mutation.get("field_selector") == "state" and mutation.get("value") else (plan.get("terminal_states") or ["cancelled"])[0]
         body.update({
             "id": object_id,
             "object_id": object_id,
@@ -313,6 +412,7 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     if not isinstance(body, dict):
         body = {"value": body}
     body.update(_risk_augmented_body(probe, seed, path_params))
+    body, mutation_application = _apply_mutation_to_body(body, probe, seed)
 
     headers: dict[str, str] = {}
     risk = str(probe.get("risk_type") or "")
@@ -376,6 +476,7 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
         "request_body": body,
         "path_params": path_params,
         "headers": headers,
+        "mutation_application": mutation_application,
         "setup_requests": setup_requests,
         "snapshots": snapshots,
         "cleanup_requests": cleanup_requests,
@@ -385,6 +486,9 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
             "primary_fixture_id": generated_id,
             "input_openapi_used": bool(spec),
             "schema_used": bool(schema),
+            "mutation_applied": bool(mutation_application.get("applied")),
+            "mutation_kind": mutation_application.get("mutation_kind"),
+            "mutation_applied_fields": mutation_application.get("applied_fields") or [],
             "setup_request_count": len(setup_requests),
             "snapshot_request_count": len(snapshots.get("before") or []) + len(snapshots.get("after") or []),
             "snapshot_observer_planner": observer_plan.get("planner"),
