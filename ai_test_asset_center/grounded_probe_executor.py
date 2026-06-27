@@ -1520,6 +1520,30 @@ def _render_flow_step_body(config: dict[str, Any], probe: dict[str, Any], step: 
     return rendered, summary
 
 
+def _render_runtime_target_body(
+    config: dict[str, Any],
+    probe: dict[str, Any],
+    method: str,
+    path: str,
+    body: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Render observed fixture ids into the final target request body.
+
+    Setup, snapshot, cleanup and flow-step bodies already bind runtime ids.  The
+    one remaining gap was the main write probe body when it came from
+    ``request_bodies`` or another advanced override: the URL could target the
+    server-created resource while JSON still carried ``{order_id}`` or
+    ``qb_auto_*`` placeholders.  Render the target body against the same
+    runtime path params immediately before execution and record a receipt so the
+    report shows whether body binding actually happened.
+    """
+    path_params = _configured_path_params(config, probe, method, path)
+    rendered = _render_fixture_runtime_value(body, path_params, _runtime_binding_original_values(config, probe))
+    summary = _runtime_body_binding_summary(body, rendered)
+    summary["source"] = "runtime_target_request_body"
+    return rendered, summary
+
+
 def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe: dict[str, Any], key: str, timeout: float) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
     for item in _auto_fixture_requests(config, probe, key):
@@ -1764,7 +1788,9 @@ def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config:
     setup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "setup_requests", timeout)
     setup_blocked = any(r.get("status") == "blocked" for r in setup_receipts)
     body, _reason = _configured_body(config, decision.candidate_id, decision.method, decision.path, probe)
+    body, target_body_binding = _render_runtime_target_body(config, probe, decision.method, decision.path, body)
     effective_request, headers, missing = _effective_runtime_request(probe, decision, config, base_url, body)
+    effective_request["body_runtime_binding"] = target_body_binding
     snapshots = {
         "before": [] if setup_blocked or missing else _execute_snapshots(config, base_url, probe, "before", timeout),
         "after": [],
