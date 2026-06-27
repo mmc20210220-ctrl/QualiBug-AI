@@ -90,3 +90,38 @@ def test_phase95_auth_boundary_variants_strip_credentials_and_validate_business_
 
     protected = _verify_observation(probe, {"status_code": 403, "payload": {"error": "forbidden"}})
     assert protected["verdict"] == "falsified_or_protected"
+
+
+def test_readonly_ownership_scope_probe_validates_accepted_negative_list_response() -> None:
+    probe = {
+        "candidate_id": "QBSCOPE-LIST-1",
+        "risk_type": "ownership_scope_probe",
+        "execution_policy": "read_only_safe",
+        "endpoint": {"method": "GET", "path": "/api/v1/orders/list?page_size=50000"},
+        "source_refs": [
+            {"kind": "endpoint_contract", "file": "API.md", "section": "/orders/list", "quote": "list endpoints must validate tenant and owner scope"},
+            {"kind": "business_rule", "file": "BUSINESS_RULES.md", "section": "C28", "quote": "large list surfaces must be limited and scope-filtered"},
+        ],
+    }
+
+    verdict = _verify_observation(
+        probe,
+        {
+            "status_code": 200,
+            "payload": {
+                "ok": True,
+                "observed_bug_id": "ORD-C28-028",
+                "expected_should_have_rejected": True,
+                "actual_behavior": "accepted_or_returned_business_data",
+                "resource": {
+                    "id": "srv_order_1",
+                    "tenant_id": "tenant-a",
+                    "owner_user_id": "foreign-owner",
+                    "status": "accepted_despite_negative_probe",
+                },
+            },
+        },
+    )
+
+    assert verdict["verdict"] == "validated_candidate"
+    assert "read-only negative scope probe" in verdict["reason"]

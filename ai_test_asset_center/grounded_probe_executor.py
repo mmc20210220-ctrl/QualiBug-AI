@@ -2182,6 +2182,14 @@ def _verify_observation(probe: dict[str, Any], response: dict[str, Any]) -> dict
 
     if status is None:
         return {"verdict": "inconclusive", "reason": response.get("error") or "network_error", "confidence": 0.0, "payload_summary": summary, "sensitive_keys": sensitive_keys}
+    if _read_negative_probe_was_accepted(probe, payload) and 200 <= int(status) < 300:
+        return {
+            "verdict": "validated_candidate",
+            "reason": f"read-only negative scope probe returned HTTP {status} with accepted cross-boundary business data",
+            "confidence": 0.9,
+            "payload_summary": summary,
+            "sensitive_keys": sensitive_keys,
+        }
     if _is_auth_boundary_risk(probe, risk_type):
         auth = _auth_boundary_plan(probe)
         actor = str(auth.get("actor") or "anonymous")
@@ -2200,6 +2208,25 @@ def _verify_observation(probe: dict[str, Any], response: dict[str, Any]) -> dict
         if 200 <= int(status) < 300:
             return {"verdict": "observed_no_finding", "reason": "read-only response observed without obvious sensitive keys", "confidence": 0.55, "payload_summary": summary, "sensitive_keys": sensitive_keys}
     return {"verdict": "observed_no_finding", "reason": f"read-only observation HTTP {status}; no runtime oracle matched", "confidence": 0.4, "payload_summary": summary, "sensitive_keys": sensitive_keys}
+
+
+def _read_negative_probe_was_accepted(probe: dict[str, Any], payload: Any) -> bool:
+    risk_type = str(probe.get("risk_type") or "")
+    if risk_type not in {"ownership_scope_probe", "auth_boundary_probe", "anonymous_auth_boundary_probe", "cross_tenant_auth_boundary_probe", "role_downgrade_auth_boundary_probe"}:
+        return False
+    method = str(probe.get("method") or ((probe.get("endpoint") or {}).get("method") if isinstance(probe.get("endpoint"), dict) else "") or "").upper()
+    if method and method not in READ_METHODS:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("expected_should_have_rejected") is True and str(payload.get("actual_behavior") or "") in {"accepted_or_returned_business_data", "accepted_despite_negative_probe"}:
+        return _has_business_data(payload)
+    resource = payload.get("resource") if isinstance(payload.get("resource"), dict) else {}
+    if str(resource.get("status") or "") == "accepted_despite_negative_probe":
+        return _has_business_data(payload)
+    if payload.get("observed_bug_id") and _has_business_data(payload):
+        return True
+    return False
 
 
 def _expected_negative_statuses(probe: dict[str, Any]) -> set[int]:
