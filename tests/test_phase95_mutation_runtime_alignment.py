@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai_test_asset_center.auto_test_data_factory import build_auto_fixture_for_probe
-from ai_test_asset_center.grounded_probe_executor import _headers_for_probe, _verify_observation
+from ai_test_asset_center.grounded_probe_executor import _headers_for_probe, _verify_observation, _verify_write_observation
 
 
 def _grounded_write_probe(risk_type: str, mutation: dict) -> dict:
@@ -125,3 +125,34 @@ def test_readonly_ownership_scope_probe_validates_accepted_negative_list_respons
 
     assert verdict["verdict"] == "validated_candidate"
     assert "read-only negative scope probe" in verdict["reason"]
+
+
+def test_conservation_probe_validates_accepted_negative_write_payload_marker() -> None:
+    probe = _grounded_write_probe(
+        "conservation_probe",
+        {"mutation_kind": "resource_negative_value", "field_selector": "resource", "value": -1},
+    )
+
+    verdict = _verify_write_observation(
+        probe,
+        [
+            {
+                "status_code": 200,
+                "payload": {
+                    "ok": True,
+                    "observed_bug_id": "ORD-C08-008",
+                    "expected_should_have_rejected": True,
+                    "actual_behavior": "accepted_or_returned_business_data",
+                    "resource": {
+                        "id": "srv_order_1",
+                        "status": "accepted_despite_negative_probe",
+                        "resource_qty": 1,
+                    },
+                },
+            }
+        ],
+        {"before": [{"status_code": 200, "payload": {"records": []}}], "after": [{"status_code": 200, "payload": {"records": []}}]},
+    )
+
+    assert verdict["verdict"] == "validated_candidate"
+    assert "business payload shows" in verdict["reason"]

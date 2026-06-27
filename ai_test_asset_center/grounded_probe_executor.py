@@ -2229,6 +2229,28 @@ def _read_negative_probe_was_accepted(probe: dict[str, Any], payload: Any) -> bo
     return False
 
 
+def _negative_probe_payload_was_accepted(probe: dict[str, Any], payload: Any) -> bool:
+    risk_type = str(probe.get("risk_type") or "")
+    if risk_type not in {
+        "ownership_scope_probe",
+        "auth_boundary_probe",
+        "anonymous_auth_boundary_probe",
+        "cross_tenant_auth_boundary_probe",
+        "role_downgrade_auth_boundary_probe",
+        "state_transition_probe",
+        "async_external_event_probe",
+        "conservation_probe",
+        "idempotency_replay_probe",
+    }:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("expected_should_have_rejected") is True and str(payload.get("actual_behavior") or "") in {"accepted_or_returned_business_data", "accepted_despite_negative_probe"}:
+        return _has_business_data(payload)
+    resource = payload.get("resource") if isinstance(payload.get("resource"), dict) else {}
+    return str(resource.get("status") or "") == "accepted_despite_negative_probe" and _has_business_data(payload)
+
+
 def _expected_negative_statuses(probe: dict[str, Any]) -> set[int]:
     probe_plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
     values = probe_plan.get("expected_status") or probe_plan.get("expected_statuses") or []
@@ -2653,6 +2675,16 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
 
     if code in expected:
         return {"verdict": "falsified_or_protected", "reason": f"negative sandbox write was rejected with expected HTTP {code}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
+
+    if 200 <= code < 300 and _negative_probe_payload_was_accepted(probe, payload):
+        return {
+            "verdict": "validated_candidate",
+            "reason": f"negative sandbox write returned HTTP {code} and business payload shows the rejected operation was accepted",
+            "confidence": 0.9,
+            "payload_summary": summary,
+            "sensitive_keys": sensitive_keys,
+            "business_invariant_evaluation": invariant_eval,
+        }
 
     if _is_auth_boundary_risk(probe, risk_type) or risk_type in {"ownership_scope_probe", "state_transition_probe", "async_external_event_probe"}:
         if 200 <= code < 300:
