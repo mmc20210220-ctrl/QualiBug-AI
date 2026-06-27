@@ -1263,6 +1263,189 @@ def _render_runtime_evidence_progress_delta_markdown(delta: dict[str, Any]) -> s
     return "\n".join(lines)
 
 
+
+def _runtime_reproduction_gate_ready(package: dict[str, Any]) -> bool:
+    gate = package.get("reproduction_readiness_gate") if isinstance(package.get("reproduction_readiness_gate"), dict) else {}
+    if gate:
+        return bool(gate.get("customer_ready")) and not bool(gate.get("blockers") or [])
+    return bool(package.get("customer_ready")) and bool(package.get("reproduction_trace") or [])
+
+
+def _runtime_package_candidate_ids(pack: dict[str, Any], *, ready_only: bool) -> list[str]:
+    ids: list[str] = []
+    for package in pack.get("packages") or []:
+        if not isinstance(package, dict):
+            continue
+        if ready_only and not (package.get("customer_ready") is True and _runtime_reproduction_gate_ready(package)):
+            continue
+        if not ready_only and (package.get("customer_ready") is True and _runtime_reproduction_gate_ready(package)):
+            continue
+        candidate_id = str(package.get("candidate_id") or "").strip()
+        if candidate_id:
+            ids.append(candidate_id)
+    return _dedupe(ids)
+
+
+def _runtime_ledger_gap_candidate_ids(ledger: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    for entry in ledger.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("customer_ready") is True and not (entry.get("gap_types") or []):
+            continue
+        candidate_id = str(entry.get("candidate_id") or "").strip()
+        if candidate_id:
+            ids.append(candidate_id)
+    return _dedupe(ids)
+
+
+def _build_runtime_evidence_promotion_gate(report: dict[str, Any]) -> dict[str, Any]:
+    """Decide whether a runtime evidence run may be promoted to customer handoff.
+
+    The remediation loop can now run targeted probes, carry forward proven
+    findings, and compute progress deltas.  This gate converts those artifacts
+    into a single go/no-go decision so the product does not accidentally market
+    a run as customer-ready while P0 gaps, reproduction blockers, or regression
+    signals still exist.
+    """
+    scoreboard = report.get("runtime_evidence_scoreboard") if isinstance(report.get("runtime_evidence_scoreboard"), dict) else {}
+    maturity = scoreboard.get("evidence_maturity") if isinstance(scoreboard.get("evidence_maturity"), dict) else {}
+    remediation = report.get("runtime_evidence_remediation_plan") if isinstance(report.get("runtime_evidence_remediation_plan"), dict) else {}
+    ledger = report.get("runtime_evidence_probe_ledger") if isinstance(report.get("runtime_evidence_probe_ledger"), dict) else {}
+    pack = report.get("runtime_customer_reproduction_pack") if isinstance(report.get("runtime_customer_reproduction_pack"), dict) else {}
+    progress = report.get("runtime_evidence_progress_delta") if isinstance(report.get("runtime_evidence_progress_delta"), dict) else {}
+    carry = report.get("runtime_evidence_carry_forward") if isinstance(report.get("runtime_evidence_carry_forward"), dict) else {}
+    rerun = report.get("runtime_rerun_selection") if isinstance(report.get("runtime_rerun_selection"), dict) else {}
+
+    checks = {
+        "scoreboard_customer_ready": bool(maturity.get("customer_ready")),
+        "scoreboard_maturity_level": maturity.get("level"),
+        "execution_integrity_score": scoreboard.get("execution_integrity_score", 0),
+        "p0_group_count": int(remediation.get("p0_group_count") or 0),
+        "queued_candidate_count": int(remediation.get("queued_candidate_count") or 0),
+        "customer_ready_reproduction_count": int(pack.get("customer_ready_reproduction_count") or 0),
+        "blocked_reproduction_count": int(pack.get("blocked_reproduction_count") or 0),
+        "probe_ledger_evidence_gap_count": int(ledger.get("evidence_gap_probe_count") or 0),
+        "probe_ledger_customer_ready_count": int(ledger.get("customer_ready_probe_count") or 0),
+        "progress_delta_status": progress.get("status"),
+        "progress_regression_count": len(progress.get("regressions") or []),
+        "carry_forward_blocked_candidate_count": int(carry.get("blocked_candidate_count") or 0),
+        "rerun_missing_candidate_count": len(rerun.get("missing_candidate_ids") or []),
+        "targeted_rerun_enabled": bool(rerun.get("enabled")),
+    }
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not checks["scoreboard_customer_ready"]:
+        blockers.append("scoreboard_maturity_not_customer_ready")
+    if checks["p0_group_count"] > 0:
+        blockers.append("p0_runtime_remediation_groups_remaining")
+    if checks["queued_candidate_count"] > 0:
+        blockers.append("runtime_remediation_rerun_queue_not_empty")
+    if checks["customer_ready_reproduction_count"] <= 0:
+        blockers.append("no_customer_ready_reproduction_packages")
+    if checks["blocked_reproduction_count"] > 0:
+        blockers.append("blocked_reproduction_packages_remaining")
+    if checks["probe_ledger_evidence_gap_count"] > 0:
+        blockers.append("probe_ledger_evidence_gaps_remaining")
+    if checks["progress_regression_count"] > 0:
+        blockers.append("runtime_evidence_progress_regression_detected")
+    if checks["carry_forward_blocked_candidate_count"] > 0:
+        blockers.append("carry_forward_blocked_candidate_evidence")
+    if checks["rerun_missing_candidate_count"] > 0:
+        blockers.append("rerun_manifest_references_missing_candidates")
+
+    if not progress:
+        warnings.append("progress_delta_not_built")
+    elif progress.get("status") == "no_previous_runtime_evidence_found":
+        warnings.append("first_runtime_evidence_baseline_no_previous_delta")
+    elif progress.get("status") == "runtime_evidence_unchanged":
+        warnings.append("targeted_rerun_did_not_improve_evidence")
+
+    ready_candidate_ids = _runtime_package_candidate_ids(pack, ready_only=True)
+    blocked_candidate_ids = _dedupe(
+        _runtime_package_candidate_ids(pack, ready_only=False)
+        + _runtime_ledger_gap_candidate_ids(ledger)
+        + [str(cid) for cid in (rerun.get("missing_candidate_ids") or []) if str(cid).strip()]
+    )
+
+    promotion_ready = not blockers and checks["customer_ready_reproduction_count"] > 0
+    if promotion_ready:
+        status = "customer_ready_runtime_evidence_promotion_approved"
+        next_action = "Freeze this run as the customer-ready baseline and use the reproduction pack for customer/developer handoff."
+    elif checks["progress_regression_count"] > 0:
+        status = "runtime_evidence_promotion_blocked_by_regression"
+        next_action = "Stop handoff, inspect the progress delta regressions, and rerun after restoring the previous customer-ready evidence."
+    elif checks["p0_group_count"] > 0 or checks["queued_candidate_count"] > 0:
+        status = "runtime_evidence_promotion_blocked_by_remediation_queue"
+        next_action = "Run the remediation rerun manifest first, then regenerate scoreboard, ledger, reproduction pack, progress delta, and this promotion gate."
+    elif checks["customer_ready_reproduction_count"] <= 0:
+        status = "runtime_evidence_promotion_blocked_no_customer_ready_findings"
+        next_action = "Continue runtime execution until at least one validated finding has a customer-ready reproduction package."
+    else:
+        status = "runtime_evidence_promotion_blocked"
+        next_action = "Resolve the listed blockers before commercial/customer handoff."
+
+    return {
+        "engine": "runtime_evidence_promotion_gate_v1_phase95",
+        "status": status,
+        "project_id": report.get("project_id"),
+        "promotion_ready": promotion_ready,
+        "customer_ready": promotion_ready,
+        "blockers": _dedupe(blockers),
+        "warnings": _dedupe(warnings),
+        "checks": checks,
+        "approved_customer_ready_candidate_ids": ready_candidate_ids,
+        "approved_customer_ready_candidate_count": len(ready_candidate_ids),
+        "blocked_candidate_ids": blocked_candidate_ids,
+        "blocked_candidate_count": len(blocked_candidate_ids),
+        "next_action": next_action,
+    }
+
+
+def _render_runtime_evidence_promotion_gate_markdown(gate: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Evidence Promotion Gate",
+        "",
+        f"- engine: `{gate.get('engine')}`",
+        f"- status: `{gate.get('status')}`",
+        f"- project: `{gate.get('project_id')}`",
+        f"- promotion ready: `{gate.get('promotion_ready')}`",
+        f"- next action: {gate.get('next_action')}",
+        "",
+        "## Gate blockers",
+        "",
+    ]
+    blockers = gate.get("blockers") or []
+    if blockers:
+        for blocker in blockers:
+            lines.append(f"- `{blocker}`")
+    else:
+        lines.append("- none")
+    lines.append("")
+    warnings = gate.get("warnings") or []
+    if warnings:
+        lines.extend(["## Warnings", ""])
+        for warning in warnings:
+            lines.append(f"- `{warning}`")
+        lines.append("")
+    checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
+    if checks:
+        lines.extend(["## Checks", "", "| Check | Value |", "|---|---:|"])
+        for name, value in checks.items():
+            lines.append(f"| `{name}` | `{value}` |")
+        lines.append("")
+    approved = gate.get("approved_customer_ready_candidate_ids") or []
+    blocked = gate.get("blocked_candidate_ids") or []
+    lines.extend([
+        "## Candidate summary",
+        "",
+        f"- approved customer-ready candidates: `{json.dumps(approved, ensure_ascii=False)}`",
+        f"- blocked candidates: `{json.dumps(blocked, ensure_ascii=False)}`",
+        "",
+    ])
+    return "\n".join(lines)
+
 def _probe_has_strict_document_grounding(probe: dict[str, Any]) -> bool:
     refs = probe.get("source_refs") if isinstance(probe.get("source_refs"), list) else []
     kinds = {str(r.get("kind") or "") for r in refs if isinstance(r, dict)}
@@ -4350,6 +4533,10 @@ def run_grounded_probe_executor(
             "runtime_progress_delta_regression_count": 0,
             "runtime_progress_delta_resolved_gap_count": 0,
             "runtime_progress_delta_new_gap_count": 0,
+            "runtime_promotion_gate_status": "not_built",
+            "runtime_promotion_gate_ready": False,
+            "runtime_promotion_gate_blocker_count": 0,
+            "runtime_promotion_gate_approved_candidate_count": 0,
             "phase94_added_probe_count": int(bug_discovery_expansion.get("added_probe_count") or 0),
             "phase94_added_p0_probe_count": int(bug_discovery_expansion.get("added_p0_probe_count") or 0),
             "phase94_multistep_flow_scenario_count": int(bug_discovery_expansion.get("multistep_flow_scenario_count") or 0),
@@ -4481,6 +4668,8 @@ def run_grounded_probe_executor(
     runtime_carry_forward_md_path = output / "grounded_probe_runtime_evidence_carry_forward.md"
     runtime_progress_delta_json_path = output / "grounded_probe_runtime_evidence_progress_delta.json"
     runtime_progress_delta_md_path = output / "grounded_probe_runtime_evidence_progress_delta.md"
+    runtime_promotion_gate_json_path = output / "grounded_probe_runtime_evidence_promotion_gate.json"
+    runtime_promotion_gate_md_path = output / "grounded_probe_runtime_evidence_promotion_gate.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -4557,6 +4746,8 @@ def run_grounded_probe_executor(
         "runtime_evidence_carry_forward_md": str(runtime_carry_forward_md_path),
         "runtime_evidence_progress_delta_json": str(runtime_progress_delta_json_path),
         "runtime_evidence_progress_delta_md": str(runtime_progress_delta_md_path),
+        "runtime_evidence_promotion_gate_json": str(runtime_promotion_gate_json_path),
+        "runtime_evidence_promotion_gate_md": str(runtime_promotion_gate_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -4671,6 +4862,13 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_progress_delta_new_gap_count"] = len(report["runtime_evidence_progress_delta"].get("new_gap_types") or [])
     _write_json(runtime_progress_delta_json_path, report["runtime_evidence_progress_delta"])
     runtime_progress_delta_md_path.write_text(_render_runtime_evidence_progress_delta_markdown(report["runtime_evidence_progress_delta"]), encoding="utf-8")
+    report["runtime_evidence_promotion_gate"] = _build_runtime_evidence_promotion_gate(report)
+    report["summary"]["runtime_promotion_gate_status"] = report["runtime_evidence_promotion_gate"].get("status")
+    report["summary"]["runtime_promotion_gate_ready"] = bool(report["runtime_evidence_promotion_gate"].get("promotion_ready"))
+    report["summary"]["runtime_promotion_gate_blocker_count"] = len(report["runtime_evidence_promotion_gate"].get("blockers") or [])
+    report["summary"]["runtime_promotion_gate_approved_candidate_count"] = report["runtime_evidence_promotion_gate"].get("approved_customer_ready_candidate_count", 0)
+    _write_json(runtime_promotion_gate_json_path, report["runtime_evidence_promotion_gate"])
+    runtime_promotion_gate_md_path.write_text(_render_runtime_evidence_promotion_gate_markdown(report["runtime_evidence_promotion_gate"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
     report["summary"]["runtime_sla_must_run_count"] = report["runtime_sla_execution_policy"].get("must_run_for_sla_count", 0)
     report["summary"]["runtime_sla_blocked_before_sla_count"] = report["runtime_sla_execution_policy"].get("blocked_before_sla_count", 0)
