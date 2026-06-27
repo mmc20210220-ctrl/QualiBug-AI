@@ -3096,6 +3096,259 @@ def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[st
     }
 
 
+
+
+def _runtime_remediation_priority(gap_type: str) -> str:
+    gap = str(gap_type or "")
+    p0 = {
+        "blocked_decision",
+        "missing_runtime_observation",
+        "missing_target_http_response",
+        "fixture_setup_not_fully_accepted",
+        "runtime_binding_not_fully_bound",
+        "snapshot_not_fully_accepted",
+        "missing_runtime_observation",
+        "missing_reproduction_trace",
+        "missing_target_reproduction_step",
+        "target_http_status_missing",
+        "validated_runtime_verdict_missing",
+        "probe_ledger_has_evidence_gaps",
+    }
+    p1 = {
+        "needs_more_evidence",
+        "inconclusive_runtime_oracle",
+        "cleanup_not_fully_accepted",
+        "support_step_not_fully_accepted",
+        "runtime_binding_not_fully_bound",
+    }
+    if gap.startswith("blocked:"):
+        return "P0"
+    if gap in p0:
+        return "P0"
+    if gap in p1:
+        return "P1"
+    return "P2"
+
+
+def _runtime_remediation_instruction(gap_type: str) -> str:
+    gap = str(gap_type or "")
+    instructions = {
+        "blocked_decision": "Fix the decision blocker first, then rerun the candidate with the same runtime configuration.",
+        "missing_runtime_observation": "Enable the required readonly/write execution mode or repair scheduling so this probe produces a runtime observation.",
+        "missing_target_http_response": "Stabilize URL rendering, auth headers, tenant headers, base URL, and timeout settings until the target request returns an HTTP response.",
+        "fixture_setup_not_fully_accepted": "Repair disposable fixture setup endpoint mapping and generated request data before trusting downstream evidence.",
+        "runtime_binding_not_fully_bound": "Bind observed runtime IDs into path, query, target body, flow body, snapshots, and cleanup until every binding event is marked bound.",
+        "snapshot_not_fully_accepted": "Repair before/after observer requests so the runtime oracle can compare accepted business-state snapshots.",
+        "cleanup_not_fully_accepted": "Fix cleanup path/body binding or cleanup ordering so sandbox data is reliably removed after reruns.",
+        "needs_more_evidence": "Add stronger oracle evidence such as fixture anchors, control actor baseline reads, or richer observer deltas.",
+        "inconclusive_runtime_oracle": "Strengthen invariant classification so runtime responses resolve to validated, protected, or falsified outcomes.",
+        "probe_ledger_has_evidence_gaps": "Do not hand this finding to customers yet; clear the probe ledger gaps and regenerate the reproduction pack.",
+        "missing_reproduction_trace": "Capture setup, target, snapshot, and cleanup steps before calling the finding reproducible.",
+        "missing_target_reproduction_step": "Ensure the reproduction trace includes the target request or target flow step that triggered the finding.",
+        "target_http_status_missing": "Regenerate the reproduction trace only after the target step records a concrete HTTP status.",
+        "support_step_not_fully_accepted": "Fix setup, snapshot, or cleanup support steps so the reproduction package is deterministic.",
+        "validated_runtime_verdict_missing": "Only package findings whose latest runtime observation is explicitly validated_candidate.",
+    }
+    if gap.startswith("blocked:"):
+        return f"Resolve decision blocker `{gap.split(':', 1)[1]}` and rerun this candidate."
+    return instructions.get(gap, "Inspect this evidence gap in the probe ledger and add a targeted repair before the next customer-ready run.")
+
+
+def _build_runtime_evidence_remediation_plan(report: dict[str, Any]) -> dict[str, Any]:
+    """Build a concrete remediation/rerun queue from scoreboard, ledger, and reproduction gates.
+
+    Scoreboards identify global weak points and the probe ledger names the exact
+    candidates.  This plan converts both into an ordered action queue so a future
+    run can focus on the smallest set of probes blocking customer-ready evidence.
+    """
+    ledger = report.get("runtime_evidence_probe_ledger") if isinstance(report.get("runtime_evidence_probe_ledger"), dict) else {}
+    repro_pack = report.get("runtime_customer_reproduction_pack") if isinstance(report.get("runtime_customer_reproduction_pack"), dict) else {}
+    scoreboard = report.get("runtime_evidence_scoreboard") if isinstance(report.get("runtime_evidence_scoreboard"), dict) else {}
+    entries = [entry for entry in (ledger.get("entries") or []) if isinstance(entry, dict)]
+    packages = [item for item in (repro_pack.get("packages") or []) if isinstance(item, dict)]
+
+    groups: dict[str, dict[str, Any]] = {}
+
+    def ensure_group(gap_type: str) -> dict[str, Any]:
+        gap = str(gap_type or "unknown_gap")
+        if gap not in groups:
+            groups[gap] = {
+                "priority": _runtime_remediation_priority(gap),
+                "gap_type": gap,
+                "candidate_ids": [],
+                "finding_ids": [],
+                "readiness_levels": {},
+                "verdicts": {},
+                "source_counts": {},
+                "recommended_fix": _runtime_remediation_instruction(gap),
+            }
+        return groups[gap]
+
+    def add_unique(items: list[Any], value: Any) -> None:
+        if value is None or value == "":
+            return
+        if value not in items:
+            items.append(value)
+
+    for entry in entries:
+        cid = str(entry.get("candidate_id") or "")
+        gaps = [str(gap) for gap in (entry.get("gap_types") or []) if str(gap)]
+        if not gaps and entry.get("customer_ready") is not True and entry.get("readiness_level") not in {"protected_or_falsified", "customer_ready_candidate"}:
+            gaps = ["executed_unclassified"]
+        for gap in gaps:
+            group = ensure_group(gap)
+            add_unique(group["candidate_ids"], cid)
+            readiness = str(entry.get("readiness_level") or "unknown")
+            verdict = str(entry.get("verdict") or "unknown")
+            group["readiness_levels"][readiness] = group["readiness_levels"].get(readiness, 0) + 1
+            group["verdicts"][verdict] = group["verdicts"].get(verdict, 0) + 1
+            group["source_counts"]["probe_ledger"] = group["source_counts"].get("probe_ledger", 0) + 1
+
+    for item in packages:
+        cid = str(item.get("candidate_id") or "")
+        finding_id = str(item.get("finding_id") or "")
+        gate = item.get("reproduction_readiness_gate") if isinstance(item.get("reproduction_readiness_gate"), dict) else {}
+        blockers = [str(blocker) for blocker in (gate.get("blockers") or []) if str(blocker)]
+        if item.get("customer_ready") is True:
+            continue
+        if not blockers and item.get("readiness_level") not in {"customer_ready_candidate", "protected_or_falsified"}:
+            blockers = [str(item.get("readiness_level") or "blocked_reproduction_evidence_gap")]
+        for blocker in blockers:
+            group = ensure_group(blocker)
+            add_unique(group["candidate_ids"], cid)
+            add_unique(group["finding_ids"], finding_id)
+            readiness = str(item.get("readiness_level") or "unknown")
+            group["readiness_levels"][readiness] = group["readiness_levels"].get(readiness, 0) + 1
+            group["source_counts"]["reproduction_readiness_gate"] = group["source_counts"].get("reproduction_readiness_gate", 0) + 1
+
+    priority_order = {"P0": 0, "P1": 1, "P2": 2}
+    priority_groups = sorted(
+        groups.values(),
+        key=lambda item: (priority_order.get(str(item.get("priority")), 9), -len(item.get("candidate_ids") or []), str(item.get("gap_type") or "")),
+    )
+    for group in priority_groups:
+        group["candidate_count"] = len(group.get("candidate_ids") or [])
+        group["finding_count"] = len(group.get("finding_ids") or [])
+        group["readiness_levels"] = dict(sorted(group.get("readiness_levels", {}).items()))
+        group["verdicts"] = dict(sorted(group.get("verdicts", {}).items()))
+        group["source_counts"] = dict(sorted(group.get("source_counts", {}).items()))
+        group["rerun_scope"] = {
+            "candidate_ids": group.get("candidate_ids") or [],
+            "after_fix": group.get("recommended_fix"),
+            "regenerate_outputs": [
+                "grounded_probe_runtime_evidence_scoreboard.json",
+                "grounded_probe_runtime_evidence_probe_ledger.json",
+                "grounded_probe_runtime_customer_reproduction_pack.json",
+            ],
+        }
+
+    queued_candidates: list[str] = []
+    for group in priority_groups:
+        for cid in group.get("candidate_ids") or []:
+            add_unique(queued_candidates, cid)
+    ready_candidates = [str(entry.get("candidate_id")) for entry in entries if entry.get("customer_ready") is True and entry.get("candidate_id")]
+
+    p0_count = sum(1 for group in priority_groups if group.get("priority") == "P0")
+    p1_count = sum(1 for group in priority_groups if group.get("priority") == "P1")
+    if queued_candidates:
+        status = "runtime_remediation_required" if p0_count else "runtime_hardening_recommended"
+    elif entries or packages:
+        status = "customer_ready_no_runtime_remediation_needed"
+    else:
+        status = "empty_no_runtime_evidence"
+
+    return {
+        "engine": "runtime_evidence_remediation_plan_v1_phase95",
+        "created_at": report.get("created_at"),
+        "project_id": report.get("project_id"),
+        "status": status,
+        "scoreboard_maturity_level": ((scoreboard.get("evidence_maturity") or {}).get("level") if isinstance(scoreboard.get("evidence_maturity"), dict) else None),
+        "source_counts": {
+            "probe_ledger_entries": len(entries),
+            "reproduction_packages": len(packages),
+            "scoreboard_recommended_actions": len(scoreboard.get("recommended_next_actions") or []),
+        },
+        "p0_group_count": p0_count,
+        "p1_group_count": p1_count,
+        "remediation_group_count": len(priority_groups),
+        "queued_candidate_count": len(queued_candidates),
+        "customer_ready_candidate_count": len(ready_candidates),
+        "priority_groups": priority_groups,
+        "rerun_manifest": {
+            "selection_policy": "fix P0 groups first, rerun only queued candidate_ids, then regenerate scoreboard, probe ledger, and reproduction pack",
+            "candidate_ids": queued_candidates,
+            "customer_ready_candidate_ids_excluded": ready_candidates,
+            "max_candidates": len(queued_candidates),
+            "requires_full_rerun_when": [
+                "auth account matrix changed",
+                "OpenAPI endpoint mapping changed",
+                "fixture data factory changed",
+                "runtime oracle semantics changed",
+            ],
+        },
+    }
+
+
+def _render_runtime_evidence_remediation_plan_markdown(plan: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Evidence Remediation Plan",
+        "",
+        f"- engine: `{plan.get('engine')}`",
+        f"- project: `{plan.get('project_id')}`",
+        f"- status: `{plan.get('status')}`",
+        f"- scoreboard maturity: `{plan.get('scoreboard_maturity_level')}`",
+        f"- remediation groups: {plan.get('remediation_group_count')}",
+        f"- P0 groups: {plan.get('p0_group_count')}",
+        f"- queued candidates: {plan.get('queued_candidate_count')}",
+        "",
+    ]
+    manifest = plan.get("rerun_manifest") if isinstance(plan.get("rerun_manifest"), dict) else {}
+    if manifest.get("candidate_ids"):
+        lines.extend([
+            "## Rerun manifest",
+            "",
+            f"- selection policy: {manifest.get('selection_policy')}",
+            f"- candidate ids: `{json.dumps(manifest.get('candidate_ids') or [], ensure_ascii=False)}`",
+            "",
+        ])
+    groups = [group for group in (plan.get("priority_groups") or []) if isinstance(group, dict)]
+    if groups:
+        lines.extend([
+            "## Remediation groups",
+            "",
+            "| Priority | Gap | Candidates | Findings | Recommended fix |",
+            "|---|---|---:|---:|---|",
+        ])
+        for group in groups[:50]:
+            lines.append(
+                "| "
+                + " | ".join([
+                    str(group.get("priority") or "-"),
+                    str(group.get("gap_type") or "-").replace("|", "\\|"),
+                    str(group.get("candidate_count") or 0),
+                    str(group.get("finding_count") or 0),
+                    str(group.get("recommended_fix") or "-").replace("|", "\\|"),
+                ])
+                + " |"
+            )
+        lines.append("")
+        for group in groups[:20]:
+            lines.extend([
+                f"### {group.get('priority')} — {group.get('gap_type')}",
+                "",
+                f"- candidate ids: `{json.dumps(group.get('candidate_ids') or [], ensure_ascii=False)}`",
+                f"- finding ids: `{json.dumps(group.get('finding_ids') or [], ensure_ascii=False)}`",
+                f"- sources: `{json.dumps(group.get('source_counts') or {}, ensure_ascii=False)}`",
+                f"- fix: {group.get('recommended_fix')}",
+                "",
+            ])
+        if len(groups) > 50:
+            lines.append(f"_Only the first 50 remediation groups are shown; see JSON for all {len(groups)} groups._")
+            lines.append("")
+    else:
+        lines.append("No runtime evidence remediation groups were produced.")
+        lines.append("")
+    return "\n".join(lines)
 def _render_runtime_customer_reproduction_pack_markdown(pack: dict[str, Any]) -> str:
     lines = [
         "# Runtime Customer Reproduction Pack",
@@ -3496,6 +3749,8 @@ def run_grounded_probe_executor(
     runtime_probe_ledger_md_path = output / "grounded_probe_runtime_evidence_probe_ledger.md"
     runtime_repro_pack_json_path = output / "grounded_probe_runtime_customer_reproduction_pack.json"
     runtime_repro_pack_md_path = output / "grounded_probe_runtime_customer_reproduction_pack.md"
+    runtime_remediation_plan_json_path = output / "grounded_probe_runtime_evidence_remediation_plan.json"
+    runtime_remediation_plan_md_path = output / "grounded_probe_runtime_evidence_remediation_plan.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -3566,6 +3821,8 @@ def run_grounded_probe_executor(
         "runtime_evidence_probe_ledger_md": str(runtime_probe_ledger_md_path),
         "runtime_customer_reproduction_pack_json": str(runtime_repro_pack_json_path),
         "runtime_customer_reproduction_pack_md": str(runtime_repro_pack_md_path),
+        "runtime_evidence_remediation_plan_json": str(runtime_remediation_plan_json_path),
+        "runtime_evidence_remediation_plan_md": str(runtime_remediation_plan_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -3658,6 +3915,12 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_reproduction_pack_status"] = report["runtime_customer_reproduction_pack"].get("status")
     _write_json(runtime_repro_pack_json_path, report["runtime_customer_reproduction_pack"])
     runtime_repro_pack_md_path.write_text(_render_runtime_customer_reproduction_pack_markdown(report["runtime_customer_reproduction_pack"]), encoding="utf-8")
+    report["runtime_evidence_remediation_plan"] = _build_runtime_evidence_remediation_plan(report)
+    report["summary"]["runtime_remediation_plan_status"] = report["runtime_evidence_remediation_plan"].get("status")
+    report["summary"]["runtime_remediation_plan_p0_group_count"] = report["runtime_evidence_remediation_plan"].get("p0_group_count", 0)
+    report["summary"]["runtime_remediation_plan_queued_candidate_count"] = report["runtime_evidence_remediation_plan"].get("queued_candidate_count", 0)
+    _write_json(runtime_remediation_plan_json_path, report["runtime_evidence_remediation_plan"])
+    runtime_remediation_plan_md_path.write_text(_render_runtime_evidence_remediation_plan_markdown(report["runtime_evidence_remediation_plan"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
     report["summary"]["runtime_sla_must_run_count"] = report["runtime_sla_execution_policy"].get("must_run_for_sla_count", 0)
     report["summary"]["runtime_sla_blocked_before_sla_count"] = report["runtime_sla_execution_policy"].get("blocked_before_sla_count", 0)
