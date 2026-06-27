@@ -24,6 +24,13 @@ _REQUIRED_KEYS = {
     "commercial_handoff_acceptance_gate_json",
     "commercial_handoff_secret_audit_json",
     "runtime_evidence_readiness_sla_gate_json",
+    "runtime_evidence_scoreboard_json",
+    "runtime_evidence_probe_ledger_json",
+    "runtime_customer_reproduction_pack_json",
+    "runtime_evidence_remediation_plan_json",
+    "runtime_evidence_promotion_gate_json",
+    "runtime_evidence_customer_delivery_manifest_json",
+    "runtime_evidence_delivery_manifest_verification_json",
     "runtime_sla_execution_policy_json",
     "write_sandbox_approval_packet_json",
     "remediation_verification_json",
@@ -34,6 +41,15 @@ _PHASE_BY_KEY_PREFIX = [
     ("runtime_capability", "phase93b"),
     ("onboarding_remediation", "phase93c"),
     ("runtime_execution_runbook", "phase93d"),
+    ("runtime_evidence_scoreboard", "phase95_runtime_evidence"),
+    ("runtime_evidence_probe_ledger", "phase95_runtime_evidence"),
+    ("runtime_customer_reproduction_pack", "phase95_runtime_evidence"),
+    ("runtime_evidence_remediation_plan", "phase95_runtime_evidence"),
+    ("runtime_evidence_carry_forward", "phase95_runtime_evidence"),
+    ("runtime_evidence_progress_delta", "phase95_runtime_evidence"),
+    ("runtime_evidence_promotion_gate", "phase95_runtime_delivery"),
+    ("runtime_evidence_customer_delivery_manifest", "phase95_runtime_delivery"),
+    ("runtime_evidence_delivery_manifest_verification", "phase95_runtime_delivery"),
     ("runtime_evidence_readiness", "phase93e"),
     ("runtime_sla_execution", "phase93f"),
     ("runtime_sla_gap", "phase93g"),
@@ -168,6 +184,9 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
     sla_gate_hash = _payload_hash(_as_dict(report.get("runtime_evidence_readiness_sla_gate")))
     sla_policy_hash = _payload_hash(_as_dict(report.get("runtime_sla_execution_policy")))
     remediation_hash = _payload_hash(_as_dict(report.get("remediation_verification_artifact")))
+    runtime_promotion_hash = _payload_hash(_as_dict(report.get("runtime_evidence_promotion_gate")))
+    runtime_delivery_manifest_hash = _payload_hash(_as_dict(report.get("runtime_evidence_customer_delivery_manifest")))
+    runtime_delivery_manifest_verification_hash = _payload_hash(_as_dict(report.get("runtime_evidence_delivery_manifest_verification")))
     aggregate_artifact_hash = _hash_existing_artifacts(artifact_entries)
 
     acceptance_gate = _as_dict(report.get("commercial_handoff_acceptance_gate"))
@@ -207,6 +226,9 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
         "runtime_evidence_sla_gate_hash": sla_gate_hash,
         "runtime_sla_execution_policy_hash": sla_policy_hash,
         "remediation_verification_hash": remediation_hash,
+        "runtime_evidence_promotion_gate_hash": runtime_promotion_hash,
+        "runtime_evidence_customer_delivery_manifest_hash": runtime_delivery_manifest_hash,
+        "runtime_evidence_delivery_manifest_verification_hash": runtime_delivery_manifest_verification_hash,
         "customer_acceptance_status": acceptance_gate.get("status"),
         "customer_acceptance_gate_passed": bool(acceptance_gate.get("acceptance_gate_passed")),
         "customer_acceptance_violation_count": int(acceptance_gate.get("violation_count") or len(acceptance_violations)),
@@ -251,11 +273,17 @@ def build_handoff_archive_manifest(report: dict[str, Any]) -> dict[str, Any]:
             "runtime_evidence_sla_gate_hash": sla_gate_hash,
             "runtime_sla_execution_policy_hash": sla_policy_hash,
             "remediation_verification_hash": remediation_hash,
+            "runtime_evidence_promotion_gate_hash": runtime_promotion_hash,
+            "runtime_evidence_customer_delivery_manifest_hash": runtime_delivery_manifest_hash,
+            "runtime_evidence_delivery_manifest_verification_hash": runtime_delivery_manifest_verification_hash,
         },
         "comparison_keys_for_future_reruns": [
             "run_lineage_id",
             "probe_plan_hash",
             "runtime_evidence_sla_gate_hash",
+            "runtime_evidence_promotion_gate_hash",
+            "runtime_evidence_customer_delivery_manifest_hash",
+            "runtime_evidence_delivery_manifest_verification_hash",
             "commercial_handoff_bundle_hash",
             "commercial_handoff_secret_audit_hash",
             "artifact_archive_hash",

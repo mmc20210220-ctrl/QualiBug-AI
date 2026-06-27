@@ -26,6 +26,24 @@ _ARTIFACTS: list[tuple[str, str, str, str]] = [
     ("runtime_execution_runbook_md", "grounded_probe_runtime_execution_runbook.md", "Execution runbook", "qa_owner"),
     ("runtime_evidence_readiness_sla_gate_json", "grounded_probe_runtime_evidence_readiness_sla_gate.json", "Commercial evidence readiness SLA gate", "delivery_owner"),
     ("runtime_evidence_readiness_sla_gate_md", "grounded_probe_runtime_evidence_readiness_sla_gate.md", "SLA gate explanation", "delivery_owner"),
+    ("runtime_evidence_scoreboard_json", "grounded_probe_runtime_evidence_scoreboard.json", "Runtime execution coverage scoreboard", "delivery_owner"),
+    ("runtime_evidence_scoreboard_md", "grounded_probe_runtime_evidence_scoreboard.md", "Runtime execution coverage summary", "delivery_owner"),
+    ("runtime_evidence_probe_ledger_json", "grounded_probe_runtime_evidence_probe_ledger.json", "Per-probe runtime evidence ledger", "qa_owner"),
+    ("runtime_evidence_probe_ledger_md", "grounded_probe_runtime_evidence_probe_ledger.md", "Per-probe evidence gap guide", "qa_owner"),
+    ("runtime_customer_reproduction_pack_json", "grounded_probe_runtime_customer_reproduction_pack.json", "Customer-ready reproduction evidence packages", "engineering_owner"),
+    ("runtime_customer_reproduction_pack_md", "grounded_probe_runtime_customer_reproduction_pack.md", "Customer/developer reproduction guide", "engineering_owner"),
+    ("runtime_evidence_remediation_plan_json", "grounded_probe_runtime_evidence_remediation_plan.json", "Runtime evidence remediation and rerun manifest", "qa_owner"),
+    ("runtime_evidence_remediation_plan_md", "grounded_probe_runtime_evidence_remediation_plan.md", "Runtime evidence remediation guide", "qa_owner"),
+    ("runtime_evidence_carry_forward_json", "grounded_probe_runtime_evidence_carry_forward.json", "Customer-ready evidence carry-forward ledger", "delivery_owner"),
+    ("runtime_evidence_carry_forward_md", "grounded_probe_runtime_evidence_carry_forward.md", "Carry-forward evidence summary", "delivery_owner"),
+    ("runtime_evidence_progress_delta_json", "grounded_probe_runtime_evidence_progress_delta.json", "Runtime evidence progress/regression delta", "delivery_owner"),
+    ("runtime_evidence_progress_delta_md", "grounded_probe_runtime_evidence_progress_delta.md", "Runtime evidence progress summary", "delivery_owner"),
+    ("runtime_evidence_promotion_gate_json", "grounded_probe_runtime_evidence_promotion_gate.json", "Customer-ready runtime evidence promotion gate", "delivery_owner"),
+    ("runtime_evidence_promotion_gate_md", "grounded_probe_runtime_evidence_promotion_gate.md", "Promotion gate explanation", "delivery_owner"),
+    ("runtime_evidence_customer_delivery_manifest_json", "grounded_probe_runtime_evidence_customer_delivery_manifest.json", "Frozen customer delivery evidence manifest", "delivery_owner"),
+    ("runtime_evidence_customer_delivery_manifest_md", "grounded_probe_runtime_evidence_customer_delivery_manifest.md", "Customer delivery manifest summary", "delivery_owner"),
+    ("runtime_evidence_delivery_manifest_verification_json", "grounded_probe_runtime_evidence_delivery_manifest_verification.json", "Delivery manifest hash verification", "security_owner"),
+    ("runtime_evidence_delivery_manifest_verification_md", "grounded_probe_runtime_evidence_delivery_manifest_verification.md", "Delivery manifest verification summary", "security_owner"),
     ("runtime_sla_execution_policy_json", "grounded_probe_runtime_sla_execution_policy.json", "SLA-gated execution policy", "qa_owner"),
     ("runtime_sla_execution_policy_md", "grounded_probe_runtime_sla_execution_policy.md", "SLA execution policy guide", "qa_owner"),
     ("runtime_sla_gap_prioritizer_json", "grounded_probe_runtime_sla_gap_prioritizer.json", "Prioritized onboarding delta plan", "customer_admin"),
@@ -59,6 +77,9 @@ def _count_by_priority(findings: list[dict[str, Any]]) -> dict[str, int]:
 
 def _handoff_status(report: dict[str, Any]) -> tuple[str, str]:
     gate = _as_dict(report.get("runtime_evidence_readiness_sla_gate"))
+    promotion_gate = _as_dict(report.get("runtime_evidence_promotion_gate"))
+    delivery_manifest = _as_dict(report.get("runtime_evidence_customer_delivery_manifest"))
+    manifest_verification = _as_dict(report.get("runtime_evidence_delivery_manifest_verification"))
     safety = _as_dict(report.get("onboarding_patch_safety_validation"))
     approval = _as_dict(report.get("write_sandbox_approval_packet"))
     gap = _as_dict(report.get("runtime_sla_gap_prioritizer"))
@@ -68,6 +89,12 @@ def _handoff_status(report: dict[str, Any]) -> tuple[str, str]:
         return "handoff_blocked_by_patch_safety", "Do not send the onboarding patch until production targets, raw secrets or unsafe cleanup gaps are removed."
     if approval.get("write_approval_required") and not approval.get("ready_for_customer_approval"):
         return "handoff_blocked_by_write_sandbox_approval", "Write-sandbox evidence is required or requested, but the customer approval packet is not ready."
+    if promotion_gate and not promotion_gate.get("promotion_ready"):
+        return "handoff_blocked_by_runtime_evidence_promotion_gate", "Runtime evidence promotion gate is not approved; resolve promotion blockers before customer handoff."
+    if delivery_manifest and not delivery_manifest.get("customer_ready"):
+        return "handoff_blocked_by_runtime_delivery_manifest", "Runtime customer delivery manifest is not customer-ready; regenerate evidence artifacts after resolving missing or blocked delivery items."
+    if manifest_verification and not manifest_verification.get("verified"):
+        return "handoff_blocked_by_runtime_delivery_manifest_verification", "Frozen runtime delivery manifest failed hash verification; do not hand off until drift, missing artifacts or tampering signals are resolved."
     if not gate.get("sla_gate_passed"):
         if gap.get("action_count"):
             return "conditional_handoff_onboarding_delta_required", "Commercial SLA is not yet claimable; send the prioritized onboarding delta and rerun preflight/SLA gate."
@@ -92,6 +119,13 @@ def _artifact_manifest(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "onboarding_preflight_json",
                 "runtime_capability_matrix_json",
                 "runtime_evidence_readiness_sla_gate_json",
+                "runtime_evidence_scoreboard_json",
+                "runtime_evidence_probe_ledger_json",
+                "runtime_customer_reproduction_pack_json",
+                "runtime_evidence_remediation_plan_json",
+                "runtime_evidence_promotion_gate_json",
+                "runtime_evidence_customer_delivery_manifest_json",
+                "runtime_evidence_delivery_manifest_verification_json",
                 "runtime_sla_execution_policy_json",
                 "runtime_execution_runbook_md",
             },
@@ -130,6 +164,30 @@ def _signoff_checklist(report: dict[str, Any], status: str) -> list[dict[str, An
             "passed": not minimum_failures,
             "text": "Confirm all minimum commercial gate checks passed, including verified auth session, non-production target, base URL and document grounding.",
             "minimum_gate_failures": minimum_failures,
+        },
+        {
+            "item_id": "HANDOFF-RUNTIME-PROMOTION-GATE",
+            "owner": "delivery_owner",
+            "required": bool(_as_dict(report.get("runtime_evidence_promotion_gate"))),
+            "passed": (not _as_dict(report.get("runtime_evidence_promotion_gate"))) or bool(_as_dict(report.get("runtime_evidence_promotion_gate")).get("promotion_ready")),
+            "text": "Confirm the Phase95 runtime evidence promotion gate approved this run for customer-ready delivery.",
+            "promotion_blockers": _as_list(_as_dict(report.get("runtime_evidence_promotion_gate")).get("blockers")),
+        },
+        {
+            "item_id": "HANDOFF-RUNTIME-DELIVERY-MANIFEST",
+            "owner": "delivery_owner",
+            "required": bool(_as_dict(report.get("runtime_evidence_customer_delivery_manifest"))),
+            "passed": (not _as_dict(report.get("runtime_evidence_customer_delivery_manifest"))) or bool(_as_dict(report.get("runtime_evidence_customer_delivery_manifest")).get("customer_ready")),
+            "text": "Confirm customer delivery evidence was frozen into a manifest with required artifact hashes.",
+            "delivery_manifest_status": _as_dict(report.get("runtime_evidence_customer_delivery_manifest")).get("status"),
+        },
+        {
+            "item_id": "HANDOFF-RUNTIME-MANIFEST-VERIFY",
+            "owner": "security_owner",
+            "required": bool(_as_dict(report.get("runtime_evidence_delivery_manifest_verification"))),
+            "passed": (not _as_dict(report.get("runtime_evidence_delivery_manifest_verification"))) or bool(_as_dict(report.get("runtime_evidence_delivery_manifest_verification")).get("verified")),
+            "text": "Verify the frozen runtime delivery manifest hashes still match before sending customer artifacts.",
+            "verification_blockers": _as_list(_as_dict(report.get("runtime_evidence_delivery_manifest_verification")).get("blockers")),
         },
         {
             "item_id": "HANDOFF-PATCH-SAFETY",
@@ -221,6 +279,12 @@ def build_commercial_handoff_bundle(report: dict[str, Any]) -> dict[str, Any]:
             "preflight_status": preflight.get("status"),
             "runtime_sla_policy_status": policy.get("status"),
             "write_sandbox_approval_status": approval.get("status"),
+            "runtime_promotion_gate_status": _as_dict(report.get("runtime_evidence_promotion_gate")).get("status"),
+            "runtime_promotion_gate_ready": bool(_as_dict(report.get("runtime_evidence_promotion_gate")).get("promotion_ready")) if _as_dict(report.get("runtime_evidence_promotion_gate")) else None,
+            "runtime_delivery_manifest_status": _as_dict(report.get("runtime_evidence_customer_delivery_manifest")).get("status"),
+            "runtime_delivery_manifest_ready": bool(_as_dict(report.get("runtime_evidence_customer_delivery_manifest")).get("customer_ready")) if _as_dict(report.get("runtime_evidence_customer_delivery_manifest")) else None,
+            "runtime_delivery_manifest_verification_status": _as_dict(report.get("runtime_evidence_delivery_manifest_verification")).get("status"),
+            "runtime_delivery_manifest_verified": bool(_as_dict(report.get("runtime_evidence_delivery_manifest_verification")).get("verified")) if _as_dict(report.get("runtime_evidence_delivery_manifest_verification")) else None,
             "validated_candidate_count": summary.get("validated_candidate_count", len(findings)),
             "finding_count_by_priority": _count_by_priority(findings),
             "p0_p1_finding_count": sum(1 for f in findings if str(f.get("priority")) in {"P0", "P1"}),
@@ -265,6 +329,12 @@ def render_commercial_handoff_markdown(bundle: dict[str, Any]) -> str:
         "preflight_status",
         "runtime_sla_policy_status",
         "write_sandbox_approval_status",
+        "runtime_promotion_gate_status",
+        "runtime_promotion_gate_ready",
+        "runtime_delivery_manifest_status",
+        "runtime_delivery_manifest_ready",
+        "runtime_delivery_manifest_verification_status",
+        "runtime_delivery_manifest_verified",
         "validated_candidate_count",
         "p0_p1_finding_count",
         "runtime_sla_must_run_count",
