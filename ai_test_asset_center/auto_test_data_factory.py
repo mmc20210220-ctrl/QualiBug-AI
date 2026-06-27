@@ -24,6 +24,13 @@ import yaml
 BLOCKED_INPUT_PART_RE = re.compile(r"(?:oracle|ground[_-]?truth|bug[_-]?matrix|answer|solution|seed)", re.I)
 PATH_PARAM_RE = re.compile(r"\{([^{}]+)\}")
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+READ_METHODS = {"GET", "HEAD"}
+FIXTURE_BACKED_READ_RISKS = {
+    "auth_boundary_probe",
+    "anonymous_auth_boundary_probe",
+    "cross_tenant_auth_boundary_probe",
+    "role_downgrade_auth_boundary_probe",
+}
 MUTATION_FIELD_RE = {
     "resource": re.compile(r"(?:amount|price|balance|quota|point|credit|stock|inventory|quantity|qty|limit|total|积分|额度|余额|库存|金额|数量)", re.I),
     "tenant": re.compile(r"(?:tenant|org|owner|user|account|member|customer|object|resource|租户|组织|归属|用户)", re.I),
@@ -361,10 +368,23 @@ def _find_delete_endpoint(spec: dict[str, Any], target_path: str) -> str:
         if not PATH_PARAM_RE.search(str(p)):
             continue
         score = _score_related_path(target_path, str(p))
+        if _canonical_suffix(str(p)) == _canonical_suffix(target_path):
+            score += 40
         if score > best[0]:
             best = (score, str(p))
     return best[1] if best[0] >= 15 else ""
 
+
+
+
+def _fixture_backed_read_probe(probe: dict[str, Any], method: str, path: str) -> bool:
+    if str(method or "").upper() not in READ_METHODS:
+        return False
+    if not PATH_PARAM_RE.search(str(path or "")):
+        return False
+    risk = str(probe.get("risk_type") or "")
+    plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
+    return risk in FIXTURE_BACKED_READ_RISKS or isinstance(plan.get("auth_boundary"), dict)
 
 def _bind_path_params(path: str, generated_id: str) -> dict[str, str]:
     return {name: generated_id for name in PATH_PARAM_RE.findall(path)}
@@ -426,9 +446,10 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     snapshots: dict[str, Any] = {"before": [], "after": [], "note": "no suitable OpenAPI read endpoint discovered"}
     observer_plan: dict[str, Any] = {"planner": "snapshot_observer_planner_v1_phase92q", "observers": [], "coverage": []}
 
-    if spec and method in WRITE_METHODS:
+    fixture_backed_read = _fixture_backed_read_probe(probe, method, path)
+    if spec and (method in WRITE_METHODS or fixture_backed_read):
         create_path = _find_create_endpoint(spec, path)
-        read_path = _find_read_endpoint(spec, path)
+        read_path = path if method in READ_METHODS and PATH_PARAM_RE.search(path) else _find_read_endpoint(spec, path)
         delete_path = _find_delete_endpoint(spec, path)
         if create_path:
             setup_requests.append({
@@ -494,6 +515,7 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
             "snapshot_observer_planner": observer_plan.get("planner"),
             "snapshot_observer_coverage": snapshots.get("coverage") or observer_plan.get("coverage") or [],
             "cleanup_request_count": len(cleanup_requests),
+            "fixture_backed_read_probe": bool(fixture_backed_read),
             "customer_supplied_business_data_required": False,
         },
     }

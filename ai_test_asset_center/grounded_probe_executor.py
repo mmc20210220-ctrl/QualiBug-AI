@@ -130,6 +130,7 @@ READ_METHODS = {"GET", "HEAD"}
 EXPECTED_AUTH_FAILURES = {401, 403, 404}
 DEFAULT_NEGATIVE_WRITE_FAILURES = {400, 401, 403, 404, 409, 422}
 AUTH_BOUNDARY_RISKS = {"auth_boundary_probe", "anonymous_auth_boundary_probe", "cross_tenant_auth_boundary_probe", "role_downgrade_auth_boundary_probe"}
+FIXTURE_BACKED_READ_RISKS = AUTH_BOUNDARY_RISKS
 AUTH_HEADER_NAMES = ["Authorization", "Cookie", "X-Tenant-Id", "X-Org-Id", "X-Workspace-Id"]
 SANDBOX_CLEANUP_STRATEGIES = {"ephemeral_reset", "fixture_reset", "transaction_rollback", "auto_delete", "manual_disposable", "benchmark_reset", "qualibug_auto_fixture_cleanup"}
 PRODUCTION_HOST_RE = re.compile(r"(?:^|[.-])(?:prod|production|live)(?:[.-]|$)|^www\.", re.I)
@@ -238,6 +239,29 @@ def _auth_boundary_plan(probe: dict[str, Any]) -> dict[str, Any]:
 def _is_auth_boundary_risk(probe: dict[str, Any] | None = None, risk_type: str = "") -> bool:
     risk = str(risk_type or ((probe or {}).get("risk_type") if isinstance(probe, dict) else "") or "")
     return risk in AUTH_BOUNDARY_RISKS or bool(_auth_boundary_plan(probe or {}))
+
+
+def _fixture_backed_read_probe(probe: dict[str, Any], method: str = "", path: str = "") -> bool:
+    """Return true when a read probe needs a disposable resource to be meaningful."""
+    ep = probe.get("endpoint") if isinstance(probe.get("endpoint"), dict) else {}
+    m = str(method or ep.get("method") or "").upper()
+    p = str(path or ep.get("path") or "")
+    if m not in READ_METHODS or not re.search(r"\{[^{}]+\}", p):
+        return False
+    risk = str(probe.get("risk_type") or "")
+    return risk in FIXTURE_BACKED_READ_RISKS or _is_auth_boundary_risk(probe, risk)
+
+
+def _read_fixture_setup_approval(config: dict[str, Any], base_url: str, options: dict[str, Any]) -> tuple[bool, str]:
+    allow_write = bool(
+        options.get("allow_write_sandbox")
+        or config.get("allow_write_probes")
+        or ((config.get("test_environment") or {}).get("allow_write_probes") if isinstance(config.get("test_environment"), dict) else False)
+    )
+    if not allow_write:
+        return False, "fixture_backed_read_probe_requires_test_environment_write_execution_enabled"
+    ok, reason, _sandbox = _approval_enabled(config, base_url, str(options.get("approval_id") or ""))
+    return ok, reason
 
 
 def _join_url(base_url: str, path: str) -> str:
@@ -577,7 +601,7 @@ def _configured_path_params(config: dict[str, Any], probe: dict[str, Any], metho
     candidate_id = str(probe.get("candidate_id") or "")
     path_param_cfg = dict(config.get("path_params") or {})
     merged = dict(path_param_cfg.get("*") or {})
-    if _auto_fixture_enabled(config) and (method in WRITE_METHODS or bool(config.get("auto_read_path_params"))):
+    if _auto_fixture_enabled(config) and (method in WRITE_METHODS or bool(config.get("auto_read_path_params")) or _fixture_backed_read_probe(probe, method, path)):
         bundle = _auto_fixture_bundle(config, probe)
         if isinstance(bundle.get("path_params"), dict):
             merged.update(bundle.get("path_params") or {})
@@ -727,6 +751,13 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
         "headers": _redact(headers),
         "body": _redact(body),
     }
+    read_fixture_setup_required = False
+    if method in READ_METHODS and _auto_fixture_enabled(config) and _fixture_backed_read_probe(probe, method, path):
+        bundle = _auto_fixture_bundle(config, probe)
+        read_fixture_setup_required = bool(isinstance(bundle, dict) and bundle.get("setup_requests"))
+        if read_fixture_setup_required:
+            req["runtime_fixture_setup_required"] = True
+            req["runtime_fixture_setup_reason"] = "fixture_backed_read_probe"
 
     if os.environ.get("QUALIBUG_STRICT_PROBE_GROUNDING", "1") != "0" and not _probe_has_strict_document_grounding(probe):
         return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", "ungrounded_probe_missing_endpoint_or_requirement_source_refs", req)
@@ -765,6 +796,11 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
         return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", f"policy_not_read_only_safe:{execution_policy}", req)
     if not options.get("execute_readonly"):
         return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "dry_run_only", "execute_readonly_not_enabled", req)
+    if read_fixture_setup_required:
+        ok, setup_reason = _read_fixture_setup_approval(config, base_url, options)
+        if not ok:
+            return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", setup_reason, req)
+        return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "execute_readonly", f"eligible_read_only_probe_with_fixture_setup:{setup_reason}", req)
     return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "execute_readonly", "eligible_read_only_probe", req)
 
 
@@ -1170,6 +1206,36 @@ def _verify_concurrency_observation(probe: dict[str, Any], responses: list[dict[
     return None
 
 
+def _execute_read_probe(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, timeout: float) -> dict[str, Any]:
+    setup_required = bool((decision.request or {}).get("runtime_fixture_setup_required"))
+    setup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "setup_requests", timeout) if setup_required else []
+    setup_blocked = any(r.get("status") == "blocked" for r in setup_receipts)
+    effective_request, headers, missing = _effective_runtime_request(probe, decision, config, base_url, None)
+    if setup_blocked:
+        response = {"status_code": None, "error": "auto_fixture_setup_blocked", "payload": None, "duration_ms": 0}
+        verification = {"verdict": "inconclusive", "reason": "auto_fixture_setup_blocked", "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
+    elif missing:
+        response = {"status_code": None, "error": f"runtime_missing_path_params_after_read_fixture_setup:{','.join(missing)}", "payload": None, "duration_ms": 0}
+        verification = {"verdict": "inconclusive", "reason": response["error"], "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
+    else:
+        response = _http_request(decision.method, str(effective_request.get("url") or ""), headers, timeout=timeout)
+        verification = _verify_observation(probe, response)
+    cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout) if setup_required else []
+    return {
+        "candidate_id": decision.candidate_id,
+        "risk_type": decision.risk_type,
+        "method": decision.method,
+        "path": decision.path,
+        "request": effective_request if not setup_blocked else (decision.request | {"setup_blocked": True}),
+        "fixture_receipts": setup_receipts,
+        "cleanup_receipts": cleanup_receipts,
+        "response": {"status_code": response.get("status_code"), "error": response.get("error"), "payload": _redact(response.get("payload")), "duration_ms": response.get("duration_ms")},
+        "verification": verification,
+        "source_refs": probe.get("source_refs") or [],
+        "grounding_basis": probe.get("grounding_basis") or {},
+    }
+
+
 def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: dict[str, Any], base_url: str, timeout: float) -> dict[str, Any]:
     plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
     scenario = plan.get("flow_scenario") if isinstance(plan.get("flow_scenario"), dict) else {}
@@ -1557,22 +1623,9 @@ def run_grounded_probe_executor(
         d = asdict(decision)
         decisions.append(d)
         if decision.decision == "execute_readonly":
-            req = decision.request
-            response = _http_request(decision.method, str(req.get("url") or ""), _headers_for_probe(probe, config), timeout=timeout_seconds)
-            verification = _verify_observation(probe, response)
-            obs = {
-                "candidate_id": decision.candidate_id,
-                "risk_type": decision.risk_type,
-                "method": decision.method,
-                "path": decision.path,
-                "request": req,
-                "response": {"status_code": response.get("status_code"), "error": response.get("error"), "payload": _redact(response.get("payload")), "duration_ms": response.get("duration_ms")},
-                "verification": verification,
-                "source_refs": probe.get("source_refs") or [],
-                "grounding_basis": probe.get("grounding_basis") or {},
-            }
+            obs = _execute_read_probe(probe, decision, config, base, timeout_seconds)
             observations.append(obs)
-            if verification.get("verdict") == "validated_candidate":
+            if (obs.get("verification") or {}).get("verdict") == "validated_candidate":
                 findings.append(_finding_from_observation(obs, len(findings) + 1, "runtime_http_evidence_from_document_grounded_probe"))
         elif decision.decision == "execute_write_sandbox":
             probe_plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
