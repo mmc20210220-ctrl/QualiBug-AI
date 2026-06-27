@@ -2157,6 +2157,199 @@ def _execution_failure_reasons(decisions: list[dict[str, Any]], observations: li
     return dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))[:20])
 
 
+def _runtime_evidence_gap_recommendations(scoreboard: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert factual scoreboard counters into deterministic next actions.
+
+    The scoreboard itself is a ledger.  This helper does not invent runtime
+    evidence; it only turns observed rates/counts into an ordered remediation
+    plan so operators know which runtime gap blocks stronger bug proof.
+    """
+    actions: list[dict[str, Any]] = []
+
+    def add(priority: str, gap_type: str, metric: str, observed: Any, threshold: Any, action: str) -> None:
+        actions.append({
+            "priority": priority,
+            "gap_type": gap_type,
+            "metric": metric,
+            "observed": observed,
+            "threshold": threshold,
+            "action": action,
+        })
+
+    probe_count = int(scoreboard.get("probe_count") or 0)
+    executed = int(scoreboard.get("executed_probe_count") or 0)
+    execution_rate = float(scoreboard.get("execution_coverage_rate") or _safe_rate(executed, probe_count))
+    response_rate = float(scoreboard.get("target_response_rate") or 0.0)
+    fixture_rate = float(scoreboard.get("fixture_setup_success_rate") or 0.0)
+    binding_rate = float(scoreboard.get("runtime_binding_success_rate") or 0.0)
+    snapshot_count = int(scoreboard.get("snapshot_request_count") or 0)
+    snapshot_rate = float(scoreboard.get("snapshot_success_rate") or 0.0)
+    cleanup_executed = int(scoreboard.get("cleanup_executed_count") or 0)
+    cleanup_rate = float(scoreboard.get("cleanup_success_rate") or 0.0)
+    oracle_rate = float(scoreboard.get("oracle_resolution_rate") or 0.0)
+    needs_more = int(scoreboard.get("needs_more_evidence_count") or 0)
+    inconclusive = int(scoreboard.get("inconclusive_count") or 0)
+    finding_count = int(scoreboard.get("finding_count") or 0)
+    validated = int(scoreboard.get("validated_candidate_count") or 0)
+
+    if probe_count and execution_rate < 70.0:
+        add(
+            "P0",
+            "low_execution_coverage",
+            "execution_coverage_rate",
+            execution_rate,
+            ">=70.0",
+            "Resolve blocked probe decisions first: missing path params, unsafe write policy, base URL/auth config, or read_only_safe flags.",
+        )
+    if executed and response_rate < 90.0:
+        add(
+            "P0",
+            "low_target_response_rate",
+            "target_response_rate",
+            response_rate,
+            ">=90.0",
+            "Stabilize sandbox reachability and endpoint rendering so executed probes produce HTTP evidence instead of transport/runtime gaps.",
+        )
+    if int(scoreboard.get("fixture_setup_executed_count") or 0) and fixture_rate < 85.0:
+        add(
+            "P0",
+            "fixture_setup_instability",
+            "fixture_setup_success_rate",
+            fixture_rate,
+            ">=85.0",
+            "Fix disposable fixture setup plans, required request bodies, credential profile, and parent-resource ordering before trusting write/auth findings.",
+        )
+    if int(scoreboard.get("runtime_binding_event_count") or 0) and binding_rate < 95.0:
+        add(
+            "P0",
+            "runtime_binding_instability",
+            "runtime_binding_success_rate",
+            binding_rate,
+            ">=95.0",
+            "Improve route-aware response ID extraction and bind observed IDs into path, query, target body, flow body, snapshots, and cleanup.",
+        )
+    if executed and snapshot_count == 0:
+        add(
+            "P0",
+            "missing_before_after_snapshots",
+            "snapshot_request_count",
+            snapshot_count,
+            ">0",
+            "Configure or auto-plan before/after resource observers so accepted writes can be proven by business-state deltas.",
+        )
+    elif snapshot_count and snapshot_rate < 80.0:
+        add(
+            "P0",
+            "snapshot_observer_instability",
+            "snapshot_success_rate",
+            snapshot_rate,
+            ">=80.0",
+            "Repair snapshot observer paths, query binding, and auth headers; weak snapshots turn accepted writes into needs_more_evidence.",
+        )
+    if cleanup_executed and cleanup_rate < 90.0:
+        add(
+            "P1",
+            "cleanup_instability",
+            "cleanup_success_rate",
+            cleanup_rate,
+            ">=90.0",
+            "Fix cleanup ordering and runtime ID binding so disposable sandbox evidence does not leave residue.",
+        )
+    if executed and oracle_rate < 65.0:
+        add(
+            "P1",
+            "weak_runtime_oracle_resolution",
+            "oracle_resolution_rate",
+            oracle_rate,
+            ">=65.0",
+            "Add stronger before/after invariants, fixture evidence anchors, and response semantic joins to reduce inconclusive/needs_more_evidence outcomes.",
+        )
+    if needs_more > 0:
+        add(
+            "P1",
+            "needs_more_evidence_backlog",
+            "needs_more_evidence_count",
+            needs_more,
+            "0 preferred",
+            "Promote needs_more_evidence items with missing observers, control-actor baselines, or fixture ID anchors before reporting as customer-ready.",
+        )
+    if inconclusive > 0:
+        add(
+            "P2",
+            "inconclusive_runtime_backlog",
+            "inconclusive_count",
+            inconclusive,
+            "0 preferred",
+            "Classify network/config failures separately from true protected behavior so the next run focuses on actionable runtime gaps.",
+        )
+    if validated > finding_count:
+        add(
+            "P1",
+            "validated_finding_packaging_gap",
+            "validated_candidate_count_minus_finding_count",
+            validated - finding_count,
+            "0",
+            "Package every validated candidate into customer-ready reproduction evidence or explicitly mark why it is held back.",
+        )
+
+    order = {"P0": 0, "P1": 1, "P2": 2}
+    return sorted(actions, key=lambda item: (order.get(str(item.get("priority")), 9), str(item.get("gap_type") or "")))[:12]
+
+
+def _runtime_evidence_maturity(scoreboard: dict[str, Any]) -> dict[str, Any]:
+    """Return a deterministic gate over factual runtime scoreboard metrics."""
+    execution_rate = float(scoreboard.get("execution_coverage_rate") or 0.0)
+    response_rate = float(scoreboard.get("target_response_rate") or 0.0)
+    fixture_rate = float(scoreboard.get("fixture_setup_success_rate") or 0.0)
+    binding_rate = float(scoreboard.get("runtime_binding_success_rate") or 0.0)
+    snapshot_count = int(scoreboard.get("snapshot_request_count") or 0)
+    snapshot_rate = float(scoreboard.get("snapshot_success_rate") or 0.0)
+    cleanup_executed = int(scoreboard.get("cleanup_executed_count") or 0)
+    cleanup_rate = float(scoreboard.get("cleanup_success_rate") or 0.0)
+    oracle_rate = float(scoreboard.get("oracle_resolution_rate") or 0.0)
+    integrity = float(scoreboard.get("execution_integrity_score") or 0.0)
+    p0_gaps = [a for a in (scoreboard.get("recommended_next_actions") or []) if isinstance(a, dict) and a.get("priority") == "P0"]
+
+    gates = {
+        "execution_coverage_gate": execution_rate >= 70.0,
+        "target_response_gate": response_rate >= 90.0 or int(scoreboard.get("executed_probe_count") or 0) == 0,
+        "fixture_setup_gate": fixture_rate >= 85.0 or int(scoreboard.get("fixture_setup_executed_count") or 0) == 0,
+        "runtime_binding_gate": binding_rate >= 95.0 or int(scoreboard.get("runtime_binding_event_count") or 0) == 0,
+        "snapshot_gate": snapshot_count > 0 and snapshot_rate >= 80.0,
+        "cleanup_gate": cleanup_rate >= 90.0 or cleanup_executed == 0,
+        "oracle_resolution_gate": oracle_rate >= 65.0 or int(scoreboard.get("executed_probe_count") or 0) == 0,
+        "integrity_gate": integrity >= 75.0,
+    }
+    if not scoreboard.get("executed_probe_count"):
+        level = "not_executed"
+        customer_ready = False
+        reason = "no probes executed against the runtime target"
+    elif p0_gaps:
+        level = "runtime_evidence_blocked"
+        customer_ready = False
+        reason = f"{len(p0_gaps)} P0 runtime evidence gap(s) must be resolved first"
+    elif all(gates.values()) and integrity >= 85.0:
+        level = "customer_ready_runtime_evidence"
+        customer_ready = True
+        reason = "runtime coverage, binding, snapshots, cleanup, and oracle resolution passed customer-ready gates"
+    elif integrity >= 65.0:
+        level = "runtime_evidence_needs_hardening"
+        customer_ready = False
+        reason = "runtime run produced useful evidence but still needs hardening before customer-ready claims"
+    else:
+        level = "runtime_evidence_early_stage"
+        customer_ready = False
+        reason = "runtime execution is present but evidence integrity remains below the hardening threshold"
+
+    return {
+        "level": level,
+        "customer_ready": customer_ready,
+        "reason": reason,
+        "gates": gates,
+        "p0_gap_count": len(p0_gaps),
+    }
+
+
 def _build_runtime_evidence_scoreboard(report: dict[str, Any]) -> dict[str, Any]:
     """Build a factual run ledger from the actual runtime report.
 
@@ -2234,19 +2427,25 @@ def _build_runtime_evidence_scoreboard(report: dict[str, Any]) -> dict[str, Any]
         2,
     )
 
-    return {
-        "engine": "runtime_evidence_scoreboard_v1_phase95_runtime_ledger",
+    target_http_response_count = target_responses + write_target_responses
+    oracle_resolved_count = validated_count + protected_count
+    scoreboard = {
+        "engine": "runtime_evidence_scoreboard_v2_phase95_gap_plan",
         "created_at": report.get("created_at"),
         "project_id": report.get("project_id"),
         "probe_count": len(decisions),
         "executed_probe_count": executed_probe_count,
         "executed_readonly_count": len(observations),
         "executed_write_sandbox_count": len(write_observations),
-        "target_http_response_count": target_responses + write_target_responses,
+        "execution_coverage_rate": _safe_rate(executed_probe_count, len(decisions)),
+        "target_http_response_count": target_http_response_count,
+        "target_response_rate": _safe_rate(target_http_response_count, executed_probe_count),
         "decision_counts": decision_counts,
         "verdict_counts": verdict_counts,
         "validated_candidate_count": validated_count,
         "protected_or_falsified_count": protected_count,
+        "oracle_resolved_count": oracle_resolved_count,
+        "oracle_resolution_rate": _safe_rate(oracle_resolved_count, observations_total),
         "needs_more_evidence_count": needs_more_count,
         "inconclusive_count": inconclusive_count,
         "finding_count": len(findings),
@@ -2269,6 +2468,9 @@ def _build_runtime_evidence_scoreboard(report: dict[str, Any]) -> dict[str, Any]
         "execution_integrity_score": execution_integrity_score,
         "top_failure_or_gap_reasons": _execution_failure_reasons(decisions, all_obs),
     }
+    scoreboard["recommended_next_actions"] = _runtime_evidence_gap_recommendations(scoreboard)
+    scoreboard["evidence_maturity"] = _runtime_evidence_maturity(scoreboard)
+    return scoreboard
 
 
 def _render_runtime_evidence_scoreboard_markdown(scoreboard: dict[str, Any]) -> str:
@@ -2278,12 +2480,14 @@ def _render_runtime_evidence_scoreboard_markdown(scoreboard: dict[str, Any]) -> 
         f"- engine: `{scoreboard.get('engine')}`",
         f"- project: `{scoreboard.get('project_id')}`",
         f"- execution integrity score: `{scoreboard.get('execution_integrity_score')}`",
+        f"- evidence maturity: `{((scoreboard.get('evidence_maturity') or {}).get('level'))}` / customer-ready `{((scoreboard.get('evidence_maturity') or {}).get('customer_ready'))}`",
+        f"- maturity reason: {((scoreboard.get('evidence_maturity') or {}).get('reason'))}",
         "",
         "## Execution coverage",
         "",
         f"- probes total: {scoreboard.get('probe_count')}",
-        f"- probes executed: {scoreboard.get('executed_probe_count')}",
-        f"- target HTTP responses: {scoreboard.get('target_http_response_count')}",
+        f"- probes executed: {scoreboard.get('executed_probe_count')} ({scoreboard.get('execution_coverage_rate')}%)",
+        f"- target HTTP responses: {scoreboard.get('target_http_response_count')} ({scoreboard.get('target_response_rate')}%)",
         f"- decisions: `{json.dumps(scoreboard.get('decision_counts') or {}, ensure_ascii=False)}`",
         f"- verdicts: `{json.dumps(scoreboard.get('verdict_counts') or {}, ensure_ascii=False)}`",
         "",
@@ -2300,11 +2504,32 @@ def _render_runtime_evidence_scoreboard_markdown(scoreboard: dict[str, Any]) -> 
         "",
         f"- validated candidates: {scoreboard.get('validated_candidate_count')}",
         f"- protected/falsified: {scoreboard.get('protected_or_falsified_count')}",
+        f"- runtime oracle resolved: {scoreboard.get('oracle_resolved_count')} ({scoreboard.get('oracle_resolution_rate')}%)",
         f"- needs more evidence: {scoreboard.get('needs_more_evidence_count')}",
         f"- inconclusive: {scoreboard.get('inconclusive_count')}",
         f"- customer-ready finding count: {scoreboard.get('finding_count')}",
         "",
     ]
+    maturity = scoreboard.get("evidence_maturity") if isinstance(scoreboard.get("evidence_maturity"), dict) else {}
+    gates = maturity.get("gates") if isinstance(maturity.get("gates"), dict) else {}
+    if gates:
+        lines.extend(["## Evidence maturity gates", ""])
+        for name, passed in gates.items():
+            marker = "pass" if passed else "needs work"
+            lines.append(f"- {name}: `{marker}`")
+        lines.append("")
+    actions = scoreboard.get("recommended_next_actions") or []
+    if actions:
+        lines.extend(["## Recommended next actions", ""])
+        for item in actions:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('priority')} / {item.get('gap_type')}: "
+                f"{item.get('metric')}={item.get('observed')} "
+                f"(target {item.get('threshold')}) — {item.get('action')}"
+            )
+        lines.append("")
     gaps = scoreboard.get("top_failure_or_gap_reasons") or {}
     if gaps:
         lines.extend(["## Top failure or evidence-gap reasons", ""])
@@ -2720,7 +2945,14 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_scoreboard_fixture_setup_success_rate"] = report["runtime_evidence_scoreboard"].get("fixture_setup_success_rate", 0)
     report["summary"]["runtime_scoreboard_cleanup_success_rate"] = report["runtime_evidence_scoreboard"].get("cleanup_success_rate", 0)
     report["summary"]["runtime_scoreboard_snapshot_success_rate"] = report["runtime_evidence_scoreboard"].get("snapshot_success_rate", 0)
+    report["summary"]["runtime_scoreboard_execution_coverage_rate"] = report["runtime_evidence_scoreboard"].get("execution_coverage_rate", 0)
+    report["summary"]["runtime_scoreboard_target_response_rate"] = report["runtime_evidence_scoreboard"].get("target_response_rate", 0)
+    report["summary"]["runtime_scoreboard_oracle_resolution_rate"] = report["runtime_evidence_scoreboard"].get("oracle_resolution_rate", 0)
     report["summary"]["runtime_scoreboard_top_gap_count"] = len(report["runtime_evidence_scoreboard"].get("top_failure_or_gap_reasons") or {})
+    report["summary"]["runtime_scoreboard_recommended_action_count"] = len(report["runtime_evidence_scoreboard"].get("recommended_next_actions") or [])
+    maturity = report["runtime_evidence_scoreboard"].get("evidence_maturity") if isinstance(report["runtime_evidence_scoreboard"].get("evidence_maturity"), dict) else {}
+    report["summary"]["runtime_scoreboard_evidence_maturity_level"] = maturity.get("level")
+    report["summary"]["runtime_scoreboard_customer_ready"] = bool(maturity.get("customer_ready"))
     _write_json(runtime_scoreboard_json_path, report["runtime_evidence_scoreboard"])
     runtime_scoreboard_md_path.write_text(_render_runtime_evidence_scoreboard_markdown(report["runtime_evidence_scoreboard"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
