@@ -1218,6 +1218,7 @@ def _bind_flow_response_id_to_runtime(
                 "bound": True,
                 "source": "flow_step_response",
                 "response_id": response_id,
+                "previous_values": old_values,
                 "path_params": fields,
                 "reason": reason,
             })
@@ -1476,6 +1477,49 @@ def _runtime_body_binding_summary(original: Any, rendered: Any) -> dict[str, Any
     return {"bound": True, "original": _safe_payload_summary(original), "rendered": _safe_payload_summary(rendered)}
 
 
+def _runtime_binding_original_values(config: dict[str, Any], probe: dict[str, Any]) -> dict[str, Any]:
+    """Return pre-runtime placeholder values observed before response id binding.
+
+    Multi-step flow steps can carry their own request bodies.  Those bodies may
+    contain either ``{order_id}`` placeholders or the original generated
+    ``qb_auto_*`` IDs.  After a previous step binds the real server id, render
+    step bodies against the current path params and replace any remembered
+    generated values from earlier runtime bindings.
+    """
+    if not _auto_fixture_enabled(config):
+        return {}
+    bundle = _auto_fixture_bundle(config, probe)
+    if not isinstance(bundle, dict):
+        return {}
+    originals: dict[str, Any] = {}
+    for binding in bundle.get("runtime_bindings") or []:
+        if not isinstance(binding, dict) or not binding.get("bound"):
+            continue
+        previous = binding.get("previous_values") if isinstance(binding.get("previous_values"), dict) else {}
+        for key, value in previous.items():
+            if value not in (None, "", [], {}):
+                originals[str(key)] = value
+    return originals
+
+
+def _flow_step_body_template(step: dict[str, Any], fallback_body: Any) -> tuple[Any, str]:
+    if "body" in step:
+        return step.get("body"), "step.body"
+    if "request_body" in step:
+        return step.get("request_body"), "step.request_body"
+    if "json" in step:
+        return step.get("json"), "step.json"
+    return fallback_body, "shared_probe_body"
+
+
+def _render_flow_step_body(config: dict[str, Any], probe: dict[str, Any], step: dict[str, Any], fallback_body: Any, path_params: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    template, source = _flow_step_body_template(step, fallback_body)
+    rendered = _render_fixture_runtime_value(template, path_params, _runtime_binding_original_values(config, probe))
+    summary = _runtime_body_binding_summary(template, rendered)
+    summary["source"] = source
+    return rendered, summary
+
+
 def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe: dict[str, Any], key: str, timeout: float) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
     for item in _auto_fixture_requests(config, probe, key):
@@ -1650,7 +1694,8 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
                 continue
             query_string = _render_query(step.get("query"), shared_params)
             request_path = _append_query(path, query_string)
-            response = _http_request(method, _join_url(base_url, request_path), headers, body=shared_body, timeout=timeout)
+            step_body, step_body_binding = _render_flow_step_body(config, probe, step, shared_body, shared_params)
+            response = _http_request(method, _join_url(base_url, request_path), headers, body=step_body, timeout=timeout)
             runtime_binding: dict[str, Any] = {}
             if isinstance(response.get("status_code"), int) and 200 <= int(response.get("status_code")) < 300:
                 bind_fields, bind_reason = _infer_flow_bind_fields(
@@ -1671,7 +1716,7 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
                 )
                 if runtime_binding:
                     shared_body = _replace_fixture_runtime_value(shared_body, str((runtime_binding.get("previous_values") or {}).get(bind_fields[0]) or ""), response_id)
-            responses.append(response | {"attempt": idx + 1, "step": idx + 1, "flow_action": step.get("action"), "flow_path": request_path, "runtime_binding": runtime_binding})
+            responses.append(response | {"attempt": idx + 1, "step": idx + 1, "flow_action": step.get("action"), "flow_path": request_path, "request_body_runtime_binding": step_body_binding, "runtime_binding": runtime_binding})
         snapshots["after"] = _execute_snapshots(config, base_url, probe, "after", timeout)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout)
     verification = _verify_flow_observation(probe, responses, snapshots) if not setup_blocked else {"verdict": "inconclusive", "reason": "auto_fixture_setup_blocked", "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
@@ -1684,7 +1729,7 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
         "fixture_receipts": setup_receipts,
         "cleanup_receipts": cleanup_receipts,
         "responses": [
-            {"attempt": r.get("attempt"), "step": r.get("step"), "flow_action": r.get("flow_action"), "flow_path": r.get("flow_path"), "runtime_binding": r.get("runtime_binding") or {}, "status_code": r.get("status_code"), "error": r.get("error"), "payload": _redact(r.get("payload")), "duration_ms": r.get("duration_ms")}
+            {"attempt": r.get("attempt"), "step": r.get("step"), "flow_action": r.get("flow_action"), "flow_path": r.get("flow_path"), "request_body_runtime_binding": r.get("request_body_runtime_binding") or {}, "runtime_binding": r.get("runtime_binding") or {}, "status_code": r.get("status_code"), "error": r.get("error"), "payload": _redact(r.get("payload")), "duration_ms": r.get("duration_ms")}
             for r in responses
         ],
         "snapshots": snapshots,
