@@ -2805,6 +2805,257 @@ def _render_runtime_evidence_probe_ledger_markdown(ledger: dict[str, Any]) -> st
         lines.append("")
     return "\n".join(lines)
 
+
+def _shell_single_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def _runtime_repro_curl_template(method: str, path: str, body: Any = None) -> str:
+    """Return a secret-free curl template using BASE_URL instead of raw credentials."""
+    method = str(method or "GET").upper()
+    path = str(path or "/")
+    base = f"curl -X {method} \"$BASE_URL{path}\""
+    if body is not None and body != {}:
+        payload = json.dumps(_redact(body), ensure_ascii=False, sort_keys=True)
+        base += " -H \"Content-Type: application/json\" --data-raw " + _shell_single_quote(payload)
+    return base
+
+
+def _runtime_response_status(item: dict[str, Any]) -> Any:
+    response = item.get("response") if isinstance(item.get("response"), dict) else item
+    return response.get("status_code") if isinstance(response, dict) else None
+
+
+def _runtime_response_summary(item: dict[str, Any]) -> dict[str, Any]:
+    response = item.get("response") if isinstance(item.get("response"), dict) else item
+    payload = response.get("payload") if isinstance(response, dict) else None
+    return _safe_payload_summary(payload)
+
+
+def _runtime_repro_steps_for_observation(obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build a deterministic, customer-shareable reproduction trace for one observation."""
+    steps: list[dict[str, Any]] = []
+    seq = 1
+    for receipt in obs.get("fixture_receipts") or []:
+        if not isinstance(receipt, dict):
+            continue
+        method = str(receipt.get("method") or "POST").upper()
+        path = str(receipt.get("path") or "")
+        body_binding = receipt.get("body_runtime_binding") if isinstance(receipt.get("body_runtime_binding"), dict) else {}
+        steps.append({
+            "sequence": seq,
+            "phase": "setup",
+            "purpose": receipt.get("purpose") or "disposable_fixture_setup",
+            "method": method,
+            "path": path,
+            "curl_template": _runtime_repro_curl_template(method, path),
+            "status_code": _runtime_response_status(receipt),
+            "accepted": bool(receipt.get("accepted")),
+            "runtime_binding": _redact(receipt.get("runtime_binding") or {}),
+            "body_runtime_binding": _redact(body_binding),
+            "response_summary": _runtime_response_summary(receipt),
+        })
+        seq += 1
+
+    snapshots = obs.get("snapshots") if isinstance(obs.get("snapshots"), dict) else {}
+    for phase in ("before", "after"):
+        for snap in (snapshots.get(phase) or []):
+            if not isinstance(snap, dict):
+                continue
+            method = str(snap.get("method") or "GET").upper()
+            path = str(snap.get("path") or "")
+            response = snap.get("response") if isinstance(snap.get("response"), dict) else {}
+            steps.append({
+                "sequence": seq,
+                "phase": f"snapshot_{phase}",
+                "purpose": snap.get("observer_kind") or snap.get("evidence_goal") or f"{phase}_snapshot",
+                "method": method,
+                "path": path,
+                "curl_template": _runtime_repro_curl_template(method, path),
+                "status_code": response.get("status_code"),
+                "accepted": isinstance(response.get("status_code"), int) and 200 <= int(response.get("status_code")) < 300,
+                "response_summary": _safe_payload_summary(response.get("payload")),
+            })
+            seq += 1
+
+    request = obs.get("request") if isinstance(obs.get("request"), dict) else {}
+    if obs.get("response"):
+        method = str(obs.get("method") or request.get("method") or "GET").upper()
+        path = str(request.get("path") or obs.get("path") or "")
+        body = request.get("body") if isinstance(request, dict) else None
+        response = obs.get("response") if isinstance(obs.get("response"), dict) else {}
+        steps.append({
+            "sequence": seq,
+            "phase": "target",
+            "purpose": "main_probe_request",
+            "method": method,
+            "path": path,
+            "curl_template": _runtime_repro_curl_template(method, path, body),
+            "status_code": response.get("status_code"),
+            "accepted": isinstance(response.get("status_code"), int) and 200 <= int(response.get("status_code")) < 300,
+            "body_runtime_binding": _redact(request.get("body_runtime_binding") or {}),
+            "response_summary": _safe_payload_summary(response.get("payload")),
+        })
+        seq += 1
+    for response in obs.get("responses") or []:
+        if not isinstance(response, dict):
+            continue
+        method = str(response.get("method") or obs.get("method") or "POST").upper()
+        path = str(response.get("flow_path") or response.get("path") or request.get("path") or obs.get("path") or "")
+        steps.append({
+            "sequence": seq,
+            "phase": "target_flow_step",
+            "purpose": response.get("flow_action") or f"flow_step_{response.get('step') or response.get('attempt') or seq}",
+            "step": response.get("step"),
+            "attempt": response.get("attempt"),
+            "method": method,
+            "path": path,
+            "curl_template": _runtime_repro_curl_template(method, path),
+            "status_code": response.get("status_code"),
+            "accepted": isinstance(response.get("status_code"), int) and 200 <= int(response.get("status_code")) < 300,
+            "runtime_binding": _redact(response.get("runtime_binding") or {}),
+            "body_runtime_binding": _redact(response.get("request_body_runtime_binding") or {}),
+            "response_summary": _safe_payload_summary(response.get("payload")),
+        })
+        seq += 1
+
+    for receipt in obs.get("cleanup_receipts") or []:
+        if not isinstance(receipt, dict):
+            continue
+        method = str(receipt.get("method") or "DELETE").upper()
+        path = str(receipt.get("path") or "")
+        steps.append({
+            "sequence": seq,
+            "phase": "cleanup",
+            "purpose": receipt.get("purpose") or "disposable_fixture_cleanup",
+            "method": method,
+            "path": path,
+            "curl_template": _runtime_repro_curl_template(method, path),
+            "status_code": _runtime_response_status(receipt),
+            "accepted": bool(receipt.get("accepted")),
+            "runtime_binding": _redact(receipt.get("runtime_binding") or {}),
+            "body_runtime_binding": _redact(receipt.get("body_runtime_binding") or {}),
+            "response_summary": _runtime_response_summary(receipt),
+        })
+        seq += 1
+    return steps
+
+
+def _build_runtime_customer_reproduction_pack(report: dict[str, Any]) -> dict[str, Any]:
+    """Package customer-ready findings with exact, redacted runtime reproduction traces."""
+    observations = [o for o in (report.get("observations") or []) if isinstance(o, dict)]
+    write_observations = [o for o in (report.get("write_observations") or []) if isinstance(o, dict)]
+    obs_by_id = {str(o.get("candidate_id") or ""): o for o in observations + write_observations if o.get("candidate_id")}
+    ledger_entries = {}
+    ledger = report.get("runtime_evidence_probe_ledger") if isinstance(report.get("runtime_evidence_probe_ledger"), dict) else {}
+    for entry in ledger.get("entries") or []:
+        if isinstance(entry, dict) and entry.get("candidate_id"):
+            ledger_entries[str(entry.get("candidate_id"))] = entry
+
+    findings = [f for f in (report.get("findings") or []) if isinstance(f, dict)]
+    packages: list[dict[str, Any]] = []
+    for finding in findings:
+        cid = str(finding.get("candidate_id") or "")
+        obs = obs_by_id.get(cid) or {}
+        ledger_entry = ledger_entries.get(cid) or {}
+        verification = obs.get("verification") if isinstance(obs.get("verification"), dict) else {}
+        steps = _runtime_repro_steps_for_observation(obs) if obs else []
+        binding_events = _runtime_evidence_probe_binding_events(obs) if obs else []
+        packages.append({
+            "finding_id": finding.get("finding_id"),
+            "candidate_id": cid,
+            "title": finding.get("title"),
+            "risk_type": finding.get("risk_type"),
+            "method": finding.get("method"),
+            "path": finding.get("path"),
+            "confidence": finding.get("confidence"),
+            "evidence_grade": finding.get("evidence_grade"),
+            "evidence_strength_score": finding.get("evidence_strength_score"),
+            "customer_ready": bool(ledger_entry.get("customer_ready")) or verification.get("verdict") == "validated_candidate",
+            "readiness_level": ledger_entry.get("readiness_level") or "validated_candidate_without_probe_ledger",
+            "reason": finding.get("reason") or verification.get("reason"),
+            "runtime_evidence": {
+                "target_http_statuses": _runtime_evidence_target_statuses(obs) if obs else [],
+                "runtime_binding_event_count": len(binding_events),
+                "runtime_binding_bound_count": sum(1 for event in binding_events if event.get("bound") is True),
+                "fixture_setup": ledger_entry.get("fixture_setup") or {},
+                "snapshots": ledger_entry.get("snapshots") or {},
+                "cleanup": ledger_entry.get("cleanup") or {},
+                "gap_types": ledger_entry.get("gap_types") or [],
+            },
+            "reproduction_trace": steps,
+            "violated_invariants": _redact(finding.get("violated_invariants") or []),
+            "delta_summary": _redact(finding.get("delta_summary") or {}),
+            "source_refs": _redact(finding.get("source_refs") or []),
+            "customer_triage": _redact(finding.get("customer_triage") or {}),
+        })
+
+    return {
+        "engine": "runtime_customer_reproduction_pack_v1_phase95",
+        "created_at": report.get("created_at"),
+        "project_id": report.get("project_id"),
+        "finding_count": len(packages),
+        "customer_ready_reproduction_count": sum(1 for item in packages if item.get("customer_ready") is True),
+        "status": "ready" if packages else "empty_no_validated_runtime_findings",
+        "redaction_policy": "uses BASE_URL templates and redacts secret-bearing fields; no raw Authorization/Cookie values are emitted",
+        "packages": packages,
+    }
+
+
+def _render_runtime_customer_reproduction_pack_markdown(pack: dict[str, Any]) -> str:
+    lines = [
+        "# Runtime Customer Reproduction Pack",
+        "",
+        f"- engine: `{pack.get('engine')}`",
+        f"- project: `{pack.get('project_id')}`",
+        f"- status: `{pack.get('status')}`",
+        f"- findings packaged: {pack.get('finding_count')}",
+        f"- customer-ready reproductions: {pack.get('customer_ready_reproduction_count')}",
+        f"- redaction policy: {pack.get('redaction_policy')}",
+        "",
+    ]
+    packages = [p for p in (pack.get("packages") or []) if isinstance(p, dict)]
+    if not packages:
+        lines.append("No validated runtime findings were available for customer reproduction packaging.")
+        lines.append("")
+        return "\n".join(lines)
+    for item in packages[:50]:
+        lines.extend([
+            f"## {item.get('finding_id')} — {item.get('title')}",
+            "",
+            f"- candidate: `{item.get('candidate_id')}`",
+            f"- endpoint: `{item.get('method')} {item.get('path')}`",
+            f"- readiness: `{item.get('readiness_level')}` / customer-ready `{item.get('customer_ready')}`",
+            f"- evidence: grade `{item.get('evidence_grade')}`, score `{item.get('evidence_strength_score')}`, confidence `{item.get('confidence')}`",
+            f"- reason: {item.get('reason')}",
+            "",
+            "### Reproduction trace",
+            "",
+            "| # | Phase | Method | Path | HTTP | Accepted | Command template |",
+            "|---:|---|---|---|---:|---|---|",
+        ])
+        for step in item.get("reproduction_trace") or []:
+            if not isinstance(step, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join([
+                    str(step.get("sequence") or "-"),
+                    str(step.get("phase") or "-"),
+                    str(step.get("method") or "-"),
+                    str(step.get("path") or "-").replace("|", "\\|"),
+                    str(step.get("status_code") if step.get("status_code") is not None else "-"),
+                    str(step.get("accepted")),
+                    f"`{str(step.get('curl_template') or '-').replace('`', '')}`",
+                ])
+                + " |"
+            )
+        lines.append("")
+    if len(packages) > 50:
+        lines.append(f"_Only the first 50 packages are shown; see JSON for all {len(packages)} findings._")
+        lines.append("")
+    return "\n".join(lines)
+
 def _render_runtime_evidence_scoreboard_markdown(scoreboard: dict[str, Any]) -> str:
     lines = [
         "# Runtime Evidence Scoreboard",
@@ -3146,6 +3397,8 @@ def run_grounded_probe_executor(
     runtime_scoreboard_md_path = output / "grounded_probe_runtime_evidence_scoreboard.md"
     runtime_probe_ledger_json_path = output / "grounded_probe_runtime_evidence_probe_ledger.json"
     runtime_probe_ledger_md_path = output / "grounded_probe_runtime_evidence_probe_ledger.md"
+    runtime_repro_pack_json_path = output / "grounded_probe_runtime_customer_reproduction_pack.json"
+    runtime_repro_pack_md_path = output / "grounded_probe_runtime_customer_reproduction_pack.md"
     runtime_sla_policy_json_path = output / "grounded_probe_runtime_sla_execution_policy.json"
     runtime_sla_policy_md_path = output / "grounded_probe_runtime_sla_execution_policy.md"
     runtime_sla_gap_json_path = output / "grounded_probe_runtime_sla_gap_prioritizer.json"
@@ -3214,6 +3467,8 @@ def run_grounded_probe_executor(
         "runtime_evidence_scoreboard_md": str(runtime_scoreboard_md_path),
         "runtime_evidence_probe_ledger_json": str(runtime_probe_ledger_json_path),
         "runtime_evidence_probe_ledger_md": str(runtime_probe_ledger_md_path),
+        "runtime_customer_reproduction_pack_json": str(runtime_repro_pack_json_path),
+        "runtime_customer_reproduction_pack_md": str(runtime_repro_pack_md_path),
         "runtime_sla_execution_policy_json": str(runtime_sla_policy_json_path),
         "runtime_sla_execution_policy_md": str(runtime_sla_policy_md_path),
         "runtime_sla_gap_prioritizer_json": str(runtime_sla_gap_json_path),
@@ -3300,6 +3555,12 @@ def run_grounded_probe_executor(
     report["summary"]["runtime_probe_ledger_evidence_gap_count"] = report["runtime_evidence_probe_ledger"].get("evidence_gap_probe_count", 0)
     _write_json(runtime_probe_ledger_json_path, report["runtime_evidence_probe_ledger"])
     runtime_probe_ledger_md_path.write_text(_render_runtime_evidence_probe_ledger_markdown(report["runtime_evidence_probe_ledger"]), encoding="utf-8")
+    report["runtime_customer_reproduction_pack"] = _build_runtime_customer_reproduction_pack(report)
+    report["summary"]["runtime_reproduction_pack_finding_count"] = report["runtime_customer_reproduction_pack"].get("finding_count", 0)
+    report["summary"]["runtime_reproduction_pack_customer_ready_count"] = report["runtime_customer_reproduction_pack"].get("customer_ready_reproduction_count", 0)
+    report["summary"]["runtime_reproduction_pack_status"] = report["runtime_customer_reproduction_pack"].get("status")
+    _write_json(runtime_repro_pack_json_path, report["runtime_customer_reproduction_pack"])
+    runtime_repro_pack_md_path.write_text(_render_runtime_customer_reproduction_pack_markdown(report["runtime_customer_reproduction_pack"]), encoding="utf-8")
     report["runtime_sla_execution_policy"] = build_runtime_sla_execution_policy(report)
     report["summary"]["runtime_sla_must_run_count"] = report["runtime_sla_execution_policy"].get("must_run_for_sla_count", 0)
     report["summary"]["runtime_sla_blocked_before_sla_count"] = report["runtime_sla_execution_policy"].get("blocked_before_sla_count", 0)
