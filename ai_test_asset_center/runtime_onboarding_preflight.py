@@ -14,6 +14,8 @@ import re
 import urllib.parse
 from typing import Any, Callable
 
+from .runtime_connectivity_auth_preflight import build_runtime_connectivity_auth_preflight
+
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 READ_METHODS = {"GET", "HEAD"}
 HIGH_VALUE_RUNTIME_RISKS = {
@@ -179,30 +181,73 @@ def _role_coverage(config: dict[str, Any]) -> dict[str, Any]:
 def _auth_readiness(config: dict[str, Any]) -> dict[str, Any]:
     runtime = config.get("_auth_runtime") if isinstance(config.get("_auth_runtime"), dict) else {}
     accounts = _accounts(config)
-    if not accounts:
-        headers = config.get("default_headers") if isinstance(config.get("default_headers"), dict) else {}
-        token_like = any(str(k).lower() in {"authorization", "cookie", "x-api-key"} for k in headers)
-        return {
-            "ok": False,
-            "configured": token_like,
-            "verified": False,
-            "mode": "headers_configured_unverified" if token_like else "headers_or_no_accounts",
-            "successful_session_count": 0,
-            "message": "default auth headers configured but no login/session health check has verified them" if token_like else "no test accounts or auth headers configured",
-        }
-    if runtime.get("mode") == "account_login":
+    headers = config.get("default_headers") if isinstance(config.get("default_headers"), dict) else {}
+    token_like = any(str(k).lower() in {"authorization", "cookie", "x-api-key", "x-auth-token", "x-session-id"} for k in headers)
+    mode = str(runtime.get("mode") or "")
+
+    if mode == "account_login":
         success = int(runtime.get("successful_session_count") or 0)
+        session_health = int(runtime.get("session_health_verified_count") or 0)
+        token_count = int(runtime.get("token_acquired_count") or 0)
+        cookie_count = int(runtime.get("cookie_acquired_count") or 0)
         return {
             "ok": success > 0,
             "configured": True,
             "verified": success > 0,
+            "session_health_verified": session_health > 0,
             "mode": "account_login",
             "successful_session_count": success,
-            "message": f"{success} account session(s) derived by login flow" if success else "account login attempted but no usable session was derived",
+            "token_acquired_count": token_count,
+            "cookie_acquired_count": cookie_count,
+            "session_health_verified_count": session_health,
+            "message": f"{success} account session(s) derived by login flow" if success else "account login attempted but no usable token/cookie/session was derived",
         }
+
+    if mode == "static_headers":
+        session_health = int(runtime.get("session_health_verified_count") or 0)
+        verified = session_health > 0
+        return {
+            "ok": verified,
+            "configured": bool(runtime.get("configured") or token_like),
+            "verified": verified,
+            "session_health_verified": verified,
+            "mode": "static_headers" if verified else "headers_configured_unverified",
+            "successful_session_count": int(runtime.get("successful_session_count") or 0),
+            "session_health_verified_count": session_health,
+            "message": "static auth headers verified by session health check" if verified else "default auth headers configured but no login/session health check has verified them",
+        }
+
     if runtime.get("blocked_reason"):
-        return {"ok": False, "configured": bool(accounts), "verified": False, "mode": runtime.get("mode"), "successful_session_count": 0, "message": str(runtime.get("blocked_reason"))}
-    return {"ok": False, "configured": bool(accounts), "verified": False, "mode": runtime.get("mode") or "unknown", "successful_session_count": 0, "message": "accounts configured but login flow was not resolved"}
+        return {
+            "ok": False,
+            "configured": bool(accounts or token_like or runtime.get("configured")),
+            "verified": False,
+            "session_health_verified": False,
+            "mode": runtime.get("mode"),
+            "successful_session_count": 0,
+            "message": str(runtime.get("blocked_reason")),
+        }
+
+    if not accounts:
+        return {
+            "ok": False,
+            "configured": token_like,
+            "verified": False,
+            "session_health_verified": False,
+            "mode": "headers_configured_unverified" if token_like else "headers_or_no_accounts",
+            "successful_session_count": 0,
+            "message": "default auth headers configured but no login/session health check has verified them" if token_like else "no test accounts or auth headers configured",
+        }
+
+    return {
+        "ok": False,
+        "configured": bool(accounts),
+        "verified": False,
+        "session_health_verified": False,
+        "mode": runtime.get("mode") or "unknown",
+        "successful_session_count": 0,
+        "message": "accounts configured but login flow was not resolved",
+    }
 
 
 def _sandbox_readiness(config: dict[str, Any], allow_write_sandbox: bool) -> dict[str, Any]:
@@ -267,26 +312,49 @@ def run_runtime_onboarding_preflight(
     allow_write_sandbox: bool,
     timeout_seconds: float = 10.0,
     requester: Requester | None = None,
+    resolver: Callable[[str, int | None], list[Any]] | None = None,
 ) -> dict[str, Any]:
     probes = [p for p in (plan.get("probes") or []) if isinstance(p, dict)]
     counts = _probe_counts(probes)
     prod_like, prod_reason = _is_production_like(config, base_url)
-    auth = _auth_readiness(config)
+    connectivity_auth = build_runtime_connectivity_auth_preflight(
+        config=config,
+        base_url=base_url,
+        execute_readonly=execute_readonly,
+        allow_write_sandbox=allow_write_sandbox,
+        timeout_seconds=timeout_seconds,
+        requester=requester,
+        resolver=resolver,
+        safety_skip_http=bool(prod_like and base_url),
+        safety_skip_reason="HTTP/auth probes skipped because target is production-like" if prod_like and base_url else "",
+    )
+    auth_config = dict(config or {})
+    existing_runtime = auth_config.get("_auth_runtime") if isinstance(auth_config.get("_auth_runtime"), dict) else {}
+    discovered_runtime = connectivity_auth.get("auth_runtime") if isinstance(connectivity_auth.get("auth_runtime"), dict) else {}
+    if discovered_runtime and (not existing_runtime or not int(existing_runtime.get("successful_session_count") or 0)):
+        auth_config["_auth_runtime"] = discovered_runtime
+    auth = _auth_readiness(auth_config)
     roles = _role_coverage(config)
     sandbox = _sandbox_readiness(config, allow_write_sandbox)
     snapshots = _snapshot_readiness(config, probes)
-    if prod_like and base_url:
-        reachability = {"ok": False, "skipped": True, "message": "reachability skipped because target is production-like"}
-    else:
+    reachability = connectivity_auth.get("http_edge") if isinstance(connectivity_auth.get("http_edge"), dict) else {}
+    if not reachability:
         reachability = _try_reachability(base_url, timeout_seconds, requester) if base_url else {"ok": False, "skipped": True, "message": "base_url not configured"}
     placeholder_block = _contains_placeholder(config)
+    url_parse = connectivity_auth.get("url_parse") if isinstance(connectivity_auth.get("url_parse"), dict) else {}
+    dns_resolution = connectivity_auth.get("dns_resolution") if isinstance(connectivity_auth.get("dns_resolution"), dict) else {}
+    auth_runtime = connectivity_auth.get("auth_runtime") if isinstance(connectivity_auth.get("auth_runtime"), dict) else {}
 
     checks = [
         _check("base_url_configured", bool(base_url), "target base URL is configured" if base_url else "no target base URL; runtime execution will be plan-only", severity="blocking" if execute_readonly or allow_write_sandbox else "warning"),
+        _check("url_parse_ok", bool(url_parse.get("ok")), url_parse.get("message") or "URL parse unknown", severity="blocking" if execute_readonly or allow_write_sandbox else "warning", url_parse=url_parse),
+        _check("url_host_resolves", bool(dns_resolution.get("ok")), dns_resolution.get("message") or "host resolution unknown", severity="blocking" if execute_readonly or allow_write_sandbox else "warning", skipped=bool(dns_resolution.get("skipped")), dns_resolution=dns_resolution),
         _check("base_url_reachable", bool(reachability.get("ok")), reachability.get("message") or "reachability unknown", severity="blocking" if (execute_readonly or allow_write_sandbox) else "warning", skipped=bool(reachability.get("skipped")), status_code=reachability.get("status_code"), error=reachability.get("error"), duration_ms=reachability.get("duration_ms")),
         _check("non_production_target", not prod_like, prod_reason, severity="blocking"),
         _check("probe_plan_grounded", counts["total"] > 0 and counts["strictly_grounded"] == counts["total"], f"{counts['strictly_grounded']}/{counts['total']} probes have strict document grounding", severity="blocking"),
-        _check("auth_session_ready", bool(auth.get("ok")), auth.get("message") or "auth readiness unknown", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count")),
+        _check("auth_session_ready", bool(auth.get("ok")), auth.get("message") or "auth readiness unknown", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count"), token_acquired_count=auth.get("token_acquired_count"), cookie_acquired_count=auth.get("cookie_acquired_count"), session_health_verified_count=auth.get("session_health_verified_count")),
+        _check("token_cookie_or_session_acquired", int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0, "token/cookie/session material was acquired" if int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0 else "no token/cookie/session material acquired yet", severity="warning", mode=auth_runtime.get("mode") or auth.get("mode"), successful_session_count=auth_runtime.get("successful_session_count") or auth.get("successful_session_count")),
+        _check("session_health_verified", int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0, "authenticated session was verified by health/me endpoint" if int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0 else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count")),
         _check("role_coverage", not roles.get("missing_recommended_roles"), "recommended tenant/admin/owner/normal role coverage is present" if not roles.get("missing_recommended_roles") else "recommended role coverage is incomplete; some boundary probes may be degraded", severity="warning", role_coverage=roles),
         _check("auto_fixture_create_permission", bool(sandbox.get("enabled") and sandbox.get("auto_fixture_enabled")), "auto fixture creation is enabled for disposable test data" if sandbox.get("enabled") and sandbox.get("auto_fixture_enabled") else "auto fixture creation is not fully enabled", severity="warning", sandbox=sandbox),
         _check("cleanup_health_declared", bool(sandbox.get("cleanup_strategy_supported")), f"cleanup strategy `{sandbox.get('cleanup_strategy')}` is supported" if sandbox.get("cleanup_strategy_supported") else "cleanup strategy is missing or unsupported", severity="blocking" if allow_write_sandbox else "warning", cleanup_strategy=sandbox.get("cleanup_strategy")),
@@ -327,6 +395,7 @@ def run_runtime_onboarding_preflight(
         "blocking_reasons": [c.get("name") for c in blocking],
         "warning_reasons": [c.get("name") for c in warnings],
         "auth_readiness": auth,
+        "connectivity_auth_preflight": connectivity_auth,
         "role_coverage": roles,
         "sandbox_readiness": sandbox,
         "snapshot_readiness": snapshots,
