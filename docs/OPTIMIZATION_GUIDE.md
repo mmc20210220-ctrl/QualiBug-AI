@@ -10,6 +10,7 @@
 
 | 文件 | 说明 |
 |------|------|
+| `examples/example_minimal.py` | **最简单** - 1 分钟快速上手 |
 | `examples/example_optimizations.py` | **强烈推荐** - 综合优化工具包示例 |
 | `examples/example_monitor_usage.py` | 性能监控基本用法 |
 | `examples/example_combined_optimizations.py` | 缓存 + 监控组合使用 |
@@ -18,6 +19,9 @@
 
 运行示例：
 ```bash
+# 1 分钟快速上手（最简单）
+python examples/example_minimal.py
+
 # 综合优化工具包（推荐）
 python examples/example_optimizations.py
 
@@ -507,11 +511,13 @@ if __name__ == "__main__":
    - `ai_test_asset_center/safe_retry.py`
    - `ai_test_asset_center/optimizations.py`
    - `docs/OPTIMIZATION_GUIDE.md`
+   - `docs/QUICKSTART.md`
    - `examples/example_monitor_usage.py`
    - `examples/example_combined_optimizations.py`
    - `examples/integrated_optimization_demo.py`
    - `examples/example_safe_retry_simple.py`
    - `examples/example_optimizations.py`
+   - `examples/example_minimal.py`
 
 2. **恢复原代码**（如果修改过）：
    - 移除装饰器
