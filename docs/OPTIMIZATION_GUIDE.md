@@ -512,6 +512,8 @@ if __name__ == "__main__":
    - `ai_test_asset_center/optimizations.py`
    - `docs/OPTIMIZATION_GUIDE.md`
    - `docs/QUICKSTART.md`
+   - `docs/BEST_PRACTICES.md`
+   - `docs/SUMMARY.md`
    - `examples/example_monitor_usage.py`
    - `examples/example_combined_optimizations.py`
    - `examples/integrated_optimization_demo.py`
