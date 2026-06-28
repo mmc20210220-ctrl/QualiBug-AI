@@ -18,9 +18,11 @@ from .console_output import safe_print as print
 
 OUTPUT_HARD_LIMITS = (
     "\nOUTPUT HARD LIMITS:\n"
+    "- Return exactly one top-level JSON object with this shape: {\"hypotheses\":[{...}]}.\n"
     "- Return at most 15 hypotheses.\n"
     "- Each hypothesis must be concise and no longer than 500 characters.\n"
     "- Return JSON only.\n"
+    "- Use double-quoted JSON strings only; never use Python repr, single quotes, comments, or trailing commas.\n"
     "- Do not include analysis, markdown, commentary, or code fences.\n"
     "- If evidence is insufficient, return fewer hypotheses rather than verbose explanations.\n"
 )
@@ -29,6 +31,7 @@ MAX_HYPOTHESES = 15
 MAX_HYPOTHESIS_CHARS = 500
 MAX_REASONER_WORKERS = 4
 MIN_REASONER_TIMEOUT_SECONDS = 300
+MIN_REASONER_MAX_TOKENS = 32768
 
 SIDE_PATH_REASONER_ENGINES = (
     ("business_outcome", "outcome"),
@@ -160,6 +163,143 @@ def _salvage_truncated_json(text: str) -> list[dict] | None:
     return saved if saved else None
 
 
+def _message_content_to_text(content: Any) -> str:
+    """Normalize OpenAI-compatible message content variants into text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                value = part.get("text") or part.get("content") or part.get("value")
+                if isinstance(value, str):
+                    parts.append(value)
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _strip_json_wrappers(text: str) -> tuple[str, str]:
+    """Remove common presentation wrappers without changing JSON semantics."""
+    cleaned = (text or "").strip().lstrip("\ufeff")
+    degradations: list[str] = []
+    if cleaned.startswith("```"):
+        degradations.append("code_fence_removed")
+        lines = cleaned.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    stripped = re.sub(r"^\s*(?:json|JSON|output|Output|result|Result)\s*:\s*", "", cleaned).strip()
+    if stripped != cleaned:
+        degradations.append("label_prefix_removed")
+    return stripped, ",".join(degradations)
+
+
+def _extract_balanced_json(text: str) -> str | None:
+    """Extract the first complete JSON object/array from surrounding text."""
+    start = -1
+    opener = ""
+    for idx, ch in enumerate(text):
+        if ch in "{[":
+            start = idx
+            opener = ch
+            break
+    if start < 0:
+        return None
+
+    closer_for = {"{": "}", "[": "]"}
+    stack = [closer_for[opener]]
+    in_string = False
+    escape = False
+    quote = ""
+    for idx in range(start + 1, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == quote:
+                in_string = False
+            continue
+        if ch in {'"', "'"}:
+            in_string = True
+            quote = ch
+            continue
+        if ch in "{[":
+            stack.append(closer_for[ch])
+        elif stack and ch == stack[-1]:
+            stack.pop()
+            if not stack:
+                return text[start:idx + 1].strip()
+    return None
+
+
+def _parse_structured_content(cleaned: str) -> tuple[Any | None, str, str]:
+    """Parse model content, preferring strict JSON and labeling deviations."""
+    try:
+        return json.loads(cleaned), "", ""
+    except json.JSONDecodeError as first_error:
+        balanced = _extract_balanced_json(cleaned)
+        if balanced and balanced != cleaned:
+            try:
+                return json.loads(balanced), "degraded", "json_slice_extracted"
+            except json.JSONDecodeError:
+                pass
+        try:
+            parsed = ast.literal_eval(balanced or cleaned)
+        except (SyntaxError, ValueError):
+            return None, "", f"parse_error: {str(first_error)[:100]}"
+        if isinstance(parsed, (dict, list)):
+            return parsed, "degraded", "python_literal_json_salvaged"
+        return None, "", f"parse_error: {str(first_error)[:100]}"
+
+
+def _extract_hypothesis_items(parsed: Any) -> tuple[list[Any] | None, str]:
+    """Normalize common model root shapes into a hypothesis item list."""
+    if isinstance(parsed, list):
+        return parsed, "array_root"
+    if not isinstance(parsed, dict):
+        return None, f"content_not_list_or_dict: {type(parsed).__name__}"
+
+    for key in ("hypotheses", "findings", "risks", "bugs", "issues", "items", "results"):
+        value = parsed.get(key)
+        if isinstance(value, list):
+            return value, "" if key == "hypotheses" else f"alternate_root_key:{key}"
+
+    for key in ("result", "data", "output", "response"):
+        value = parsed.get(key)
+        if isinstance(value, (dict, list)):
+            nested, reason = _extract_hypothesis_items(value)
+            if nested is not None:
+                return nested, f"nested_root:{key}" + (f",{reason}" if reason else "")
+
+    hypothesis_like_keys = {
+        "hypothesis_id", "title", "severity", "expected_behavior",
+        "verification_method", "why_this_matters", "symptoms_if_broken",
+    }
+    if hypothesis_like_keys.intersection(parsed):
+        return [parsed], "single_hypothesis_object"
+    return None, "missing_hypotheses_array"
+
+
+def _normalize_hypothesis_items(items: list[Any], *, max_hypotheses: int = MAX_HYPOTHESES) -> list[dict]:
+    normalized: list[dict] = []
+    for item in items[:max(1, min(int(max_hypotheses or 1), MAX_HYPOTHESES))]:
+        if isinstance(item, dict):
+            normalized.append(dict(item))
+        elif isinstance(item, str) and item.strip():
+            normalized.append({"title": item.strip(), "source_format": "string_hypothesis"})
+    for hypothesis in normalized:
+        for key, value in list(hypothesis.items()):
+            if isinstance(value, str) and len(value) > MAX_HYPOTHESIS_CHARS:
+                hypothesis[key] = value[:MAX_HYPOTHESIS_CHARS - 3] + "..."
+    return normalized
+
+
 def _parse_engine_content(raw: str) -> tuple[list[dict] | None, str, str]:
     """Parse DeepSeek API response → list of hypothesis dicts.
 
@@ -178,76 +318,38 @@ def _parse_engine_content(raw: str) -> tuple[list[dict] | None, str, str]:
     if not choices:
         return None, "failed", "empty_choices"
 
-    content = choices[0].get("message", {}).get("content", "")
+    content = _message_content_to_text(choices[0].get("message", {}).get("content", ""))
     if not content or len(content.strip()) < 10:
         return None, "failed", "empty_content"
 
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if len(lines) >= 3:
-            cleaned = "\n".join(lines[1:-1]).strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:].strip()
-
-    # Try normal parse first
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        try:
-            parsed = ast.literal_eval(cleaned)
-        except (SyntaxError, ValueError):
-            parsed = None
-        if isinstance(parsed, (dict, list)):
-            status_from_literal = "degraded"
-            degradation_from_literal = "python_literal_json_salvaged"
-        else:
-            status_from_literal = ""
-            degradation_from_literal = ""
-        # Attempt truncation recovery
-        if parsed is None and any(kw in str(e) for kw in (
+    cleaned, wrapper_degradation = _strip_json_wrappers(content)
+    parsed, parse_status, parse_degradation = _parse_structured_content(cleaned)
+    if parsed is None:
+        if any(kw in parse_degradation for kw in (
             "Unterminated string", "Expecting delimiter", "Expecting value",
             "Expecting property name enclosed in double quotes",
             "Expecting ',' delimiter", "Extra data",
         )):
             salvaged = _salvage_truncated_json(cleaned)
             if salvaged and len(salvaged) >= 1:
-                # Apply hard limits
-                salvaged = salvaged[:MAX_HYPOTHESES]
-                for h in salvaged:
-                    for k in h:
-                        if isinstance(h[k], str) and len(h[k]) > MAX_HYPOTHESIS_CHARS:
-                            h[k] = h[k][:MAX_HYPOTHESIS_CHARS - 3] + "..."
-                return salvaged[:MAX_HYPOTHESES], "degraded", "truncated_json_salvaged"
-        if parsed is None:
-            return None, "failed", f"parse_error: {str(e)[:100]}"
-    else:
-        status_from_literal = ""
-        degradation_from_literal = ""
+                return _normalize_hypothesis_items(salvaged), "degraded", "truncated_json_salvaged"
+        return None, "failed", parse_degradation or "parse_error"
 
-    # Normalize: extract hypotheses from various root shapes
-    if isinstance(parsed, list):
-        hypotheses = parsed
-    elif isinstance(parsed, dict):
-        hypotheses = parsed.get("hypotheses") or parsed.get("findings") or [parsed]
-    else:
-        return None, "failed", "content_not_list_or_dict"
+    items, shape_degradation = _extract_hypothesis_items(parsed)
+    if items is None:
+        return None, "failed", shape_degradation
 
-    if not isinstance(hypotheses, list):
-        return None, "failed", f"hypotheses_not_list: {type(hypotheses).__name__}"
-
-    # Apply hard limits
-    hypotheses = hypotheses[:MAX_HYPOTHESES]
-    for h in hypotheses:
-        if isinstance(h, dict):
-            for k in h:
-                if isinstance(h[k], str) and len(h[k]) > MAX_HYPOTHESIS_CHARS:
-                    h[k] = h[k][:MAX_HYPOTHESIS_CHARS - 3] + "..."
+    item_degradation = "string_hypothesis_items" if any(isinstance(item, str) for item in items) else ""
+    hypotheses = _normalize_hypothesis_items(items)
 
     if not hypotheses:
         return None, "failed", "empty_hypotheses"
 
-    return hypotheses, status_from_literal or "success", degradation_from_literal
+    degradation_parts = [
+        part for part in (wrapper_degradation, parse_degradation, shape_degradation, item_degradation) if part
+    ]
+    status = parse_status or ("degraded" if degradation_parts else "success")
+    return hypotheses, status, ",".join(degradation_parts)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -303,6 +405,11 @@ def _run_reasoner_engine(
             worker_config.timeout_seconds = _effective_timeout_seconds(
                 getattr(worker_config, "timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS)
             )
+            if hasattr(worker_config, "max_tokens"):
+                worker_config.max_tokens = max(
+                    int(getattr(worker_config, "max_tokens", 0) or 0),
+                    MIN_REASONER_MAX_TOKENS,
+                )
             if (
                 hasattr(worker_config, "response_format")
                 and not getattr(worker_config, "response_format", "")

@@ -79,15 +79,81 @@ def test_reasoner_parser_salvages_python_literal_hypotheses() -> None:
     assert hypotheses == [{"title": "reservation drift", "severity": "P1"}]
 
 
+def test_reasoner_parser_extracts_json_from_wrapped_content() -> None:
+    from ai_test_asset_center.stage_reason_all_v2 import _parse_engine_content
+
+    raw = (
+        '{"choices":[{"message":{"content":'
+        '"Here is the JSON:\\n```json\\n{\\"hypotheses\\":[{\\"title\\":\\"wrapped\\",\\"severity\\":\\"P2\\"}]}\\n```"}'
+        "}]}"
+    )
+
+    hypotheses, status, degradation = _parse_engine_content(raw)
+
+    assert status == "degraded"
+    assert degradation == "json_slice_extracted"
+    assert hypotheses == [{"title": "wrapped", "severity": "P2"}]
+
+
+def test_reasoner_parser_marks_code_fence_as_degraded() -> None:
+    from ai_test_asset_center.stage_reason_all_v2 import _parse_engine_content
+
+    raw = (
+        '{"choices":[{"message":{"content":'
+        '"```json\\n{\\"hypotheses\\":[{\\"title\\":\\"fenced\\"}]}\\n```"'
+        "}}]}"
+    )
+
+    hypotheses, status, degradation = _parse_engine_content(raw)
+
+    assert status == "degraded"
+    assert degradation == "code_fence_removed"
+    assert hypotheses == [{"title": "fenced"}]
+
+
+def test_reasoner_parser_normalizes_nested_and_alternate_roots() -> None:
+    from ai_test_asset_center.stage_reason_all_v2 import _parse_engine_content
+
+    raw = (
+        '{"choices":[{"message":{"content":'
+        '"{\\"data\\":{\\"findings\\":[{\\"title\\":\\"nested\\",\\"severity\\":\\"P1\\"}]}}"'
+        "}}]}"
+    )
+
+    hypotheses, status, degradation = _parse_engine_content(raw)
+
+    assert status == "degraded"
+    assert "nested_root:data" in degradation
+    assert "alternate_root_key:findings" in degradation
+    assert hypotheses == [{"title": "nested", "severity": "P1"}]
+
+
+def test_reasoner_parser_handles_content_parts_and_string_items() -> None:
+    from ai_test_asset_center.stage_reason_all_v2 import _parse_engine_content
+
+    raw = (
+        '{"choices":[{"message":{"content":['
+        '{"type":"text","text":"{\\"hypotheses\\":[\\"string risk\\"]}"}'
+        "]}}]}"
+    )
+
+    hypotheses, status, degradation = _parse_engine_content(raw)
+
+    assert status == "degraded"
+    assert degradation == "string_hypothesis_items"
+    assert hypotheses == [{"title": "string risk", "source_format": "string_hypothesis"}]
+
+
 def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) -> None:
     from ai_test_asset_center.llm_reasoning import ReasoningConfig
     from ai_test_asset_center.stage_reason_all_v2 import _run_reasoner_engine
 
-    captured: dict[str, str] = {}
+    captured: dict[str, str | int] = {}
 
     class FakeReasoningClient:
         def __init__(self, config: ReasoningConfig) -> None:
             captured["response_format"] = config.response_format
+            captured["max_tokens"] = config.max_tokens
 
         def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
             return '{"choices":[{"message":{"content":"{\\"hypotheses\\":[{\\"title\\":\\"ok\\"}]}"}}]}'
@@ -101,6 +167,7 @@ def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) ->
         base_url="https://example.invalid/v1",
         api_key="test",
         model="test-model",
+        max_tokens=4096,
         response_format="",
     )
     result = _run_reasoner_engine(
@@ -113,5 +180,6 @@ def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) ->
     )
 
     assert captured["response_format"] == "json_object"
+    assert captured["max_tokens"] == 32768
     assert result["status"] == "success"
     assert len(result["hypotheses"]) == 1
