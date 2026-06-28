@@ -1,13 +1,18 @@
 """
-Phase79+: Cross-Endpoint Consistency Verifier
+[DEPRECATED] Phase79+: Cross-Endpoint Consistency Verifier
+Status: ZOMBIE MODULE — 0 active cross-references in the codebase.
+Roadmap: Candidate for Side Path integration (real_project_defect_discovery)
+         or merge into the Hot Path verifier pipeline. Not currently wired.
 
 Compares entity state across multiple API endpoints to detect:
 - List vs detail data mismatches
-- Admin vs viewer view inconsistencies  
+- Admin vs viewer view inconsistencies
 - Aggregation/summary vs detail discrepancies
 - Cache vs source-of-truth drift
 
 Builds on: StateObserver, StateProjectionEngine, APICapabilityMapper
+
+See DEPRECATED.md for architecture decisions and activation plan.
 """
 
 from __future__ import annotations

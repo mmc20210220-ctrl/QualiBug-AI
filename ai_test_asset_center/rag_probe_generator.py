@@ -1,3 +1,10 @@
+"""
+[DEPRECATED] RAG Probe Generator
+Status: NEAR-ZOMBIE -- 1 active cross-reference.
+Roadmap: Generate probes targeting RAG/KB endpoints.
+         Verify single reference is active; activate full pipeline or prune.
+See DEPRECATED.md for architecture decisions.
+"""
 from __future__ import annotations
 
 import html

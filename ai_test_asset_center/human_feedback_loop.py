@@ -1,3 +1,10 @@
+"""
+[DEPRECATED] Human Feedback Loop
+Status: NEAR-ZOMBIE -- 1 active cross-reference.
+Roadmap: Collect human feedback on findings for RLHF-style continuous improvement.
+         Wire into finding lifecycle for human-in-the-loop review workflow.
+See DEPRECATED.md for architecture decisions.
+"""
 from __future__ import annotations
 
 import argparse

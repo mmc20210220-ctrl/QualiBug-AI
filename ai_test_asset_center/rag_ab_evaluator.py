@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+"""
+[DEPRECATED] RAG A/B Evaluator
+Status: ZOMBIE MODULE -- 0 active cross-references.
+Roadmap: Future evaluation infrastructure for optimizing RAG-based
+         knowledge retrieval in the Enterprise Knowledge Center.
+         Compares retrieval strategies (baseline vs candidate) on
+         recall, precision, and latency metrics. Not currently wired.
+
+See DEPRECATED.md for architecture decisions and activation plan.
+"""
+
 import argparse
 import json
 import os

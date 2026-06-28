@@ -1,3 +1,10 @@
+"""
+[DEPRECATED] Issue Lifecycle Center
+Status: NEAR-ZOMBIE -- 0 active cross-references.
+Roadmap: Central issue lifecycle tracking (status transitions, SLA monitoring).
+         Wire into runtime_finding_lifecycle_registry.py.
+See DEPRECATED.md for architecture decisions.
+"""
 from __future__ import annotations
 
 import json

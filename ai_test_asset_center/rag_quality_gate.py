@@ -1,3 +1,10 @@
+"""
+[DEPRECATED] RAG Quality Gate
+Status: NEAR-ZOMBIE -- 0 active cross-references.
+Roadmap: Quality gate for RAG pipeline outputs.
+         Wire into rag_probe_generator.py pipeline.
+See DEPRECATED.md for architecture decisions.
+"""
 from __future__ import annotations
 
 import argparse

@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+"""
+[DEPRECATED] Historical Bug Importer
+Status: ZOMBIE MODULE -- 0 active cross-references.
+Roadmap: Critical for behavior space modeling data flywheel.
+         Import historical bug data from external trackers (Jira, etc.)
+         to bootstrap the cross-enterprise behavior pattern library.
+         Not currently wired into any import pipeline.
+
+Parses historical bug reports from CSV, JSON, JSONL, Markdown, and plain text.
+Classifies each bug by risk keyword matching and maps them to API surface via
+OpenAPI path references.
+
+See DEPRECATED.md for architecture decisions and activation plan.
+"""
+
 import csv
 import json
 import re

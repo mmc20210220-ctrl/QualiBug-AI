@@ -1,3 +1,10 @@
+"""
+[DEPRECATED] Model Evaluation Harness
+Status: NEAR-ZOMBIE -- 0 active cross-references.
+Roadmap: Evaluate ML model quality on benchmark suites.
+         Future: model evaluation pipeline for CI/CD.
+See DEPRECATED.md for architecture decisions.
+"""
 from __future__ import annotations
 
 import argparse

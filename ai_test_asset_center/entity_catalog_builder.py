@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 """
-Entity Catalog Builder — PRD + OpenAPI → Entity Extraction
+[DEPRECATED] Entity Catalog Builder -- PRD + OpenAPI -> Entity Extraction
+Status: ZOMBIE MODULE — 0 active cross-references in the codebase.
+Roadmap: Core building block for behavior space modeling ontology.
+         Needs wiring into discovery_engine.py as a pre-processing step
+         before entity-level probe generation. Not currently wired.
 
 Builds an entity catalog from PRD markdown text and OpenAPI 3.x schemas.
 Extracts EntityCandidate objects with typed fields classified as identity,
 state, amount, or quantity fields.  Supports merging multiple catalogs
 with deduplication by entity_alias similarity.
 
+See DEPRECATED.md for architecture decisions and activation plan.
+
 Design goals
 ------------
-- Zero hardcoded entity types — all entities are discovered from documents.
+- Zero hardcoded entity types -- all entities are discovered from documents.
 - Markdown-aware PRD parsing: headings, tables, keyword-triggered sections.
 - OpenAPI-aware schema parsing: #/components/schemas with field classification.
 - Merge: fuzzy entity_alias dedup, field union, averaged confidence.

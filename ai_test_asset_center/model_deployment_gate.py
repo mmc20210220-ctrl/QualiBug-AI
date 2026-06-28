@@ -1,3 +1,10 @@
+"""
+[DEPRECATED] Model Deployment Gate
+Status: NEAR-ZOMBIE -- 0 active cross-references.
+Roadmap: Gate model deployment based on evaluation metrics.
+         Future: CI/CD model deployment quality gate.
+See DEPRECATED.md for architecture decisions.
+"""
 from __future__ import annotations
 
 import argparse
