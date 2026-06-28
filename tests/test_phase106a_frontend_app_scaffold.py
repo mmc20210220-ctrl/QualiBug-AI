@@ -33,6 +33,15 @@ def test_phase106a_builds_real_vite_react_frontend_scaffold(tmp_path: Path) -> N
     assert "react" in package["dependencies"]
     assert "typescript" in package["dependencies"]
     assert "vitest" in package["devDependencies"]
+    assert "latest" not in {
+        *package["dependencies"].values(),
+        *package["devDependencies"].values(),
+    }
+
+    tsconfig = json.loads((app_dir / "tsconfig.json").read_text(encoding="utf-8"))
+    tsconfig_node = json.loads((app_dir / "tsconfig.node.json").read_text(encoding="utf-8"))
+    assert tsconfig["compilerOptions"]["moduleResolution"] == "Bundler"
+    assert tsconfig_node["compilerOptions"]["moduleResolution"] == "Bundler"
 
     api_client = (app_dir / "src/api/qualibugClient.ts").read_text(encoding="utf-8")
     for method in ("runEnvironmentPreflight", "generateTestPlan", "startTestRun", "getRiskDetail", "getExecutiveReport"):

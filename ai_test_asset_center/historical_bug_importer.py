@@ -26,6 +26,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_MARKERS = {"private_ground_truth", "bug_sets", "enabled_bugs", "current_bug_set", "ground_truth_bugs", "bug_instance_id"}
 SUPPORTED_EXTENSIONS = {".csv", ".json", ".jsonl", ".md", ".txt"}
 
+DEPRECATED_STATUS = {
+    "status": "deprecated_offline_producer",
+    "reason": "No current Hot Path imports this module directly; downstream code can still consume its generated historical_bugs artifacts.",
+    "next_action": "Either reconnect import_historical_bugs through onboarding/pilot UI with tests or replace it with the enterprise knowledge ingestion path.",
+}
+
 RISK_KEYWORDS: dict[str, list[str]] = {
     "permission_bypass": ["权限", "管理员", "admin", "rbac", "role", "unauthorized", "未授权", "越权访问"],
     "idor": ["他人", "越权", "idor", "横向", "订单详情", "address", "profile", "owner"],

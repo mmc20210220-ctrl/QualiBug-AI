@@ -26,6 +26,12 @@ from .state_projection_engine import StateProjectionEngine
 from .unified_http_transport import SafeHttpTransport, ExecutionPolicy
 from .project_context_compiler import EntityCandidate, APICapability
 
+DEPRECATED_STATUS = {
+    "status": "deprecated_unwired",
+    "reason": "No current Hot Path or pilot runtime imports this module.",
+    "next_action": "Either reconnect through a product path with tests or delete in a cleanup phase.",
+}
+
 
 @dataclass
 class EndpointPair:

@@ -6,7 +6,7 @@ Drop-in replacement for discovery_engine.py AutonomousDiscoveryEngine.stage_reas
 2 attempts max, JSON truncation recovery via raw_decode.
 """
 
-import copy, json, os, re, time
+import ast, copy, json, os, re, time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Any
 
@@ -29,6 +29,15 @@ MAX_HYPOTHESES = 15
 MAX_HYPOTHESIS_CHARS = 500
 MAX_REASONER_WORKERS = 4
 MIN_REASONER_TIMEOUT_SECONDS = 300
+
+SIDE_PATH_REASONER_ENGINES = (
+    ("business_outcome", "outcome"),
+    ("business_reconciliation", "reconciliation"),
+    ("business_invariant", "invariant"),
+    ("multi_source_reasoning", "consistency"),
+    ("business_lifecycle", "temporal"),
+    ("consistency_isolation", "consistency"),
+)
 
 # Errors that warrant one retry
 RETRYABLE_ERRORS = (
@@ -185,8 +194,22 @@ def _parse_engine_content(raw: str) -> tuple[list[dict] | None, str, str]:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as e:
+        try:
+            parsed = ast.literal_eval(cleaned)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            status_from_literal = "degraded"
+            degradation_from_literal = "python_literal_json_salvaged"
+        else:
+            status_from_literal = ""
+            degradation_from_literal = ""
         # Attempt truncation recovery
-        if any(kw in str(e) for kw in ("Unterminated string", "Expecting delimiter", "Expecting value", "Extra data")):
+        if parsed is None and any(kw in str(e) for kw in (
+            "Unterminated string", "Expecting delimiter", "Expecting value",
+            "Expecting property name enclosed in double quotes",
+            "Expecting ',' delimiter", "Extra data",
+        )):
             salvaged = _salvage_truncated_json(cleaned)
             if salvaged and len(salvaged) >= 1:
                 # Apply hard limits
@@ -196,7 +219,11 @@ def _parse_engine_content(raw: str) -> tuple[list[dict] | None, str, str]:
                         if isinstance(h[k], str) and len(h[k]) > MAX_HYPOTHESIS_CHARS:
                             h[k] = h[k][:MAX_HYPOTHESIS_CHARS - 3] + "..."
                 return salvaged[:MAX_HYPOTHESES], "degraded", "truncated_json_salvaged"
-        return None, "failed", f"parse_error: {str(e)[:100]}"
+        if parsed is None:
+            return None, "failed", f"parse_error: {str(e)[:100]}"
+    else:
+        status_from_literal = ""
+        degradation_from_literal = ""
 
     # Normalize: extract hypotheses from various root shapes
     if isinstance(parsed, list):
@@ -220,7 +247,7 @@ def _parse_engine_content(raw: str) -> tuple[list[dict] | None, str, str]:
     if not hypotheses:
         return None, "failed", "empty_hypotheses"
 
-    return hypotheses, "success", ""
+    return hypotheses, status_from_literal or "success", degradation_from_literal
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -276,6 +303,13 @@ def _run_reasoner_engine(
             worker_config.timeout_seconds = _effective_timeout_seconds(
                 getattr(worker_config, "timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS)
             )
+            if (
+                hasattr(worker_config, "response_format")
+                and not getattr(worker_config, "response_format", "")
+                and str(os.environ.get("QUALIBUG_DISABLE_REASONER_JSON_MODE", "")).lower()
+                not in {"1", "true", "yes", "on"}
+            ):
+                worker_config.response_format = "json_object"
             worker_client = ReasoningClient(config=worker_config)
 
             raw = worker_client._chat(prompt, system_prompt=system_prompt)
@@ -351,6 +385,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         ("saga", REASONER_PROMPTS.get("saga", REASONER_PROMPTS["causality"])),
         ("event_chain", REASONER_PROMPTS.get("event_chain", REASONER_PROMPTS["causality"])),
         ("metamorphic", REASONER_PROMPTS.get("metamorphic", REASONER_PROMPTS["consistency"])),
+        *[
+            (name, REASONER_PROMPTS.get(prompt_key, REASONER_PROMPTS["consistency"]))
+            for name, prompt_key in SIDE_PATH_REASONER_ENGINES
+        ],
     ]
 
     # ── Concurrency (Policy Registry + env var fallback) ──
@@ -387,6 +425,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             ("saga", REASONER_PROMPTS.get("saga", REASONER_PROMPTS["causality"])),
             ("event_chain", REASONER_PROMPTS.get("event_chain", REASONER_PROMPTS["causality"])),
             ("metamorphic", REASONER_PROMPTS.get("metamorphic", REASONER_PROMPTS["consistency"])),
+            *[
+                (name, REASONER_PROMPTS.get(prompt_key, REASONER_PROMPTS["consistency"]))
+                for name, prompt_key in SIDE_PATH_REASONER_ENGINES
+            ],
         ]
 
     if str(os.environ.get("QUALIBUG_LOCAL_BOOTSTRAP_ONLY", "")).lower() in {"1", "true", "yes", "on"}:

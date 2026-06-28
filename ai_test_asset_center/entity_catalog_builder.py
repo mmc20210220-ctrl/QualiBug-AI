@@ -89,6 +89,12 @@ _QUANTITY_NAME_PATTERNS: tuple[str, ...] = (
 )
 _AMOUNT_QUANTITY_TYPES: frozenset[str] = frozenset({"integer", "number"})
 
+DEPRECATED_STATUS = {
+    "status": "deprecated_unwired",
+    "reason": "No current Hot Path or pilot runtime imports this module.",
+    "next_action": "Either reconnect through a product path with tests or delete in a cleanup phase.",
+}
+
 
 @dataclass
 class EntityField:

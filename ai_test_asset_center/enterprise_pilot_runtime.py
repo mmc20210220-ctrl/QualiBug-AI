@@ -41,6 +41,7 @@ from .enterprise_testops_control_plane import (
     build_test_data_orchestration,
     load_environment_config,
 )
+from .real_project_defect_discovery import run_real_project_discovery
 from .real_project_onboarding import ROOT, _safe_project_id, _write_json as _project_write_json
 from .release_risk_dashboard import build_release_risk_dashboard
 from .product_ui import _icon, callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
@@ -80,6 +81,7 @@ JOB_TYPES = {
     "control_plane_refresh",
     "environment_health",
     "safe_discovery_plan",
+    "real_project_discovery",
     "release_gate",
     "sandbox_data_setup_plan",
 }
@@ -534,6 +536,24 @@ def _run_job(job: dict[str, Any], project: str, root: Path) -> dict[str, Any]:
         probes = control.get("permission_probes") or []
         asset = load_enterprise_business_knowledge_asset(project, root) or build_enterprise_business_knowledge_asset(project, root)
         return {"status": "succeeded", "run_mode": "safe_plan_only", "network_requests": 0, "candidate_probe_count": len(probes), "oracle_count": len(asset.get("oracle_library") or []), "note": "执行计划交给现有受控发现引擎；运行时不会隐式发起写请求。"}
+    if task == "real_project_discovery":
+        result = run_real_project_discovery(project, root)
+        probes_payload = result.get("probes") or {}
+        probes = probes_payload.get("items") if isinstance(probes_payload, dict) else probes_payload
+        return {
+            "status": "succeeded",
+            "run_mode": "real_project_discovery",
+            "network_requests": int(result.get("network_requests") or 0),
+            "issue_count": len(result.get("issues") or []),
+            "probe_count": len(probes or []),
+            "business_outcome_finding_count": result.get("business_outcome_finding_count", 0),
+            "business_reconciliation_finding_count": result.get("business_reconciliation_finding_count", 0),
+            "business_invariant_finding_count": result.get("business_invariant_finding_count", 0),
+            "multi_source_reasoning_finding_count": result.get("multi_source_reasoning_finding_count", 0),
+            "business_lifecycle_finding_count": result.get("business_lifecycle_finding_count", 0),
+            "consistency_isolation_finding_count": result.get("consistency_isolation_finding_count", 0),
+            "output_dir": str(result.get("output_dir") or ""),
+        }
     if task == "release_gate":
         dashboard = build_release_risk_dashboard(project, root)
         return {"status": "succeeded", "release_decision": (dashboard.get("release_risk") or {}).get("decision"), "network_requests": 0}

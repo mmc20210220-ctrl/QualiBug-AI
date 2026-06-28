@@ -22,6 +22,8 @@ class ReasonerPolicy:
         "causality", "invariant", "reconciliation", "counterexample",
         "consistency", "population", "outcome", "temporal",
         "saga", "event_chain", "metamorphic",
+        "business_outcome", "business_reconciliation", "business_invariant",
+        "multi_source_reasoning", "business_lifecycle", "consistency_isolation",
     ])
     engine_weights: dict[str, float] = field(default_factory=dict)
     max_workers: int = 4
@@ -47,6 +49,8 @@ class ReasonerPolicy:
             "causality", "invariant", "reconciliation", "counterexample",
             "consistency", "population", "outcome", "temporal",
             "saga", "event_chain", "metamorphic",
+            "business_outcome", "business_reconciliation", "business_invariant",
+            "multi_source_reasoning", "business_lifecycle", "consistency_isolation",
         ]
         legacy_default = canonical[:8]
         incoming = [str(name) for name in (self.enabled_engines or []) if str(name) in canonical]

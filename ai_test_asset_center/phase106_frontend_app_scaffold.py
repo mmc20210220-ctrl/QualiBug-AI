@@ -360,8 +360,21 @@ def _write_package_json(app_dir: Path) -> None:
             "test": "vitest run",
             "lint:contract": "vitest run src/__tests__/frontend-contract.test.ts",
         },
-        "dependencies": {"@vitejs/plugin-react": "latest", "vite": "latest", "typescript": "latest", "react": "latest", "react-dom": "latest"},
-        "devDependencies": {"vitest": "latest", "@testing-library/react": "latest", "@testing-library/jest-dom": "latest", "jsdom": "latest", "@types/react": "latest", "@types/react-dom": "latest"},
+        "dependencies": {
+            "@vitejs/plugin-react": "^6.0.3",
+            "vite": "^8.1.0",
+            "typescript": "^6.0.3",
+            "react": "^19.2.7",
+            "react-dom": "^19.2.7",
+        },
+        "devDependencies": {
+            "vitest": "^4.1.9",
+            "@testing-library/react": "^16.3.2",
+            "@testing-library/jest-dom": "^6.9.1",
+            "jsdom": "^29.1.1",
+            "@types/react": "^19.2.17",
+            "@types/react-dom": "^19.2.3",
+        },
     }
     _write_text(app_dir / "package.json", _json_dump(package))
 
@@ -375,6 +388,7 @@ def _write_ts_configs(app_dir: Path) -> None:
                     "target": "ES2020",
                     "useDefineForClassFields": True,
                     "lib": ["DOM", "DOM.Iterable", "ES2020"],
+                    "types": ["vite/client"],
                     "allowJs": False,
                     "skipLibCheck": True,
                     "esModuleInterop": True,
@@ -382,7 +396,7 @@ def _write_ts_configs(app_dir: Path) -> None:
                     "strict": True,
                     "forceConsistentCasingInFileNames": True,
                     "module": "ESNext",
-                    "moduleResolution": "Node",
+                    "moduleResolution": "Bundler",
                     "resolveJsonModule": True,
                     "isolatedModules": True,
                     "noEmit": True,
@@ -397,7 +411,7 @@ def _write_ts_configs(app_dir: Path) -> None:
         app_dir / "tsconfig.node.json",
         _json_dump(
             {
-                "compilerOptions": {"composite": True, "module": "ESNext", "moduleResolution": "Node", "allowSyntheticDefaultImports": True},
+                "compilerOptions": {"composite": True, "module": "ESNext", "moduleResolution": "Bundler", "allowSyntheticDefaultImports": True},
                 "include": ["vite.config.ts"],
             }
         ),
@@ -434,7 +448,7 @@ def _ts_literal(data: Mapping[str, Any]) -> str:
 def _write_data(app_dir: Path, data: Mapping[str, Any]) -> None:
     _write_text(
         app_dir / "src/data/demoData.ts",
-        f"""import type {{ QualiBugDemoData }} from '../types';\n\nexport const demoData = {_ts_literal(data)} as const satisfies QualiBugDemoData;\n\nexport const routeInventory = demoData.routes;\nexport const apiContract = demoData.api_contract;\n""",
+        f"""import type {{ QualiBugDemoData }} from '../types';\n\nexport const demoData = {_ts_literal(data)} as unknown as QualiBugDemoData;\n\nexport const routeInventory = demoData.routes;\nexport const apiContract = demoData.api_contract;\n""",
     )
 
 

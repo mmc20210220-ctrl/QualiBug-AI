@@ -28,6 +28,12 @@ DEFAULT_DISCOVERY_OUT = Path("platform_outputs/enterprise_shop/defect_discovery/
 DEFAULT_RAG_PROBES = Path("platform_workspace/enterprise_shop/defect_discovery/rag_enhanced_probes.json")
 DEFAULT_DEFECT_PROBES = Path("platform_workspace/enterprise_shop/defect_discovery/defect_probes.json")
 
+DEPRECATED_STATUS = {
+    "status": "deprecated_offline_producer",
+    "reason": "No current Hot Path imports this module directly; rag_quality_gate still consumes its rag_ab_scorecard artifact.",
+    "next_action": "Either reconnect run_rag_ab_evaluation through a benchmark command with tests or fold it into the active quality gate.",
+}
+
 VARIANT_CONFIGS: dict[str, dict[str, Any]] = {
     "no_rag": {
         "label": "No RAG baseline",
