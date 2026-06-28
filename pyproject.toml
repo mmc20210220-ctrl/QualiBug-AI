@@ -34,3 +34,7 @@ include = ["aitestops*", "ai_test_asset_center*", "benchmark_evaluator*", "demo_
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+# basetemp is pinned to a repo-local dir by conftest.py (pytest_configure) to
+# avoid Windows OS-temp concurrency races with the deep nested build fixtures.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 3

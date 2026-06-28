@@ -36,5 +36,9 @@ Thumbs.db
 
 # Local agent run scratch (ephemeral test/probe outputs)
 .e2e_run_*.log
+.pytest_tmp/
 .pytest_tmp_*/
 .workbuddy/
+
+# Windows reserved device name accidentally captured as a file (never commit)
+nul
