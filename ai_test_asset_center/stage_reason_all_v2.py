@@ -32,6 +32,7 @@ MAX_HYPOTHESIS_CHARS = 500
 MAX_REASONER_WORKERS = 4
 MIN_REASONER_TIMEOUT_SECONDS = 300
 MIN_REASONER_MAX_TOKENS = 32768
+MAX_REASONER_MAX_TOKENS = 100000
 
 SIDE_PATH_REASONER_ENGINES = (
     ("business_outcome", "outcome"),
@@ -70,6 +71,17 @@ def _effective_max_workers(value: Any, engine_count: int) -> int:
     except (TypeError, ValueError):
         requested = MAX_REASONER_WORKERS
     return max(1, min(requested, MAX_REASONER_WORKERS, max(1, int(engine_count))))
+
+
+def _effective_max_tokens(*values: Any) -> int:
+    """Keep reasoner output budget within the supported enterprise range."""
+    parsed = [MIN_REASONER_MAX_TOKENS]
+    for value in values:
+        try:
+            parsed.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return max(MIN_REASONER_MAX_TOKENS, min(max(parsed), MAX_REASONER_MAX_TOKENS))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -406,9 +418,8 @@ def _run_reasoner_engine(
                 getattr(worker_config, "timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS)
             )
             if hasattr(worker_config, "max_tokens"):
-                worker_config.max_tokens = max(
-                    int(getattr(worker_config, "max_tokens", 0) or 0),
-                    MIN_REASONER_MAX_TOKENS,
+                worker_config.max_tokens = _effective_max_tokens(
+                    getattr(worker_config, "max_tokens", MIN_REASONER_MAX_TOKENS)
                 )
             if (
                 hasattr(worker_config, "response_format")
@@ -508,6 +519,11 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     timeout_seconds = get_policy_value(
         "reasoner", "timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS
     )
+    raw_max_tokens = os.environ.get(
+        "QUALIBUG_REASONER_MAX_TOKENS",
+        str(get_policy_value("reasoner", "max_tokens", MIN_REASONER_MAX_TOKENS)),
+    )
+    max_tokens = _effective_max_tokens(raw_max_tokens)
     retry_delay = get_policy_value("reasoner", "retry_delay_seconds", 2.0)
     truncation_map = get_policy_value("reasoner", "prompt_truncation_chars",
         {"prd_text": 2000, "api_schema": 3000, "observed_data": 2000,
@@ -578,6 +594,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             "engine_weights": {},
             "retry_count": 0,
             "timeout_seconds": 0,
+            "max_tokens": 0,
             "max_hypotheses_per_engine": max_hypotheses_per_engine,
             "max_hypothesis_chars": max_hypothesis_chars,
         }
@@ -665,6 +682,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     original_config.timeout_seconds = _effective_timeout_seconds(
         getattr(original_config, "timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS),
         timeout_seconds,
+    )
+    original_config.max_tokens = _effective_max_tokens(
+        getattr(original_config, "max_tokens", MIN_REASONER_MAX_TOKENS),
+        max_tokens,
     )
 
     results_by_engine: dict[str, dict] = {}
@@ -778,6 +799,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "engine_weights": {name: float((engine_weights or {}).get(name, 1.0) or 0.0) for name, _ in engines},
         "retry_count": retry_count,
         "timeout_seconds": _effective_timeout_seconds(timeout_seconds),
+        "max_tokens": _effective_max_tokens(max_tokens),
         "max_hypotheses_per_engine": max_hypotheses_per_engine,
         "max_hypothesis_chars": max_hypothesis_chars,
     }

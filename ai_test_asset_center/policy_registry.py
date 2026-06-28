@@ -29,6 +29,7 @@ class ReasonerPolicy:
     max_workers: int = 4
     retry_count: int = 1
     timeout_seconds: int = 300
+    max_tokens: int = 32768
     max_hypotheses_per_engine: int = 15
     max_hypothesis_chars: int = 500
     retry_delay_seconds: float = 2.0
@@ -41,6 +42,7 @@ class ReasonerPolicy:
     def __post_init__(self):
         # Normalize legacy persisted policies before they reach live execution.
         self.timeout_seconds = max(int(self.timeout_seconds or 0), 300)
+        self.max_tokens = max(32768, min(int(self.max_tokens or 32768), 100000))
         self.max_workers = max(1, min(int(self.max_workers or 1), 4))
         self.retry_count = max(0, min(int(self.retry_count or 0), 1))
         self.max_hypotheses_per_engine = max(1, min(int(self.max_hypotheses_per_engine or 1), 15))

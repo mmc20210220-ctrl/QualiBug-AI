@@ -23,6 +23,15 @@ def test_reasoner_policy_keeps_side_path_engines_enabled() -> None:
     assert policy.max_workers == 4
     assert policy.max_hypotheses_per_engine == 15
     assert policy.timeout_seconds >= 300
+    assert policy.max_tokens == 32768
+
+
+def test_reasoner_policy_clamps_max_tokens() -> None:
+    low = ReasonerPolicy(max_tokens=4096)
+    high = ReasonerPolicy(max_tokens=250000)
+
+    assert low.max_tokens == 32768
+    assert high.max_tokens == 100000
 
 
 def test_pilot_runtime_real_project_discovery_bridges_side_path(monkeypatch, tmp_path: Path) -> None:
@@ -183,3 +192,84 @@ def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) ->
     assert captured["max_tokens"] == 32768
     assert result["status"] == "success"
     assert len(result["hypotheses"]) == 1
+
+
+def test_reasoner_worker_allows_enterprise_max_tokens(monkeypatch) -> None:
+    from ai_test_asset_center.llm_reasoning import ReasoningConfig
+    from ai_test_asset_center.stage_reason_all_v2 import _run_reasoner_engine
+
+    captured: dict[str, int] = {}
+
+    class FakeReasoningClient:
+        def __init__(self, config: ReasoningConfig) -> None:
+            captured["max_tokens"] = config.max_tokens
+
+        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+            return '{"choices":[{"message":{"content":"{\\"hypotheses\\":[{\\"title\\":\\"ok\\"}]}"}}]}'
+
+    import ai_test_asset_center.llm_reasoning as llm_reasoning
+
+    monkeypatch.setattr(llm_reasoning, "ReasoningClient", FakeReasoningClient)
+
+    config = ReasoningConfig(
+        base_url="https://example.invalid/v1",
+        api_key="test",
+        model="test-model",
+        max_tokens=100000,
+    )
+    result = _run_reasoner_engine(
+        "smoke",
+        "",
+        "prompt",
+        "system",
+        config,
+        retry_count=0,
+    )
+
+    assert captured["max_tokens"] == 100000
+    assert result["status"] == "success"
+
+
+def test_stage_reasoner_reports_env_max_tokens(monkeypatch) -> None:
+    import ai_test_asset_center.policy_wiring as policy_wiring
+    import ai_test_asset_center.stage_reason_all_v2 as stage
+    from ai_test_asset_center.llm_reasoning import ReasoningClient
+
+    class Dummy:
+        def __init__(self) -> None:
+            self.client = ReasoningClient()
+            self._last_engine_report = {}
+
+        def _fill_template(self, template: str, **kwargs: object) -> str:
+            return "{}"
+
+    def fake_run(engine_name, template, prompt, system_prompt, client_config, **kwargs):
+        return {
+            "engine_name": engine_name,
+            "hypotheses": [{"title": engine_name}],
+            "status": "success",
+            "attempts": 1,
+            "retry_used": False,
+            "raw_chars": 1,
+            "content_chars": 1,
+            "duration_seconds": 0.0,
+            "error": "",
+            "degradation_reason": "",
+        }
+
+    def patched_policy(section: str, key: str, default=None):
+        if section == "reasoner" and key == "enabled_engines":
+            return ["causality"]
+        if section == "reasoner" and key == "retry_count":
+            return 0
+        return default
+
+    monkeypatch.setenv("QUALIBUG_REASONER_MAX_TOKENS", "100000")
+    monkeypatch.setattr(stage, "_run_reasoner_engine", fake_run)
+    monkeypatch.setattr(policy_wiring, "get_policy_value", patched_policy)
+
+    dummy = Dummy()
+    hypotheses = stage._stage_reason_all_v2(dummy, "prd", "api", {}, prior_findings=[])
+
+    assert len(hypotheses) == 1
+    assert dummy._last_engine_report["max_tokens"] == 100000
