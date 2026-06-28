@@ -2,11 +2,13 @@
 
 ## 概述
 
-本文档介绍如何**安全地**优化 QualiBug AI 的发现引擎，不修改核心业务逻辑，只添加可观察性。
+本文档介绍如何**安全地**优化 QualiBug AI 的发现引擎，不修改核心业务逻辑，只添加可观察性和缓存优化。
 
 ---
 
-## 新增模块：`performance_monitor.py`
+## 新增模块
+
+### 1. `performance_monitor.py` - 性能监控
 
 ### 功能
 - ✅ 性能监控装饰器
@@ -130,6 +132,67 @@ PerformanceMetrics.reset("stage_read")  # 只重置特定指标
 
 ---
 
+### 2. `safe_cache.py` - 安全缓存模块
+
+#### 功能
+- ✅ 内存缓存装饰器
+- ✅ TTL 过期机制
+- ✅ 可随时开关
+- ✅ 零风险（不改变现有代码行为）
+
+#### 特点
+- **向后兼容**：完全不改变现有代码功能
+- **可选使用**：通过装饰器选择性添加
+- **可随时禁用**：`SafeCache.disable()` 即可完全关闭
+- **性能提升**：`_build_route_map` 等重复调用可缓存
+
+#### 快速使用
+
+```python
+from ai_test_asset_center.safe_cache import (
+    cached,
+    SafeCache,
+    enable_cache,
+    get_cache_stats
+)
+
+# 装饰需要缓存的函数
+@cached(ttl_seconds=300.0, key_prefix="route_map")
+def build_route_map():
+    # ... 原代码 ...
+
+# 启用缓存
+enable_cache()
+```
+
+#### 缓存 API
+
+##### `@cached(ttl_seconds=None, key_prefix="")`
+缓存函数返回值
+
+```python
+@cached(ttl_seconds=300.0, key_prefix="my_data")
+def expensive_function():
+    # ... 耗时操作 ...
+```
+
+##### 缓存控制
+```python
+from ai_test_asset_center.safe_cache import (
+    enable_cache,
+    disable_cache,
+    clear_cache,
+    get_cache_stats
+)
+
+enable_cache()      # 启用缓存
+disable_cache()     # 禁用缓存
+clear_cache()       # 清空缓存
+print(get_cache_stats())  # 查看缓存统计
+```
+
+---
+
 ## 安全优化建议
 
 ### 优先级 P0 - 零风险
@@ -211,13 +274,83 @@ if __name__ == "__main__":
 
 ---
 
+## 完整示例：组合优化（监控 + 缓存）
+
+```python
+"""
+示例：组合使用性能监控和缓存优化
+不修改 discovery_engine.py 代码
+"""
+
+from ai_test_asset_center.discovery_engine import AutonomousDiscoveryEngine
+from ai_test_asset_center.performance_monitor import (
+    measure_time,
+    get_performance_summary,
+    PerformanceMetrics
+)
+from ai_test_asset_center.safe_cache import (
+    cached,
+    enable_cache,
+    get_cache_stats
+)
+import logging
+
+# 启用缓存和日志
+enable_cache()
+logging.basicConfig(level=logging.INFO)
+
+class FullyOptimizedEngine(AutonomousDiscoveryEngine):
+    """组合优化的发现引擎 - 缓存 + 监控"""
+    
+    @measure_time("build_route_map")
+    @cached(ttl_seconds=300.0, key_prefix="discovery_route_map")
+    def _build_route_map(self):
+        """缓存 route_map，避免重复请求 OpenAPI"""
+        return super()._build_route_map()
+    
+    @measure_time("stage_read")
+    def stage_read(self, *args, **kwargs):
+        return super().stage_read(*args, **kwargs)
+    
+    @measure_time("stage_reason_all")
+    def stage_reason_all(self, *args, **kwargs):
+        return super().stage_reason_all(*args, **kwargs)
+    
+    @measure_time("stage_execute")
+    def stage_execute(self, *args, **kwargs):
+        return super().stage_execute(*args, **kwargs)
+
+# 使用示例
+def run_optimized_discovery():
+    print("开始优化后的发现流程...")
+    engine = FullyOptimizedEngine()
+    
+    # ... 正常执行你的发现流程 ...
+    
+    # 显示性能摘要
+    print("\n性能摘要:")
+    print(get_performance_summary())
+    
+    # 显示缓存统计
+    print("\n缓存统计:")
+    print(get_cache_stats())
+
+if __name__ == "__main__":
+    run_optimized_discovery()
+```
+
+---
+
 ## 回滚计划
 
 如果遇到问题，立即回滚：
 
 1. **删除新文件**：
    - `ai_test_asset_center/performance_monitor.py`
+   - `ai_test_asset_center/safe_cache.py`
    - `docs/OPTIMIZATION_GUIDE.md`
+   - `examples/example_monitor_usage.py`
+   - `examples/example_combined_optimizations.py`
 
 2. **恢复原代码**（如果修改过）：
    - 移除装饰器
