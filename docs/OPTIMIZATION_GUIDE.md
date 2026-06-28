@@ -13,10 +13,12 @@
 | `examples/example_monitor_usage.py` | 性能监控基本用法 |
 | `examples/example_combined_optimizations.py` | 缓存 + 监控组合使用 |
 | `examples/integrated_optimization_demo.py` | **推荐** - 完整集成演示 |
+| `examples/example_safe_retry_simple.py` | 安全重试装饰器示例 |
 
 运行示例：
 ```bash
 python examples/integrated_optimization_demo.py
+python examples/example_safe_retry_simple.py
 ```
 
 ---
@@ -208,6 +210,61 @@ print(get_cache_stats())  # 查看缓存统计
 
 ---
 
+### 3. `safe_retry.py` - 安全重试装饰器
+
+#### 功能
+- 安全的重试装饰器（零风险，不改变函数行为）
+- 指数退避 + 抖动
+- 可配置重试次数、延迟等参数
+- 预设配置：网络请求、API 调用
+
+#### 特点
+- 零风险：只在失败时重试，不改变原函数逻辑
+- 可选使用：装饰器方式添加
+- 可随时移除
+
+#### 快速使用
+
+```python
+from ai_test_asset_center.safe_retry import (
+    safe_retry,
+    safe_retry_network,
+    safe_retry_api
+)
+
+# 基本重试
+@safe_retry(max_retries=3, initial_delay=0.5)
+def flaky_operation():
+    # ... 可能失败的操作 ...
+
+# 网络请求重试（预设配置）
+@safe_retry_network
+def fetch_from_server():
+    # ... 网络请求 ...
+
+# API 调用重试（预设配置）
+@safe_retry_api
+def call_external_api():
+    # ... API 调用 ...
+```
+
+#### 完整配置选项
+
+```python
+@safe_retry(
+    max_retries=3,              # 最大重试次数
+    initial_delay=0.5,          # 初始延迟（秒）
+    max_delay=10.0,             # 最大延迟（秒）
+    backoff_factor=2.0,         # 退避因子
+    jitter=0.1,                 # 抖动因子
+    name="my_operation"         # 操作名称（用于日志）
+)
+def my_function():
+    # ...
+```
+
+---
+
 ## 安全优化建议
 
 ### 优先级 P0 - 零风险
@@ -363,9 +420,11 @@ if __name__ == "__main__":
 1. **删除新文件**：
    - `ai_test_asset_center/performance_monitor.py`
    - `ai_test_asset_center/safe_cache.py`
+   - `ai_test_asset_center/safe_retry.py`
    - `docs/OPTIMIZATION_GUIDE.md`
    - `examples/example_monitor_usage.py`
    - `examples/example_combined_optimizations.py`
+   - `examples/example_safe_retry_simple.py`
 
 2. **恢复原代码**（如果修改过）：
    - 移除装饰器
