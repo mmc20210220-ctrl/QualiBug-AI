@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 """
-QualiBug AI - 增强的发现引擎 (阶段1-3)
+QualiBug AI - 增强的发现引擎 (阶段1-2)
 
 整合所有优化分析器，提升bug发现能力。
+第1阶段：业务规则、状态机、多租户、守恒
+第2阶段：并发、异步任务、缓存一致性、认证授权
 """
 
 import logging
@@ -15,6 +17,10 @@ from .analyzers.business_rules import BusinessRulesAnalyzer
 from .analyzers.state_machine import StateMachineAnalyzer
 from .analyzers.multi_tenant import MultiTenantAnalyzer
 from .analyzers.conservation import ConservationAnalyzer
+from .analyzers.concurrency import ConcurrencyAnalyzer
+from .analyzers.async_task import AsyncTaskAnalyzer
+from .analyzers.cache_consistency import CacheConsistencyAnalyzer
+from .analyzers.authorization import AuthorizationAnalyzer
 
 # 导入优化引擎
 from .optimized_discovery_engine import OptimizedDiscoveryEngine
@@ -27,17 +33,26 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
     增强的发现引擎
 
     整合了所有新的分析器，提升bug发现能力：
+
+    第1阶段：
     - 业务规则分析 (C01, C08, C09, C13)
     - 状态机分析 (C06, C07)
     - 多租户隔离分析 (C05)
     - 守恒规则分析 (C08)
+
+    第2阶段：
+    - 并发与竞态分析 (C11)
+    - 异步任务分析 (C20)
+    - 缓存一致性分析 (C21)
+    - 认证授权分析 (C03, C04)
     """
 
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:8000/api",
         enable_checkpoints: bool = True,
-        enable_optimizations: bool = True
+        enable_optimizations: bool = True,
+        enable_phase2: bool = True
     ):
         """
         初始化增强引擎
@@ -46,22 +61,30 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
             base_url: 基础URL
             enable_checkpoints: 是否启用检查点
             enable_optimizations: 是否启用所有优化
+            enable_phase2: 是否启用第2阶段优化
         """
         super().__init__(
             base_url=base_url,
             enable_checkpoints=enable_checkpoints
         )
 
-        # 初始化分析器
+        # 第1阶段分析器
         self.business_rules_analyzer = BusinessRulesAnalyzer()
         self.state_machine_analyzer = StateMachineAnalyzer()
         self.multi_tenant_analyzer = MultiTenantAnalyzer()
         self.conservation_analyzer = ConservationAnalyzer()
 
+        # 第2阶段分析器
+        self.concurrency_analyzer = ConcurrencyAnalyzer()
+        self.async_task_analyzer = AsyncTaskAnalyzer()
+        self.cache_consistency_analyzer = CacheConsistencyAnalyzer()
+        self.authorization_analyzer = AuthorizationAnalyzer()
+        self.enable_phase2 = enable_phase2
+
         # 所有发现的bugs
         self.all_discoveries: List[Dict[str, Any]] = []
 
-        logger.info("增强发现引擎初始化完成")
+        logger.info("增强发现引擎初始化完成 (包含第2阶段)")
 
     def run_enhanced_discovery(
         self,
@@ -119,6 +142,40 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
         )
         results["analysis"]["conservation"] = self.conservation_analyzer.get_summary()
         results["discoveries"].extend([self._convert_to_discovery(b, "C08") for b in conservation_bugs])
+
+        # 第2阶段分析
+        if self.enable_phase2:
+            # 5. 运行并发与竞态分析
+            logger.info("5. 运行并发与竞态分析...")
+            concurrency_bugs = self.concurrency_analyzer.analyze_concurrency(
+                self._parse_api_spec(api_spec_text), prd_text
+            )
+            results["analysis"]["concurrency"] = self.concurrency_analyzer.get_summary()
+            results["discoveries"].extend([self._convert_to_discovery(b, "C11") for b in concurrency_bugs])
+
+            # 6. 运行异步任务分析
+            logger.info("6. 运行异步任务分析...")
+            async_task_bugs = self.async_task_analyzer.analyze_async_tasks(
+                self._parse_api_spec(api_spec_text), prd_text
+            )
+            results["analysis"]["async_task"] = self.async_task_analyzer.get_summary()
+            results["discoveries"].extend([self._convert_to_discovery(b, "C20") for b in async_task_bugs])
+
+            # 7. 运行缓存一致性分析
+            logger.info("7. 运行缓存一致性分析...")
+            cache_bugs = self.cache_consistency_analyzer.analyze_cache_consistency(
+                self._parse_api_spec(api_spec_text), prd_text
+            )
+            results["analysis"]["cache_consistency"] = self.cache_consistency_analyzer.get_summary()
+            results["discoveries"].extend([self._convert_to_discovery(b, "C21") for b in cache_bugs])
+
+            # 8. 运行认证授权分析
+            logger.info("8. 运行认证授权分析...")
+            auth_bugs = self.authorization_analyzer.analyze_authorization(
+                self._parse_api_spec(api_spec_text), prd_text
+            )
+            results["analysis"]["authorization"] = self.authorization_analyzer.get_summary()
+            results["discoveries"].extend([self._convert_to_discovery(b, "C03") for b in auth_bugs])
 
         # 收集所有发现
         self.all_discoveries.extend(results["discoveries"])
@@ -285,10 +342,18 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
             "severity_count": severity_count,
             "category_count": category_count,
             "analyzers": {
-                "business_rules": self.business_rules_analyzer.get_summary(),
-                "state_machine": self.state_machine_analyzer.get_summary(),
-                "multi_tenant": self.multi_tenant_analyzer.get_summary(),
-                "conservation": self.conservation_analyzer.get_summary()
+                "phase1": {
+                    "business_rules": self.business_rules_analyzer.get_summary(),
+                    "state_machine": self.state_machine_analyzer.get_summary(),
+                    "multi_tenant": self.multi_tenant_analyzer.get_summary(),
+                    "conservation": self.conservation_analyzer.get_summary()
+                },
+                "phase2": {
+                    "concurrency": self.concurrency_analyzer.get_summary(),
+                    "async_task": self.async_task_analyzer.get_summary(),
+                    "cache_consistency": self.cache_consistency_analyzer.get_summary(),
+                    "authorization": self.authorization_analyzer.get_summary()
+                }
             }
         }
 
@@ -296,7 +361,8 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
 # 便捷工厂函数
 def create_enhanced_engine(
     base_url: str = "http://127.0.0.1:8000/api",
-    enable_checkpoints: bool = True
+    enable_checkpoints: bool = True,
+    enable_phase2: bool = True
 ) -> EnhancedDiscoveryEngine:
     """
     创建增强发现引擎
@@ -304,11 +370,13 @@ def create_enhanced_engine(
     Args:
         base_url: 基础URL
         enable_checkpoints: 是否启用检查点
+        enable_phase2: 是否启用第2阶段优化
 
     Returns:
         增强发现引擎实例
     """
     return EnhancedDiscoveryEngine(
         base_url=base_url,
-        enable_checkpoints=enable_checkpoints
+        enable_checkpoints=enable_checkpoints,
+        enable_phase2=enable_phase2
     )
