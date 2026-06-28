@@ -8,9 +8,9 @@ QualiBug AI 发现普通端点测试经常遗漏的高价值缺陷：跨系统�
 
 ## 版本信息
 
-**当前版本**: Phase92A Evidence Bridge & Two-Layer Gate
+**当前版本**: 95.0.0（Phase106 前端工程化 · 企业质量指挥中心 HTTP API）
 
-Phase92A 引入了严格的证据管道，确保四层状态保留：
+证据管道保持四层状态保留（自 Phase92A 起持续生效）：
 
 ```
 Raw Probe Evidence → Normalized Runtime Evidence → Semantic Verification Evidence → Business Finding Contract
@@ -36,12 +36,14 @@ cp .env.local.example .env.local
 # 编辑 .env.local 配置你的 LLM API
 
 # 4. 运行测试
-python -m pytest tests/test_phase92a_evidence_bridge.py -v
+python -m pytest tests/test_phase95_runtime_evidence_scoreboard.py -v
+# 或运行完整测试套件
+python -m pytest tests/ -q
 
 # 5. 启动服务
 python -m ai_test_asset_center.private_pilot_service
-# 或使用命令行入口
-qualibug-server
+# 或使用 CLI（发布验证、扫描等）
+qualibug verify-release
 ```
 
 ### Docker部署
@@ -102,28 +104,35 @@ docker-compose logs -f qualibug
 ## 命令行工具
 
 ```bash
+# 检查本地与 LLM 配置
+qualibug doctor
+
 # 运行发布验证
 qualibug verify-release
 
-# 启动私有服务
-qualibug-server
+# 启动私有服务（无独立 server 入口，直接运行模块）
+python -m ai_test_asset_center.private_pilot_service
 
-# 运行发现引擎
-qualibug discover --project myproject --prd "path/to/prd.md"
+# 运行发现引擎（--prd / --api 为必需参数）
+qualibug discover --prd "path/to/prd.md" --api "path/to/api.md"
 ```
 
 ---
 
 ## API端点
 
+私有服务 `private_pilot_service`（默认端口 8088）：
+
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/health` | GET | 健康检查 |
+| `/api/health` | GET | 健康检查（含真实 LLM 连通状态，未连通时为 offline） |
 | `/api/pilot/status` | GET | 服务状态 |
 | `/api/scan/run` | POST | 运行扫描 |
 | `/api/pilot/config` | GET/POST | 配置管理 |
 | `/api/knowledge/ingest` | POST | 知识导入 |
 | `/api/settings/save` | POST | 系统设置 |
+
+前端联调 API 面（Phase104A，`phase104_command_center_http_api`，默认端口 8790）使用 `/api/v1/*` 前缀，详见 `PHASE104A_COMMAND_CENTER_HTTP_API_README.md`。
 
 ---
 
@@ -156,20 +165,22 @@ qualibug-ai/
 
 ### 环境变量 (.env.local)
 
-```bash
-# LLM配置 (必填)
-OPENAI_API_KEY=your-api-key
-OPENAI_API_BASE=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4
+代码只读取 `LLM_*`（OpenAI 风格的 `OPENAI_*` 名称不被读取）。完整参考见 `.env.local.example`。
 
-# 或使用本地LLM
-LLM_API_BASE=http://localhost:8080/v1
-LLM_MODEL=local-model
+```bash
+# LLM配置 (必填) — 代码读取 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_API_KEY=your-api-key
+LLM_MODEL=your-deepseek-model
+LLM_TEMPERATURE=0.1
+LLM_TIMEOUT_SECONDS=300
+LLM_THINKING_MODE=disabled
+LLM_RESPONSE_FORMAT=json_object
 
 # 服务配置
-QUALIBUG_PROJECT=default
-QUALIBUG_PORT=5000
-QUALIBUG_PRODUCTION=0  # 开发模式设为0
+QUALIBUG_PROJECT=real_project_demo
+QUALIBUG_PORT=8088        # 默认 8088
+QUALIBUG_PRODUCTION=0     # 设为 1 时进入生产模式，禁止所有外部 HTTP 写入
 ```
 
 ---
@@ -178,8 +189,8 @@ QUALIBUG_PRODUCTION=0  # 开发模式设为0
 
 ```bash
 # 运行核心测试
-python -m pytest tests/test_phase92a_evidence_bridge.py -v
-python -m pytest tests/test_discovery_finding_gate.py -v
+python -m pytest tests/test_phase95_runtime_evidence_scoreboard.py -v
+python -m pytest tests/test_real_project_discovery_contract.py -v
 
 # 运行完整测试套件
 python -m pytest tests/ -v --cov=ai_test_asset_center

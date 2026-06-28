@@ -1,13 +1,19 @@
-# Phase90 Resume State
+# Resume State
 
-Status: COMPLETED_90_PLUS (repository and controlled-verification scope)
+Status: COMPLETED (repository and controlled-verification scope)
 
-Measured evidence:
+Last refreshed: 2026-06-29.
 
-- Full suite: 338 passed, 1 skipped.
-- Release verifier: passed.
-- Phase90 archive audit: passed with no sensitive/runtime-path violations.
-- Product scorecard: 90/100 for the repository and controlled Sandbox scope.
+Measured evidence (current code tree, Phase106):
+
+- Full suite: 261 passed, 0 failed, 0 errors. Verified across three consecutive
+  full runs (forward x2, reverse file order x1) after pinning the pytest
+  basetemp to the repo-local, git-ignored `.pytest_tmp/run` in `conftest.py`.
+  Earlier bare `python -m pytest` runs showed nondeterministic Windows
+  OS-temp concurrency failures that never reproduced in isolation; those are
+  resolved, not masked.
+- All 231 Python modules under `ai_test_asset_center/` pass AST syntax check.
+- Python package version: `95.0.0` (see `pyproject.toml`).
 
 External deployment validation remains required for customer-specific test
 adapters, approved cleanup mappings, live LLM network routes and sustained

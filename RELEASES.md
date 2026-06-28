@@ -99,6 +99,15 @@
 
 当前版本：
 
+- Version: `95.0.0`（Phase106 · 前端工程化与企业质量指挥中心 HTTP API）
+- Title: `Frontend Engineering & Enterprise Command Center HTTP API`
+- Asset: 前端工程为按需生成产物（运行 `python -m ai_test_asset_center.phase106_frontend_test_plan_runtime` 等生成器产出 Vite + React + TypeScript 工程，再由 Phase104H CI 质量门禁打包 zip）
+- Integrity: 各生成器均产出 `CHECKSUMS*.sha256`，Phase104H CI 门禁统一复验
+- Release state: Engineering validated；完整测试套件 261 passed，0 failed（详见 `RESUME_STATE.md`）
+- 入口: `qualibug verify-release`、`python -m ai_test_asset_center.private_pilot_service`、`python -m ai_test_asset_center.phase104_command_center_http_api`
+
+历史版本：
+
 - Version: `Phase76`
 - Title: `Agent Business-Flow Orchestrator`
 - Asset: `QualiBug_AI_Enterprise_Edition_Phase76_AgentLoop_FlowOrchestrator_Complete.zip`
