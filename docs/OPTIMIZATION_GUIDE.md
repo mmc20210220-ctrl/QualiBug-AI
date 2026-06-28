@@ -10,13 +10,18 @@
 
 | 文件 | 说明 |
 |------|------|
+| `examples/example_optimizations.py` | **强烈推荐** - 综合优化工具包示例 |
 | `examples/example_monitor_usage.py` | 性能监控基本用法 |
 | `examples/example_combined_optimizations.py` | 缓存 + 监控组合使用 |
-| `examples/integrated_optimization_demo.py` | **推荐** - 完整集成演示 |
+| `examples/integrated_optimization_demo.py` | 完整集成演示 |
 | `examples/example_safe_retry_simple.py` | 安全重试装饰器示例 |
 
 运行示例：
 ```bash
+# 综合优化工具包（推荐）
+python examples/example_optimizations.py
+
+# 其他示例
 python examples/integrated_optimization_demo.py
 python examples/example_safe_retry_simple.py
 ```
@@ -265,6 +270,85 @@ def my_function():
 
 ---
 
+### 4. `optimizations.py` - 综合优化工具包 🚀
+
+#### 功能
+- 一站式导入所有优化
+- `@optimized` - 综合装饰器，一键组合所有优化
+- 预设配置：`@optimized_network`、`@optimized_api`、`@optimized_cacheable`
+- 工具函数：启用/禁用、清空缓存、获取摘要
+
+#### 特点
+- 零风险，不修改现有代码
+- 自动处理模块缺失的情况
+- 开箱即用，预设配置
+
+#### 快速使用
+
+```python
+# 一站式导入！
+from ai_test_asset_center.optimizations import (
+    optimized,
+    optimized_network,
+    optimized_api,
+    optimized_cacheable,
+    enable_all_optimizations,
+    get_optimization_summary
+)
+
+# 一键组合所有优化
+@optimized(
+    measure=True,    # 性能监控
+    cache=True,      # 缓存
+    retry=True,      # 重试
+    cache_ttl=300.0,
+    retry_max=3
+)
+def my_function():
+    # ...
+
+# 使用预设配置
+@optimized_network
+def fetch_data():
+    # ...
+
+@optimized_cacheable(ttl=60.0)
+def expensive_calc():
+    # ...
+
+# 工具函数
+enable_all_optimizations()
+print(get_optimization_summary())
+```
+
+#### 发现引擎优化示例
+
+```python
+from ai_test_asset_center.discovery_engine import AutonomousDiscoveryEngine
+from ai_test_asset_center.optimizations import (
+    optimized_cacheable,
+    measure_time
+)
+
+class OptimizedDiscoveryEngine(AutonomousDiscoveryEngine):
+    """优化后的发现引擎"""
+    
+    @optimized_cacheable(ttl=300.0, prefix="route_map")
+    def _build_route_map(self):
+        """缓存 route_map"""
+        return super()._build_route_map()
+    
+    @measure_time("stage_read")
+    def stage_read(self, *args, **kwargs):
+        return super().stage_read(*args, **kwargs)
+    
+    @measure_time("stage_reason_all")
+    def stage_reason_all(self, *args, **kwargs):
+        return super().stage_reason_all(*args, **kwargs)
+```
+
+---
+
 ## 安全优化建议
 
 ### 优先级 P0 - 零风险
@@ -421,10 +505,13 @@ if __name__ == "__main__":
    - `ai_test_asset_center/performance_monitor.py`
    - `ai_test_asset_center/safe_cache.py`
    - `ai_test_asset_center/safe_retry.py`
+   - `ai_test_asset_center/optimizations.py`
    - `docs/OPTIMIZATION_GUIDE.md`
    - `examples/example_monitor_usage.py`
    - `examples/example_combined_optimizations.py`
+   - `examples/integrated_optimization_demo.py`
    - `examples/example_safe_retry_simple.py`
+   - `examples/example_optimizations.py`
 
 2. **恢复原代码**（如果修改过）：
    - 移除装饰器
