@@ -1112,6 +1112,52 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     data["business_risk_coverage_map"] = coverage_summary
     data["metrics"]["business_risk_coverage_entries"] = int(coverage_summary.get("entry_count", 0) or 0) if isinstance(coverage_summary, dict) else 0
 
+    probe_items = probes if isinstance(probes, list) else []
+    issue_items = issues if isinstance(issues, list) else []
+    execution_items = executions if isinstance(executions, list) else []
+    executed_request_count = sum(1 for item in execution_items if item.get("executed"))
+    blocked_request_count = sum(1 for item in execution_items if item.get("blocked") or item.get("blocked_by_safety"))
+    candidate_only_count = sum(
+        1 for item in issue_items
+        if str(((item.get("evidence") or {}).get("response") or {}).get("error") or "").lower()
+        in {"candidate_only_or_missing_base_url", "candidate_only"}
+    )
+    quality_summary = (defect_quality_report or {}).get("summary") if isinstance(defect_quality_report, dict) else {}
+    high_confidence_count = int((quality_summary or {}).get("high_confidence_count") or 0)
+    data.update({
+        "status": "succeeded",
+        "issue_count": len(issue_items),
+        "probe_count": len(probe_items),
+        "network_requests": executed_request_count,
+        "http_request_count": executed_request_count,
+        "http_blocked_count": blocked_request_count,
+        "candidate_only_issue_count": candidate_only_count,
+        "high_confidence_issue_count": high_confidence_count,
+        "output_dir": str(paths["output_dir"]),
+        "summary": {
+            "project_id": project,
+            "project_name": data.get("project_name"),
+            "mode": mode,
+            "status": "succeeded",
+            "issue_count": len(issue_items),
+            "probe_count": len(probe_items),
+            "network_requests": executed_request_count,
+            "http_blocked_count": blocked_request_count,
+            "candidate_only_issue_count": candidate_only_count,
+            "high_confidence_issue_count": high_confidence_count,
+            "risk_distribution": risk_dist,
+            "output_dir": str(paths["output_dir"]),
+        },
+    })
+    data["metrics"].update({
+        "issue_count": len(issue_items),
+        "probe_count": len(probe_items),
+        "network_requests": executed_request_count,
+        "http_blocked_count": blocked_request_count,
+        "candidate_only_issue_count": candidate_only_count,
+        "high_confidence_issue_count": high_confidence_count,
+    })
+
     paths["workspace_dir"].mkdir(parents=True, exist_ok=True)
     paths["output_dir"].mkdir(parents=True, exist_ok=True)
     _write_json(paths["workspace_dir"] / "defect_probes.json", {"items": probes})

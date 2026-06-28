@@ -797,6 +797,8 @@ def evaluate_defect_quality(issues: Iterable[dict[str, Any]], project_id: str = 
             classification = "environment_problem"
         elif any(word in text for word in ("precondition", "blocked", "account missing", "data missing", "测试数据", "前置")):
             classification = "test_data_problem"
+        if any(word in text for word in ("candidate_only", "candidate_only_or_missing_base_url", "destructive_probe_blocked", "未执行", "候选风险")):
+            classification = "candidate_only"
         severity = str(issue.get("severity") or "P2")
         severity_weight = {"P0": 1.0, "P1": 0.8, "P2": 0.55, "P3": 0.25}.get(severity, 0.45)
         evidence = issue.get("evidence") if isinstance(issue.get("evidence"), dict) else {}
@@ -817,7 +819,8 @@ def evaluate_defect_quality(issues: Iterable[dict[str, Any]], project_id: str = 
     high = [item for item in representatives if item.get("high_confidence")]
     env = [item for item in rows if item.get("classification") == "environment_problem"]
     data = [item for item in rows if item.get("classification") == "test_data_problem"]
-    result = {"phase": PHASE, "project_id": project, "generated_at_utc": _now(), "issues": representatives, "clusters": clusters, "summary": {"input_issue_count": len(rows), "deduplicated_issue_count": len(representatives), "duplicate_compression_rate": round(1 - len(representatives) / max(1, len(rows)), 3), "high_confidence_count": len(high), "environment_problem_count": len(env), "test_data_problem_count": len(data), "suspected_false_positive_count": len([item for item in rows if item.get("classification") == "defect" and float(item.get("confidence_score") or 0) < 0.48])}, "governance": {"environment_and_data_problems_do_not_enter_high_value_defect_count": True, "duplicate_clusters_keep_all_evidence_members": True}}
+    candidate_only = [item for item in rows if item.get("classification") == "candidate_only"]
+    result = {"phase": PHASE, "project_id": project, "generated_at_utc": _now(), "issues": representatives, "clusters": clusters, "summary": {"input_issue_count": len(rows), "deduplicated_issue_count": len(representatives), "duplicate_compression_rate": round(1 - len(representatives) / max(1, len(rows)), 3), "high_confidence_count": len(high), "environment_problem_count": len(env), "test_data_problem_count": len(data), "candidate_only_count": len(candidate_only), "suspected_false_positive_count": len([item for item in rows if item.get("classification") == "defect" and float(item.get("confidence_score") or 0) < 0.48])}, "governance": {"environment_data_and_candidate_only_do_not_enter_high_value_defect_count": True, "duplicate_clusters_keep_all_evidence_members": True}}
     _write_json(_paths(project, root)["defect_quality"], result)
     return result
 
