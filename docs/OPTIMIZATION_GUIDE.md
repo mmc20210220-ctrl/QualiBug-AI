@@ -4,6 +4,21 @@
 
 本文档介绍如何**安全地**优化 QualiBug AI 的发现引擎，不修改核心业务逻辑，只添加可观察性和缓存优化。
 
+## 快速开始 - 示例文件
+
+想要立即开始？查看这些示例文件：
+
+| 文件 | 说明 |
+|------|------|
+| `examples/example_monitor_usage.py` | 性能监控基本用法 |
+| `examples/example_combined_optimizations.py` | 缓存 + 监控组合使用 |
+| `examples/integrated_optimization_demo.py` | **推荐** - 完整集成演示 |
+
+运行示例：
+```bash
+python examples/integrated_optimization_demo.py
+```
+
 ---
 
 ## 新增模块
