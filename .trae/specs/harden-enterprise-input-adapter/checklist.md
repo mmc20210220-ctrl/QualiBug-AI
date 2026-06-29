@@ -7,4 +7,4 @@
 - [x] 关键格式的自动化测试覆盖分类、markdown API 提取、字段字典与 UIUX 线索提取
 - [x] `QualiBug_ECommerce_Benchmark` 回归结果中 `interface_count` 相比改造前提升
 - [x] `QualiBug_ECommerce_Benchmark` 回归结果中 `generated_probe_count` 相比改造前提升或明确解释剩余边界
-- [ ] 本轮改动完成后代码已提交并推送，且最终 benchmark 复测数据已记录
+- [x] 本轮改动完成后代码已提交并推送，且最终 benchmark 复测数据已记录

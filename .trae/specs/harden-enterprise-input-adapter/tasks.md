@@ -34,10 +34,10 @@
   - [x] SubTask 7.2: 用 `QualiBug_ECommerce_Benchmark` 重新 ingest 并记录关键指标
   - [x] SubTask 7.3: 对比改造前后 `interface_count`、`data_table_count`、`rule_count`、`oracle_count`、`generated_probe_count`
 
-- [ ] Task 8: 提交、推送并做最终项目复测
-  - [ ] SubTask 8.1: 在验证通过后整理本轮代码改动并形成单一清晰提交
-  - [ ] SubTask 8.2: 推送到远端 `origin/main`
-  - [ ] SubTask 8.3: 推送后再跑 benchmark 项目复测，并汇总最终数据变化
+- [x] Task 8: 提交、推送并做最终项目复测
+  - [x] SubTask 8.1: 在验证通过后整理本轮代码改动并形成单一清晰提交
+  - [x] SubTask 8.2: 推送到远端 `origin/main`
+  - [x] SubTask 8.3: 推送后再跑 benchmark 项目复测，并汇总最终数据变化
 
 # Task Dependencies
 - Task 2 depends on Task 1
