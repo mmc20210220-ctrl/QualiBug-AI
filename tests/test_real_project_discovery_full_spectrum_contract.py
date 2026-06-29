@@ -67,6 +67,7 @@ def test_real_project_discovery_exposes_full_spectrum_coverage_contract(tmp_path
     result = run_real_project_discovery(project, tmp_path)
     metrics = result["metrics"]
     coverage = result["bug_family_coverage"]
+    matrix = result["full_spectrum_capability_matrix"]
 
     assert result["status"] == "succeeded"
     assert metrics["api_contract_probe_count"] >= 1
@@ -118,5 +119,13 @@ def test_real_project_discovery_exposes_full_spectrum_coverage_contract(tmp_path
     assert "ui_design_oracle_missing_component_count" in planner_summary
     assert "ui_design_oracle_missing_feedback_count" in planner_summary
     assert coverage["covered_family_count"] >= 5
+    assert coverage["declared_source_count"] >= coverage["materialized_source_count"]
+    assert coverage["missing_source_count"] >= 1
+    assert matrix["source_row_count"] >= coverage["declared_source_count"]
+    assert matrix["summary"]["declared_source_count"] >= matrix["summary"]["materialized_source_count"]
     covered_families = {row["family_id"] for row in coverage["rows"] if row["probe_count"] > 0 or row["issue_count"] > 0}
     assert {"api_contract", "ui", "uiux", "compatibility", "performance"}.issubset(covered_families)
+    api_contract_row = next(row for row in coverage["rows"] if row["family_id"] == "api_contract")
+    assert api_contract_row["declared_source_count"] >= 2
+    assert api_contract_row["materialized_source_count"] >= 1
+    assert api_contract_row["missing_declared_sources"]

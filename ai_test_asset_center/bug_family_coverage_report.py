@@ -36,17 +36,33 @@ def build_bug_family_coverage_report(
         family_probes = [item for item in probe_items if str(item.get("defect_family") or resolve_defect_family(item).get("family_id") or "") == family_id]
         family_issues = [item for item in issue_items if str(item.get("defect_family") or resolve_defect_family(item).get("family_id") or "") == family_id]
         family_cap_rows = capability_map.get(family_id, [])
-        probe_level_cap_rows = [row for row in family_cap_rows if isinstance(row, dict) and not row.get("capability_id")]
+        probe_level_cap_rows = [row for row in family_cap_rows if isinstance(row, dict) and not row.get("capability_id") and not row.get("source_id")]
         capability_level_rows = [row for row in family_cap_rows if isinstance(row, dict) and row.get("capability_id")]
+        source_level_rows = [row for row in family_cap_rows if isinstance(row, dict) and row.get("source_id")]
         executable_probe_count = sum(1 for row in probe_level_cap_rows if str(row.get("preflight_lane") or "").endswith("ready"))
         ready_capability_count = sum(1 for row in capability_level_rows if str(row.get("preflight_lane") or "").endswith("ready"))
         blocked_capability_count = sum(1 for row in capability_level_rows if "blocked" in str(row.get("preflight_lane") or "") or str(row.get("preflight_lane") or "") == "plan_only")
+        declared_source_count = len(source_level_rows)
+        materialized_source_rows = [row for row in source_level_rows if str(row.get("preflight_lane") or "").endswith("ready")]
+        materialized_source_count = len(materialized_source_rows)
+        missing_source_rows = [row for row in source_level_rows if str(row.get("preflight_lane") or "") != "source_ready"]
+        missing_source_count = len(missing_source_rows)
+        materialized_sources = sorted({str(row.get("source_id") or "") for row in materialized_source_rows if str(row.get("source_id") or "")})
+        missing_declared_sources = sorted({str(row.get("source_id") or "") for row in missing_source_rows if str(row.get("source_id") or "")})
         blocked_probe_count = sum(1 for item in family_probes if str(item.get("capability_gate") or "") == "browser_ui_unavailable")
         candidate_only_count = sum(1 for item in family_issues if float(item.get("confidence") or 0.0) < 0.75)
         validated_count = sum(1 for item in family_issues if float(item.get("confidence") or 0.0) >= 0.75)
         coverage_gap_reason_code = ""
         coverage_gap_reason = ""
         coverage_gap_action = ""
+        source_gap_reason_code = ""
+        source_gap_reason = ""
+        source_gap_action = ""
+        if missing_source_rows:
+            first_gap_row = next((row for row in missing_source_rows if str(row.get("reason_code") or "").strip()), missing_source_rows[0])
+            source_gap_reason_code = str(first_gap_row.get("reason_code") or "")
+            source_gap_reason = str(first_gap_row.get("reason") or "")
+            source_gap_action = str(first_gap_row.get("action") or "")
         if browser_ui_blocked and family_id in browser_ui_affected_families:
             coverage_gap_reason_code = browser_ui_reason_code
             coverage_gap_reason = str(browser_ui_health.get("reason") or "")
@@ -68,6 +84,14 @@ def build_bug_family_coverage_report(
                 "blocked_probe_count": blocked_probe_count,
                 "ready_capability_count": ready_capability_count,
                 "blocked_capability_count": blocked_capability_count,
+                "declared_source_count": declared_source_count,
+                "materialized_source_count": materialized_source_count,
+                "missing_source_count": missing_source_count,
+                "materialized_sources": materialized_sources,
+                "missing_declared_sources": missing_declared_sources,
+                "source_gap_reason_code": source_gap_reason_code,
+                "source_gap_reason": source_gap_reason,
+                "source_gap_action": source_gap_action,
                 "candidate_only_count": candidate_only_count,
                 "validated_count": validated_count,
                 "coverage_status": (
@@ -91,6 +115,9 @@ def build_bug_family_coverage_report(
         "covered_family_count": sum(1 for row in family_rows if row["coverage_status"] != "not_covered"),
         "validated_family_count": sum(1 for row in family_rows if row["coverage_status"] == "validated"),
         "candidate_only_family_count": sum(1 for row in family_rows if row["coverage_status"] == "candidate_only"),
+        "declared_source_count": sum(int(row.get("declared_source_count") or 0) for row in family_rows),
+        "materialized_source_count": sum(int(row.get("materialized_source_count") or 0) for row in family_rows),
+        "missing_source_count": sum(int(row.get("missing_source_count") or 0) for row in family_rows),
         "missing_probe_families": missing_probe_families,
         "missing_validated_families": missing_validated_families,
         "missing_family_reasons": missing_family_reasons,

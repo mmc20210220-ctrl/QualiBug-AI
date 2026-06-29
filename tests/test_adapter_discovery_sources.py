@@ -5,6 +5,7 @@ from ai_test_asset_center.bug_family_coverage_report import build_bug_family_cov
 from ai_test_asset_center.compatibility_discovery_adapter import collect_compatibility_issues, generate_compatibility_probes
 from ai_test_asset_center.frontend_runtime_discovery_adapter import generate_frontend_runtime_probes
 from ai_test_asset_center.frontend_ux_discovery_adapter import generate_frontend_ux_probes
+from ai_test_asset_center.full_spectrum_capability_matrix import build_full_spectrum_capability_matrix
 from ai_test_asset_center.performance_stability_discovery_adapter import (
     collect_performance_stability_issues,
     generate_performance_stability_probes,
@@ -72,3 +73,43 @@ def test_bug_family_coverage_report_marks_browser_blocked_families() -> None:
     assert rows["ui"]["coverage_gap_reason_code"] == "E_BROWSER_CACHE_MISSING"
     assert rows["uiux"]["coverage_gap_reason_code"] == "E_BROWSER_CACHE_MISSING"
     assert coverage["missing_family_reasons"]["ui"]["reason_code"] == "E_BROWSER_CACHE_MISSING"
+
+
+def test_full_spectrum_coverage_tracks_declared_vs_materialized_sources() -> None:
+    openapi = {
+        "openapi": "3.0.0",
+        "paths": {
+            "/api/orders": {"get": {"responses": {"200": {"description": "ok"}}}},
+        },
+    }
+    cfg = {"request_timeout_seconds": 5, "deployment_mode": "private_deployment", "environment_class": "sandbox"}
+    probes = []
+    probes.extend(generate_api_contract_probes(openapi, cfg, "demo"))
+    probes.extend(generate_frontend_runtime_probes(openapi, cfg, "demo"))
+
+    matrix = build_full_spectrum_capability_matrix(
+        probes,
+        onboarding={
+            "checks": [
+                {"name": "base_url_reachable", "ok": True},
+                {"name": "safety_boundary", "ok": True},
+                {"name": "openapi_parse", "ok": True},
+                {"name": "openapi_paths", "count": 1},
+            ]
+        },
+        browser_ui_health={"enabled": False, "reason_code": "E_BROWSER_DISABLED", "reason": "browser disabled", "action": "enable browser"},
+    )
+    coverage = build_bug_family_coverage_report([], [], capability_rows=list(matrix["rows"]))
+    rows = {row["family_id"]: row for row in coverage["rows"]}
+
+    api_row = rows["api_contract"]
+    assert api_row["declared_source_count"] >= 2
+    assert api_row["materialized_source_count"] >= 1
+    assert "phase104_api_contract" in api_row["missing_declared_sources"]
+
+    ui_row = rows["ui"]
+    assert ui_row["declared_source_count"] >= 3
+    assert ui_row["materialized_source_count"] >= 1
+    assert "frontend_runtime" in ui_row["materialized_sources"]
+    assert ui_row["missing_source_count"] >= 1
+    assert coverage["declared_source_count"] >= coverage["materialized_source_count"]
