@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+import re
 
 from .defect_signal_schema import normalize_defect_signal
 from .real_project_onboarding import ROOT, config_paths
@@ -152,10 +153,32 @@ def _text_corpus(page: dict[str, Any], elements: list[dict[str, Any]]) -> str:
     for element in elements[:200]:
         if not isinstance(element, dict):
             continue
-        for key in ("text", "label", "name", "role", "selector", "aria_label", "ariaLabel"):
+        for key in (
+            "text",
+            "label",
+            "name",
+            "role",
+            "selector",
+            "aria_label",
+            "ariaLabel",
+            "semantic_name",
+            "element_id",
+            "id",
+            "href",
+            "placeholder",
+            "tag",
+            "type",
+            "css",
+            "css_candidates",
+            "xpath_candidate",
+        ):
             value = element.get(key)
             if isinstance(value, str) and value.strip():
                 chunks.append(value)
+            elif isinstance(value, list):
+                for item in value[:20]:
+                    if isinstance(item, str) and item.strip():
+                        chunks.append(item)
     return " ".join(chunks)
 
 
@@ -182,6 +205,177 @@ def _expected_tokens() -> dict[str, list[str]]:
     }
 
 
+def _normalize(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _element_value(element: dict[str, Any], key: str) -> str:
+    value = element.get(key)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        chunks = [str(item) for item in value[:20] if str(item).strip()]
+        return " ".join(chunks)
+    return ""
+
+
+def _element_role(element: dict[str, Any]) -> str:
+    return _normalize(_element_value(element, "role") or _element_value(element, "aria_role") or _element_value(element, "ariaRole"))
+
+
+def _element_text_blob(element: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in (
+        "text",
+        "label",
+        "name",
+        "aria_label",
+        "ariaLabel",
+        "placeholder",
+        "selector",
+        "css",
+        "css_candidates",
+        "xpath_candidate",
+        "semantic_name",
+        "element_id",
+        "href",
+        "id",
+        "tag",
+        "testid",
+        "data_testid",
+        "data-testid",
+    ):
+        value = _element_value(element, key)
+        if value:
+            parts.append(value)
+    return _normalize(" ".join(parts))
+
+
+def _extract_data_testids(text: str) -> list[str]:
+    if not text:
+        return []
+    hits: list[str] = []
+    for match in re.finditer(r"data-testid\s*=\s*['\"]([^'\"]+)['\"]", text, flags=re.IGNORECASE):
+        value = (match.group(1) or "").strip()
+        if value:
+            hits.append(value)
+    for match in re.finditer(r"\[data-testid\s*=\s*['\"]([^'\"]+)['\"]\]", text, flags=re.IGNORECASE):
+        value = (match.group(1) or "").strip()
+        if value:
+            hits.append(value)
+    return hits
+
+
+def _element_testid_candidates(element: dict[str, Any]) -> set[str]:
+    candidates: set[str] = set()
+    for key in ("testid", "data_testid", "data-testid"):
+        value = _element_value(element, key)
+        if value.strip():
+            candidates.add(value.strip().lower())
+    selector = _element_value(element, "selector")
+    for tid in _extract_data_testids(selector):
+        candidates.add(tid.strip().lower())
+    for key in ("css", "css_candidates"):
+        value = _element_value(element, key)
+        for tid in _extract_data_testids(value):
+            candidates.add(tid.strip().lower())
+    return candidates
+
+
+def _oracle_match_hints(oracle: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    hints = oracle.get("match_hints") if isinstance(oracle.get("match_hints"), dict) else {}
+    out: dict[str, dict[str, Any]] = {}
+    for key, value in hints.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        out[key] = value
+    return out
+
+
+def _oracle_hint_list(hints: dict[str, dict[str, Any]], item_id: str, key: str) -> list[str]:
+    hint = hints.get(item_id)
+    if not isinstance(hint, dict):
+        return []
+    value = hint.get(key)
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    return []
+
+
+def _oracle_confidence(match_hints: dict[str, dict[str, Any]], item_id: str, *, base: float, elements: list[dict[str, Any]]) -> tuple[float, str]:
+    testids = _oracle_hint_list(match_hints, item_id, "testids")
+    keywords = _oracle_hint_list(match_hints, item_id, "keywords")
+    roles = _oracle_hint_list(match_hints, item_id, "roles")
+    if testids and elements:
+        return min(0.82, max(base, 0.76)), "testid_role"
+    if testids:
+        return min(0.78, max(base, 0.72)), "testid"
+    if keywords and elements:
+        return min(0.72, max(base, 0.66)), "keyword_role"
+    if keywords:
+        return min(0.68, max(base, 0.62)), "keyword"
+    if roles and elements:
+        return min(0.66, max(base, 0.6)), "role_only"
+    return min(0.62, base), "token_fallback"
+
+
+def _minimize_missing_items(match_hints: dict[str, dict[str, Any]], items: list[str], *, elements: list[dict[str, Any]]) -> list[str]:
+    order = {
+        "testid_role": 6,
+        "testid": 5,
+        "keyword_role": 4,
+        "keyword": 3,
+        "role_only": 2,
+        "token_fallback": 1,
+    }
+    ranked: list[tuple[int, float, str]] = []
+    for item_id in items:
+        confidence, basis = _oracle_confidence(match_hints, item_id, base=0.6, elements=elements)
+        ranked.append((order.get(basis, 0), confidence, item_id))
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return [item_id for _, _, item_id in ranked[:2]]
+
+
+def _structured_match(item_id: str, elements: list[dict[str, Any]], hints: dict[str, dict[str, Any]]) -> bool:
+    rules = hints.get(item_id)
+    if not isinstance(rules, dict) or not rules:
+        return False
+    roles = {str(r).lower() for r in (rules.get("roles") or []) if str(r).strip()}
+    keywords = [str(k).lower() for k in (rules.get("keywords") or []) if str(k).strip()]
+    testids = [str(k).lower() for k in (rules.get("testids") or []) if str(k).strip()]
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        role = _element_role(element)
+        blob = _element_text_blob(element)
+        if roles and role and role not in roles:
+            continue
+        if testids:
+            candidates = _element_testid_candidates(element)
+            if candidates and any(tid in candidates for tid in testids):
+                return True
+            if any(tid in blob for tid in testids):
+                return True
+        if keywords and any(kw in blob for kw in keywords):
+            return True
+    return False
+
+
+def _oracle_item_present(
+    item_id: str,
+    corpus: str,
+    elements: list[dict[str, Any]],
+    *,
+    match_hints: dict[str, dict[str, Any]],
+    tokens_fallback: dict[str, list[str]],
+    oracle_tokens: dict[str, list[str]],
+) -> bool:
+    if _structured_match(item_id, elements, match_hints):
+        return True
+    expected = oracle_tokens.get(item_id) or tokens_fallback.get(item_id) or []
+    return bool(expected and any(str(t).lower() in corpus for t in expected))
+
+
 def _design_issue_family(screen_id: str, component_id: str) -> str:
     if component_id in {"project_summary", "project_card_list", "project_scoped_api_paths"}:
         return "ui"
@@ -206,26 +400,48 @@ def _append_design_oracle_issues(
         return
     screen_id = str(screen.get("screen_id") or "unknown")
     corpus = _text_corpus(page, elements).lower()
-    tokens = _expected_tokens()
+    tokens_fallback = _expected_tokens()
+    match_hints = _oracle_match_hints(oracle)
+    oracle_tokens: dict[str, list[str]] = {}
+    for key, hint in match_hints.items():
+        if not isinstance(hint, dict):
+            continue
+        token_list = hint.get("tokens")
+        if isinstance(token_list, list):
+            oracle_tokens[str(key)] = [str(item) for item in token_list if str(item).strip()]
     dedupe_keys = dedupe_keys if isinstance(dedupe_keys, set) else set()
     missing_components: list[str] = []
     for component in screen.get("expected_components") or []:
         component_id = str(component)
-        expected = tokens.get(component_id, [])
-        if expected and any(str(t).lower() in corpus for t in expected):
+        if _oracle_item_present(
+            component_id,
+            corpus,
+            elements,
+            match_hints=match_hints,
+            tokens_fallback=tokens_fallback,
+            oracle_tokens=oracle_tokens,
+        ):
             continue
-        if expected:
+        if oracle_tokens.get(component_id) or tokens_fallback.get(component_id):
             missing_components.append(component_id)
     for component_id in missing_components[:3]:
         dedupe_key = ("component", screen_id, component_id)
         if dedupe_key in dedupe_keys:
             continue
         dedupe_keys.add(dedupe_key)
+        confidence, confidence_basis = _oracle_confidence(match_hints, component_id, base=0.66, elements=elements)
         evidence = {
             "route_signature": route_signature,
             "screen_id": screen_id,
             "missing_component": component_id,
-            "expected_tokens": tokens.get(component_id, []),
+            "expected_tokens": oracle_tokens.get(component_id) or tokens_fallback.get(component_id, []),
+            "match_hints": {
+                "roles": _oracle_hint_list(match_hints, component_id, "roles"),
+                "testids": _oracle_hint_list(match_hints, component_id, "testids"),
+                "keywords": _oracle_hint_list(match_hints, component_id, "keywords"),
+            },
+            "confidence_basis": confidence_basis,
+            "element_count": len(elements),
             "page": _summarize_page(page),
             "element_sample": elements[:12],
         }
@@ -237,7 +453,7 @@ def _append_design_oracle_issues(
                     "defect_family": _design_issue_family(screen_id, component_id),
                     "risk_type": "ui_design_oracle",
                     "severity": "P2",
-                    "confidence": 0.66,
+                    "confidence": confidence,
                     "status": "needs_human_review",
                     "source": "ui_design_oracle",
                     "route": route_signature,
@@ -253,21 +469,35 @@ def _append_design_oracle_issues(
     missing_feedback: list[str] = []
     for feedback in screen.get("required_feedback") or []:
         feedback_id = str(feedback)
-        expected = tokens.get(feedback_id, [])
-        if expected and any(str(t).lower() in corpus for t in expected):
+        if _oracle_item_present(
+            feedback_id,
+            corpus,
+            elements,
+            match_hints=match_hints,
+            tokens_fallback=tokens_fallback,
+            oracle_tokens=oracle_tokens,
+        ):
             continue
-        if expected:
+        if oracle_tokens.get(feedback_id) or tokens_fallback.get(feedback_id):
             missing_feedback.append(feedback_id)
     for feedback_id in missing_feedback[:2]:
         dedupe_key = ("feedback", screen_id, feedback_id)
         if dedupe_key in dedupe_keys:
             continue
         dedupe_keys.add(dedupe_key)
+        confidence, confidence_basis = _oracle_confidence(match_hints, feedback_id, base=0.55, elements=elements)
         evidence = {
             "route_signature": route_signature,
             "screen_id": screen_id,
             "missing_feedback": feedback_id,
-            "expected_tokens": tokens.get(feedback_id, []),
+            "expected_tokens": oracle_tokens.get(feedback_id) or tokens_fallback.get(feedback_id, []),
+            "match_hints": {
+                "roles": _oracle_hint_list(match_hints, feedback_id, "roles"),
+                "testids": _oracle_hint_list(match_hints, feedback_id, "testids"),
+                "keywords": _oracle_hint_list(match_hints, feedback_id, "keywords"),
+            },
+            "confidence_basis": confidence_basis,
+            "element_count": len(elements),
             "page": _summarize_page(page),
             "element_sample": elements[:12],
         }
@@ -279,13 +509,100 @@ def _append_design_oracle_issues(
                     "defect_family": "uiux",
                     "risk_type": "ui_design_oracle",
                     "severity": "P3",
-                    "confidence": 0.55,
+                    "confidence": confidence,
                     "status": "needs_human_review",
                     "source": "ui_design_oracle",
                     "route": route_signature,
                     "path": route_signature,
                     "expected": "页面应呈现设计预期的统一状态反馈",
                     "actual": f"未识别到反馈语义 {feedback_id}",
+                    "evidence": evidence,
+                },
+                signal_kind="issue",
+                default_source="ui_design_oracle",
+            )
+        )
+    journeys = oracle.get("journeys") if isinstance(oracle.get("journeys"), list) else []
+    for journey in journeys:
+        if not isinstance(journey, dict):
+            continue
+        journey_id = str(journey.get("journey_id") or "")
+        entry_route = str(journey.get("entry_route") or "")
+        if not journey_id or entry_route != route_signature:
+            continue
+        dedupe_key = ("journey", journey_id, "missing")
+        if dedupe_key in dedupe_keys:
+            continue
+        required_components = [str(item) for item in (journey.get("required_components") or []) if str(item).strip()]
+        expected_feedback = [str(item) for item in (journey.get("expected_feedback") or []) if str(item).strip()]
+        missing_required_components: list[str] = []
+        missing_expected_feedback: list[str] = []
+        for component_id in required_components:
+            if _oracle_item_present(
+                component_id,
+                corpus,
+                elements,
+                match_hints=match_hints,
+                tokens_fallback=tokens_fallback,
+                oracle_tokens=oracle_tokens,
+            ):
+                continue
+            if oracle_tokens.get(component_id) or tokens_fallback.get(component_id):
+                missing_required_components.append(component_id)
+        for feedback_id in expected_feedback:
+            if _oracle_item_present(
+                feedback_id,
+                corpus,
+                elements,
+                match_hints=match_hints,
+                tokens_fallback=tokens_fallback,
+                oracle_tokens=oracle_tokens,
+            ):
+                continue
+            if oracle_tokens.get(feedback_id) or tokens_fallback.get(feedback_id):
+                missing_expected_feedback.append(feedback_id)
+        if not (missing_required_components or missing_expected_feedback):
+            continue
+        dedupe_keys.add(dedupe_key)
+        minimal_components = _minimize_missing_items(match_hints, missing_required_components, elements=elements)
+        minimal_feedback = _minimize_missing_items(match_hints, missing_expected_feedback, elements=elements)
+        focus_item = (minimal_components + minimal_feedback + missing_required_components + missing_expected_feedback)[0]
+        confidence, confidence_basis = _oracle_confidence(match_hints, focus_item, base=0.6, elements=elements)
+        evidence = {
+            "route_signature": route_signature,
+            "screen_id": screen_id,
+            "journey_id": journey_id,
+            "journey_title": str(journey.get("title") or journey_id),
+            "entry_route": entry_route,
+            "missing_required_components": missing_required_components[:5],
+            "missing_expected_feedback": missing_expected_feedback[:5],
+            "minimal_missing_required_components": minimal_components,
+            "minimal_missing_expected_feedback": minimal_feedback,
+            "match_hints": {
+                "roles": _oracle_hint_list(match_hints, focus_item, "roles"),
+                "testids": _oracle_hint_list(match_hints, focus_item, "testids"),
+                "keywords": _oracle_hint_list(match_hints, focus_item, "keywords"),
+            },
+            "confidence_basis": confidence_basis,
+            "element_count": len(elements),
+            "page": _summarize_page(page),
+            "element_sample": elements[:12],
+        }
+        issues.append(
+            normalize_defect_signal(
+                {
+                    "issue_id": f"ISSUE_UI_DESIGN_{len(issues)+1:04d}",
+                    "title": f"设计旅程预期缺失：{journey_id}",
+                    "defect_family": str(journey.get("defect_family") or "uiux"),
+                    "risk_type": "ui_design_oracle",
+                    "severity": "P2",
+                    "confidence": confidence,
+                    "status": "needs_human_review",
+                    "source": "ui_design_oracle",
+                    "route": route_signature,
+                    "path": route_signature,
+                    "expected": "页面应满足设计旅程的关键组件与反馈闭环",
+                    "actual": f"缺少组件={','.join(missing_required_components[:3]) or 'none'}; 缺少反馈={','.join(missing_expected_feedback[:3]) or 'none'}",
                     "evidence": evidence,
                 },
                 signal_kind="issue",

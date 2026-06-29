@@ -35,6 +35,7 @@ from ai_test_asset_center.phase106_frontend_api_runtime import (
 from ai_test_asset_center.ui_design_oracle_manifest import (
     build_ui_design_sources,
     build_ui_journey_oracles,
+    build_ui_oracle_match_hints,
     build_ui_screen_oracles,
 )
 
@@ -226,6 +227,10 @@ def _json_dump(payload: Any) -> str:
     return json.dumps(redact_value(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
+def _json_dump_raw(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -321,7 +326,7 @@ def _write_project_components(app_dir: Path) -> None:
     )
     _write_text(
         app_dir / "src/components/ProjectSwitcher.tsx",
-        """import type { ProjectSummary } from '../app/projectContext';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\ntype ProjectSwitcherProps = {\n  projects?: ProjectSummary[];\n  selectedProjectId?: string;\n  onSelect?: (projectId: string) => void;\n  disabled?: boolean;\n  compact?: boolean;\n};\n\nexport function ProjectSwitcher({ projects, selectedProjectId, onSelect, disabled, compact }: ProjectSwitcherProps) {\n  const workspace = useProjectWorkspace();\n  const resolvedProjects = projects ?? workspace.projects;\n  const resolvedProjectId = selectedProjectId ?? workspace.selectedProjectId;\n  const resolvedOnSelect = onSelect ?? workspace.selectProject;\n  const resolvedDisabled = disabled ?? workspace.loading;\n\n  return (\n    <label className={`qb-project-switcher ${compact ? 'compact' : ''}`.trim()}>\n      <span>当前项目切换</span>\n      <select value={resolvedProjectId} disabled={resolvedDisabled || resolvedProjects.length === 0} onChange={(event) => resolvedOnSelect(event.target.value)}>\n        {resolvedProjects.map((project) => (\n          <option key={project.projectId} value={project.projectId}>{project.projectName}</option>\n        ))}\n      </select>\n      {compact ? null : <small>切换后保持当前工作区路由与信息架构稳定。</small>}\n    </label>\n  );\n}\n""",
+        """import type { ProjectSummary } from '../app/projectContext';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\ntype ProjectSwitcherProps = {\n  projects?: ProjectSummary[];\n  selectedProjectId?: string;\n  onSelect?: (projectId: string) => void;\n  disabled?: boolean;\n  compact?: boolean;\n};\n\nexport function ProjectSwitcher({ projects, selectedProjectId, onSelect, disabled, compact }: ProjectSwitcherProps) {\n  const workspace = useProjectWorkspace();\n  const resolvedProjects = projects ?? workspace.projects;\n  const resolvedProjectId = selectedProjectId ?? workspace.selectedProjectId;\n  const resolvedOnSelect = onSelect ?? workspace.selectProject;\n  const resolvedDisabled = disabled ?? workspace.loading;\n\n  return (\n    <label className={`qb-project-switcher ${compact ? 'compact' : ''}`.trim()} data-testid=\"project-switcher\">\n      <span>当前项目切换</span>\n      <select data-testid=\"project-switcher-select\" value={resolvedProjectId} disabled={resolvedDisabled || resolvedProjects.length === 0} onChange={(event) => resolvedOnSelect(event.target.value)}>\n        {resolvedProjects.map((project) => (\n          <option key={project.projectId} value={project.projectId}>{project.projectName}</option>\n        ))}\n      </select>\n      {compact ? null : <small>切换后保持当前工作区路由与信息架构稳定。</small>}\n    </label>\n  );\n}\n""",
     )
     _write_text(
         app_dir / "src/components/ProjectRouteGuard.tsx",
@@ -344,11 +349,11 @@ def _write_project_components(app_dir: Path) -> None:
 def _write_project_pages(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/pages/ProjectListPage.tsx",
-        """import { useState } from 'react';\nimport { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { ProjectSummaryCard } from '../components/ProjectSummaryCard';\nimport { WorkspaceStateGate } from '../components/WorkspaceStateGate';\nimport { projectWorkspace } from '../services/projectWorkspace';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nexport function ProjectListPage() {\n  const workspace = useProjectWorkspace();\n  const [lastCreateResult, setLastCreateResult] = useState<string | null>(null);\n\n  async function createDraftProject() {\n    const result = await projectWorkspace.createProjectDraft({\n      project_id: `draft_${Date.now()}`,\n      project_name: '新客户上线质量评估草案',\n      customer_name: '待补充客户',\n      industry: 'unknown',\n      status: 'draft',\n      launch_decision: '待环境诊断',\n    });\n    setLastCreateResult(`创建项目草案已接收：${String(result.source)}`);\n    workspace.refresh();\n  }\n\n  return (\n    <PageShell title=\"项目列表\" subtitle=\"真实项目维度入口：项目列表、创建项目草案、当前项目切换、项目级状态缓存、统一状态反馈。\">\n      <WorkspaceStateGate loading={workspace.loading} error={workspace.error} isEmpty={workspace.isEmpty} runtimeHealth={workspace.runtimeHealth} source={workspace.source} onRetry={workspace.refresh}>\n        <div className=\"qb-project-toolbar\">\n          <DataModeBadge mode={workspace.mode || 'demo'} source={workspace.source} />\n          <ProjectSwitcher projects={workspace.projects} selectedProjectId={workspace.selectedProjectId} onSelect={workspace.selectProject} disabled={workspace.loading} />\n          <button type=\"button\" onClick={createDraftProject}>创建项目草案</button>\n        </div>\n        {lastCreateResult && <p className=\"qb-success\">{lastCreateResult}</p>}\n        <section className=\"qb-project-grid\">\n          {workspace.projects.map((project) => (\n            <ProjectSummaryCard key={project.projectId} project={project} active={project.projectId === workspace.selectedProjectId} onSelect={workspace.selectProject} />\n          ))}\n        </section>\n        <section className=\"qb-panel\">\n          <h3>项目级 API 请求</h3>\n          <p>每个核心页面后续都使用当前项目 ID 调用 Phase104 API，避免多个客户项目数据混用。</p>\n        </section>\n      </WorkspaceStateGate>\n    </PageShell>\n  );\n}\n""",
+        """import { useState } from 'react';\nimport { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { ProjectSummaryCard } from '../components/ProjectSummaryCard';\nimport { WorkspaceStateGate } from '../components/WorkspaceStateGate';\nimport { projectWorkspace } from '../services/projectWorkspace';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nexport function ProjectListPage() {\n  const workspace = useProjectWorkspace();\n  const [lastCreateResult, setLastCreateResult] = useState<string | null>(null);\n\n  async function createDraftProject() {\n    const result = await projectWorkspace.createProjectDraft({\n      project_id: `draft_${Date.now()}`,\n      project_name: '新客户上线质量评估草案',\n      customer_name: '待补充客户',\n      industry: 'unknown',\n      status: 'draft',\n      launch_decision: '待环境诊断',\n    });\n    setLastCreateResult(`创建项目草案已接收：${String(result.source)}`);\n    workspace.refresh();\n  }\n\n  return (\n    <PageShell title=\"项目列表\" subtitle=\"真实项目维度入口：项目列表、创建项目草案、当前项目切换、项目级状态缓存、统一状态反馈。\">\n      <WorkspaceStateGate loading={workspace.loading} error={workspace.error} isEmpty={workspace.isEmpty} runtimeHealth={workspace.runtimeHealth} source={workspace.source} onRetry={workspace.refresh}>\n        <div className=\"qb-project-toolbar\">\n          <DataModeBadge mode={workspace.mode || 'demo'} source={workspace.source} />\n          <ProjectSwitcher projects={workspace.projects} selectedProjectId={workspace.selectedProjectId} onSelect={workspace.selectProject} disabled={workspace.loading} />\n          <button type=\"button\" data-testid=\"create-project-draft\" onClick={createDraftProject}>创建项目草案</button>\n        </div>\n        {lastCreateResult && <p className=\"qb-success\">{lastCreateResult}</p>}\n        <section className=\"qb-project-grid\">\n          {workspace.projects.map((project) => (\n            <ProjectSummaryCard key={project.projectId} project={project} active={project.projectId === workspace.selectedProjectId} onSelect={workspace.selectProject} />\n          ))}\n        </section>\n        <section className=\"qb-panel\">\n          <h3>项目级 API 请求</h3>\n          <p>每个核心页面后续都使用当前项目 ID 调用 Phase104 API，避免多个客户项目数据混用。</p>\n        </section>\n      </WorkspaceStateGate>\n    </PageShell>\n  );\n}\n""",
     )
     _write_text(
         app_dir / "src/pages/ProjectDetailPage.tsx",
-        """import { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectRouteGuard } from '../components/ProjectRouteGuard';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { WorkspaceStateGate } from '../components/WorkspaceStateGate';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nfunction currentProjectIdFromPath(): string {\n  const parts = window.location.pathname.split('/').filter(Boolean);\n  return parts[0] === 'projects' && parts[1] ? decodeURIComponent(parts[1]) : '';\n}\n\nexport function ProjectDetailPage() {\n  const workspace = useProjectWorkspace();\n  const routeProjectId = currentProjectIdFromPath();\n  const project = workspace.projects.find((item) => item.projectId === routeProjectId) || workspace.currentProject;\n\n  return (\n    <PageShell title=\"项目详情\" subtitle=\"项目级路由：每个页面、每个 API 请求都绑定当前项目上下文，并保证项目切换连续性。\">\n      <WorkspaceStateGate loading={workspace.loading} error={workspace.error} isEmpty={workspace.isEmpty} runtimeHealth={workspace.runtimeHealth} source={workspace.source} onRetry={workspace.refresh}>\n        <ProjectRouteGuard ready={Boolean(project)} message=\"没有找到该项目，请先回到项目列表选择当前项目。\">\n          {project && (\n            <>\n              <div className=\"qb-project-toolbar\">\n                <DataModeBadge mode={workspace.mode || 'demo'} source={workspace.source} />\n                <ProjectSwitcher projects={workspace.projects} selectedProjectId={project.projectId} onSelect={workspace.selectProject} disabled={workspace.loading} />\n                <a href=\"/projects\">返回项目列表</a>\n              </div>\n              <section className=\"qb-project-hero\">\n                <span className=\"qb-kicker\">{project.customerName} · {project.industry}</span>\n                <h2>{project.projectName}</h2>\n                <p>项目 ID：<code>{project.projectId}</code></p>\n                <p>上线建议：{project.launchDecision} · 风险数：{project.riskCount} · 健康分：{project.healthScore}</p>\n              </section>\n              <section className=\"qb-project-actions\">\n                <a href=\"/environment\">进入环境诊断</a>\n                <a href=\"/test-plan-runtime\">进入 AI 测试计划</a>\n                <a href=\"/execution-runtime\">进入实时测试执行</a>\n                <a href=\"/risk-evidence\">进入风险证据链</a>\n                <a href=\"/report-roi\">进入领导报告 / ROI</a>\n              </section>\n              <section className=\"qb-panel\">\n                <h3>项目级 API 路径清单</h3>\n                <div className=\"qb-api-paths\">\n                  {workspace.scopedApiPaths.map((item) => (\n                    <article key={item.path}>\n                      <strong>{item.screen}</strong>\n                      <code>{item.method} {item.resolvedPath}</code>\n                      <small>{item.client}</small>\n                    </article>\n                  ))}\n                </div>\n              </section>\n            </>\n          )}\n        </ProjectRouteGuard>\n      </WorkspaceStateGate>\n    </PageShell>\n  );\n}\n""",
+        """import { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectRouteGuard } from '../components/ProjectRouteGuard';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { WorkspaceStateGate } from '../components/WorkspaceStateGate';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nfunction currentProjectIdFromPath(): string {\n  const parts = window.location.pathname.split('/').filter(Boolean);\n  return parts[0] === 'projects' && parts[1] ? decodeURIComponent(parts[1]) : '';\n}\n\nexport function ProjectDetailPage() {\n  const workspace = useProjectWorkspace();\n  const routeProjectId = currentProjectIdFromPath();\n  const project = workspace.projects.find((item) => item.projectId === routeProjectId) || workspace.currentProject;\n\n  return (\n    <PageShell title=\"项目详情\" subtitle=\"项目级路由：每个页面、每个 API 请求都绑定当前项目上下文，并保证项目切换连续性。\">\n      <WorkspaceStateGate loading={workspace.loading} error={workspace.error} isEmpty={workspace.isEmpty} runtimeHealth={workspace.runtimeHealth} source={workspace.source} onRetry={workspace.refresh}>\n        <ProjectRouteGuard ready={Boolean(project)} message=\"没有找到该项目，请先回到项目列表选择当前项目。\">\n          {project && (\n            <>\n              <div className=\"qb-project-toolbar\">\n                <DataModeBadge mode={workspace.mode || 'demo'} source={workspace.source} />\n                <ProjectSwitcher projects={workspace.projects} selectedProjectId={project.projectId} onSelect={workspace.selectProject} disabled={workspace.loading} />\n                <a href=\"/projects\">返回项目列表</a>\n              </div>\n              <section className=\"qb-project-hero\">\n                <span className=\"qb-kicker\">{project.customerName} · {project.industry}</span>\n                <h2>{project.projectName}</h2>\n                <p>项目 ID：<code>{project.projectId}</code></p>\n                <p>上线建议：{project.launchDecision} · 风险数：{project.riskCount} · 健康分：{project.healthScore}</p>\n              </section>\n              <section className=\"qb-project-actions\">\n                <a href=\"/\" data-testid=\"command-center\">进入质量驾驶舱</a>\n                <a href=\"/environment\">进入环境诊断</a>\n                <a href=\"/test-plan-runtime\">进入 AI 测试计划</a>\n                <a href=\"/execution-runtime\">进入实时测试执行</a>\n                <a href=\"/risk-evidence\" data-testid=\"risk-evidence\">进入风险证据链</a>\n                <a href=\"/report-roi\">进入领导报告 / ROI</a>\n              </section>\n              <section className=\"qb-panel\">\n                <h3>项目级 API 路径清单</h3>\n                <div className=\"qb-api-paths\">\n                  {workspace.scopedApiPaths.map((item) => (\n                    <article key={item.path}>\n                      <strong>{item.screen}</strong>\n                      <code>{item.method} {item.resolvedPath}</code>\n                      <small>{item.client}</small>\n                    </article>\n                  ))}\n                </div>\n              </section>\n            </>\n          )}\n        </ProjectRouteGuard>\n      </WorkspaceStateGate>\n    </PageShell>\n  );\n}\n""",
     )
 
 
@@ -418,11 +423,62 @@ def _write_project_readme(app_dir: Path) -> None:
     )
 
 
+def _derive_ui_oracle_match_hints(app_dir: Path, base_hints: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    sources: dict[str, list[str]] = {
+        "project_switcher": ["src/components/ProjectSwitcher.tsx"],
+        "create_project_button": ["src/pages/ProjectListPage.tsx"],
+        "project_card_list": ["src/pages/ProjectListPage.tsx"],
+        "workspace_state_gate": ["src/components/WorkspaceStateGate.tsx"],
+        "loading_indicator": ["src/components/WorkspaceStateGate.tsx"],
+        "empty_state_message": ["src/components/WorkspaceStateGate.tsx"],
+        "error_feedback": ["src/components/WorkspaceStateGate.tsx"],
+        "project_route_guard": ["src/components/ProjectRouteGuard.tsx"],
+        "project_summary": ["src/pages/ProjectDetailPage.tsx"],
+        "project_scoped_api_paths": ["src/pages/ProjectDetailPage.tsx", "src/pages/ProjectListPage.tsx"],
+        "current_project_visible": ["src/pages/ProjectDetailPage.tsx"],
+        "navigation_entry_visible": ["src/pages/ProjectDetailPage.tsx"],
+        "risk_evidence_entry": ["src/pages/ProjectDetailPage.tsx"],
+        "command_center_entry": ["src/pages/ProjectDetailPage.tsx"],
+    }
+    derived: dict[str, dict[str, Any]] = {}
+    for key, hint in base_hints.items():
+        if not isinstance(key, str) or not isinstance(hint, dict):
+            continue
+        rels = sources.get(key, [])
+        corpus = " ".join(_read_text(app_dir / rel, limit=200_000) for rel in rels if (app_dir / rel).exists())
+        tokens = [str(item) for item in (hint.get("tokens") or []) if str(item).strip()]
+        keywords = [str(item) for item in (hint.get("keywords") or []) if str(item).strip()]
+        testids = [str(item) for item in (hint.get("testids") or []) if str(item).strip()]
+        filtered_tokens = [token for token in tokens if token in corpus]
+        filtered_keywords = [kw for kw in keywords if kw in corpus]
+        filtered_testids = [tid for tid in testids if tid in corpus]
+        roles: list[str] = [str(r) for r in (hint.get("roles") or []) if str(r).strip()]
+        if key == "project_switcher" and "<select" in corpus and "combobox" not in roles:
+            roles.append("combobox")
+        if key == "create_project_button" and "<button" in corpus and "button" not in roles:
+            roles.append("button")
+        if key in {"risk_evidence_entry", "command_center_entry", "navigation_entry_visible"} and "<a " in corpus and "link" not in roles:
+            roles.append("link")
+        if key == "error_feedback" and "alert" not in roles:
+            roles.append("alert")
+        if key == "loading_indicator" and "status" not in roles:
+            roles.append("status")
+        if filtered_tokens or filtered_keywords or filtered_testids or roles:
+            derived[key] = {
+                "roles": roles,
+                "testids": filtered_testids,
+                "keywords": filtered_keywords or filtered_tokens,
+                "tokens": filtered_tokens,
+            }
+    return derived
+
+
 def _write_manifest_files(output_dir: Path, report: FrontendProjectRoutesAcceptanceReport | None = None) -> dict[str, Any]:
     task_journeys = build_frontend_task_journeys()
     ui_design_sources = build_ui_design_sources()
     ui_screen_oracles = build_ui_screen_oracles()
     ui_journey_oracles = build_ui_journey_oracles()
+    ui_oracle_match_hints = _derive_ui_oracle_match_hints(output_dir / FRONTEND_APP_DIR, build_ui_oracle_match_hints())
     manifest = redact_value(
         {
             "version": PHASE106D_VERSION,
@@ -435,6 +491,7 @@ def _write_manifest_files(output_dir: Path, report: FrontendProjectRoutesAccepta
             "ui_design_sources": ui_design_sources,
             "ui_screen_oracles": ui_screen_oracles,
             "ui_journey_oracles": ui_journey_oracles,
+            "ui_oracle_match_hints": ui_oracle_match_hints,
             "required_files": list(REQUIRED_PROJECT_ROUTE_FILES),
             "core_labels": list(CORE_PROJECT_ROUTE_LABELS),
             "artifacts": {
@@ -467,20 +524,21 @@ def _write_manifest_files(output_dir: Path, report: FrontendProjectRoutesAccepta
         output_dir / PROJECT_ROUTES_MANIFEST_MD,
         f"""# Phase106D Frontend Project Routes Manifest\n\n- Version: `{manifest['version']}`\n- App dir: `{manifest['app_dir']}`\n- Entrypoint: `{manifest['entrypoint']}`\n\n## Project Routes\n\n{route_lines}\n\n## Project-scoped API Paths\n\n{api_lines}\n\n## Security\n\n默认脱敏，保留 demo fallback，项目级 API 请求绑定当前项目 ID。\n""",
     )
-    _write_text(output_dir / TASK_JOURNEYS_MANIFEST_JSON, _json_dump({"version": PHASE106D_VERSION, "generated_at": _now(), "journeys": task_journeys}))
+    _write_text(output_dir / TASK_JOURNEYS_MANIFEST_JSON, _json_dump_raw({"version": PHASE106D_VERSION, "generated_at": _now(), "journeys": task_journeys}))
     _write_text(
         output_dir / TASK_JOURNEYS_MANIFEST_MD,
         f"""# Phase106D Frontend Task Journeys\n\n- Version: `{manifest['version']}`\n- Entry app dir: `{manifest['app_dir']}`\n\n## Journeys\n\n{journey_lines}\n""",
     )
     _write_text(
         output_dir / UI_DESIGN_ORACLE_MANIFEST_JSON,
-        _json_dump(
+        _json_dump_raw(
             {
                 "version": "ui-design-oracle-v1",
                 "generated_at": _now(),
                 "design_sources": ui_design_sources,
                 "screens": ui_screen_oracles,
                 "journeys": ui_journey_oracles,
+                "match_hints": ui_oracle_match_hints,
             }
         ),
     )

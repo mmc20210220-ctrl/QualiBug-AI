@@ -36,7 +36,11 @@ def build_bug_family_coverage_report(
         family_probes = [item for item in probe_items if str(item.get("defect_family") or resolve_defect_family(item).get("family_id") or "") == family_id]
         family_issues = [item for item in issue_items if str(item.get("defect_family") or resolve_defect_family(item).get("family_id") or "") == family_id]
         family_cap_rows = capability_map.get(family_id, [])
-        executable_probe_count = sum(1 for row in family_cap_rows if str(row.get("preflight_lane") or "").endswith("ready"))
+        probe_level_cap_rows = [row for row in family_cap_rows if isinstance(row, dict) and not row.get("capability_id")]
+        capability_level_rows = [row for row in family_cap_rows if isinstance(row, dict) and row.get("capability_id")]
+        executable_probe_count = sum(1 for row in probe_level_cap_rows if str(row.get("preflight_lane") or "").endswith("ready"))
+        ready_capability_count = sum(1 for row in capability_level_rows if str(row.get("preflight_lane") or "").endswith("ready"))
+        blocked_capability_count = sum(1 for row in capability_level_rows if "blocked" in str(row.get("preflight_lane") or "") or str(row.get("preflight_lane") or "") == "plan_only")
         blocked_probe_count = sum(1 for item in family_probes if str(item.get("capability_gate") or "") == "browser_ui_unavailable")
         candidate_only_count = sum(1 for item in family_issues if float(item.get("confidence") or 0.0) < 0.75)
         validated_count = sum(1 for item in family_issues if float(item.get("confidence") or 0.0) >= 0.75)
@@ -62,6 +66,8 @@ def build_bug_family_coverage_report(
                 "issue_count": len(family_issues),
                 "executable_probe_count": executable_probe_count,
                 "blocked_probe_count": blocked_probe_count,
+                "ready_capability_count": ready_capability_count,
+                "blocked_capability_count": blocked_capability_count,
                 "candidate_only_count": candidate_only_count,
                 "validated_count": validated_count,
                 "coverage_status": (

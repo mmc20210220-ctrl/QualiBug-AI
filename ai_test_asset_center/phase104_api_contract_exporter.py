@@ -275,25 +275,23 @@ def build_openapi_spec(*, title: str = "QualiBug Enterprise Command Center API")
             op["requestBody"] = _request_body(route.request_schema)
         paths.setdefault(route.path, {})[route.method.lower()] = op
 
-    return redact_value(
-        {
-            "openapi": "3.0.3",
-            "info": {
-                "title": title,
-                "version": PHASE104B_VERSION,
-                "description": "QualiBug Phase104 Enterprise Quality Command Center local API contract.",
-            },
-            "servers": [{"url": "http://127.0.0.1:8790", "description": "Local Phase104A API server"}],
-            "paths": paths,
-            "components": _components(),
-            "x-qualibug": {
-                "contract_version": PHASE104B_VERSION,
-                "runtime_version": PHASE104A_VERSION,
-                "redaction_status": "safe",
-                "generated_at": _now(),
-            },
-        }
-    )
+    return {
+        "openapi": "3.0.3",
+        "info": {
+            "title": title,
+            "version": PHASE104B_VERSION,
+            "description": "QualiBug Phase104 Enterprise Quality Command Center local API contract.",
+        },
+        "servers": [{"url": "http://127.0.0.1:8790", "description": "Local Phase104A API server"}],
+        "paths": paths,
+        "components": _components(),
+        "x-qualibug": {
+            "contract_version": PHASE104B_VERSION,
+            "runtime_version": PHASE104A_VERSION,
+            "redaction_status": "safe",
+            "generated_at": _now(),
+        },
+    }
 
 
 def render_contract_markdown(spec: Mapping[str, Any] | None = None) -> str:

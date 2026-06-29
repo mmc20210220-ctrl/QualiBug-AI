@@ -17,6 +17,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from .ui_design_oracle_signal_basis import build_ui_design_oracle_signal_basis_legend
+
 
 _AUTH_WORDS = ("auth", "认证", "permission", "权限", "anonymous", "匿名", "401", "403", "role", "角色")
 
@@ -193,6 +195,7 @@ def analyze_evidence_gaps(result: dict[str, Any]) -> dict[str, Any]:
     for gap in gaps:
         severity_by_bucket[gap["bucket"]][str(gap.get("severity") or "P3")] += 1
     ui_design_oracle_issues = [i for i in issues if isinstance(i, dict) and str(i.get("source") or "") == "ui_design_oracle"]
+    legend = metrics.get("ui_design_oracle_signal_basis_legend") if isinstance(metrics.get("ui_design_oracle_signal_basis_legend"), dict) else build_ui_design_oracle_signal_basis_legend()
     return {
         "report_version": "phase92e-evidence-gap-v1",
         "generated_at": _now(),
@@ -215,6 +218,20 @@ def analyze_evidence_gaps(result: dict[str, Any]) -> dict[str, Any]:
             "browser_ui_blocked_families": list((family_coverage.get("missing_family_reasons") or {}).keys()),
             "ui_design_oracle": {
                 "issue_count": int(metrics.get("ui_design_oracle_issue_count", len(ui_design_oracle_issues)) or 0),
+                "strong_signal_count": int(metrics.get("ui_design_oracle_strong_signal_count", 0) or 0),
+                "weak_signal_count": int(metrics.get("ui_design_oracle_weak_signal_count", 0) or 0),
+                "signal_basis_distribution": metrics.get("ui_design_oracle_signal_basis_distribution") if isinstance(metrics.get("ui_design_oracle_signal_basis_distribution"), dict) else {},
+                "signal_basis_legend": legend,
+                "signal_basis_recommended_actions": metrics.get("ui_design_oracle_signal_basis_recommended_actions") if isinstance(metrics.get("ui_design_oracle_signal_basis_recommended_actions"), list) else [],
+                "signal_basis_action_reasons": metrics.get("ui_design_oracle_signal_basis_action_reasons") if isinstance(metrics.get("ui_design_oracle_signal_basis_action_reasons"), dict) else {},
+                "role_signal_count": int(metrics.get("ui_design_oracle_role_signal_count", 0) or 0),
+                "keyword_signal_count": int(metrics.get("ui_design_oracle_keyword_signal_count", 0) or 0),
+                "token_signal_count": int(metrics.get("ui_design_oracle_token_signal_count", 0) or 0),
+                "none_signal_count": int(metrics.get("ui_design_oracle_none_signal_count", 0) or 0),
+                "journey_oracle_count": int(metrics.get("ui_design_oracle_journey_oracle_count", 0) or 0),
+                "journey_covered_count": int(metrics.get("ui_design_oracle_journey_covered_count", 0) or 0),
+                "journey_missing_count": int(metrics.get("ui_design_oracle_journey_missing_count", 0) or 0),
+                "journey_issue_count": int(metrics.get("ui_design_oracle_journey_issue_count", 0) or 0),
                 "missing_component_count": int(metrics.get("ui_design_oracle_missing_component_count", 0) or 0),
                 "missing_feedback_count": int(metrics.get("ui_design_oracle_missing_feedback_count", 0) or 0),
             },
@@ -237,6 +254,68 @@ def _markdown(report: dict[str, Any]) -> str:
     lines.append(f"- Engine needs_more_evidence: {s.get('engine_needs_more_evidence')}")
     lines.append(f"- Engine inconclusive_rate: {s.get('engine_inconclusive_rate')}")
     lines.append("")
+    ui_oracle = (s.get("ui_design_oracle") or {}) if isinstance(s, dict) else {}
+    if isinstance(ui_oracle, dict):
+        dist = ui_oracle.get("signal_basis_distribution") if isinstance(ui_oracle.get("signal_basis_distribution"), dict) else {}
+        legend = ui_oracle.get("signal_basis_legend") if isinstance(ui_oracle.get("signal_basis_legend"), dict) else {}
+        next_actions = ui_oracle.get("signal_basis_recommended_actions") if isinstance(ui_oracle.get("signal_basis_recommended_actions"), list) else []
+        action_reasons = ui_oracle.get("signal_basis_action_reasons") if isinstance(ui_oracle.get("signal_basis_action_reasons"), dict) else {}
+        if dist:
+            lines.append("## UI Design Oracle Signals")
+            lines.append("")
+            lines.append(f"- Issue count: {ui_oracle.get('issue_count', 0)}")
+            lines.append(f"- Strong (testid): {ui_oracle.get('strong_signal_count', 0)}")
+            lines.append(f"- Weak (non-testid): {ui_oracle.get('weak_signal_count', 0)}")
+            if next_actions:
+                lines.append(f"- Next actions: {', '.join(str(item) for item in next_actions if str(item).strip())}")
+            lines.append("")
+            lines.append("### Basis distribution")
+            lines.append("")
+            for bucket, count in dist.items():
+                lines.append(f"- `{bucket}`: {count}")
+            if action_reasons:
+                top_buckets = action_reasons.get("top_buckets") if isinstance(action_reasons.get("top_buckets"), list) else []
+                reasons = action_reasons.get("action_reasons") if isinstance(action_reasons.get("action_reasons"), list) else []
+                if top_buckets:
+                    lines.append("")
+                    lines.append("### Top buckets")
+                    lines.append("")
+                    for item in top_buckets[:3]:
+                        if not isinstance(item, dict):
+                            continue
+                        lines.append(f"- `{item.get('bucket')}`: {item.get('count')} ({item.get('label')})")
+                if reasons:
+                    lines.append("")
+                    lines.append("### Action reasons")
+                    lines.append("")
+                    for item in reasons[:10]:
+                        if not isinstance(item, dict):
+                            continue
+                        action = item.get("action")
+                        triggered = item.get("triggered_by") if isinstance(item.get("triggered_by"), list) else []
+                        trigger_text = ", ".join(
+                            f"{(t or {}).get('bucket')}={int((t or {}).get('count') or 0)}"
+                            for t in triggered
+                            if isinstance(t, dict) and str((t or {}).get("bucket") or "").strip()
+                        )
+                        if trigger_text:
+                            lines.append(f"- {action} (because {trigger_text})")
+                        else:
+                            lines.append(f"- {action}")
+            if legend:
+                lines.append("")
+                lines.append("### Basis legend")
+                lines.append("")
+                for bucket, meta in legend.items():
+                    if not isinstance(meta, dict):
+                        continue
+                    label = meta.get("label") or bucket
+                    meaning = meta.get("meaning") or ""
+                    actions = meta.get("recommended_actions") if isinstance(meta.get("recommended_actions"), list) else []
+                    lines.append(f"- `{bucket}` ({label}): {meaning}")
+                    if actions:
+                        lines.append(f"  - Recommended: {', '.join(str(a) for a in actions if str(a).strip())}")
+            lines.append("")
     lines.append("## Buckets")
     lines.append("")
     for bucket, count in (s.get("buckets") or {}).items():

@@ -25,6 +25,7 @@ import json
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
@@ -36,6 +37,7 @@ from ai_test_asset_center.phase103_command_center_api import (
 )
 from ai_test_asset_center.phase103_demo_runner import seed_demo_project
 from ai_test_asset_center.phase103_enterprise_command_center import redact_value
+from ai_test_asset_center.real_project_onboarding import ROOT, _safe_project_id
 
 PHASE104A_VERSION = "phase104a-command-center-http-api-v1"
 
@@ -144,6 +146,40 @@ def _bool_query(value: str | None) -> bool | None:
     if lowered in {"0", "false", "no", "n", "off"}:
         return False
     return None
+
+
+def _load_ui_design_oracle_governance(project_id: str) -> dict[str, Any] | None:
+    project = _safe_project_id(project_id)
+    candidate = ROOT / "platform_outputs" / project / "real_project" / "real_project_defect_data.json"
+    if not candidate.exists():
+        return None
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8") or "null")
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("risk_based_plan_summary") if isinstance(payload.get("risk_based_plan_summary"), dict) else {}
+    if not summary:
+        return None
+    governance = {str(k): v for k, v in summary.items() if str(k).startswith("ui_design_oracle_")}
+    return governance or None
+
+
+def _augment_command_center_snapshot(project_id: str, envelope: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(envelope, Mapping):
+        return dict(envelope) if isinstance(envelope, dict) else {"success": False, "data": None}
+    data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else None
+    if not isinstance(data, Mapping):
+        return dict(envelope)
+    governance = _load_ui_design_oracle_governance(project_id)
+    if not governance:
+        return dict(envelope)
+    updated_data = dict(data)
+    updated_data["ui_design_oracle_governance"] = governance
+    updated = dict(envelope)
+    updated["data"] = updated_data
+    return updated
 
 
 class Phase104CommandCenterHttpApp:
@@ -271,7 +307,7 @@ class Phase104CommandCenterHttpApp:
             return self._wrap(self.api.get_test_run(project_id, tail[1]))
 
         if tail == ["command-center"] and method == "GET":
-            return self._wrap(self.api.get_command_center(project_id))
+            return self._wrap(_augment_command_center_snapshot(project_id, self.api.get_command_center(project_id)))
 
         if tail == ["live-map"] and method == "GET":
             return self._wrap(self.api.get_live_map(project_id))

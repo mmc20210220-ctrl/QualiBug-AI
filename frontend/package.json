@@ -1,0 +1,37 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "openapi:export": "cd .. && python -m ai_test_asset_center.phase104_api_contract_exporter --output-dir frontend/openapi/phase104_api_contract",
+    "openapi:gen": "node scripts/openapi/generate.mjs",
+    "openapi:check": "node scripts/openapi/check.mjs",
+    "typecheck": "tsc --noEmit",
+    "tests": "npm run openapi:check && node scripts/tests.mjs",
+    "redaction:scan": "node scripts/security/redaction-scan.mjs",
+    "audit:check": "node scripts/security/npm-audit-baseline.mjs",
+    "e2e": "playwright test",
+    "ci:gate": "node scripts/ci/gate.mjs"
+  },
+  "dependencies": {
+    "next": "16.2.9",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "openapi-typescript": "7.13.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

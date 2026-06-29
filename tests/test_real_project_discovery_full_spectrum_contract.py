@@ -77,6 +77,20 @@ def test_real_project_discovery_exposes_full_spectrum_coverage_contract(tmp_path
     assert metrics["compatibility_probe_count"] >= 1
     assert metrics["performance_stability_probe_count"] >= 1
     assert "ui_design_oracle_issue_count" in metrics
+    assert "ui_design_oracle_strong_signal_count" in metrics
+    assert "ui_design_oracle_weak_signal_count" in metrics
+    assert "ui_design_oracle_signal_basis_distribution" in metrics
+    assert "ui_design_oracle_signal_basis_legend" in metrics
+    assert "ui_design_oracle_signal_basis_recommended_actions" in metrics
+    assert "ui_design_oracle_signal_basis_action_reasons" in metrics
+    assert "ui_design_oracle_role_signal_count" in metrics
+    assert "ui_design_oracle_keyword_signal_count" in metrics
+    assert "ui_design_oracle_token_signal_count" in metrics
+    assert "ui_design_oracle_none_signal_count" in metrics
+    assert "ui_design_oracle_journey_oracle_count" in metrics
+    assert "ui_design_oracle_journey_covered_count" in metrics
+    assert "ui_design_oracle_journey_missing_count" in metrics
+    assert "ui_design_oracle_journey_issue_count" in metrics
     assert "ui_design_oracle_missing_component_count" in metrics
     assert "ui_design_oracle_missing_feedback_count" in metrics
     assert "browser_ui_health" in result
@@ -87,6 +101,20 @@ def test_real_project_discovery_exposes_full_spectrum_coverage_contract(tmp_path
     assert "browser_ui_budget_constrained" in planner_summary
     assert "browser_ui_fallback_families" in planner_summary
     assert "ui_design_oracle_issue_count" in planner_summary
+    assert "ui_design_oracle_strong_signal_count" in planner_summary
+    assert "ui_design_oracle_weak_signal_count" in planner_summary
+    assert "ui_design_oracle_signal_basis_distribution" in planner_summary
+    assert "ui_design_oracle_signal_basis_legend" in planner_summary
+    assert "ui_design_oracle_signal_basis_recommended_actions" in planner_summary
+    assert "ui_design_oracle_signal_basis_action_reasons" in planner_summary
+    assert "ui_design_oracle_role_signal_count" in planner_summary
+    assert "ui_design_oracle_keyword_signal_count" in planner_summary
+    assert "ui_design_oracle_token_signal_count" in planner_summary
+    assert "ui_design_oracle_none_signal_count" in planner_summary
+    assert "ui_design_oracle_journey_oracle_count" in planner_summary
+    assert "ui_design_oracle_journey_covered_count" in planner_summary
+    assert "ui_design_oracle_journey_missing_count" in planner_summary
+    assert "ui_design_oracle_journey_issue_count" in planner_summary
     assert "ui_design_oracle_missing_component_count" in planner_summary
     assert "ui_design_oracle_missing_feedback_count" in planner_summary
     assert coverage["covered_family_count"] >= 5

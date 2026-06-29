@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "minimumSeverity": "low",
+  "allow": [
+    {
+      "name": "next",
+      "severity": "moderate",
+      "range": "9.3.4-canary.0 - 16.3.0-canary.5",
+      "via": [
+        "postcss"
+      ]
+    },
+    {
+      "name": "postcss",
+      "severity": "moderate",
+      "range": "<8.5.10",
+      "via": [
+        "source:1117015|name:postcss|title:PostCSS has XSS via Unescaped </style> in its CSS Stringify Output"
+      ]
+    }
+  ]
+}

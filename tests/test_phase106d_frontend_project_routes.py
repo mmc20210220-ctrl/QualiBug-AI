@@ -72,6 +72,10 @@ def test_phase106d_builds_project_list_and_detail_routes(tmp_path: Path) -> None
     assert ui_design_oracle["version"] == "ui-design-oracle-v1"
     assert any(item["screen_id"] == "project_list" for item in ui_design_oracle["screens"])
     assert any(item["journey_id"] == "enter_command_center" for item in ui_design_oracle["journeys"])
+    assert "match_hints" in ui_design_oracle
+    assert "project_switcher" in ui_design_oracle["match_hints"]
+    assert "当前项目切换" in (ui_design_oracle["match_hints"]["project_switcher"].get("tokens") or [])
+    assert "project-switcher" in (ui_design_oracle["match_hints"]["project_switcher"].get("testids") or [])
     assert not verify_frontend_project_routes_checksums(tmp_path)
 
 

@@ -56,11 +56,24 @@ from .browser_ui_replay_discovery_adapter import (
 from .bug_family_coverage_report import build_bug_family_coverage_report
 from .compatibility_discovery_adapter import collect_compatibility_issues, generate_compatibility_probes
 from .defect_family_registry import resolve_defect_family
+from .document_contract_fuzzing_discovery_adapter import generate_document_contract_fuzzing_probes
+from .full_spectrum_capability_matrix import build_full_spectrum_capability_matrix
 from .frontend_runtime_discovery_adapter import collect_frontend_runtime_issues, generate_frontend_runtime_probes
 from .frontend_ux_discovery_adapter import collect_frontend_ux_issues, generate_frontend_ux_probes
+from .openapi_static_security_scan_adapter import (
+    collect_openapi_static_security_issues,
+    generate_openapi_static_security_probes,
+)
 from .performance_stability_discovery_adapter import (
     collect_performance_stability_issues,
     generate_performance_stability_probes,
+)
+from .ui_design_oracle_signal_basis import (
+    UI_DESIGN_ORACLE_SIGNAL_BASIS_BUCKETS,
+    build_ui_design_oracle_signal_basis_legend,
+    normalize_ui_design_oracle_signal_basis,
+    build_ui_design_oracle_action_reasons,
+    recommend_ui_design_oracle_next_actions,
 )
 
 DESTRUCTIVE_RISK_TYPES = {"payment", "refund", "delete", "idempotency", "duplicate_submit", "concurrency", "cancel_order"}
@@ -566,6 +579,8 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     frontend_ux_probes = generate_frontend_ux_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
     compatibility_probes = generate_compatibility_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
     performance_stability_probes = generate_performance_stability_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    openapi_static_security_probes = generate_openapi_static_security_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    document_contract_fuzzing_probes = generate_document_contract_fuzzing_probes(project, root)
     if isinstance(risk_plan, dict) and isinstance(risk_plan.get("selected_probes"), list):
         probes = [dict(p) for p in risk_plan.get("selected_probes", [])]
     else:
@@ -619,6 +634,8 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             *base_probes,
             *history_probes,
             *api_contract_probes,
+            *openapi_static_security_probes,
+            *document_contract_fuzzing_probes,
             *frontend_runtime_probes,
             *frontend_ux_probes,
             *compatibility_probes,
@@ -635,6 +652,8 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
                 break
     supplemental_probes = [
         *api_contract_probes,
+        *openapi_static_security_probes,
+        *document_contract_fuzzing_probes,
         *browser_ui_replay_probes,
         *frontend_runtime_probes,
         *frontend_ux_probes,
@@ -755,6 +774,8 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             evidence_items.append({"issue_id": issue["issue_id"], "probe_id": probe["probe_id"], "request": issue["evidence"]["request"], "response": issue["evidence"]["response"], "expected": issue["expected"], "actual": issue["actual"], "confidence": issue["confidence"]})
 
     for adapter_issue in collect_api_contract_issues(project, root, scenario=str(cfg.get("scenario") or "manufacturing")):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
+    for adapter_issue in collect_openapi_static_security_issues(openapi if isinstance(openapi, dict) else {}):
         _append_adapter_issue(issues, evidence_items, adapter_issue)
     for adapter_issue in collect_browser_ui_replay_issues(project, root, cfg=cfg, scenario=str(cfg.get("scenario") or "manufacturing")):
         _append_adapter_issue(issues, evidence_items, adapter_issue)
@@ -1254,8 +1275,68 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         "suggested_release_blockers": blockers,
     }
     data["browser_ui_health"] = browser_health
-    family_coverage_report = build_bug_family_coverage_report(probes, issues, health_context={"browser_ui_health": browser_health})
+    full_spectrum_capability_matrix = build_full_spectrum_capability_matrix(
+        probes,
+        onboarding=onboarding,
+        browser_ui_health=browser_health,
+        enterprise_testops_preflight=enterprise_testops_preflight or {},
+    )
+    data["full_spectrum_capability_matrix"] = full_spectrum_capability_matrix
+    family_coverage_report = build_bug_family_coverage_report(
+        probes,
+        issues,
+        capability_rows=list(full_spectrum_capability_matrix.get("rows") or []),
+        health_context={"browser_ui_health": browser_health},
+    )
     data["bug_family_coverage"] = family_coverage_report
+    ui_design_oracle_issues = [i for i in issues if isinstance(i, dict) and i.get("source") == "ui_design_oracle"]
+    ui_design_oracle_signal_basis_distribution: dict[str, int] = {bucket: 0 for bucket in UI_DESIGN_ORACLE_SIGNAL_BASIS_BUCKETS}
+    for issue in ui_design_oracle_issues:
+        evidence = issue.get("evidence") if isinstance(issue.get("evidence"), dict) else {}
+        bucket = normalize_ui_design_oracle_signal_basis(evidence.get("confidence_basis"))
+        ui_design_oracle_signal_basis_distribution[bucket] = int(ui_design_oracle_signal_basis_distribution.get(bucket, 0) or 0) + 1
+    ui_design_oracle_signal_basis_legend = build_ui_design_oracle_signal_basis_legend()
+    ui_design_oracle_recommended_actions = recommend_ui_design_oracle_next_actions(ui_design_oracle_signal_basis_distribution, ui_design_oracle_signal_basis_legend)
+    ui_design_oracle_action_reasons = build_ui_design_oracle_action_reasons(ui_design_oracle_signal_basis_distribution, ui_design_oracle_signal_basis_legend)
+    ui_design_oracle_issue_count = len(ui_design_oracle_issues)
+    ui_design_oracle_strong_signal_count = int(ui_design_oracle_signal_basis_distribution.get("testid", 0) or 0)
+    ui_design_oracle_weak_signal_count = max(0, int(ui_design_oracle_issue_count) - int(ui_design_oracle_strong_signal_count))
+    ui_design_oracle_journey_issue_count = 0
+    ui_design_oracle_journey_ids: set[str] = set()
+    for issue in ui_design_oracle_issues:
+        evidence = issue.get("evidence") if isinstance(issue.get("evidence"), dict) else {}
+        journey_id = str(evidence.get("journey_id") or "").strip()
+        if not journey_id:
+            continue
+        ui_design_oracle_journey_issue_count += 1
+        ui_design_oracle_journey_ids.add(journey_id)
+    ui_design_oracle_journey_missing_count = len(ui_design_oracle_journey_ids)
+    ui_design_oracle_journey_oracle_count = 0
+    try:
+        paths = config_paths(project, root)
+        candidates: list[Path] = []
+        configured_manifest = str((cfg or {}).get("ui_design_oracle_manifest") or "").strip()
+        configured_dir = str((cfg or {}).get("frontend_project_routes_dir") or "").strip()
+        if configured_manifest:
+            candidates.append(Path(configured_manifest))
+        if configured_dir:
+            candidates.append(Path(configured_dir) / "ui_design_oracle_manifest.json")
+        candidates.extend(
+            [
+                paths["output_dir"] / "ui_design_oracle_manifest.json",
+                (root or paths["output_dir"]) / "platform_outputs" / project / "ui_design_oracle_manifest.json",
+                (root or paths["output_dir"]) / "ui_design_oracle_manifest.json",
+            ]
+        )
+        for candidate in candidates:
+            payload = _load_json(candidate, {})
+            journeys = payload.get("journeys") if isinstance(payload, dict) else None
+            if isinstance(journeys, list):
+                ui_design_oracle_journey_oracle_count = len([j for j in journeys if isinstance(j, dict)])
+                break
+    except Exception:
+        ui_design_oracle_journey_oracle_count = 0
+    ui_design_oracle_journey_covered_count = max(0, int(ui_design_oracle_journey_oracle_count) - int(ui_design_oracle_journey_missing_count))
     data["metrics"].update(
         {
             "api_contract_probe_count": len([p for p in probes if p.get("source") == "api_contract_acceptance"]),
@@ -1265,7 +1346,21 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             "frontend_ux_probe_count": len([p for p in probes if p.get("source") == "frontend_ux_adapter"]),
             "compatibility_probe_count": len([p for p in probes if p.get("source") == "compatibility_adapter"]),
             "performance_stability_probe_count": len([p for p in probes if p.get("source") == "performance_stability_adapter"]),
-            "ui_design_oracle_issue_count": len([i for i in issues if i.get("source") == "ui_design_oracle"]),
+            "ui_design_oracle_issue_count": ui_design_oracle_issue_count,
+            "ui_design_oracle_strong_signal_count": ui_design_oracle_strong_signal_count,
+            "ui_design_oracle_weak_signal_count": ui_design_oracle_weak_signal_count,
+            "ui_design_oracle_signal_basis_distribution": dict(sorted(ui_design_oracle_signal_basis_distribution.items())),
+            "ui_design_oracle_signal_basis_legend": dict(ui_design_oracle_signal_basis_legend),
+            "ui_design_oracle_signal_basis_recommended_actions": list(ui_design_oracle_recommended_actions),
+            "ui_design_oracle_signal_basis_action_reasons": dict(ui_design_oracle_action_reasons),
+            "ui_design_oracle_role_signal_count": int(ui_design_oracle_signal_basis_distribution.get("role", 0) or 0),
+            "ui_design_oracle_keyword_signal_count": int(ui_design_oracle_signal_basis_distribution.get("keyword", 0) or 0),
+            "ui_design_oracle_token_signal_count": int(ui_design_oracle_signal_basis_distribution.get("token", 0) or 0),
+            "ui_design_oracle_none_signal_count": int(ui_design_oracle_signal_basis_distribution.get("none", 0) or 0),
+            "ui_design_oracle_journey_oracle_count": int(ui_design_oracle_journey_oracle_count),
+            "ui_design_oracle_journey_covered_count": int(ui_design_oracle_journey_covered_count),
+            "ui_design_oracle_journey_missing_count": int(ui_design_oracle_journey_missing_count),
+            "ui_design_oracle_journey_issue_count": int(ui_design_oracle_journey_issue_count),
             "ui_design_oracle_missing_component_count": sum(
                 1
                 for i in issues
@@ -1293,6 +1388,20 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     )
     design_oracle_summary = {
         "ui_design_oracle_issue_count": int(data["metrics"].get("ui_design_oracle_issue_count") or 0),
+        "ui_design_oracle_strong_signal_count": int(data["metrics"].get("ui_design_oracle_strong_signal_count") or 0),
+        "ui_design_oracle_weak_signal_count": int(data["metrics"].get("ui_design_oracle_weak_signal_count") or 0),
+        "ui_design_oracle_signal_basis_distribution": data["metrics"].get("ui_design_oracle_signal_basis_distribution") if isinstance(data["metrics"].get("ui_design_oracle_signal_basis_distribution"), dict) else {},
+        "ui_design_oracle_signal_basis_legend": data["metrics"].get("ui_design_oracle_signal_basis_legend") if isinstance(data["metrics"].get("ui_design_oracle_signal_basis_legend"), dict) else {},
+        "ui_design_oracle_signal_basis_recommended_actions": data["metrics"].get("ui_design_oracle_signal_basis_recommended_actions") if isinstance(data["metrics"].get("ui_design_oracle_signal_basis_recommended_actions"), list) else [],
+        "ui_design_oracle_signal_basis_action_reasons": data["metrics"].get("ui_design_oracle_signal_basis_action_reasons") if isinstance(data["metrics"].get("ui_design_oracle_signal_basis_action_reasons"), dict) else {},
+        "ui_design_oracle_role_signal_count": int(data["metrics"].get("ui_design_oracle_role_signal_count") or 0),
+        "ui_design_oracle_keyword_signal_count": int(data["metrics"].get("ui_design_oracle_keyword_signal_count") or 0),
+        "ui_design_oracle_token_signal_count": int(data["metrics"].get("ui_design_oracle_token_signal_count") or 0),
+        "ui_design_oracle_none_signal_count": int(data["metrics"].get("ui_design_oracle_none_signal_count") or 0),
+        "ui_design_oracle_journey_oracle_count": int(data["metrics"].get("ui_design_oracle_journey_oracle_count") or 0),
+        "ui_design_oracle_journey_covered_count": int(data["metrics"].get("ui_design_oracle_journey_covered_count") or 0),
+        "ui_design_oracle_journey_missing_count": int(data["metrics"].get("ui_design_oracle_journey_missing_count") or 0),
+        "ui_design_oracle_journey_issue_count": int(data["metrics"].get("ui_design_oracle_journey_issue_count") or 0),
         "ui_design_oracle_missing_component_count": int(data["metrics"].get("ui_design_oracle_missing_component_count") or 0),
         "ui_design_oracle_missing_feedback_count": int(data["metrics"].get("ui_design_oracle_missing_feedback_count") or 0),
         "ui_design_oracle_signals_present": bool(int(data["metrics"].get("ui_design_oracle_issue_count") or 0) > 0),

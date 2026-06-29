@@ -39,6 +39,7 @@ Thumbs.db
 .pytest_tmp/
 .pytest_tmp_*/
 .workbuddy/
+.trae/
 
 # Windows reserved device name accidentally captured as a file (never commit)
 nul
