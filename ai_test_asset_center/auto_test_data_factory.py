@@ -18,6 +18,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -112,6 +113,39 @@ def _collection_prefix(path: str) -> str:
             break
         out.append(part)
     return "/" + "/".join(out) if out else ""
+
+
+def _spec_server_base_path(spec: dict[str, Any]) -> str:
+    servers = spec.get("servers") if isinstance(spec, dict) else {}
+    if not isinstance(servers, list):
+        return ""
+    for item in servers:
+        if not isinstance(item, dict):
+            continue
+        raw_url = str(item.get("url") or "").strip()
+        if not raw_url:
+            continue
+        parsed = urlparse(raw_url)
+        path = str(parsed.path or "").strip()
+        if path and path != "/":
+            return path.rstrip("/")
+    return ""
+
+
+def _materialize_spec_path(spec: dict[str, Any], path: str) -> str:
+    resolved = str(path or "").strip()
+    if not resolved:
+        return ""
+    if "://" in resolved:
+        return resolved
+    if not resolved.startswith("/"):
+        resolved = "/" + resolved
+    base_path = _spec_server_base_path(spec)
+    if not base_path:
+        return resolved
+    if resolved == base_path or resolved.startswith(base_path + "/"):
+        return resolved
+    return base_path + resolved
 
 
 def _operation(spec: dict[str, Any], method: str, path: str) -> dict[str, Any]:
@@ -448,9 +482,9 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
 
     fixture_backed_read = _fixture_backed_read_probe(probe, method, path)
     if spec and (method in WRITE_METHODS or fixture_backed_read):
-        create_path = _find_create_endpoint(spec, path)
-        read_path = path if method in READ_METHODS and PATH_PARAM_RE.search(path) else _find_read_endpoint(spec, path)
-        delete_path = _find_delete_endpoint(spec, path)
+        create_path = _materialize_spec_path(spec, _find_create_endpoint(spec, path))
+        read_path = path if method in READ_METHODS and PATH_PARAM_RE.search(path) else _materialize_spec_path(spec, _find_read_endpoint(spec, path))
+        delete_path = _materialize_spec_path(spec, _find_delete_endpoint(spec, path))
         if create_path:
             setup_requests.append({
                 "purpose": "create_disposable_qb_auto_fixture",

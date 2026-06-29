@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { getBehaviorSpaceVisualization } from "@/behavior-space/api";
-import { BehaviorSpaceFlow } from "@/components/behavior-space/BehaviorSpaceFlow";
-import { BehaviorSpaceSandbox } from "@/components/behavior-space/BehaviorSpaceSandbox";
+import { BehaviorSpaceDeferredVisualizations } from "@/components/behavior-space/BehaviorSpaceDeferredVisualizations";
 import { toSafeErrorView } from "@/lib/api/command-center";
 
 function isSupportedHref(href: string | undefined): href is string {
@@ -271,11 +270,11 @@ export default async function BehaviorSpacePage({
           </div>
         </div>
 
-        <BehaviorSpaceSandbox visualization={visualization} />
-
-        <div id="behavior-space-2d">
-          <BehaviorSpaceFlow visualization={visualization} />
+        <div className="rounded-[var(--radius-md)] border border-[rgba(122,167,255,0.14)] bg-[rgba(122,167,255,0.05)] p-4 text-sm text-[var(--muted)]">
+          重型可视化已调整为按需加载：页面先返回上线建议、风险成本、回放和审计关联，再在浏览器空闲或滚动到对应区域时初始化图布局与演示层。
         </div>
+
+        <BehaviorSpaceDeferredVisualizations visualization={visualization} />
       </div>
     );
   } catch (err) {

@@ -148,3 +148,33 @@ def test_targeted_rerun_writes_progress_delta_from_previous_artifacts(tmp_path) 
     )
     assert (out_dir / "grounded_probe_runtime_evidence_progress_delta.json").exists()
     assert (out_dir / "grounded_probe_runtime_evidence_progress_delta.md").exists()
+
+
+def test_first_runtime_baseline_does_not_report_gap_regression_without_previous_artifacts() -> None:
+    delta = _build_runtime_evidence_progress_delta(
+        {},
+        {
+            "project_id": "baseline-demo",
+            "runtime_evidence_scoreboard": {
+                "execution_integrity_score": 61,
+                "execution_coverage_rate": 55.0,
+                "runtime_binding_success_rate": 80.0,
+                "evidence_maturity": {"level": "runtime_evidence_needs_hardening", "customer_ready": False},
+            },
+            "runtime_evidence_remediation_plan": {
+                "p0_group_count": 2,
+                "queued_candidate_count": 2,
+                "priority_groups": [
+                    {"priority": "P0", "gap_type": "runtime_binding_not_fully_bound"},
+                    {"priority": "P0", "gap_type": "snapshot_not_fully_accepted"},
+                ],
+            },
+            "runtime_customer_reproduction_pack": {"customer_ready_reproduction_count": 0, "packages": []},
+            "runtime_evidence_probe_ledger": {"customer_ready_probe_count": 0, "entries": []},
+        },
+    )
+
+    assert delta["has_previous_evidence"] is False
+    assert delta["status"] == "no_previous_runtime_evidence_found"
+    assert delta["new_gap_types"] == ["runtime_binding_not_fully_bound", "snapshot_not_fully_accepted"]
+    assert delta["regressions"] == []

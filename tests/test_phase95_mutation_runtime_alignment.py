@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from ai_test_asset_center.auto_test_data_factory import build_auto_fixture_for_probe
 from ai_test_asset_center.grounded_probe_executor import (
     _append_query_surface_get_fallbacks,
@@ -58,6 +60,49 @@ def test_auto_fixture_replaces_idempotency_placeholders_with_concrete_replay_key
     assert body["business_key"] == body["idempotency_key"]
     assert "<SAME_AS_PREVIOUS_ATTEMPT>" not in str(body)
     assert bundle["mutation_application"]["applied"] is True
+
+
+def test_auto_fixture_materializes_server_base_path_for_setup_and_cleanup(tmp_path) -> None:
+    probe = _grounded_write_probe(
+        "conservation_probe",
+        {"mutation_kind": "resource_negative_value", "field_selector": "resource", "value": -1},
+    )
+    probe["endpoint"]["path"] = "/orders/{order_id}"
+    (tmp_path / "openapi.json").write_text(
+        json.dumps(
+            {
+                "openapi": "3.0.0",
+                "servers": [{"url": "https://benchmark.example.test/api/v1/ecommerce"}],
+                "paths": {
+                    "/orders": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"name": {"type": "string"}, "amount": {"type": "number"}},
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/orders/{order_id}": {"get": {}, "delete": {}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = build_auto_fixture_for_probe(
+        probe,
+        input_dir=tmp_path,
+        config={"qualibug_auto_create_test_data": True},
+    )
+
+    assert bundle["setup_requests"][0]["path"] == "/api/v1/ecommerce/orders"
+    assert bundle["cleanup_requests"][0]["path"] == "/api/v1/ecommerce/orders/{order_id}"
 
 
 def test_phase95_auth_boundary_variants_strip_credentials_and_validate_business_data() -> None:

@@ -1113,6 +1113,7 @@ def _build_runtime_evidence_progress_delta(config: dict[str, Any], report: dict[
     resolved_gap_types = [gap for gap in previous_gap_types if gap not in set(current_gap_types)]
     new_gap_types = [gap for gap in current_gap_types if gap not in set(previous_gap_types)]
     persisting_gap_types = [gap for gap in current_gap_types if gap in set(previous_gap_types)]
+    has_previous = bool(previous_scoreboard or previous_plan or previous_pack or previous_ledger)
 
     previous_maturity = previous_scoreboard.get("evidence_maturity") if isinstance(previous_scoreboard.get("evidence_maturity"), dict) else {}
     current_maturity = current_scoreboard.get("evidence_maturity") if isinstance(current_scoreboard.get("evidence_maturity"), dict) else {}
@@ -1139,10 +1140,9 @@ def _build_runtime_evidence_progress_delta(config: dict[str, Any], report: dict[
         regressions.append("customer_ready_reproduction_count_decreased")
     if previous_ledger and current_ledger_ready < previous_ledger_ready:
         regressions.append("customer_ready_probe_ledger_count_decreased")
-    if new_gap_types:
+    if has_previous and new_gap_types:
         regressions.append("new_runtime_gap_types_detected")
 
-    has_previous = bool(previous_scoreboard or previous_plan or previous_pack or previous_ledger)
     if not has_previous:
         status = "no_previous_runtime_evidence_found"
         next_action = "Capture this run as the baseline, then rerun after fixing the remediation plan gaps."
@@ -3836,7 +3836,7 @@ def _collect_runtime_binding_events(observations: list[dict[str, Any]]) -> list[
         cid = str(obs.get("candidate_id") or "")
         req = obs.get("request") if isinstance(obs.get("request"), dict) else {}
         body_binding = req.get("body_runtime_binding")
-        if isinstance(body_binding, dict):
+        if _meaningful_runtime_binding(body_binding):
             events.append({
                 "candidate_id": cid,
                 "source": body_binding.get("source") or "request_body",
@@ -3848,7 +3848,7 @@ def _collect_runtime_binding_events(observations: list[dict[str, Any]]) -> list[
                 if not isinstance(receipt, dict):
                     continue
                 binding = receipt.get("runtime_binding")
-                if isinstance(binding, dict) and binding:
+                if _meaningful_runtime_binding(binding):
                     events.append({
                         "candidate_id": cid,
                         "source": binding.get("source") or bucket_name,
@@ -3857,7 +3857,7 @@ def _collect_runtime_binding_events(observations: list[dict[str, Any]]) -> list[
                         "path": receipt.get("path"),
                     })
                 body_binding = receipt.get("body_runtime_binding")
-                if isinstance(body_binding, dict):
+                if _meaningful_runtime_binding(body_binding):
                     events.append({
                         "candidate_id": cid,
                         "source": body_binding.get("source") or f"{bucket_name}_body",
@@ -3869,7 +3869,7 @@ def _collect_runtime_binding_events(observations: list[dict[str, Any]]) -> list[
             if not isinstance(response, dict):
                 continue
             binding = response.get("runtime_binding")
-            if isinstance(binding, dict) and binding:
+            if _meaningful_runtime_binding(binding):
                 events.append({
                     "candidate_id": cid,
                     "source": binding.get("source") or "flow_response",
@@ -3878,7 +3878,7 @@ def _collect_runtime_binding_events(observations: list[dict[str, Any]]) -> list[
                     "step": response.get("step"),
                 })
             body_binding = response.get("request_body_runtime_binding")
-            if isinstance(body_binding, dict):
+            if _meaningful_runtime_binding(body_binding):
                 events.append({
                     "candidate_id": cid,
                     "source": body_binding.get("source") or "flow_step_body",
@@ -3910,6 +3910,33 @@ def _execution_failure_reasons(decisions: list[dict[str, Any]], observations: li
                 reason = str(response.get("error"))
                 reasons[reason] = reasons.get(reason, 0) + 1
     return dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))[:20])
+
+
+def _meaningful_runtime_binding(binding: Any) -> bool:
+    if not isinstance(binding, dict) or not binding:
+        return False
+    if binding.get("bound") is True:
+        return True
+    return any(
+        key in binding
+        for key in (
+            "reason",
+            "original",
+            "rendered",
+            "path_params",
+            "response_id",
+            "previous_values",
+        )
+    )
+
+
+def _snapshot_status_code(snapshot: dict[str, Any]) -> int | None:
+    if isinstance(snapshot.get("status_code"), int):
+        return int(snapshot.get("status_code"))
+    response = snapshot.get("response") if isinstance(snapshot.get("response"), dict) else {}
+    if isinstance(response.get("status_code"), int):
+        return int(response.get("status_code"))
+    return None
 
 
 def _runtime_evidence_gap_recommendations(scoreboard: dict[str, Any]) -> list[dict[str, Any]]:
@@ -4139,7 +4166,7 @@ def _build_runtime_evidence_scoreboard(report: dict[str, Any]) -> dict[str, Any]
         for s in (((obs.get("snapshots") or {}).get(phase)) or [])
         if isinstance(s, dict)
     ]
-    snapshot_accepted = sum(1 for s in snapshots if isinstance(s.get("status_code"), int) and 200 <= int(s.get("status_code")) < 300)
+    snapshot_accepted = sum(1 for s in snapshots if isinstance(_snapshot_status_code(s), int) and 200 <= int(_snapshot_status_code(s) or 0) < 300)
     target_responses = sum(1 for obs in observations if isinstance((obs.get("response") or {}).get("status_code"), int))
     write_target_responses = sum(1 for obs in write_observations for r in (obs.get("responses") or []) if isinstance(r, dict) and isinstance(r.get("status_code"), int))
     runtime_binding_events = _collect_runtime_binding_events(all_obs)
@@ -4234,7 +4261,7 @@ def _runtime_evidence_probe_binding_events(obs: dict[str, Any]) -> list[dict[str
     events: list[dict[str, Any]] = []
     req = obs.get("request") if isinstance(obs.get("request"), dict) else {}
     body_binding = req.get("body_runtime_binding")
-    if isinstance(body_binding, dict):
+    if _meaningful_runtime_binding(body_binding):
         events.append({
             "source": body_binding.get("source") or "request_body",
             "bound": bool(body_binding.get("bound")),
@@ -4245,7 +4272,7 @@ def _runtime_evidence_probe_binding_events(obs: dict[str, Any]) -> list[dict[str
             if not isinstance(receipt, dict):
                 continue
             binding = receipt.get("runtime_binding")
-            if isinstance(binding, dict) and binding:
+            if _meaningful_runtime_binding(binding):
                 events.append({
                     "source": binding.get("source") or bucket_name,
                     "bound": bool(binding.get("bound")),
@@ -4253,7 +4280,7 @@ def _runtime_evidence_probe_binding_events(obs: dict[str, Any]) -> list[dict[str
                     "path": receipt.get("path"),
                 })
             body_binding = receipt.get("body_runtime_binding")
-            if isinstance(body_binding, dict):
+            if _meaningful_runtime_binding(body_binding):
                 events.append({
                     "source": body_binding.get("source") or f"{bucket_name}_body",
                     "bound": bool(body_binding.get("bound")),
@@ -4264,7 +4291,7 @@ def _runtime_evidence_probe_binding_events(obs: dict[str, Any]) -> list[dict[str
         if not isinstance(response, dict):
             continue
         binding = response.get("runtime_binding")
-        if isinstance(binding, dict) and binding:
+        if _meaningful_runtime_binding(binding):
             events.append({
                 "source": binding.get("source") or "flow_response",
                 "bound": bool(binding.get("bound")),
@@ -4272,7 +4299,7 @@ def _runtime_evidence_probe_binding_events(obs: dict[str, Any]) -> list[dict[str
                 "step": response.get("step"),
             })
         body_binding = response.get("request_body_runtime_binding")
-        if isinstance(body_binding, dict):
+        if _meaningful_runtime_binding(body_binding):
             events.append({
                 "source": body_binding.get("source") or "flow_step_body",
                 "bound": bool(body_binding.get("bound")),
@@ -4333,7 +4360,7 @@ def _runtime_evidence_probe_gap_types(decision: dict[str, Any], obs: dict[str, A
         if isinstance(s, dict)
     ]
     if snapshot_items:
-        accepted = sum(1 for s in snapshot_items if isinstance(s.get("status_code"), int) and 200 <= int(s.get("status_code")) < 300)
+        accepted = sum(1 for s in snapshot_items if isinstance(_snapshot_status_code(s), int) and 200 <= int(_snapshot_status_code(s) or 0) < 300)
         if accepted < len(snapshot_items):
             gaps.append("snapshot_not_fully_accepted")
 

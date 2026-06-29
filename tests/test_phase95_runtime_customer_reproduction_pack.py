@@ -94,6 +94,7 @@ def test_runtime_customer_reproduction_pack_packages_validated_finding_trace() -
                         "accepted": True,
                         "method": "DELETE",
                         "path": "/orders/srv_ready",
+                        "body_runtime_binding": {"bound": False, "source": "runtime_target_request_body"},
                         "response": {"status_code": 204, "payload": {}},
                     }
                 ],

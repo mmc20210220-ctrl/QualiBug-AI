@@ -46,7 +46,12 @@ def test_runtime_evidence_scoreboard_counts_actual_setup_binding_snapshot_and_cl
                     }
                 ],
                 "cleanup_receipts": [
-                    {"status": "executed", "accepted": False, "error": "cleanup failed"},
+                    {
+                        "status": "executed",
+                        "accepted": False,
+                        "error": "cleanup failed",
+                        "body_runtime_binding": {"bound": False, "source": "runtime_target_request_body"},
+                    },
                 ],
                 "responses": [
                     {
@@ -57,8 +62,8 @@ def test_runtime_evidence_scoreboard_counts_actual_setup_binding_snapshot_and_cl
                     }
                 ],
                 "snapshots": {
-                    "before": [{"status_code": 200, "observer_kind": "resource_detail"}],
-                    "after": [{"status_code": 500, "observer_kind": "resource_detail"}],
+                    "before": [{"observer_kind": "resource_detail", "response": {"status_code": 200}}],
+                    "after": [{"observer_kind": "resource_detail", "response": {"status_code": 500}}],
                 },
                 "verification": {"verdict": "validated_candidate", "reason": "state invariant failed"},
             }
@@ -80,7 +85,7 @@ def test_runtime_evidence_scoreboard_counts_actual_setup_binding_snapshot_and_cl
     assert scoreboard["cleanup_accepted_count"] == 1
     assert scoreboard["snapshot_request_count"] == 2
     assert scoreboard["snapshot_accepted_count"] == 1
-    assert scoreboard["runtime_binding_event_count"] == 6
+    assert scoreboard["runtime_binding_event_count"] == 5
     assert scoreboard["runtime_binding_success_count"] == 5
     assert scoreboard["query_bound_request_count"] == 3
     assert scoreboard["top_failure_or_gap_reasons"] == {"missing_path_params:order_id": 1}
