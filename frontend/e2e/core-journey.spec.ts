@@ -7,19 +7,20 @@ test("核心旅程（demo auth）：登录入口→选项目→能力→风险�
   await page.getByRole("link", { name: "进入演示模式" }).click();
   await expect(page.getByRole("heading", { name: "项目列表" })).toBeVisible();
 
-  const firstProjectCard = page.locator('a[href^="/projects/"]').first();
+  const firstProjectCard = page.locator('a[href^="/projects/"]').filter({ hasText: "进入" }).first();
   await firstProjectCard.click();
-  await expect(page.getByRole("heading", { name: "项目工作区" })).toBeVisible();
+  await expect(page).toHaveURL(/\/projects\/[^/]+$/);
+  await expect(page.locator("div").filter({ hasText: /^项目工作区$/ }).first()).toBeVisible();
 
-  await page.getByRole("link", { name: "能力中心" }).click();
+  await page.getByRole("link", { name: "能力中心" }).first().click();
   await expect(page.getByRole("heading", { name: "覆盖度与缺口" })).toBeVisible();
 
-  await page.getByRole("link", { name: "风险证据" }).click();
+  await page.getByRole("link", { name: "风险证据" }).first().click();
   await expect(page.getByRole("heading", { name: "风险证据链" })).toBeVisible();
 
-  await page.getByRole("link", { name: "执行" }).click();
+  await page.getByRole("link", { name: "执行" }).first().click();
   await expect(page.getByRole("heading", { name: "执行与任务生命周期" })).toBeVisible();
 
-  await page.getByRole("link", { name: "报告" }).click();
+  await page.getByRole("link", { name: "报告" }).first().click();
   await expect(page.getByRole("heading", { name: "领导层报告" })).toBeVisible();
 });

@@ -39,7 +39,12 @@ Thumbs.db
 .pytest_tmp/
 .pytest_tmp_*/
 .workbuddy/
-.trae/
+.trae/*
+!.trae/specs/
+!.trae/specs/nextgen-frontend-nextjs-rsc-sso/
+.trae/specs/nextgen-frontend-nextjs-rsc-sso/**
+!.trae/specs/nextgen-frontend-nextjs-rsc-sso/tasks.md
+!.trae/specs/nextgen-frontend-nextjs-rsc-sso/checklist.md
 
 # Windows reserved device name accidentally captured as a file (never commit)
 nul
