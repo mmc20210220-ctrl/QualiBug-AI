@@ -367,8 +367,20 @@ def run_runtime_onboarding_preflight(
     auth_config = dict(config or {})
     existing_runtime = auth_config.get("_auth_runtime") if isinstance(auth_config.get("_auth_runtime"), dict) else {}
     discovered_runtime = connectivity_auth.get("auth_runtime") if isinstance(connectivity_auth.get("auth_runtime"), dict) else {}
-    if discovered_runtime and (not existing_runtime or not int(existing_runtime.get("successful_session_count") or 0)):
-        auth_config["_auth_runtime"] = discovered_runtime
+    if discovered_runtime:
+        discovered_sessions = int(discovered_runtime.get("successful_session_count") or 0)
+        existing_sessions = int(existing_runtime.get("successful_session_count") or 0)
+        discovered_health = int(discovered_runtime.get("session_health_verified_count") or 0)
+        existing_health = int(existing_runtime.get("session_health_verified_count") or 0)
+        discovered_smoke = int(discovered_runtime.get("api_smoke_passed_count") or 0)
+        existing_smoke = int(existing_runtime.get("api_smoke_passed_count") or 0)
+        if (
+            not existing_runtime
+            or discovered_sessions > existing_sessions
+            or discovered_health > existing_health
+            or discovered_smoke > existing_smoke
+        ):
+            auth_config["_auth_runtime"] = discovered_runtime
     auth = _auth_readiness(auth_config)
     roles = _role_coverage(config)
     sandbox = _sandbox_readiness(config, allow_write_sandbox)

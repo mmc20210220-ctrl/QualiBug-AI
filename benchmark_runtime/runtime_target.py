@@ -61,6 +61,27 @@ class RuntimeBug:
     actual_bug_behavior: str
 
 
+@dataclass(frozen=True)
+class BenchmarkIdentity:
+    account_name: str
+    username: str
+    password: str
+    role: str
+    tenant_id: str
+    token: str
+    session_cookie: str
+
+
+def _benchmark_identities() -> list[BenchmarkIdentity]:
+    shared_password = "benchmark-demo-password"
+    return [
+        BenchmarkIdentity("normal_user", "qb_normal_user", shared_password, "normal_user", "t-a", "qb-token-normal-user", "qb_sid_normal_user"),
+        BenchmarkIdentity("admin_user", "qb_admin_user", shared_password, "admin_user", "t-a", "qb-token-admin-user", "qb_sid_admin_user"),
+        BenchmarkIdentity("owner_user", "qb_owner_user", shared_password, "owner_user", "t-a", "qb-token-owner-user", "qb_sid_owner_user"),
+        BenchmarkIdentity("cross_tenant_user", "qb_cross_tenant_user", shared_password, "cross_tenant_user", "t-b", "qb-token-cross-tenant-user", "qb_sid_cross_tenant_user"),
+    ]
+
+
 def _load_project_bugs(project_dir: Path) -> list[RuntimeBug]:
     sample_requests = _read_json(project_dir / "fixtures" / "sample_requests.json") or []
     oracle = _read_json(project_dir / "oracle" / "BUG_GROUND_TRUTH.json") or {}
@@ -109,6 +130,10 @@ class BenchmarkRuntime:
         self.suite_root = suite_root
         self.bugs: list[RuntimeBug] = []
         self.created_resources: list[dict[str, Any]] = []
+        self.identities = _benchmark_identities()
+        self.identities_by_username = {identity.username: identity for identity in self.identities}
+        self.identities_by_token = {identity.token: identity for identity in self.identities}
+        self.identities_by_cookie = {identity.session_cookie: identity for identity in self.identities}
         projects_root = suite_root / "projects"
         enabled = {p.strip() for p in os.environ.get("QUALIBUG_BENCHMARK_PROJECTS", "").split(",") if p.strip()}
         for project_dir in sorted(projects_root.iterdir() if projects_root.exists() else []):
@@ -124,6 +149,34 @@ class BenchmarkRuntime:
 
     def reset(self) -> None:
         self.created_resources.clear()
+
+    def login(self, username: str, password: str, tenant_id: str = "") -> BenchmarkIdentity | None:
+        identity = self.identities_by_username.get(str(username or ""))
+        if identity is None:
+            return None
+        if identity.password != str(password or ""):
+            return None
+        if tenant_id and identity.tenant_id != str(tenant_id):
+            return None
+        return identity
+
+    def identify(self, headers: dict[str, Any]) -> BenchmarkIdentity | None:
+        authorization = str(headers.get("authorization") or headers.get("Authorization") or "")
+        if authorization.lower().startswith("bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+            identity = self.identities_by_token.get(token)
+            if identity:
+                return identity
+        cookie_header = str(headers.get("cookie") or headers.get("Cookie") or "")
+        for raw_cookie in [chunk.strip() for chunk in cookie_header.split(";") if chunk.strip()]:
+            if "=" not in raw_cookie:
+                continue
+            name, value = raw_cookie.split("=", 1)
+            if name.strip().lower() == "sid":
+                identity = self.identities_by_cookie.get(value.strip())
+                if identity:
+                    return identity
+        return None
 
     def find(self, method: str, path: str) -> RuntimeBug | None:
         for bug in self.bugs:
@@ -230,6 +283,57 @@ def state() -> dict[str, Any]:
             for category in sorted({str(row.get("category")) for row in runtime.created_resources})
         },
     }
+
+
+@app.post("/api/login")
+async def login(request: Request) -> JSONResponse:
+    body: Any = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    identity = runtime.login(
+        str(body.get("username") or body.get("user") or body.get("login") or ""),
+        str(body.get("password") or ""),
+        str(body.get("tenant_id") or ""),
+    )
+    if identity is None:
+        return JSONResponse(status_code=401, content={"ok": False, "error": {"code": "INVALID_CREDENTIALS", "message": "invalid benchmark login"}})
+    response = JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "data": {
+                "accessToken": identity.token,
+                "role": identity.role,
+                "tenant_id": identity.tenant_id,
+                "account": identity.account_name,
+            },
+        },
+    )
+    response.set_cookie("sid", identity.session_cookie, httponly=True, samesite="lax", path="/")
+    return response
+
+
+@app.get("/api/me")
+def me(request: Request) -> JSONResponse:
+    identity = runtime.identify(dict(request.headers))
+    if identity is None:
+        return JSONResponse(status_code=401, content={"ok": False, "error": {"code": "UNAUTHENTICATED", "message": "missing or invalid auth session"}})
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "user": {
+                "username": identity.username,
+                "role": identity.role,
+                "tenant_id": identity.tenant_id,
+                "account": identity.account_name,
+            },
+        },
+    )
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])

@@ -1,9 +1,40 @@
 {
   "environment_kind": "sandbox",
   "base_url": "http://127.0.0.1:8011",
-  "default_headers": {
-    "Authorization": "Bearer benchmark-demo-token",
-    "X-Tenant-Id": "t-a"
+  "auth_flow": {
+    "login_path": "/api/login",
+    "token_json_path": "data.accessToken",
+    "session_health_path": "/api/me",
+    "tenant_field": "tenant_id",
+    "token_header_name": "Authorization",
+    "token_header_prefix": "Bearer"
+  },
+  "default_account": "normal_user",
+  "accounts": {
+    "normal_user": {
+      "username": "qb_normal_user",
+      "password": "benchmark-demo-password",
+      "role": "normal_user",
+      "tenant_id": "t-a"
+    },
+    "admin_user": {
+      "username": "qb_admin_user",
+      "password": "benchmark-demo-password",
+      "role": "admin_user",
+      "tenant_id": "t-a"
+    },
+    "owner_user": {
+      "username": "qb_owner_user",
+      "password": "benchmark-demo-password",
+      "role": "owner_user",
+      "tenant_id": "t-a"
+    },
+    "cross_tenant_user": {
+      "username": "qb_cross_tenant_user",
+      "password": "benchmark-demo-password",
+      "role": "cross_tenant_user",
+      "tenant_id": "t-b"
+    }
   },
   "allow_write_probes": true,
   "disposable_sandbox": {

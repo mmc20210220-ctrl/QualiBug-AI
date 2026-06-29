@@ -117,3 +117,28 @@ def test_report_style_query_surface_can_be_post_when_contract_says_post(tmp_path
 
     assert runtime.find("POST", "/api/v1/expense/report?month=2026-06").bug_id == "EXPENSE-REPORT"
     assert runtime.find("GET", "/api/v1/expense/report?month=2026-06") is None
+
+
+def test_benchmark_runtime_auth_login_and_identity_resolution(tmp_path: Path) -> None:
+    _make_project(
+        tmp_path,
+        "01_ecommerce_order_payment_inventory",
+        "shop",
+        [
+            {
+                "bug_id": "SHOP-ORDER",
+                "endpoint_hint": "/api/v1/shop/orders/1",
+                "primary_category": {"id": "C08"},
+            }
+        ],
+        [{"method": "GET", "path": "/api/v1/shop/orders/1"}],
+    )
+
+    runtime = BenchmarkRuntime(tmp_path)
+    identity = runtime.login("qb_normal_user", "benchmark-demo-password", "t-a")
+
+    assert identity is not None
+    assert identity.role == "normal_user"
+    assert runtime.identify({"Authorization": f"Bearer {identity.token}"}) == identity
+    assert runtime.identify({"Cookie": f"sid={identity.session_cookie}"}) == identity
+    assert runtime.login("qb_normal_user", "wrong-password", "t-a") is None
