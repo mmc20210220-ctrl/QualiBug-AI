@@ -1,0 +1,34 @@
+from __future__ import annotations
+
+from ai_test_asset_center.openapi_spec_utils import parse_openapi_spec
+
+
+def test_parse_openapi_spec_supports_json_and_yaml_like_input() -> None:
+    json_spec = '{"openapi":"3.0.0","paths":{"/api/orders":{"get":{"summary":"list"}}}}'
+    yaml_like = """
+openapi: 3.0.0
+paths:
+  /api/projects:
+    get:
+    post:
+  /api/projects/{project_id}/reports:
+    get:
+"""
+
+    parsed_json = parse_openapi_spec(json_spec)
+    parsed_yaml = parse_openapi_spec(yaml_like)
+
+    assert "/api/orders" in parsed_json["paths"]
+    assert set(parsed_yaml["paths"]["/api/projects"].keys()) == {"get", "post"}
+    assert "/api/projects/{project_id}/reports" in parsed_yaml["paths"]
+
+
+def test_parse_openapi_spec_extracts_route_refs_without_fixed_demo_path() -> None:
+    route_text = "关键调用包括 GET /api/users/{id} 和 POST /api/orders"
+    parsed = parse_openapi_spec(route_text)
+
+    assert "/api/users/{id}" in parsed["paths"]
+    assert "get" in parsed["paths"]["/api/users/{id}"]
+    assert "/api/orders" in parsed["paths"]
+    assert "post" in parsed["paths"]["/api/orders"]
+

@@ -15,6 +15,11 @@ from aitestops.enterprise_landing import EnterpriseLandingPackager
 from aitestops.productization import ProductReadyPackager
 from aitestops.release_verifier import verify_release
 from aitestops.self_dogfood_audit import run_self_dogfood_audit
+from aitestops.playwright_offline_bundle import (
+    build_playwright_offline_bundle,
+    install_playwright_offline_bundle,
+    verify_playwright_offline_bundle,
+)
 from ai_test_asset_center.agent_discovery_loop import build_agent_discovery_loop
 from ai_test_asset_center.agent_experiment_runner import compile_agent_experiment_pack, run_agent_experiment_pack
 from ai_test_asset_center.agent_business_flow_orchestrator import compile_agent_business_flow_pack, run_agent_business_flow_pack
@@ -277,6 +282,40 @@ def cmd_bug_engine_benchmark_v3_score(args: argparse.Namespace) -> int:
     }, ensure_ascii=False, indent=2, default=str))
     return 0
 
+
+def cmd_playwright_offline_build(args: argparse.Namespace) -> int:
+    bundle = build_playwright_offline_bundle(
+        out_dir=Path(args.out).resolve(),
+        requirements_file=Path(args.requirements).resolve(),
+        browsers=args.browsers.split(","),
+    )
+    print(json.dumps({"bundle_dir": str(bundle.root), "wheelhouse": str(bundle.wheelhouse), "browsers": str(bundle.browsers), "manifest": str(bundle.manifest)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_playwright_offline_install(args: argparse.Namespace) -> int:
+    env_vars = install_playwright_offline_bundle(
+        bundle_dir=Path(args.bundle).resolve(),
+        requirements_file=Path(args.requirements).resolve(),
+        browsers_path=Path(args.browsers_path).resolve() if args.browsers_path else None,
+        env_out=Path(args.env_out).resolve() if args.env_out else None,
+        venv_dir=Path(args.venv).resolve() if args.venv else None,
+    )
+    print(json.dumps({"installed": True, "env": env_vars, "note": "在 real_project_config.json 增加 playwright_browsers_path 或设置系统环境变量即可启用离线浏览器内核。"}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_playwright_offline_verify(args: argparse.Namespace) -> int:
+    report = verify_playwright_offline_bundle(
+        bundle_dir=Path(args.bundle).resolve(),
+        browsers_path=Path(args.browsers_path).resolve() if args.browsers_path else None,
+        python=Path(args.python).resolve() if args.python else None,
+        run_runtime_smoke=bool(args.runtime_smoke),
+    )
+    issues = report.get("issues") if isinstance(report, dict) else []
+    ok = not issues
+    print(json.dumps({"ok": ok, "report": report}, ensure_ascii=False, indent=2, default=str))
+    return 0 if ok else 1
 
 def cmd_bug_engine_grounded_execute(args: argparse.Namespace) -> int:
     """Execute document-grounded probe plans with strict safety gates."""
@@ -630,6 +669,27 @@ def build_parser() -> argparse.ArgumentParser:
     flows.add_argument("--execute", action="store_true", help="Execute only explicitly mapped flows through the disposable-sandbox gate")
     flows.add_argument("--approval-id", default="", help="Explicit disposable-sandbox approval ID. Required with --execute")
     flows.set_defaults(func=cmd_agent_flows)
+
+    pw_build = subparsers.add_parser("playwright-offline-build", help="Build a Playwright offline bundle (wheelhouse + browser cache)")
+    pw_build.add_argument("--out", required=True, help="Output directory for offline bundle")
+    pw_build.add_argument("--requirements", default="requirements-optional.txt", help="Requirements file to download into wheelhouse")
+    pw_build.add_argument("--browsers", default="chromium,firefox", help="Comma-separated browsers to bundle")
+    pw_build.set_defaults(func=cmd_playwright_offline_build)
+
+    pw_install = subparsers.add_parser("playwright-offline-install", help="Install Playwright from a local offline bundle without networking")
+    pw_install.add_argument("--bundle", required=True, help="Offline bundle directory")
+    pw_install.add_argument("--requirements", default="requirements-optional.txt", help="Requirements file to install from wheelhouse")
+    pw_install.add_argument("--browsers-path", default="", help="Optional extracted ms-playwright directory; defaults to bundle browsers/")
+    pw_install.add_argument("--env-out", default="", help="Optional env file path to write PLAYWRIGHT_* variables (e.g., .env.local)")
+    pw_install.add_argument("--venv", default="", help="Optional venv directory to install into (recommended for locked-down environments)")
+    pw_install.set_defaults(func=cmd_playwright_offline_install)
+
+    pw_verify = subparsers.add_parser("playwright-offline-verify", help="Verify a Playwright offline bundle and optional runtime smoke")
+    pw_verify.add_argument("--bundle", required=True, help="Offline bundle directory")
+    pw_verify.add_argument("--browsers-path", default="", help="Optional extracted ms-playwright directory; defaults to bundle browsers/")
+    pw_verify.add_argument("--python", default="", help="Optional python to run runtime smoke (e.g., venv python)")
+    pw_verify.add_argument("--runtime-smoke", action="store_true", help="Try import + headless chromium/firefox launch to verify OS deps")
+    pw_verify.set_defaults(func=cmd_playwright_offline_verify)
 
     return parser
 

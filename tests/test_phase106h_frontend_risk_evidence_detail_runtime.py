@@ -57,6 +57,20 @@ def test_phase106h_builds_risk_evidence_detail_route_and_models(tmp_path: Path) 
     assert len(manifest["runtime_endpoints"]) >= 4
     assert not verify_frontend_risk_evidence_detail_checksums(tmp_path)
 
+    core_page_text = "\n".join(
+        (app_dir / relative).read_text(encoding="utf-8")
+        for relative in (
+            "src/pages/CustomerIntakePage.tsx",
+            "src/pages/EnvironmentDiagnosisPage.tsx",
+            "src/pages/BusinessFlowMapPage.tsx",
+            "src/pages/TestExecutionPage.tsx",
+            "src/pages/RiskEvidencePage.tsx",
+            "src/pages/ReportRoiPage.tsx",
+        )
+    )
+    assert "JSON.stringify(" not in core_page_text
+    assert "<pre>" not in core_page_text
+
 
 def test_phase106h_validate_only_detects_missing_risk_evidence_route(tmp_path: Path) -> None:
     build_frontend_risk_evidence_detail_runtime(tmp_path, scenario="ecommerce")

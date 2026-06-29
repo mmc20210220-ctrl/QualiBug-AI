@@ -10,6 +10,7 @@ from ai_test_asset_center.phase106_frontend_app_scaffold import (
     PHASE106A_VERSION,
     build_frontend_app_scaffold,
     run_frontend_app_scaffold_export,
+    scan_frontend_app_scaffold_for_raw_page_dumps,
     scan_frontend_app_scaffold_for_secret_leaks,
     validate_frontend_app_scaffold,
     verify_frontend_app_checksums,
@@ -56,6 +57,21 @@ def test_phase106a_builds_real_vite_react_frontend_scaffold(tmp_path: Path) -> N
     assert len(manifest["routes"]) >= 7
     assert len(manifest["api_contract"]) >= 15
     assert not verify_frontend_app_checksums(tmp_path)
+    assert not scan_frontend_app_scaffold_for_raw_page_dumps(tmp_path)
+
+    product_pages = "\n".join(
+        (app_dir / relative).read_text(encoding="utf-8")
+        for relative in (
+            "src/pages/CustomerIntakePage.tsx",
+            "src/pages/EnvironmentDiagnosisPage.tsx",
+            "src/pages/BusinessFlowMapPage.tsx",
+            "src/pages/TestExecutionPage.tsx",
+            "src/pages/RiskEvidencePage.tsx",
+            "src/pages/ReportRoiPage.tsx",
+        )
+    )
+    for keyword in ("客户项目摘要", "环境 readiness 总览", "流程节点地图", "执行控制台", "证据详情预览", "领导层摘要"):
+        assert keyword in product_pages
 
 
 def test_phase106a_validate_only_detects_missing_api_client(tmp_path: Path) -> None:

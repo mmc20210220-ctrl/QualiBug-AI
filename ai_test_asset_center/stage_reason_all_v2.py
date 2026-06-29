@@ -946,7 +946,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     engine_names_for_report = [name for name, _ in engines] + (["local_bootstrap"] if "local_bootstrap" in results_by_engine else [])
 
     # ── 新增：运行分析器（可选，通过环境变量控制）──
-    use_analyzers = str(os.environ.get("QUALIBUG_USE_ANALYZERS", "1")).lower() in {"1", "true", "yes"}
+    use_analyzers = str(os.environ.get("QUALIBUG_USE_ANALYZERS", "0")).lower() in {"1", "true", "yes"}
     if use_analyzers:
         try:
             from .analyzers_adapter import build_analyzer_hypotheses, get_analyzer_engine_names

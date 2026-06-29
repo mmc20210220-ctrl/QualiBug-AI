@@ -187,7 +187,12 @@ def _iter_checksum_files(root: Path) -> list[Path]:
 
 def write_frontend_risk_evidence_detail_checksums(output_dir: str | Path) -> dict[str, str]:
     root = Path(output_dir)
-    checksums = {path.relative_to(root).as_posix(): _sha256(path) for path in _iter_checksum_files(root)}
+    checksums: dict[str, str] = {}
+    for path in _iter_checksum_files(root):
+        try:
+            checksums[path.relative_to(root).as_posix()] = _sha256(path)
+        except FileNotFoundError:
+            continue
     lines = [f"{digest}  {relative}" for relative, digest in sorted(checksums.items())]
     _write_text(root / RISK_EVIDENCE_DETAIL_CHECKSUMS, "\n".join(lines) + "\n")
     return checksums
@@ -376,7 +381,7 @@ def build_frontend_risk_evidence_detail_runtime(
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
 
-    build_frontend_execution_runtime(root, scenario=scenario)
+    build_frontend_execution_runtime(root, scenario=scenario, clean=False)
     app_dir = root / FRONTEND_APP_DIR
     _write_types(app_dir)
     _write_service(app_dir)

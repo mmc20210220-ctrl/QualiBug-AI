@@ -30,7 +30,20 @@ def test_phase106c_builds_real_api_runtime_boundary(tmp_path: Path) -> None:
     assert (tmp_path / "phase106_frontend_api_runtime.zip").exists()
 
     runtime_api = (app_dir / "src/api/runtimeApi.ts").read_text(encoding="utf-8")
-    for keyword in ("AbortController", "requestTimeoutMs", "normalizeEnvelope", "redactApiError", "loadRuntimeHealth"):
+    for keyword in (
+        "AbortController",
+        "requestTimeoutMs",
+        "normalizeEnvelope",
+        "redactApiError",
+        "loadRuntimeHealth",
+        "backendStatus",
+        "serviceReachable",
+        "fallbackActive",
+        "/api/health",
+        "/api/v1/health",
+        "error-envelope",
+        "timeout",
+    ):
         assert keyword in runtime_api
 
     client = (app_dir / "src/api/qualibugClient.ts").read_text(encoding="utf-8")
@@ -38,8 +51,12 @@ def test_phase106c_builds_real_api_runtime_boundary(tmp_path: Path) -> None:
         assert f"{method}(" in client
 
     adapter = (app_dir / "src/services/realApiRuntime.ts").read_text(encoding="utf-8")
-    for keyword in ("RuntimeApiAdapter", "safeApiCall", "demo-fallback", "fallbackToDemo", "loadReportRoi"):
+    for keyword in ("RuntimeApiAdapter", "safeApiCall", "demo-fallback", "fallbackToDemo", "fallbackActive", "loadReportRoi"):
         assert keyword in adapter
+
+    page = (app_dir / "src/pages/ApiRuntimeWorkbenchPage.tsx").read_text(encoding="utf-8")
+    for keyword in ("backend status", "fallback status", "provider status", "offline state", "error state", "demo fallback"):
+        assert keyword in page
 
     routes = (app_dir / "src/routes.ts").read_text(encoding="utf-8")
     assert "'/api-runtime'" in routes
@@ -49,6 +66,9 @@ def test_phase106c_builds_real_api_runtime_boundary(tmp_path: Path) -> None:
     assert manifest["version"] == PHASE106C_VERSION
     assert manifest["runtime_route"] == "/api-runtime"
     assert len(manifest["runtime_endpoint_contract"]) >= 16
+    health_paths = {item["path"] for item in manifest["runtime_endpoint_contract"] if item["client"] == "health"}
+    assert "/api/health" in health_paths
+    assert "/api/v1/health" in health_paths
     assert not verify_frontend_api_runtime_checksums(tmp_path)
 
 

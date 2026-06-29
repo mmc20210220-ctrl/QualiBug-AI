@@ -67,6 +67,8 @@ def test_analyzers_adapter():
         )
         from ai_test_asset_center.agent_discovery_loop import build_agent_discovery_loop
         from ai_test_asset_center.stage_reason_all_v2 import _dedupe_hypotheses, _prioritize_hypotheses
+        from ai_test_asset_center.bug_family_coverage_report import build_bug_family_coverage_report
+        from ai_test_asset_center.defect_family_registry import resolve_defect_family
         print("[OK] Analyzers adapter imported successfully")
     except Exception as e:
         print(f"[FAIL] Analyzers adapter import failed: {e}")
@@ -1610,6 +1612,37 @@ def test_analyzers_adapter():
         onboarding_module.ROOT = old_onboarding_root
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    print()
+    print("=" * 60)
+    print("Test 18: Full-spectrum family coverage smoke")
+    print("=" * 60)
+
+    try:
+        synthetic_probes = [
+            {"title": "Contract check", "risk_type": "api_contract", "defect_family": "api_contract"},
+            {"title": "Execution runtime", "risk_type": "frontend_execution_runtime", "defect_family": "ui"},
+            {"title": "Slow request", "risk_type": "performance_regression", "defect_family": "performance"},
+        ]
+        synthetic_issues = [
+            {"title": "CTA missing", "risk_type": "frontend_ux", "defect_family": "uiux", "confidence": 0.8},
+            {"title": "Timezone drift", "risk_type": "compatibility", "defect_family": "compatibility", "confidence": 0.6},
+        ]
+        coverage = build_bug_family_coverage_report(synthetic_probes, synthetic_issues)
+        resolved = resolve_defect_family({"title": "页面渲染失败"})
+        print(f"[OK] Covered family count: {coverage.get('covered_family_count')}")
+        print(f"[OK] Resolved UI family: {resolved.get('family_id')}")
+        if coverage.get("covered_family_count", 0) < 5:
+            print("[FAIL] Expected at least five covered bug families in coverage smoke test")
+            return False
+        if resolved.get("family_id") != "ui":
+            print("[FAIL] resolve_defect_family should map frontend render failures to ui")
+            return False
+    except Exception as e:
+        print(f"[FAIL] Full-spectrum family coverage smoke test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
     print()
     print("=" * 60)

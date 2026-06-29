@@ -47,8 +47,24 @@ from .enterprise_testops_control_plane import (
     evaluate_defect_quality,
     generate_enterprise_testops_probes,
 )
+from .api_contract_discovery_adapter import collect_api_contract_issues, generate_api_contract_probes
+from .browser_ui_replay_discovery_adapter import (
+    browser_ui_capability_health,
+    collect_browser_ui_replay_issues,
+    generate_browser_ui_replay_probes,
+)
+from .bug_family_coverage_report import build_bug_family_coverage_report
+from .compatibility_discovery_adapter import collect_compatibility_issues, generate_compatibility_probes
+from .defect_family_registry import resolve_defect_family
+from .frontend_runtime_discovery_adapter import collect_frontend_runtime_issues, generate_frontend_runtime_probes
+from .frontend_ux_discovery_adapter import collect_frontend_ux_issues, generate_frontend_ux_probes
+from .performance_stability_discovery_adapter import (
+    collect_performance_stability_issues,
+    generate_performance_stability_probes,
+)
 
 DESTRUCTIVE_RISK_TYPES = {"payment", "refund", "delete", "idempotency", "duplicate_submit", "concurrency", "cancel_order"}
+_BROWSER_UI_BLOCKED_SOURCES = {"browser_ui_replay", "frontend_execution_runtime", "frontend_ux_adapter", "compatibility_adapter"}
 
 
 def _live_mode_or_plan(configured_mode: Any, live_execution_allowed: bool) -> str:
@@ -59,6 +75,7 @@ def _live_mode_or_plan(configured_mode: Any, live_execution_allowed: bool) -> st
 def _fetch_json_or_text(url: str, method: str = "GET", body: Any | None = None, token: str | None = None, timeout: int = 10) -> dict[str, Any]:
     headers = {"Accept": "application/json"}
     raw_body = None
+    started_at = time.perf_counter()
     if body is not None:
         raw_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -68,16 +85,93 @@ def _fetch_json_or_text(url: str, method: str = "GET", body: Any | None = None, 
         req = urllib.request.Request(url, data=raw_body, method=method, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             text = resp.read(300_000).decode("utf-8", errors="replace")
-            return {"ok": 200 <= resp.status < 400, "status_code": resp.status, "body": text, "error": None}
+            return {"ok": 200 <= resp.status < 400, "status_code": resp.status, "body": text, "error": None, "duration_seconds": time.perf_counter() - started_at}
     except urllib.error.HTTPError as exc:
         text = ""
         try:
             text = exc.read(300_000).decode("utf-8", errors="replace")
         except Exception:
             pass
-        return {"ok": False, "status_code": exc.code, "body": text, "error": str(exc)}
+        return {"ok": False, "status_code": exc.code, "body": text, "error": str(exc), "duration_seconds": time.perf_counter() - started_at}
     except Exception as exc:
-        return {"ok": False, "status_code": None, "body": "", "error": str(exc)}
+        return {"ok": False, "status_code": None, "body": "", "error": str(exc), "duration_seconds": time.perf_counter() - started_at}
+
+
+def _apply_browser_health_probe_policy(
+    probes: list[dict[str, Any]],
+    browser_health: dict[str, Any],
+) -> list[dict[str, Any]]:
+    reason_code = str(browser_health.get("reason_code") or "")
+    if reason_code in {"", "OK"}:
+        return probes
+    updated: list[dict[str, Any]] = []
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        source = str(probe.get("source") or "")
+        family = str(probe.get("defect_family") or resolve_defect_family(probe).get("family_id") or "")
+        if source not in _BROWSER_UI_BLOCKED_SOURCES and family not in {"ui", "uiux", "compatibility"}:
+            updated.append(probe)
+            continue
+        evidence = probe.get("evidence") if isinstance(probe.get("evidence"), dict) else {}
+        updated.append(
+            {
+                **probe,
+                "execution_policy": "candidate_only",
+                "status": "capability_blocked",
+                "confidence_prior": min(float(probe.get("confidence_prior") or 0.35), 0.2),
+                "capability_gate": "browser_ui_unavailable",
+                "capability_gate_reason_code": reason_code,
+                "capability_gate_reason": str(browser_health.get("reason") or ""),
+                "evidence": {
+                    **evidence,
+                    "browser_ui_health": {
+                        "reason_code": reason_code,
+                        "severity": browser_health.get("severity"),
+                        "reason": browser_health.get("reason"),
+                        "action": browser_health.get("action"),
+                    },
+                },
+            }
+        )
+    return updated
+
+
+def _augment_risk_plan_with_browser_health(
+    risk_plan: dict[str, Any] | None,
+    probes: list[dict[str, Any]],
+    browser_health: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not isinstance(risk_plan, dict):
+        return risk_plan
+    reason_code = str(browser_health.get("reason_code") or "")
+    updated = dict(risk_plan)
+    updated["selected_probes"] = [dict(p) for p in probes if isinstance(p, dict)]
+    summary = dict(updated.get("summary") or {})
+    blocked = [p for p in probes if str(p.get("capability_gate") or "") == "browser_ui_unavailable"]
+    blocked_sources: dict[str, int] = {}
+    fallback_family_counts: dict[str, int] = {}
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        family = str(probe.get("defect_family") or resolve_defect_family(probe).get("family_id") or "unknown")
+        if str(probe.get("capability_gate") or "") == "browser_ui_unavailable":
+            source = str(probe.get("source") or "unknown")
+            blocked_sources[source] = blocked_sources.get(source, 0) + 1
+        else:
+            fallback_family_counts[family] = fallback_family_counts.get(family, 0) + 1
+    fallback_families = [item[0] for item in sorted(fallback_family_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
+    summary.update(
+        {
+            "browser_ui_budget_constrained": reason_code not in {"", "OK"},
+            "browser_ui_reason_code": reason_code,
+            "browser_ui_blocked_probe_count": len(blocked),
+            "browser_ui_blocked_source_distribution": dict(sorted(blocked_sources.items(), key=lambda kv: (-kv[1], kv[0]))),
+            "browser_ui_fallback_families": fallback_families,
+        }
+    )
+    updated["summary"] = summary
+    return updated
 
 
 def _extract_token(login_response: dict[str, Any]) -> str | None:
@@ -285,6 +379,41 @@ def _status_suspicious(probe: dict[str, Any], response: dict[str, Any]) -> tuple
     return False, 0.35, "响应未触发明显缺陷信号"
 
 
+def _append_adapter_issue(
+    issues: list[dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+    issue: dict[str, Any],
+) -> None:
+    if not isinstance(issue, dict):
+        return
+    family = resolve_defect_family(issue)
+    normalized_issue = dict(issue)
+    normalized_issue.setdefault("defect_family", family.get("family_id"))
+    normalized_issue.setdefault("status", "needs_human_review")
+    normalized_issue.setdefault("qa_feedback_status", "pending")
+    normalized_issue.setdefault("risk_type", normalized_issue.get("defect_family") or "scenario_flow")
+    normalized_issue.setdefault("issue_id", f"ISSUE_ADAPTER_{len(issues)+1:04d}")
+    normalized_issue.setdefault("evidence", {})
+    issues.append(normalized_issue)
+    evidence = normalized_issue.get("evidence") if isinstance(normalized_issue.get("evidence"), dict) else {}
+    request = evidence.get("request") if isinstance(evidence.get("request"), dict) else {
+        "method": normalized_issue.get("method") or "GET",
+        "url": normalized_issue.get("path") or normalized_issue.get("route") or normalized_issue.get("risk_type") or "adapter_signal",
+    }
+    response = evidence.get("response") if isinstance(evidence.get("response"), dict) else evidence
+    evidence_items.append(
+        {
+            "issue_id": normalized_issue["issue_id"],
+            "probe_id": normalized_issue.get("probe_id"),
+            "request": request,
+            "response": response,
+            "expected": normalized_issue.get("expected"),
+            "actual": normalized_issue.get("actual"),
+            "confidence": normalized_issue.get("confidence"),
+        }
+    )
+
+
 def run_real_project_discovery(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:
     root = root or ROOT
     project = _safe_project_id(project_id)
@@ -431,6 +560,12 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         replay_evidence_sandbox = load_replay_evidence_sandbox(project, root)
     except Exception:
         replay_evidence_sandbox = None
+    api_contract_probes = generate_api_contract_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    browser_ui_replay_probes = generate_browser_ui_replay_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    frontend_runtime_probes = generate_frontend_runtime_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    frontend_ux_probes = generate_frontend_ux_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    compatibility_probes = generate_compatibility_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    performance_stability_probes = generate_performance_stability_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
     if isinstance(risk_plan, dict) and isinstance(risk_plan.get("selected_probes"), list):
         probes = [dict(p) for p in risk_plan.get("selected_probes", [])]
     else:
@@ -461,7 +596,36 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         business_assurance_coverage_probes = generate_business_assurance_coverage_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
         seen_probe_keys: set[tuple[str, str, str, str]] = set()
         probes = []
-        for probe in [*business_assurance_coverage_probes, *enterprise_testops_probes, *enterprise_business_knowledge_probes, *multi_industry_probes, *business_saga_compensation_probes, *business_event_chain_probes, *business_population_probes, *business_causality_probes, *temporal_data_regression_probes, *metamorphic_differential_probes, *consistency_isolation_probes, *business_lifecycle_probes, *multi_source_reasoning_probes, *business_invariant_probes, *business_reconciliation_probes, *business_outcome_probes, *universal_probes, *flow_probes, *adaptive_probes, *base_probes, *history_probes]:
+        for probe in [
+            *business_assurance_coverage_probes,
+            *enterprise_testops_probes,
+            *enterprise_business_knowledge_probes,
+            *multi_industry_probes,
+            *business_saga_compensation_probes,
+            *business_event_chain_probes,
+            *business_population_probes,
+            *business_causality_probes,
+            *temporal_data_regression_probes,
+            *metamorphic_differential_probes,
+            *consistency_isolation_probes,
+            *business_lifecycle_probes,
+            *multi_source_reasoning_probes,
+            *business_invariant_probes,
+            *business_reconciliation_probes,
+            *business_outcome_probes,
+            *universal_probes,
+            *flow_probes,
+            *adaptive_probes,
+            *base_probes,
+            *history_probes,
+            *api_contract_probes,
+            *frontend_runtime_probes,
+            *frontend_ux_probes,
+            *compatibility_probes,
+            *performance_stability_probes,
+        ]:
+            family = resolve_defect_family(probe)
+            probe = {**probe, "defect_family": probe.get("defect_family") or family.get("family_id")}
             key = (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")))
             if key in seen_probe_keys:
                 continue
@@ -469,9 +633,36 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             probes.append(probe)
             if len(probes) >= int(cfg.get("max_probe_count") or 100):
                 break
+    supplemental_probes = [
+        *api_contract_probes,
+        *browser_ui_replay_probes,
+        *frontend_runtime_probes,
+        *frontend_ux_probes,
+        *compatibility_probes,
+        *performance_stability_probes,
+    ]
+    seen_probe_keys: set[tuple[str, str, str, str]] = {
+        (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")))
+        for probe in probes
+        if isinstance(probe, dict)
+    }
+    for probe in supplemental_probes:
+        if not isinstance(probe, dict):
+            continue
+        family = resolve_defect_family(probe)
+        probe = {**probe, "defect_family": probe.get("defect_family") or family.get("family_id")}
+        key = (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")))
+        if key in seen_probe_keys:
+            continue
+        seen_probe_keys.add(key)
+        probes.append(probe)
 
+    browser_health = browser_ui_capability_health(cfg=cfg, project_id=project, root=root)
+    probes = _apply_browser_health_probe_policy(probes, browser_health)
+    risk_plan = _augment_risk_plan_with_browser_health(risk_plan, probes, browser_health)
     if isinstance(confirmed_bug_flywheel_profile, dict):
         probes = annotate_probes_with_confirmed_learning(probes, project, root, profile=confirmed_bug_flywheel_profile)
+    probes = [{**probe, "defect_family": probe.get("defect_family") or resolve_defect_family(probe).get("family_id")} for probe in probes if isinstance(probe, dict)]
 
     normal = accounts.get("normal_user") or accounts.get("normal") or accounts.get("user") or {}
     admin = accounts.get("admin") or accounts.get("admin_user") or {}
@@ -527,13 +718,23 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
                 target_url = read_only_base_url if is_read_only else write_base_url
                 response = _fetch_json_or_text(_join_url(target_url, str(probe.get("path"))), probe_method, token=token_by_actor.get(str(probe.get("actor"))), timeout=timeout)
         suspicious, confidence, reason = _status_suspicious(probe, response)
-        execution = {"probe_id": probe["probe_id"], "probe": probe, "response_status": response.get("status_code"), "error": response.get("error"), "suspicious": suspicious, "confidence": confidence, "reason": reason}
+        execution = {
+            "probe_id": probe["probe_id"],
+            "probe": probe,
+            "response_status": response.get("status_code"),
+            "error": response.get("error"),
+            "duration_seconds": response.get("duration_seconds"),
+            "suspicious": suspicious,
+            "confidence": confidence,
+            "reason": reason,
+        }
         executions.append(execution)
         if suspicious or response.get("error") in {"candidate_only_or_missing_base_url", "destructive_probe_blocked"}:
             candidate_only = response.get("error") in {"candidate_only_or_missing_base_url", "destructive_probe_blocked"}
             issue = {
                 "issue_id": f"ISSUE_{probe['probe_id']}",
                 "title": probe.get("title"),
+                "defect_family": probe.get("defect_family") or resolve_defect_family(probe).get("family_id"),
                 "risk_type": probe.get("risk_type"),
                 "severity": probe.get("severity") if not candidate_only else "P2",
                 "confidence": confidence if not candidate_only else 0.42,
@@ -552,6 +753,19 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             }
             issues.append(issue)
             evidence_items.append({"issue_id": issue["issue_id"], "probe_id": probe["probe_id"], "request": issue["evidence"]["request"], "response": issue["evidence"]["response"], "expected": issue["expected"], "actual": issue["actual"], "confidence": issue["confidence"]})
+
+    for adapter_issue in collect_api_contract_issues(project, root, scenario=str(cfg.get("scenario") or "manufacturing")):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
+    for adapter_issue in collect_browser_ui_replay_issues(project, root, cfg=cfg, scenario=str(cfg.get("scenario") or "manufacturing")):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
+    for adapter_issue in collect_frontend_runtime_issues(project, root, scenario=str(cfg.get("scenario") or "manufacturing"), cfg=cfg):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
+    for adapter_issue in collect_frontend_ux_issues(project, root, scenario=str(cfg.get("scenario") or "manufacturing"), cfg=cfg):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
+    for adapter_issue in collect_compatibility_issues(cfg, openapi=openapi if isinstance(openapi, dict) else {}, project_id=project, root=root, scenario=str(cfg.get("scenario") or "manufacturing")):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
+    for adapter_issue in collect_performance_stability_issues(executions, request_timeout_seconds=timeout):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
 
     business_outcome_run = None
     try:
@@ -889,6 +1103,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     except Exception as exc:
         business_assurance_coverage_run = {"error": str(exc)}
 
+    issues = [{**issue, "defect_family": issue.get("defect_family") or resolve_defect_family(issue).get("family_id")} for issue in issues if isinstance(issue, dict)]
     high = [i for i in issues if float(i.get("confidence") or 0) >= 0.75]
     medium = [i for i in issues if 0.5 <= float(i.get("confidence") or 0) < 0.75]
     blockers = [i for i in issues if i.get("severity") in {"P0", "P1"} and float(i.get("confidence") or 0) >= 0.75]
@@ -1038,6 +1253,56 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         "issues": issues,
         "suggested_release_blockers": blockers,
     }
+    data["browser_ui_health"] = browser_health
+    family_coverage_report = build_bug_family_coverage_report(probes, issues, health_context={"browser_ui_health": browser_health})
+    data["bug_family_coverage"] = family_coverage_report
+    data["metrics"].update(
+        {
+            "api_contract_probe_count": len([p for p in probes if p.get("source") == "api_contract_acceptance"]),
+            "browser_ui_replay_probe_count": len([p for p in probes if p.get("source") == "browser_ui_replay"]),
+            "frontend_task_journey_probe_count": len([p for p in probes if p.get("source") == "frontend_task_journey"]),
+            "frontend_runtime_probe_count": len([p for p in probes if p.get("source") == "frontend_execution_runtime"]),
+            "frontend_ux_probe_count": len([p for p in probes if p.get("source") == "frontend_ux_adapter"]),
+            "compatibility_probe_count": len([p for p in probes if p.get("source") == "compatibility_adapter"]),
+            "performance_stability_probe_count": len([p for p in probes if p.get("source") == "performance_stability_adapter"]),
+            "ui_design_oracle_issue_count": len([i for i in issues if i.get("source") == "ui_design_oracle"]),
+            "ui_design_oracle_missing_component_count": sum(
+                1
+                for i in issues
+                if i.get("source") == "ui_design_oracle"
+                and isinstance(i.get("evidence"), dict)
+                and str((i.get("evidence") or {}).get("missing_component") or "").strip()
+            ),
+            "ui_design_oracle_missing_feedback_count": sum(
+                1
+                for i in issues
+                if i.get("source") == "ui_design_oracle"
+                and isinstance(i.get("evidence"), dict)
+                and str((i.get("evidence") or {}).get("missing_feedback") or "").strip()
+            ),
+            "browser_ui_enabled": bool(browser_health.get("enabled")),
+            "browser_ui_playwright_importable": bool(browser_health.get("playwright_importable")),
+            "browser_ui_browsers_present": bool(browser_health.get("browsers_present")),
+            "browser_ui_reason_code": str(browser_health.get("reason_code") or ""),
+            "browser_ui_severity": str(browser_health.get("severity") or ""),
+            "browser_ui_blocked_probe_count": len([p for p in probes if str(p.get("capability_gate") or "") == "browser_ui_unavailable"]),
+            "covered_bug_family_count": int(family_coverage_report.get("covered_family_count", 0) or 0),
+            "validated_bug_family_count": int(family_coverage_report.get("validated_family_count", 0) or 0),
+            "candidate_only_bug_family_count": int(family_coverage_report.get("candidate_only_family_count", 0) or 0),
+        }
+    )
+    design_oracle_summary = {
+        "ui_design_oracle_issue_count": int(data["metrics"].get("ui_design_oracle_issue_count") or 0),
+        "ui_design_oracle_missing_component_count": int(data["metrics"].get("ui_design_oracle_missing_component_count") or 0),
+        "ui_design_oracle_missing_feedback_count": int(data["metrics"].get("ui_design_oracle_missing_feedback_count") or 0),
+        "ui_design_oracle_signals_present": bool(int(data["metrics"].get("ui_design_oracle_issue_count") or 0) > 0),
+    }
+    if isinstance(data.get("risk_based_plan_summary"), dict):
+        updated_plan_summary = dict(data["risk_based_plan_summary"])
+        updated_plan_summary.update(design_oracle_summary)
+        data["risk_based_plan_summary"] = updated_plan_summary
+        if isinstance(risk_plan, dict):
+            risk_plan["summary"] = updated_plan_summary
     # Phase59 turns raw discovery candidates into quality-scored, deduplicated
     # enterprise defects.  Environment and data-precondition failures are kept
     # observable but do not inflate the high-value Bug count.

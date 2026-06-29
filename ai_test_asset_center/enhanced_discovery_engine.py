@@ -24,6 +24,7 @@ from .analyzers.authorization import AuthorizationAnalyzer
 
 # 导入优化引擎
 from .optimized_discovery_engine import OptimizedDiscoveryEngine
+from .openapi_spec_utils import parse_openapi_spec
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +105,13 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
             发现结果
         """
         logger.info("开始增强发现流程...")
+        api_spec_parsed = self._parse_api_spec(api_spec_text)
 
         results = {
             "phase": "enhanced_discovery",
             "status": "started",
             "discoveries": [],
-            "analysis": {}
+            "analysis": {"api_spec_summary": self._build_api_spec_summary(api_spec_parsed)}
         }
 
         # 1. 运行业务规则分析
@@ -117,28 +119,28 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
         rules = self.business_rules_analyzer.extract_rules_from_prd(prd_text)
         rule_violations = self.business_rules_analyzer.validate_rule_implementation(
             rules,
-            self._parse_api_spec(api_spec_text)
+            api_spec_parsed
         )
         results["analysis"]["business_rules"] = self.business_rules_analyzer.get_summary()
         results["discoveries"].extend([self._convert_to_discovery(v, "C01") for v in rule_violations])
 
         # 2. 运行状态机分析
         logger.info("2. 运行状态机分析...")
-        sm = self.state_machine_analyzer.extract_state_machine(prd_text, self._parse_api_spec(api_spec_text))
+        sm = self.state_machine_analyzer.extract_state_machine(prd_text, api_spec_parsed)
         sm_bugs = self.state_machine_analyzer.validate_state_transitions(sm, [])
         results["analysis"]["state_machine"] = self.state_machine_analyzer.get_summary()
         results["discoveries"].extend([self._convert_to_discovery(b, "C06") for b in sm_bugs])
 
         # 3. 运行多租户隔离分析
         logger.info("3. 运行多租户隔离分析...")
-        mt_bugs = self.multi_tenant_analyzer.analyze_api_endpoints(self._parse_api_spec(api_spec_text))
+        mt_bugs = self.multi_tenant_analyzer.analyze_api_endpoints(api_spec_parsed)
         results["analysis"]["multi_tenant"] = self.multi_tenant_analyzer.get_summary()
         results["discoveries"].extend([self._convert_to_discovery(b, "C05") for b in mt_bugs])
 
         # 4. 运行守恒规则分析
         logger.info("4. 运行守恒规则分析...")
         conservation_bugs = self.conservation_analyzer.analyze_conservation(
-            prd_text, self._parse_api_spec(api_spec_text)
+            prd_text, api_spec_parsed
         )
         results["analysis"]["conservation"] = self.conservation_analyzer.get_summary()
         results["discoveries"].extend([self._convert_to_discovery(b, "C08") for b in conservation_bugs])
@@ -148,7 +150,7 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
             # 5. 运行并发与竞态分析
             logger.info("5. 运行并发与竞态分析...")
             concurrency_bugs = self.concurrency_analyzer.analyze_concurrency(
-                self._parse_api_spec(api_spec_text), prd_text
+                api_spec_parsed, prd_text
             )
             results["analysis"]["concurrency"] = self.concurrency_analyzer.get_summary()
             results["discoveries"].extend([self._convert_to_discovery(b, "C11") for b in concurrency_bugs])
@@ -156,7 +158,7 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
             # 6. 运行异步任务分析
             logger.info("6. 运行异步任务分析...")
             async_task_bugs = self.async_task_analyzer.analyze_async_tasks(
-                self._parse_api_spec(api_spec_text), prd_text
+                api_spec_parsed, prd_text
             )
             results["analysis"]["async_task"] = self.async_task_analyzer.get_summary()
             results["discoveries"].extend([self._convert_to_discovery(b, "C20") for b in async_task_bugs])
@@ -164,7 +166,7 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
             # 7. 运行缓存一致性分析
             logger.info("7. 运行缓存一致性分析...")
             cache_bugs = self.cache_consistency_analyzer.analyze_cache_consistency(
-                self._parse_api_spec(api_spec_text), prd_text
+                api_spec_parsed, prd_text
             )
             results["analysis"]["cache_consistency"] = self.cache_consistency_analyzer.get_summary()
             results["discoveries"].extend([self._convert_to_discovery(b, "C21") for b in cache_bugs])
@@ -172,7 +174,7 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
             # 8. 运行认证授权分析
             logger.info("8. 运行认证授权分析...")
             auth_bugs = self.authorization_analyzer.analyze_authorization(
-                self._parse_api_spec(api_spec_text), prd_text
+                api_spec_parsed, prd_text
             )
             results["analysis"]["authorization"] = self.authorization_analyzer.get_summary()
             results["discoveries"].extend([self._convert_to_discovery(b, "C03") for b in auth_bugs])
@@ -187,16 +189,21 @@ class EnhancedDiscoveryEngine(OptimizedDiscoveryEngine):
         return results
 
     def _parse_api_spec(self, spec_text: str) -> Dict[str, Any]:
-        """解析API规格（简化）"""
-        # 在真实实现中，这会解析OpenAPI yaml/json
-        # 这里返回一个模拟值
+        """解析 API 规格，优先使用真实 OpenAPI / 路由文本而不是固定 demo 路径。"""
+        return parse_openapi_spec(spec_text)
+
+    def _build_api_spec_summary(self, api_spec_parsed: Dict[str, Any]) -> Dict[str, Any]:
+        paths = api_spec_parsed.get("paths") if isinstance(api_spec_parsed, dict) else {}
+        route_count = 0
+        method_count = 0
+        for methods in paths.values() if isinstance(paths, dict) else []:
+            route_count += 1
+            if isinstance(methods, dict):
+                method_count += len(methods)
         return {
-            "paths": {
-                "/api/orders": {
-                    "get": {"summary": "获取订单列表"},
-                    "post": {"summary": "创建订单"}
-                }
-            }
+            "openapi_version": str(api_spec_parsed.get("openapi") or ""),
+            "route_count": route_count,
+            "method_count": method_count,
         }
 
     def _convert_to_discovery(self, obj: Any, category: str) -> Dict[str, Any]:

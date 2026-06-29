@@ -10,6 +10,8 @@ P0/P1 evidence can be collected.
 
 from typing import Any
 
+from .defect_family_registry import resolve_defect_family
+
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 READ_METHODS = {"GET", "HEAD"}
 HIGH_VALUE_RUNTIME_RISKS = {
@@ -100,6 +102,7 @@ def build_runtime_probe_capability_matrix(probes: list[dict[str, Any]], prefligh
         method = str(ep.get("method") or "GET").upper()
         path = str(ep.get("path") or "")
         risk_type = str(probe.get("risk_type") or "")
+        defect_family = resolve_defect_family(probe)
         missing_blocking: list[str] = []
         missing_optional: list[str] = []
         capabilities = {
@@ -111,6 +114,7 @@ def build_runtime_probe_capability_matrix(probes: list[dict[str, Any]], prefligh
             "write_sandbox": True,
             "cleanup": True,
             "snapshot_observer": True,
+            "defect_family_registered": bool(defect_family.get("family_id")),
         }
         if not base_configured:
             missing_blocking.append("base_url")
@@ -140,12 +144,15 @@ def build_runtime_probe_capability_matrix(probes: list[dict[str, Any]], prefligh
         rows.append({
             "row_no": idx,
             "candidate_id": probe.get("candidate_id"),
+            "defect_family": defect_family.get("family_id"),
+            "defect_family_display_name": defect_family.get("display_name"),
             "risk_type": risk_type,
             "method": method,
             "path": path,
             "high_value_runtime_risk": risk_type in HIGH_VALUE_RUNTIME_RISKS,
             "requires_before_after_snapshot": needs_snapshot,
             "capabilities": capabilities,
+            "allowed_execution_modes": list(probe.get("allowed_execution_modes") or defect_family.get("allowed_execution_modes") or []),
             "missing_blocking_capabilities": missing_blocking,
             "missing_optional_capabilities": missing_optional,
             "preflight_lane": lane,

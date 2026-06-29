@@ -68,3 +68,19 @@ def test_real_project_discovery_returns_stable_summary_contract(tmp_path: Path) 
     assert result["enterprise_testops_control_plane"]["defect_quality_summary"]["candidate_only_count"] >= 1
     assert result["metrics"]["issue_count"] == result["issue_count"]
     assert result["metrics"]["probe_count"] == result["probe_count"]
+    assert "bug_family_coverage" in result
+    assert result["metrics"]["api_contract_probe_count"] >= 1
+    assert result["metrics"]["browser_ui_replay_probe_count"] >= 1
+    assert result["metrics"]["frontend_runtime_probe_count"] >= 1
+    assert result["metrics"]["performance_stability_probe_count"] >= 1
+    assert result["metrics"]["covered_bug_family_count"] >= 1
+    assert "browser_ui_health" in result
+    assert result["browser_ui_health"]["enabled"] is False
+    assert result["browser_ui_health"]["reason_code"] == "E_BROWSER_UI_DISABLED"
+    assert result["metrics"]["browser_ui_reason_code"] == "E_BROWSER_UI_DISABLED"
+    assert result["metrics"]["browser_ui_blocked_probe_count"] >= 1
+    assert result["bug_family_coverage"]["missing_family_reasons"]["ui"]["reason_code"] == "E_BROWSER_UI_DISABLED"
+    planner_summary = result["risk_based_plan_summary"]
+    assert planner_summary["browser_ui_budget_constrained"] is True
+    assert planner_summary["browser_ui_reason_code"] == "E_BROWSER_UI_DISABLED"
+    assert planner_summary["browser_ui_blocked_probe_count"] >= 1

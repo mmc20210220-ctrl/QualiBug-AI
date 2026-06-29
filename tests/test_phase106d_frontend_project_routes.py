@@ -8,6 +8,8 @@ from ai_test_asset_center.phase106_frontend_project_routes import (
     FRONTEND_APP_DIR,
     PHASE106D_VERSION,
     PROJECT_ROUTES_MANIFEST_JSON,
+    TASK_JOURNEYS_MANIFEST_JSON,
+    UI_DESIGN_ORACLE_MANIFEST_JSON,
     build_frontend_project_routes,
     run_frontend_project_routes_export,
     scan_frontend_project_routes_for_secret_leaks,
@@ -25,7 +27,10 @@ def test_phase106d_builds_project_list_and_detail_routes(tmp_path: Path) -> None
     assert (app_dir / "src/pages/ProjectListPage.tsx").exists()
     assert (app_dir / "src/pages/ProjectDetailPage.tsx").exists()
     assert (app_dir / "src/hooks/useProjectWorkspace.ts").exists()
+    assert (app_dir / "src/hooks/useSelectedProjectId.ts").exists()
     assert (app_dir / "src/services/projectWorkspace.ts").exists()
+    assert (app_dir / "src/components/WorkspaceStateGate.tsx").exists()
+    assert (app_dir / "src/components/DangerConfirmButton.tsx").exists()
     assert (tmp_path / "phase106_frontend_project_routes.zip").exists()
 
     routes = (app_dir / "src/routes.ts").read_text(encoding="utf-8")
@@ -42,10 +47,31 @@ def test_phase106d_builds_project_list_and_detail_routes(tmp_path: Path) -> None
     for keyword in ("ProjectWorkspace", "listProjects", "createProjectDraft", "demo fallback", "projectScopedApiPaths", "getExecutiveReport"):
         assert keyword in workspace
 
+    topbar = (app_dir / "src/components/Topbar.tsx").read_text(encoding="utf-8")
+    for keyword in ("顶部状态区", "运行模式", "后端状态", "ProjectSwitcher"):
+        assert keyword in topbar
+
     manifest = json.loads((tmp_path / PROJECT_ROUTES_MANIFEST_JSON).read_text(encoding="utf-8"))
     assert manifest["version"] == PHASE106D_VERSION
     assert len(manifest["project_routes"]) == 2
     assert len(manifest["project_scoped_api_paths"]) >= 7
+    assert len(manifest["frontend_task_journeys"]) >= 5
+    assert len(manifest["ui_screen_oracles"]) >= 2
+    assert len(manifest["ui_journey_oracles"]) >= 2
+    assert manifest["project_routes"][1]["requires_project_context"] is True
+    assert manifest["project_routes"][0]["design_screen_id"] == "project_list"
+    assert "project_switcher" in manifest["project_routes"][0]["expected_components"]
+    assert "open_command_center" in manifest["project_routes"][1]["primary_actions"]
+    assert "enter_command_center" in manifest["project_routes"][1]["journey_entry"]
+    task_journeys = json.loads((tmp_path / TASK_JOURNEYS_MANIFEST_JSON).read_text(encoding="utf-8"))
+    assert task_journeys["version"] == PHASE106D_VERSION
+    assert any(item["journey_id"] == "select_project" for item in task_journeys["journeys"])
+    assert any(item["journey_id"] == "enter_command_center" for item in task_journeys["journeys"])
+    assert any(item["required_components"] for item in task_journeys["journeys"])
+    ui_design_oracle = json.loads((tmp_path / UI_DESIGN_ORACLE_MANIFEST_JSON).read_text(encoding="utf-8"))
+    assert ui_design_oracle["version"] == "ui-design-oracle-v1"
+    assert any(item["screen_id"] == "project_list" for item in ui_design_oracle["screens"])
+    assert any(item["journey_id"] == "enter_command_center" for item in ui_design_oracle["journeys"])
     assert not verify_frontend_project_routes_checksums(tmp_path)
 
 

@@ -162,6 +162,10 @@ def _classify_gap(finding: dict[str, Any]) -> dict[str, Any]:
 def analyze_evidence_gaps(result: dict[str, Any]) -> dict[str, Any]:
     discovery = result.get("discovery_result") if isinstance(result.get("discovery_result"), dict) else result
     findings = discovery.get("findings") if isinstance(discovery.get("findings"), list) else []
+    family_coverage = discovery.get("bug_family_coverage") if isinstance(discovery.get("bug_family_coverage"), dict) else {}
+    browser_health = discovery.get("browser_ui_health") if isinstance(discovery.get("browser_ui_health"), dict) else {}
+    metrics = discovery.get("metrics") if isinstance(discovery.get("metrics"), dict) else {}
+    issues = discovery.get("issues") if isinstance(discovery.get("issues"), list) else []
     gaps_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
     raw_non_validated = 0
     for finding in findings:
@@ -188,6 +192,7 @@ def analyze_evidence_gaps(result: dict[str, Any]) -> dict[str, Any]:
     severity_by_bucket: dict[str, Counter] = defaultdict(Counter)
     for gap in gaps:
         severity_by_bucket[gap["bucket"]][str(gap.get("severity") or "P3")] += 1
+    ui_design_oracle_issues = [i for i in issues if isinstance(i, dict) and str(i.get("source") or "") == "ui_design_oracle"]
     return {
         "report_version": "phase92e-evidence-gap-v1",
         "generated_at": _now(),
@@ -199,6 +204,20 @@ def analyze_evidence_gaps(result: dict[str, Any]) -> dict[str, Any]:
             "severity_by_bucket": {k: dict(v) for k, v in sorted(severity_by_bucket.items())},
             "engine_needs_more_evidence": discovery.get("needs_more_evidence"),
             "engine_inconclusive_rate": discovery.get("inconclusive_rate"),
+            "covered_bug_family_count": family_coverage.get("covered_family_count", 0),
+            "validated_bug_family_count": family_coverage.get("validated_family_count", 0),
+            "missing_bug_families": list(family_coverage.get("missing_validated_families") or []),
+            "browser_ui_health": {
+                "enabled": bool(browser_health.get("enabled")),
+                "reason_code": str(browser_health.get("reason_code") or ""),
+                "severity": str(browser_health.get("severity") or ""),
+            },
+            "browser_ui_blocked_families": list((family_coverage.get("missing_family_reasons") or {}).keys()),
+            "ui_design_oracle": {
+                "issue_count": int(metrics.get("ui_design_oracle_issue_count", len(ui_design_oracle_issues)) or 0),
+                "missing_component_count": int(metrics.get("ui_design_oracle_missing_component_count", 0) or 0),
+                "missing_feedback_count": int(metrics.get("ui_design_oracle_missing_feedback_count", 0) or 0),
+            },
         },
         "gaps": gaps,
     }

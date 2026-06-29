@@ -27,15 +27,25 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ai_test_asset_center.phase103_enterprise_command_center import redact_value
+from ai_test_asset_center.frontend_task_journey_registry import build_frontend_task_journeys
 from ai_test_asset_center.phase106_frontend_api_runtime import (
     FRONTEND_APP_DIR,
     build_frontend_api_runtime,
+)
+from ai_test_asset_center.ui_design_oracle_manifest import (
+    build_ui_design_sources,
+    build_ui_journey_oracles,
+    build_ui_screen_oracles,
 )
 
 PHASE106D_VERSION = "phase106d-frontend-project-routes-v1"
 
 PROJECT_ROUTES_MANIFEST_JSON = "frontend_project_routes_manifest.json"
 PROJECT_ROUTES_MANIFEST_MD = "frontend_project_routes_manifest.md"
+TASK_JOURNEYS_MANIFEST_JSON = "frontend_task_journeys_manifest.json"
+TASK_JOURNEYS_MANIFEST_MD = "frontend_task_journeys_manifest.md"
+UI_DESIGN_ORACLE_MANIFEST_JSON = "ui_design_oracle_manifest.json"
+UI_DESIGN_ORACLE_MANIFEST_MD = "ui_design_oracle_manifest.md"
 PROJECT_ROUTES_ACCEPTANCE_JSON = "frontend_project_routes_acceptance_report.json"
 PROJECT_ROUTES_ACCEPTANCE_MD = "frontend_project_routes_acceptance_report.md"
 PROJECT_ROUTES_CHECKSUMS = "CHECKSUMS_PHASE106D.sha256"
@@ -45,9 +55,13 @@ REQUIRED_PROJECT_ROUTE_FILES: tuple[str, ...] = (
     f"{FRONTEND_APP_DIR}/src/app/projectContext.ts",
     f"{FRONTEND_APP_DIR}/src/services/projectWorkspace.ts",
     f"{FRONTEND_APP_DIR}/src/hooks/useProjectWorkspace.ts",
+    f"{FRONTEND_APP_DIR}/src/hooks/useSelectedProjectId.ts",
     f"{FRONTEND_APP_DIR}/src/components/ProjectSwitcher.tsx",
     f"{FRONTEND_APP_DIR}/src/components/ProjectSummaryCard.tsx",
     f"{FRONTEND_APP_DIR}/src/components/ProjectRouteGuard.tsx",
+    f"{FRONTEND_APP_DIR}/src/components/WorkspaceActionFeedback.tsx",
+    f"{FRONTEND_APP_DIR}/src/components/WorkspaceStateGate.tsx",
+    f"{FRONTEND_APP_DIR}/src/components/DangerConfirmButton.tsx",
     f"{FRONTEND_APP_DIR}/src/pages/ProjectListPage.tsx",
     f"{FRONTEND_APP_DIR}/src/pages/ProjectDetailPage.tsx",
     f"{FRONTEND_APP_DIR}/src/__tests__/project-routes-contract.test.ts",
@@ -55,6 +69,10 @@ REQUIRED_PROJECT_ROUTE_FILES: tuple[str, ...] = (
     f"{FRONTEND_APP_DIR}/README_FRONTEND_PROJECT_ROUTES.md",
     PROJECT_ROUTES_MANIFEST_JSON,
     PROJECT_ROUTES_MANIFEST_MD,
+    TASK_JOURNEYS_MANIFEST_JSON,
+    TASK_JOURNEYS_MANIFEST_MD,
+    UI_DESIGN_ORACLE_MANIFEST_JSON,
+    UI_DESIGN_ORACLE_MANIFEST_MD,
     PROJECT_ROUTES_ACCEPTANCE_JSON,
     PROJECT_ROUTES_ACCEPTANCE_MD,
     PROJECT_ROUTES_CHECKSUMS,
@@ -62,11 +80,23 @@ REQUIRED_PROJECT_ROUTE_FILES: tuple[str, ...] = (
 )
 
 CORE_PROJECT_ROUTE_LABELS: tuple[str, ...] = (
+    "全局产品壳",
+    "导航",
     "项目列表",
     "项目详情",
+    "顶部状态区",
     "当前项目切换",
+    "项目切换连续性",
+    "运行模式",
+    "后端状态",
     "项目级 API 请求",
     "项目级状态缓存",
+    "统一状态反馈",
+    "统一加载态",
+    "空态",
+    "失败态",
+    "离线态",
+    "危险动作确认",
     "ProjectWorkspace",
     "ProjectSwitcher",
     "ProjectRouteGuard",
@@ -76,9 +106,37 @@ CORE_PROJECT_ROUTE_LABELS: tuple[str, ...] = (
     "默认脱敏",
 )
 
-PROJECT_ROUTE_CONTRACT: tuple[dict[str, str], ...] = (
-    {"path": "/projects", "component": "ProjectListPage", "purpose": "项目列表、创建项目、当前项目切换"},
-    {"path": "/projects/:projectId", "component": "ProjectDetailPage", "purpose": "项目详情、项目级 API 路径、进入核心页面"},
+PROJECT_ROUTE_CONTRACT: tuple[dict[str, Any], ...] = (
+    {
+        "path": "/projects",
+        "component": "ProjectListPage",
+        "purpose": "项目列表、创建项目草案、统一状态反馈、当前项目切换",
+        "requires_project_context": False,
+        "primary_actions": ["create_project_draft", "switch_project", "open_project_detail"],
+        "journey_entry": ["select_project", "create_project_draft"],
+        "data_dependencies": ["projectWorkspace", "runtimeHealth", "projectRouteInventory"],
+        "risk_tags": ["workspace_loading", "project_selection", "task_completion"],
+        "guard_conditions": ["workspace_state_gate"],
+        "design_screen_id": "project_list",
+        "expected_components": ["topbar", "project_switcher", "project_card_list", "create_project_button", "workspace_state_gate"],
+        "expected_states": ["loading", "success", "empty", "error", "offline"],
+        "required_feedback": ["loading_indicator", "empty_state_message", "error_feedback"],
+    },
+    {
+        "path": "/projects/:projectId",
+        "component": "ProjectDetailPage",
+        "purpose": "项目详情、项目切换连续性、危险动作确认、进入核心页面",
+        "requires_project_context": True,
+        "primary_actions": ["switch_project", "open_command_center", "open_risk_evidence"],
+        "journey_entry": ["open_project_detail", "enter_command_center", "open_risk_evidence"],
+        "data_dependencies": ["projectWorkspace", "projectScopedApiPaths", "projectRouteGuard"],
+        "risk_tags": ["ui_navigation", "context_continuity", "project_scope_binding"],
+        "guard_conditions": ["project_route_guard", "workspace_state_gate"],
+        "design_screen_id": "project_detail",
+        "expected_components": ["topbar", "project_summary", "project_switcher", "project_route_guard", "project_scoped_api_paths"],
+        "expected_states": ["loading", "success", "error", "offline"],
+        "required_feedback": ["current_project_visible", "navigation_entry_visible"],
+    },
 )
 
 PROJECT_SCOPED_API_PATHS: tuple[dict[str, str], ...] = (
@@ -234,47 +292,74 @@ def _zip_project_routes(output_dir: Path) -> Path:
 def _write_project_context(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/app/projectContext.ts",
-        """import { runtimeConfig } from './runtimeConfig';\n\nexport interface ProjectSummary {\n  projectId: string;\n  projectName: string;\n  customerName: string;\n  industry: string;\n  status: string;\n  launchDecision: string;\n  updatedAt: string;\n  healthScore: number;\n  riskCount: number;\n}\n\nconst SELECTED_PROJECT_KEY = 'qualibug.selectedProjectId';\n\nfunction readString(value: unknown, fallback: string): string {\n  return typeof value === 'string' && value.trim() ? value : fallback;\n}\n\nfunction readNumber(value: unknown, fallback: number): number {\n  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;\n}\n\nexport function normalizeProjectSummary(raw: Record<string, unknown>, fallbackIndex = 0): ProjectSummary {\n  return {\n    projectId: readString(raw.project_id ?? raw.projectId ?? raw.id, fallbackIndex === 0 ? runtimeConfig.projectId : `demo-project-${fallbackIndex}`),\n    projectName: readString(raw.project_name ?? raw.projectName ?? raw.name, '未命名质量评估项目'),\n    customerName: readString(raw.customer_name ?? raw.customerName ?? raw.customer, '未命名客户'),\n    industry: readString(raw.industry, 'unknown'),\n    status: readString(raw.status, 'draft'),\n    launchDecision: readString(raw.launch_decision ?? raw.launchDecision ?? raw.recommendation, '待评估'),\n    updatedAt: readString(raw.updated_at ?? raw.updatedAt, new Date().toISOString()),\n    healthScore: readNumber(raw.health_score ?? raw.healthScore, 0),\n    riskCount: readNumber(raw.risk_count ?? raw.riskCount, 0),\n  };\n}\n\nexport function readSelectedProjectId(fallbackProjectId = runtimeConfig.projectId): string {\n  try {\n    return window.localStorage.getItem(SELECTED_PROJECT_KEY) || fallbackProjectId;\n  } catch {\n    return fallbackProjectId;\n  }\n}\n\nexport function persistSelectedProjectId(projectId: string): void {\n  try {\n    window.localStorage.setItem(SELECTED_PROJECT_KEY, projectId);\n  } catch {\n    // ignore storage failures in embedded customer preview.\n  }\n}\n\nexport function projectScopedApiPath(path: string, projectId: string): string {\n  return path.replace('{projectId}', encodeURIComponent(projectId));\n}\n""",
+        """import { runtimeConfig } from './runtimeConfig';\n\nexport interface ProjectSummary {\n  projectId: string;\n  projectName: string;\n  customerName: string;\n  industry: string;\n  status: string;\n  launchDecision: string;\n  updatedAt: string;\n  healthScore: number;\n  riskCount: number;\n}\n\nconst SELECTED_PROJECT_KEY = 'qualibug.selectedProjectId';\nexport const PROJECT_SELECTION_EVENT = 'qualibug:project-selection-changed';\n\nfunction readString(value: unknown, fallback: string): string {\n  return typeof value === 'string' && value.trim() ? value : fallback;\n}\n\nfunction readNumber(value: unknown, fallback: number): number {\n  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;\n}\n\nexport function normalizeProjectSummary(raw: Record<string, unknown>, fallbackIndex = 0): ProjectSummary {\n  return {\n    projectId: readString(raw.project_id ?? raw.projectId ?? raw.id, fallbackIndex === 0 ? runtimeConfig.projectId : `demo-project-${fallbackIndex}`),\n    projectName: readString(raw.project_name ?? raw.projectName ?? raw.name, '未命名质量评估项目'),\n    customerName: readString(raw.customer_name ?? raw.customerName ?? raw.customer, '未命名客户'),\n    industry: readString(raw.industry, 'unknown'),\n    status: readString(raw.status, 'draft'),\n    launchDecision: readString(raw.launch_decision ?? raw.launchDecision ?? raw.recommendation, '待评估'),\n    updatedAt: readString(raw.updated_at ?? raw.updatedAt, new Date().toISOString()),\n    healthScore: readNumber(raw.health_score ?? raw.healthScore, 0),\n    riskCount: readNumber(raw.risk_count ?? raw.riskCount, 0),\n  };\n}\n\nexport function readSelectedProjectId(fallbackProjectId = runtimeConfig.projectId): string {\n  try {\n    return window.localStorage.getItem(SELECTED_PROJECT_KEY) || fallbackProjectId;\n  } catch {\n    return fallbackProjectId;\n  }\n}\n\nexport function persistSelectedProjectId(projectId: string): void {\n  try {\n    window.localStorage.setItem(SELECTED_PROJECT_KEY, projectId);\n    window.dispatchEvent(new CustomEvent(PROJECT_SELECTION_EVENT, { detail: { projectId } }));\n  } catch {\n    // ignore storage failures in embedded customer preview.\n  }\n}\n\nexport function subscribeSelectedProject(onChange: (projectId: string) => void): () => void {\n  const handleCustomEvent = (event: Event) => {\n    const detail = event instanceof CustomEvent ? event.detail as { projectId?: string } | undefined : undefined;\n    if (detail?.projectId) onChange(detail.projectId);\n  };\n  const handleStorage = (event: StorageEvent) => {\n    if (event.key === SELECTED_PROJECT_KEY && event.newValue) onChange(event.newValue);\n  };\n  window.addEventListener(PROJECT_SELECTION_EVENT, handleCustomEvent);\n  window.addEventListener('storage', handleStorage);\n  return () => {\n    window.removeEventListener(PROJECT_SELECTION_EVENT, handleCustomEvent);\n    window.removeEventListener('storage', handleStorage);\n  };\n}\n\nexport function projectScopedApiPath(path: string, projectId: string): string {\n  return path.replace('{projectId}', encodeURIComponent(projectId));\n}\n\nexport function projectDetailPath(projectId: string): string {\n  return `/projects/${encodeURIComponent(projectId)}`;\n}\n\nexport function continueWorkspacePath(pathname: string, projectId: string): string {\n  if (pathname.startsWith('/projects/')) return projectDetailPath(projectId);\n  return pathname || '/';\n}\n""",
     )
 
 
 def _write_project_workspace_service(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/services/projectWorkspace.ts",
-        """import { qualiBugClient } from '../api/qualibugClient';\nimport { demoData } from '../data/demoData';\nimport { runtimeConfig } from '../app/runtimeConfig';\nimport { redactApiError, loadRuntimeHealth, type RuntimeHealth } from '../api/runtimeApi';\nimport { normalizeProjectSummary, projectScopedApiPath, type ProjectSummary } from '../app/projectContext';\n\nexport interface ProjectWorkspaceResult {\n  source: 'demo-data' | 'phase104-api' | 'demo-fallback';\n  mode: 'demo' | 'real';\n  projects: ProjectSummary[];\n  runtimeHealth: RuntimeHealth;\n  error?: Record<string, unknown>;\n}\n\n// demo fallback keeps project list usable when real API mode is offline.\nexport const projectScopedApiPaths = [\n  { method: 'GET', path: '/api/v1/projects/{projectId}/command-center', client: 'getCommandCenter', screen: '质量驾驶舱' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/environment/readiness', client: 'getEnvironmentReadiness', screen: '环境诊断' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/business-model', client: 'getBusinessModel', screen: '业务流程地图' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/test-plan', client: 'getTestPlan', screen: 'AI 测试计划' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/live-map', client: 'getLiveMap', screen: '实时执行' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/risks', client: 'listRisks', screen: '风险证据链' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/reports/executive', client: 'getExecutiveReport', screen: '领导层报告' },\n];\n\nexport function demoProjects(): ProjectSummary[] {\n  const primary = normalizeProjectSummary({\n    ...demoData.project,\n    health_score: demoData.demo_summary.quality_score,\n    risk_count: demoData.demo_summary.risk_count,\n    launch_decision: demoData.demo_summary.launch_recommendation,\n  });\n  return [\n    primary,\n    normalizeProjectSummary({\n      project_id: 'demo_retail_payment_v2',\n      project_name: '零售支付链路上线评估',\n      customer_name: '某零售集团',\n      industry: 'retail',\n      status: 'environment_ready',\n      launch_decision: '需完成风险复验',\n      health_score: 76,\n      risk_count: 4,\n      updated_at: demoData.generated_at,\n    }, 1),\n    normalizeProjectSummary({\n      project_id: 'demo_finance_core_banking',\n      project_name: '核心账务系统灰度质量评估',\n      customer_name: '某金融客户',\n      industry: 'finance',\n      status: 'test_running',\n      launch_decision: '暂不建议上线',\n      health_score: 68,\n      risk_count: 7,\n      updated_at: demoData.generated_at,\n    }, 2),\n  ];\n}\n\nexport function findProject(projects: ProjectSummary[], projectId: string): ProjectSummary | undefined {\n  return projects.find((project) => project.projectId === projectId) || projects[0];\n}\n\nexport function scopedPathsForProject(projectId: string) {\n  return projectScopedApiPaths.map((item) => ({ ...item, resolvedPath: projectScopedApiPath(item.path, projectId) }));\n}\n\nexport class ProjectWorkspace {\n  async listProjects(): Promise<ProjectWorkspaceResult> {\n    const runtimeHealth = await loadRuntimeHealth();\n    if (runtimeConfig.demoMode) {\n      return { mode: 'demo', source: 'demo-data', projects: demoProjects(), runtimeHealth };\n    }\n    try {\n      const rawProjects = await qualiBugClient.listProjects();\n      const projects = Array.isArray(rawProjects) ? rawProjects.map((item, index) => normalizeProjectSummary(item as Record<string, unknown>, index)) : demoProjects();\n      return { mode: 'real', source: 'phase104-api', projects, runtimeHealth: { ...runtimeHealth, online: true } };\n    } catch (error) {\n      if (!runtimeConfig.fallbackToDemo) throw error;\n      return {\n        mode: 'real',\n        source: 'demo-fallback',\n        projects: demoProjects(),\n        runtimeHealth: { ...runtimeHealth, online: false },\n        error: redactApiError(error),\n      };\n    }\n  }\n\n  async createProjectDraft(payload: Record<string, unknown>): Promise<Record<string, unknown>> {\n    const runtimeHealth = await loadRuntimeHealth();\n    if (runtimeConfig.demoMode) {\n      return { accepted: true, source: 'demo-data', runtimeHealth, project: normalizeProjectSummary(payload, 9) };\n    }\n    try {\n      const project = await qualiBugClient.createProject(payload);\n      return { accepted: true, source: 'phase104-api', runtimeHealth, project };\n    } catch (error) {\n      if (!runtimeConfig.fallbackToDemo) throw error;\n      return { accepted: true, source: 'demo-fallback', runtimeHealth, error: redactApiError(error), project: normalizeProjectSummary(payload, 9) };\n    }\n  }\n}\n\nexport const projectWorkspace = new ProjectWorkspace();\n""",
+        """import { qualiBugClient } from '../api/qualibugClient';\nimport { demoData } from '../data/demoData';\nimport { runtimeConfig } from '../app/runtimeConfig';\nimport { redactApiError, loadRuntimeHealth, type RuntimeHealth } from '../api/runtimeApi';\nimport { normalizeProjectSummary, projectScopedApiPath, type ProjectSummary } from '../app/projectContext';\n\nexport interface ProjectWorkspaceResult {\n  source: 'demo-data' | 'phase104-api' | 'demo-fallback';\n  mode: 'demo' | 'real';\n  projects: ProjectSummary[];\n  runtimeHealth: RuntimeHealth;\n  error?: Record<string, unknown>;\n}\n\nexport type WorkspaceFeedbackTone = 'loading' | 'success' | 'warning' | 'error' | 'offline';\n\n// demo fallback keeps project list usable when real API mode is offline.\nexport const projectScopedApiPaths = [\n  { method: 'GET', path: '/api/v1/projects/{projectId}/command-center', client: 'getCommandCenter', screen: '质量驾驶舱' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/environment/readiness', client: 'getEnvironmentReadiness', screen: '环境诊断' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/business-model', client: 'getBusinessModel', screen: '业务流程地图' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/test-plan', client: 'getTestPlan', screen: 'AI 测试计划' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/live-map', client: 'getLiveMap', screen: '实时执行' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/risks', client: 'listRisks', screen: '风险证据链' },\n  { method: 'GET', path: '/api/v1/projects/{projectId}/reports/executive', client: 'getExecutiveReport', screen: '领导层报告' },\n];\n\nexport function demoProjects(): ProjectSummary[] {\n  const primary = normalizeProjectSummary({\n    ...demoData.project,\n    health_score: demoData.demo_summary.quality_score,\n    risk_count: demoData.demo_summary.risk_count,\n    launch_decision: demoData.demo_summary.launch_recommendation,\n  });\n  return [\n    primary,\n    normalizeProjectSummary({\n      project_id: 'demo_retail_payment_v2',\n      project_name: '零售支付链路上线评估',\n      customer_name: '某零售集团',\n      industry: 'retail',\n      status: 'environment_ready',\n      launch_decision: '需完成风险复验',\n      health_score: 76,\n      risk_count: 4,\n      updated_at: demoData.generated_at,\n    }, 1),\n    normalizeProjectSummary({\n      project_id: 'demo_finance_core_banking',\n      project_name: '核心账务系统灰度质量评估',\n      customer_name: '某金融客户',\n      industry: 'finance',\n      status: 'test_running',\n      launch_decision: '暂不建议上线',\n      health_score: 68,\n      risk_count: 7,\n      updated_at: demoData.generated_at,\n    }, 2),\n  ];\n}\n\nexport function findProject(projects: ProjectSummary[], projectId: string): ProjectSummary | undefined {\n  return projects.find((project) => project.projectId === projectId) || projects[0];\n}\n\nexport function scopedPathsForProject(projectId: string) {\n  return projectScopedApiPaths.map((item) => ({ ...item, resolvedPath: projectScopedApiPath(item.path, projectId) }));\n}\n\nexport function workspaceSourceLabel(source: ProjectWorkspaceResult['source'] | undefined): string {\n  if (source === 'phase104-api') return '真实 API';\n  if (source === 'demo-fallback') return 'Demo Fallback';\n  return 'Demo 数据';\n}\n\nexport function runtimeStatusTone(runtimeHealth: RuntimeHealth | null | undefined): WorkspaceFeedbackTone {\n  if (!runtimeHealth) return 'loading';\n  if (runtimeHealth.backendStatus === 'online') return 'success';\n  if (runtimeHealth.backendStatus === 'failed') return 'error';\n  if (runtimeHealth.backendStatus === 'offline') return 'offline';\n  return 'warning';\n}\n\nexport function runtimeStatusLabel(runtimeHealth: RuntimeHealth | null | undefined): string {\n  if (!runtimeHealth) return '检查中';\n  if (runtimeHealth.backendStatus === 'online') return '在线';\n  if (runtimeHealth.backendStatus === 'failed') return '失败';\n  if (runtimeHealth.backendStatus === 'offline') return '离线';\n  if (runtimeHealth.backendStatus === 'checking') return '检查中';\n  return '演示模式';\n}\n\nexport class ProjectWorkspace {\n  async listProjects(): Promise<ProjectWorkspaceResult> {\n    const runtimeHealth = await loadRuntimeHealth();\n    if (runtimeConfig.demoMode) {\n      return { mode: 'demo', source: 'demo-data', projects: demoProjects(), runtimeHealth };\n    }\n    try {\n      const rawProjects = await qualiBugClient.listProjects();\n      const projects = Array.isArray(rawProjects)\n        ? rawProjects.map((item, index) => normalizeProjectSummary(item as Record<string, unknown>, index))\n        : [];\n      return { mode: 'real', source: 'phase104-api', projects, runtimeHealth };\n    } catch (error) {\n      if (!runtimeConfig.fallbackToDemo) throw error;\n      return {\n        mode: 'real',\n        source: 'demo-fallback',\n        projects: demoProjects(),\n        runtimeHealth: { ...runtimeHealth, online: false, fallbackActive: true },\n        error: redactApiError(error),\n      };\n    }\n  }\n\n  async createProjectDraft(payload: Record<string, unknown>): Promise<Record<string, unknown>> {\n    const runtimeHealth = await loadRuntimeHealth();\n    if (runtimeConfig.demoMode) {\n      return { accepted: true, source: 'demo-data', runtimeHealth, project: normalizeProjectSummary(payload, 9) };\n    }\n    try {\n      const project = await qualiBugClient.createProject(payload);\n      return { accepted: true, source: 'phase104-api', runtimeHealth, project };\n    } catch (error) {\n      if (!runtimeConfig.fallbackToDemo) throw error;\n      return { accepted: true, source: 'demo-fallback', runtimeHealth: { ...runtimeHealth, fallbackActive: true }, error: redactApiError(error), project: normalizeProjectSummary(payload, 9) };\n    }\n  }\n}\n\nexport const projectWorkspace = new ProjectWorkspace();\n""",
     )
 
 
 def _write_project_hook(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/hooks/useProjectWorkspace.ts",
-        """import { useCallback, useEffect, useMemo, useState } from 'react';\nimport { readSelectedProjectId, persistSelectedProjectId, type ProjectSummary } from '../app/projectContext';\nimport { findProject, projectWorkspace, scopedPathsForProject, type ProjectWorkspaceResult } from '../services/projectWorkspace';\n\nexport function useProjectWorkspace() {\n  const [result, setResult] = useState<ProjectWorkspaceResult | null>(null);\n  const [loading, setLoading] = useState(true);\n  const [error, setError] = useState<string | null>(null);\n  const [selectedProjectId, setSelectedProjectIdState] = useState(readSelectedProjectId());\n\n  const refresh = useCallback(() => {\n    setLoading(true);\n    projectWorkspace.listProjects()\n      .then((payload) => {\n        setResult(payload);\n        setError(null);\n        const candidate = findProject(payload.projects, selectedProjectId);\n        if (candidate && candidate.projectId !== selectedProjectId) {\n          setSelectedProjectIdState(candidate.projectId);\n          persistSelectedProjectId(candidate.projectId);\n        }\n      })\n      .catch((err: unknown) => setError(err instanceof Error ? err.message : '项目工作区加载失败'))\n      .finally(() => setLoading(false));\n  }, [selectedProjectId]);\n\n  useEffect(() => {\n    refresh();\n  }, [refresh]);\n\n  const selectProject = useCallback((projectId: string) => {\n    setSelectedProjectIdState(projectId);\n    persistSelectedProjectId(projectId);\n  }, []);\n\n  const currentProject: ProjectSummary | undefined = useMemo(() => {\n    return result ? findProject(result.projects, selectedProjectId) : undefined;\n  }, [result, selectedProjectId]);\n\n  const scopedApiPaths = useMemo(() => scopedPathsForProject(currentProject?.projectId || selectedProjectId), [currentProject, selectedProjectId]);\n\n  return {\n    loading,\n    error,\n    projects: result?.projects || [],\n    currentProject,\n    selectedProjectId,\n    selectProject,\n    refresh,\n    source: result?.source,\n    mode: result?.mode,\n    runtimeHealth: result?.runtimeHealth,\n    scopedApiPaths,\n  };\n}\n""",
+        """import { useCallback, useEffect, useMemo, useState } from 'react';\nimport { continueWorkspacePath, persistSelectedProjectId, readSelectedProjectId, subscribeSelectedProject, type ProjectSummary } from '../app/projectContext';\nimport { findProject, projectWorkspace, scopedPathsForProject, type ProjectWorkspaceResult } from '../services/projectWorkspace';\n\nexport function useProjectWorkspace() {\n  const [result, setResult] = useState<ProjectWorkspaceResult | null>(null);\n  const [loading, setLoading] = useState(true);\n  const [error, setError] = useState<string | null>(null);\n  const [selectedProjectId, setSelectedProjectIdState] = useState(readSelectedProjectId());\n\n  const refresh = useCallback(() => {\n    setLoading(true);\n    setError(null);\n    projectWorkspace.listProjects()\n      .then((payload) => {\n        setResult(payload);\n        const candidate = findProject(payload.projects, selectedProjectId);\n        if (candidate && candidate.projectId !== selectedProjectId) {\n          setSelectedProjectIdState(candidate.projectId);\n          persistSelectedProjectId(candidate.projectId);\n        }\n      })\n      .catch((err: unknown) => {\n        setError(err instanceof Error ? err.message : '项目工作区加载失败');\n        setResult(null);\n      })\n      .finally(() => setLoading(false));\n  }, [selectedProjectId]);\n\n  useEffect(() => {\n    refresh();\n  }, [refresh]);\n\n  useEffect(() => subscribeSelectedProject((projectId) => setSelectedProjectIdState(projectId)), []);\n\n  const selectProject = useCallback((projectId: string) => {\n    setSelectedProjectIdState(projectId);\n    persistSelectedProjectId(projectId);\n    const nextPath = continueWorkspacePath(window.location.pathname, projectId);\n    if (nextPath !== window.location.pathname) {\n      window.location.assign(nextPath);\n    }\n  }, []);\n\n  const currentProject: ProjectSummary | undefined = useMemo(() => {\n    return result ? findProject(result.projects, selectedProjectId) : undefined;\n  }, [result, selectedProjectId]);\n\n  const scopedApiPaths = useMemo(() => scopedPathsForProject(currentProject?.projectId || selectedProjectId), [currentProject, selectedProjectId]);\n\n  return {\n    loading,\n    error,\n    projects: result?.projects || [],\n    currentProject,\n    selectedProjectId,\n    selectProject,\n    refresh,\n    source: result?.source,\n    mode: result?.mode,\n    runtimeHealth: result?.runtimeHealth,\n    scopedApiPaths,\n    isEmpty: !loading && (result?.projects || []).length === 0,\n  };\n}\n""",
+    )
+    _write_text(
+        app_dir / "src/hooks/useSelectedProjectId.ts",
+        """import { useEffect, useState } from 'react';\nimport { readSelectedProjectId, subscribeSelectedProject } from '../app/projectContext';\n\nexport function useSelectedProjectId() {\n  const [projectId, setProjectId] = useState(() => readSelectedProjectId());\n\n  useEffect(() => {\n    return subscribeSelectedProject((nextProjectId) => setProjectId(nextProjectId));\n  }, []);\n\n  return projectId;\n}\n""",
     )
 
 
 def _write_project_components(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/components/ProjectSummaryCard.tsx",
-        """import type { ProjectSummary } from '../app/projectContext';\n\nexport function ProjectSummaryCard({ project, active, onSelect }: { project: ProjectSummary; active?: boolean; onSelect?: (projectId: string) => void }) {\n  return (\n    <article className={`qb-project-card ${active ? 'active' : ''}`}>\n      <div className=\"qb-project-card__head\">\n        <div>\n          <span className=\"qb-kicker\">{project.customerName} · {project.industry}</span>\n          <h3>{project.projectName}</h3>\n        </div>\n        <strong>{project.healthScore}</strong>\n      </div>\n      <p>状态：{project.status} · 风险数：{project.riskCount} · 上线建议：{project.launchDecision}</p>\n      <div className=\"qb-project-card__actions\">\n        <a href={`/projects/${project.projectId}`}>进入项目详情</a>\n        <button type=\"button\" onClick={() => onSelect?.(project.projectId)}>设为当前项目</button>\n      </div>\n    </article>\n  );\n}\n""",
+        """import { projectDetailPath, type ProjectSummary } from '../app/projectContext';\n\nexport function ProjectSummaryCard({ project, active, onSelect }: { project: ProjectSummary; active?: boolean; onSelect?: (projectId: string) => void }) {\n  return (\n    <article className={`qb-project-card ${active ? 'active' : ''}`}>\n      <div className=\"qb-project-card__head\">\n        <div>\n          <span className=\"qb-kicker\">{project.customerName} · {project.industry}</span>\n          <h3>{project.projectName}</h3>\n        </div>\n        <strong>{project.healthScore}</strong>\n      </div>\n      <p>状态：{project.status} · 风险数：{project.riskCount} · 上线建议：{project.launchDecision}</p>\n      <p className=\"qb-note\">最近刷新：{project.updatedAt}</p>\n      <div className=\"qb-project-card__actions\">\n        <a href={projectDetailPath(project.projectId)}>进入项目详情</a>\n        <button type=\"button\" onClick={() => onSelect?.(project.projectId)}>{active ? '继续当前旅程' : '设为当前项目'}</button>\n      </div>\n    </article>\n  );\n}\n""",
     )
     _write_text(
         app_dir / "src/components/ProjectSwitcher.tsx",
-        """import type { ProjectSummary } from '../app/projectContext';\n\nexport function ProjectSwitcher({ projects, selectedProjectId, onSelect }: { projects: ProjectSummary[]; selectedProjectId: string; onSelect: (projectId: string) => void }) {\n  return (\n    <label className=\"qb-project-switcher\">\n      <span>当前项目切换</span>\n      <select value={selectedProjectId} onChange={(event) => onSelect(event.target.value)}>\n        {projects.map((project) => (\n          <option key={project.projectId} value={project.projectId}>{project.projectName}</option>\n        ))}\n      </select>\n    </label>\n  );\n}\n""",
+        """import type { ProjectSummary } from '../app/projectContext';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\ntype ProjectSwitcherProps = {\n  projects?: ProjectSummary[];\n  selectedProjectId?: string;\n  onSelect?: (projectId: string) => void;\n  disabled?: boolean;\n  compact?: boolean;\n};\n\nexport function ProjectSwitcher({ projects, selectedProjectId, onSelect, disabled, compact }: ProjectSwitcherProps) {\n  const workspace = useProjectWorkspace();\n  const resolvedProjects = projects ?? workspace.projects;\n  const resolvedProjectId = selectedProjectId ?? workspace.selectedProjectId;\n  const resolvedOnSelect = onSelect ?? workspace.selectProject;\n  const resolvedDisabled = disabled ?? workspace.loading;\n\n  return (\n    <label className={`qb-project-switcher ${compact ? 'compact' : ''}`.trim()}>\n      <span>当前项目切换</span>\n      <select value={resolvedProjectId} disabled={resolvedDisabled || resolvedProjects.length === 0} onChange={(event) => resolvedOnSelect(event.target.value)}>\n        {resolvedProjects.map((project) => (\n          <option key={project.projectId} value={project.projectId}>{project.projectName}</option>\n        ))}\n      </select>\n      {compact ? null : <small>切换后保持当前工作区路由与信息架构稳定。</small>}\n    </label>\n  );\n}\n""",
     )
     _write_text(
         app_dir / "src/components/ProjectRouteGuard.tsx",
         """import type { PropsWithChildren } from 'react';\n\nexport function ProjectRouteGuard({ ready, message, children }: PropsWithChildren<{ ready: boolean; message?: string }>) {\n  if (!ready) {\n    return (\n      <section className=\"qb-project-guard\">\n        <h2>项目级状态缓存准备中</h2>\n        <p>{message || '正在加载项目列表和当前项目上下文。'}</p>\n        <a href=\"/projects\">返回项目列表</a>\n      </section>\n    );\n  }\n  return <>{children}</>;\n}\n""",
+    )
+    _write_text(
+        app_dir / "src/components/WorkspaceActionFeedback.tsx",
+        """import type { ReactNode } from 'react';\nimport type { WorkspaceFeedbackTone } from '../services/projectWorkspace';\n\nexport function WorkspaceActionFeedback({ tone, title, description, action, compact }: { tone: WorkspaceFeedbackTone; title: string; description: string; action?: ReactNode; compact?: boolean }) {\n  return (\n    <section className={`qb-feedback qb-feedback-${tone} ${compact ? 'compact' : ''}`.trim()}>\n      <div>\n        <strong>{title}</strong>\n        <p>{description}</p>\n      </div>\n      {action ? <div className=\"qb-feedback__action\">{action}</div> : null}\n    </section>\n  );\n}\n""",
+    )
+    _write_text(
+        app_dir / "src/components/WorkspaceStateGate.tsx",
+        """import type { PropsWithChildren } from 'react';\nimport type { RuntimeHealth } from '../api/runtimeApi';\nimport { WorkspaceActionFeedback } from './WorkspaceActionFeedback';\nimport { runtimeStatusLabel, runtimeStatusTone, workspaceSourceLabel, type ProjectWorkspaceResult } from '../services/projectWorkspace';\n\nexport function WorkspaceStateGate({ loading, error, isEmpty, runtimeHealth, source, onRetry, children }: PropsWithChildren<{ loading: boolean; error?: string | null; isEmpty?: boolean; runtimeHealth?: RuntimeHealth | null; source?: ProjectWorkspaceResult['source']; onRetry?: () => void }>) {\n  const retryAction = onRetry ? <button type=\"button\" className=\"qb-button-secondary\" onClick={onRetry}>重试</button> : undefined;\n\n  if (loading) {\n    return <WorkspaceActionFeedback tone=\"loading\" title=\"统一加载态\" description=\"正在加载项目工作区与顶部状态区信息。\" action={retryAction} />;\n  }\n\n  if (error) {\n    const tone = runtimeStatusTone(runtimeHealth);\n    const runtimeLabel = runtimeStatusLabel(runtimeHealth);\n    return <WorkspaceActionFeedback tone={tone === 'loading' ? 'error' : tone} title=\"统一失败态\" description={`项目工作区加载失败：${error}（后端状态：${runtimeLabel}）`} action={retryAction} />;\n  }\n\n  if (isEmpty) {\n    return <WorkspaceActionFeedback tone=\"warning\" title=\"统一空态\" description=\"当前账号下暂无可用项目，可创建项目草案或切换为 demo 数据。\" action={retryAction} />;\n  }\n\n  const banner = runtimeHealth && runtimeHealth.mode === 'real' && runtimeHealth.backendStatus !== 'online';\n  return (\n    <>\n      {banner ? (\n        <WorkspaceActionFeedback\n          tone={runtimeStatusTone(runtimeHealth)}\n          compact\n          title={`统一离线态：后端状态 ${runtimeStatusLabel(runtimeHealth)}`}\n          description={`${runtimeHealth.message} 数据来源：${workspaceSourceLabel(source)}`}\n          action={retryAction}\n        />\n      ) : null}\n      {children}\n    </>\n  );\n}\n""",
+    )
+    _write_text(
+        app_dir / "src/components/DangerConfirmButton.tsx",
+        """import { useRef, useState } from 'react';\n\nexport function DangerConfirmButton({ label, title, description, confirmText = '确认', cancelText = '取消', onConfirm, disabled }: { label: string; title: string; description: string; confirmText?: string; cancelText?: string; onConfirm: () => void | Promise<void>; disabled?: boolean }) {\n  const dialogRef = useRef<HTMLDialogElement | null>(null);\n  const [submitting, setSubmitting] = useState(false);\n\n  async function handleConfirm() {\n    setSubmitting(true);\n    try {\n      await onConfirm();\n      dialogRef.current?.close('confirmed');\n    } finally {\n      setSubmitting(false);\n    }\n  }\n\n  return (\n    <>\n      <button type=\"button\" className=\"qb-button-danger\" disabled={disabled || submitting} onClick={() => dialogRef.current?.showModal()}>\n        {label}\n      </button>\n      <dialog ref={dialogRef} className=\"qb-confirm-dialog\">\n        <form method=\"dialog\" className=\"qb-confirm-dialog__form\">\n          <h3>危险动作确认：{title}</h3>\n          <p>{description}</p>\n          <menu className=\"qb-confirm-dialog__actions\">\n            <button type=\"submit\" value=\"cancel\" className=\"qb-button-secondary\">{cancelText}</button>\n            <button type=\"button\" className=\"qb-button-danger\" onClick={handleConfirm} disabled={submitting}>{confirmText}</button>\n          </menu>\n        </form>\n      </dialog>\n    </>\n  );\n}\n""",
     )
 
 
 def _write_project_pages(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/pages/ProjectListPage.tsx",
-        """import { useState } from 'react';\nimport { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { ProjectSummaryCard } from '../components/ProjectSummaryCard';\nimport { projectWorkspace } from '../services/projectWorkspace';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nexport function ProjectListPage() {\n  const workspace = useProjectWorkspace();\n  const [lastCreateResult, setLastCreateResult] = useState<string | null>(null);\n\n  async function createDraftProject() {\n    const result = await projectWorkspace.createProjectDraft({\n      project_id: `draft_${Date.now()}`,\n      project_name: '新客户上线质量评估草案',\n      customer_name: '待补充客户',\n      industry: 'unknown',\n      status: 'draft',\n      launch_decision: '待环境诊断',\n    });\n    setLastCreateResult(`创建项目草案已接收：${String(result.source)}`);\n    workspace.refresh();\n  }\n\n  return (\n    <PageShell title=\"项目列表\" subtitle=\"真实项目维度入口：项目列表、创建项目、当前项目切换、项目级状态缓存。\">\n      <div className=\"qb-project-toolbar\">\n        <DataModeBadge mode={workspace.mode || 'demo'} />\n        <ProjectSwitcher projects={workspace.projects} selectedProjectId={workspace.selectedProjectId} onSelect={workspace.selectProject} />\n        <button type=\"button\" onClick={createDraftProject}>创建项目草案</button>\n      </div>\n      {workspace.error && <p className=\"qb-error\">{workspace.error}</p>}\n      {lastCreateResult && <p className=\"qb-success\">{lastCreateResult}</p>}\n      <section className=\"qb-project-grid\">\n        {workspace.projects.map((project) => (\n          <ProjectSummaryCard key={project.projectId} project={project} active={project.projectId === workspace.selectedProjectId} onSelect={workspace.selectProject} />\n        ))}\n      </section>\n      <section className=\"qb-panel\">\n        <h3>项目级 API 请求</h3>\n        <p>每个核心页面后续都使用当前项目 ID 调用 Phase104 API，避免多个客户项目数据混用。</p>\n      </section>\n    </PageShell>\n  );\n}\n""",
+        """import { useState } from 'react';\nimport { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { ProjectSummaryCard } from '../components/ProjectSummaryCard';\nimport { WorkspaceStateGate } from '../components/WorkspaceStateGate';\nimport { projectWorkspace } from '../services/projectWorkspace';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nexport function ProjectListPage() {\n  const workspace = useProjectWorkspace();\n  const [lastCreateResult, setLastCreateResult] = useState<string | null>(null);\n\n  async function createDraftProject() {\n    const result = await projectWorkspace.createProjectDraft({\n      project_id: `draft_${Date.now()}`,\n      project_name: '新客户上线质量评估草案',\n      customer_name: '待补充客户',\n      industry: 'unknown',\n      status: 'draft',\n      launch_decision: '待环境诊断',\n    });\n    setLastCreateResult(`创建项目草案已接收：${String(result.source)}`);\n    workspace.refresh();\n  }\n\n  return (\n    <PageShell title=\"项目列表\" subtitle=\"真实项目维度入口：项目列表、创建项目草案、当前项目切换、项目级状态缓存、统一状态反馈。\">\n      <WorkspaceStateGate loading={workspace.loading} error={workspace.error} isEmpty={workspace.isEmpty} runtimeHealth={workspace.runtimeHealth} source={workspace.source} onRetry={workspace.refresh}>\n        <div className=\"qb-project-toolbar\">\n          <DataModeBadge mode={workspace.mode || 'demo'} source={workspace.source} />\n          <ProjectSwitcher projects={workspace.projects} selectedProjectId={workspace.selectedProjectId} onSelect={workspace.selectProject} disabled={workspace.loading} />\n          <button type=\"button\" onClick={createDraftProject}>创建项目草案</button>\n        </div>\n        {lastCreateResult && <p className=\"qb-success\">{lastCreateResult}</p>}\n        <section className=\"qb-project-grid\">\n          {workspace.projects.map((project) => (\n            <ProjectSummaryCard key={project.projectId} project={project} active={project.projectId === workspace.selectedProjectId} onSelect={workspace.selectProject} />\n          ))}\n        </section>\n        <section className=\"qb-panel\">\n          <h3>项目级 API 请求</h3>\n          <p>每个核心页面后续都使用当前项目 ID 调用 Phase104 API，避免多个客户项目数据混用。</p>\n        </section>\n      </WorkspaceStateGate>\n    </PageShell>\n  );\n}\n""",
     )
     _write_text(
         app_dir / "src/pages/ProjectDetailPage.tsx",
-        """import { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectRouteGuard } from '../components/ProjectRouteGuard';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nfunction currentProjectIdFromPath(): string {\n  const parts = window.location.pathname.split('/').filter(Boolean);\n  return parts[0] === 'projects' && parts[1] ? decodeURIComponent(parts[1]) : '';\n}\n\nexport function ProjectDetailPage() {\n  const workspace = useProjectWorkspace();\n  const routeProjectId = currentProjectIdFromPath();\n  const project = workspace.projects.find((item) => item.projectId === routeProjectId) || workspace.currentProject;\n\n  return (\n    <PageShell title=\"项目详情\" subtitle=\"项目级路由：每个页面、每个 API 请求都绑定当前项目上下文。\">\n      <ProjectRouteGuard ready={!workspace.loading && Boolean(project)} message=\"没有找到该项目，请先回到项目列表选择当前项目。\">\n        {project && (\n          <>\n            <div className=\"qb-project-toolbar\">\n              <DataModeBadge mode={workspace.mode || 'demo'} />\n              <ProjectSwitcher projects={workspace.projects} selectedProjectId={project.projectId} onSelect={workspace.selectProject} />\n              <a href=\"/projects\">返回项目列表</a>\n            </div>\n            <section className=\"qb-project-hero\">\n              <span className=\"qb-kicker\">{project.customerName} · {project.industry}</span>\n              <h2>{project.projectName}</h2>\n              <p>项目 ID：<code>{project.projectId}</code></p>\n              <p>上线建议：{project.launchDecision} · 风险数：{project.riskCount} · 健康分：{project.healthScore}</p>\n            </section>\n            <section className=\"qb-project-actions\">\n              <a href=\"/environment\">进入环境诊断</a>\n              <a href=\"/test-execution\">进入 AI 测试执行</a>\n              <a href=\"/risk-evidence\">进入风险证据链</a>\n              <a href=\"/report-roi\">进入领导报告 / ROI</a>\n            </section>\n            <section className=\"qb-panel\">\n              <h3>项目级 API 路径清单</h3>\n              <div className=\"qb-api-paths\">\n                {workspace.scopedApiPaths.map((item) => (\n                  <article key={item.path}>\n                    <strong>{item.screen}</strong>\n                    <code>{item.method} {item.resolvedPath}</code>\n                    <small>{item.client}</small>\n                  </article>\n                ))}\n              </div>\n            </section>\n          </>\n        )}\n      </ProjectRouteGuard>\n    </PageShell>\n  );\n}\n""",
+        """import { DataModeBadge } from '../components/DataModeBadge';\nimport { PageShell } from '../components/PageShell';\nimport { ProjectRouteGuard } from '../components/ProjectRouteGuard';\nimport { ProjectSwitcher } from '../components/ProjectSwitcher';\nimport { WorkspaceStateGate } from '../components/WorkspaceStateGate';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\n\nfunction currentProjectIdFromPath(): string {\n  const parts = window.location.pathname.split('/').filter(Boolean);\n  return parts[0] === 'projects' && parts[1] ? decodeURIComponent(parts[1]) : '';\n}\n\nexport function ProjectDetailPage() {\n  const workspace = useProjectWorkspace();\n  const routeProjectId = currentProjectIdFromPath();\n  const project = workspace.projects.find((item) => item.projectId === routeProjectId) || workspace.currentProject;\n\n  return (\n    <PageShell title=\"项目详情\" subtitle=\"项目级路由：每个页面、每个 API 请求都绑定当前项目上下文，并保证项目切换连续性。\">\n      <WorkspaceStateGate loading={workspace.loading} error={workspace.error} isEmpty={workspace.isEmpty} runtimeHealth={workspace.runtimeHealth} source={workspace.source} onRetry={workspace.refresh}>\n        <ProjectRouteGuard ready={Boolean(project)} message=\"没有找到该项目，请先回到项目列表选择当前项目。\">\n          {project && (\n            <>\n              <div className=\"qb-project-toolbar\">\n                <DataModeBadge mode={workspace.mode || 'demo'} source={workspace.source} />\n                <ProjectSwitcher projects={workspace.projects} selectedProjectId={project.projectId} onSelect={workspace.selectProject} disabled={workspace.loading} />\n                <a href=\"/projects\">返回项目列表</a>\n              </div>\n              <section className=\"qb-project-hero\">\n                <span className=\"qb-kicker\">{project.customerName} · {project.industry}</span>\n                <h2>{project.projectName}</h2>\n                <p>项目 ID：<code>{project.projectId}</code></p>\n                <p>上线建议：{project.launchDecision} · 风险数：{project.riskCount} · 健康分：{project.healthScore}</p>\n              </section>\n              <section className=\"qb-project-actions\">\n                <a href=\"/environment\">进入环境诊断</a>\n                <a href=\"/test-plan-runtime\">进入 AI 测试计划</a>\n                <a href=\"/execution-runtime\">进入实时测试执行</a>\n                <a href=\"/risk-evidence\">进入风险证据链</a>\n                <a href=\"/report-roi\">进入领导报告 / ROI</a>\n              </section>\n              <section className=\"qb-panel\">\n                <h3>项目级 API 路径清单</h3>\n                <div className=\"qb-api-paths\">\n                  {workspace.scopedApiPaths.map((item) => (\n                    <article key={item.path}>\n                      <strong>{item.screen}</strong>\n                      <code>{item.method} {item.resolvedPath}</code>\n                      <small>{item.client}</small>\n                    </article>\n                  ))}\n                </div>\n              </section>\n            </>\n          )}\n        </ProjectRouteGuard>\n      </WorkspaceStateGate>\n    </PageShell>\n  );\n}\n""",
+    )
+
+
+def _patch_product_shell(app_dir: Path) -> None:
+    _write_text(
+        app_dir / "src/components/Topbar.tsx",
+        """import { DataModeBadge } from './DataModeBadge';\nimport { ProjectSwitcher } from './ProjectSwitcher';\nimport { useProjectWorkspace } from '../hooks/useProjectWorkspace';\nimport { runtimeStatusLabel, workspaceSourceLabel } from '../services/projectWorkspace';\n\nexport function Topbar() {\n  const workspace = useProjectWorkspace();\n  const runtimeLabel = runtimeStatusLabel(workspace.runtimeHealth);\n  const projectName = workspace.currentProject?.projectName || 'QualiBug 指挥中心';\n  const sourceLabel = workspaceSourceLabel(workspace.source);\n\n  return (\n    <header className=\"qb-topbar\">\n      <div>\n        <span className=\"qb-kicker\">顶部状态区 · 运行模式 · 后端状态 · 默认脱敏</span>\n        <h1>{projectName}</h1>\n        <div className=\"qb-topbar-meta\">\n          <span>当前项目 <strong>{workspace.selectedProjectId}</strong></span>\n          <span>运行模式 <strong>{workspace.mode || 'demo'}</strong></span>\n          <span>后端状态 <strong>{runtimeLabel}</strong></span>\n        </div>\n      </div>\n      <div className=\"qb-topbar-actions\">\n        <DataModeBadge mode={workspace.mode || 'demo'} source={sourceLabel} />\n        <ProjectSwitcher projects={workspace.projects} selectedProjectId={workspace.selectedProjectId} onSelect={workspace.selectProject} disabled={workspace.loading} compact />\n        <a href=\"/projects\" className=\"qb-topbar-link\">项目列表</a>\n      </div>\n    </header>\n  );\n}\n""",
+    )
+    _write_text(
+        app_dir / "src/components/Sidebar.tsx",
+        """import { routeInventory } from '../data/demoData';\nimport { readSelectedProjectId } from '../app/projectContext';\n\nfunction isActiveRoute(pathname: string, routePath: string): boolean {\n  if (routePath.includes(':projectId')) return pathname.startsWith('/projects/');\n  return pathname === routePath;\n}\n\nexport function Sidebar() {\n  const pathname = window.location.pathname;\n  const projectId = readSelectedProjectId();\n\n  return (\n    <aside className=\"qb-sidebar\">\n      <div className=\"qb-brand\">\n        <strong>QualiBug AI</strong>\n        <span>全局产品壳 · 导航</span>\n      </div>\n      <div className=\"qb-sidebar-meta\">\n        <small>当前项目</small>\n        <strong>{projectId}</strong>\n      </div>\n      <nav>\n        {routeInventory.map((route) => (\n          <a key={route.key} href={route.path} className={`qb-nav-link ${isActiveRoute(pathname, route.path) ? 'active' : ''}`.trim()}>\n            <span>{route.label}</span>\n            <small>{route.component}</small>\n          </a>\n        ))}\n      </nav>\n    </aside>\n  );\n}\n""",
     )
 
 
@@ -315,14 +400,14 @@ def _patch_app_and_routes(app_dir: Path) -> None:
 def _write_project_styles(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/styles/project-routes.css",
-        """.qb-project-toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 12px;\n  align-items: center;\n  margin-bottom: 18px;\n}\n.qb-project-switcher {\n  display: inline-flex;\n  gap: 8px;\n  align-items: center;\n  padding: 8px 10px;\n  border: 1px solid var(--qb-border);\n  border-radius: 12px;\n  background: var(--qb-surface);\n}\n.qb-project-switcher select {\n  min-width: 260px;\n}\n.qb-project-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));\n  gap: 16px;\n}\n.qb-project-card, .qb-project-hero, .qb-project-guard, .qb-panel {\n  border: 1px solid var(--qb-border);\n  border-radius: 18px;\n  background: var(--qb-surface);\n  padding: 18px;\n  box-shadow: var(--qb-shadow);\n}\n.qb-project-card.active {\n  outline: 2px solid var(--qb-accent);\n}\n.qb-project-card__head {\n  display: flex;\n  justify-content: space-between;\n  gap: 12px;\n}\n.qb-project-card__head strong {\n  font-size: 32px;\n}\n.qb-project-card__actions, .qb-project-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 10px;\n  margin-top: 14px;\n}\n.qb-project-actions a, .qb-project-card__actions a, .qb-project-card__actions button, .qb-project-toolbar button {\n  border: 1px solid var(--qb-border);\n  border-radius: 999px;\n  padding: 8px 12px;\n  text-decoration: none;\n  background: var(--qb-surface-muted);\n}\n.qb-api-paths {\n  display: grid;\n  gap: 10px;\n}\n.qb-api-paths article {\n  display: grid;\n  gap: 4px;\n  padding: 12px;\n  border-radius: 12px;\n  background: var(--qb-surface-muted);\n}\n.qb-success { color: #047857; }\n.qb-error { color: #b91c1c; }\n""",
+        """.qb-project-toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 12px;\n  align-items: center;\n  margin-bottom: 18px;\n}\n\n.qb-project-switcher {\n  display: inline-flex;\n  gap: 8px;\n  align-items: center;\n  padding: 8px 10px;\n  border: 1px solid var(--qb-border);\n  border-radius: 12px;\n  background: var(--qb-surface);\n}\n\n.qb-project-switcher.compact small {\n  display: none;\n}\n\n.qb-project-switcher select {\n  min-width: 260px;\n}\n\n.qb-project-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));\n  gap: 16px;\n}\n\n.qb-project-card, .qb-project-hero, .qb-project-guard, .qb-panel {\n  border: 1px solid var(--qb-border);\n  border-radius: 18px;\n  background: var(--qb-surface);\n  padding: 18px;\n  box-shadow: var(--qb-shadow);\n}\n\n.qb-project-card.active {\n  outline: 2px solid var(--qb-accent);\n}\n\n.qb-project-card__head {\n  display: flex;\n  justify-content: space-between;\n  gap: 12px;\n}\n\n.qb-project-card__head strong {\n  font-size: 32px;\n}\n\n.qb-project-card__actions, .qb-project-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 10px;\n  margin-top: 14px;\n}\n\n.qb-project-actions a, .qb-project-card__actions a, .qb-project-card__actions button, .qb-project-toolbar button {\n  border: 1px solid var(--qb-border);\n  border-radius: 999px;\n  padding: 8px 12px;\n  text-decoration: none;\n  background: var(--qb-surface-muted);\n}\n\n.qb-api-paths {\n  display: grid;\n  gap: 10px;\n}\n\n.qb-api-paths article {\n  display: grid;\n  gap: 4px;\n  padding: 12px;\n  border-radius: 12px;\n  background: var(--qb-surface-muted);\n}\n\n.qb-success { color: #047857; }\n.qb-error { color: #b91c1c; }\n\n.qb-nav-link.active {\n  background: rgba(255, 255, 255, 0.16);\n  outline: 1px solid rgba(255, 255, 255, 0.24);\n}\n\n.qb-sidebar-meta {\n  margin-bottom: 18px;\n  padding: 12px 14px;\n  border-radius: 14px;\n  background: rgba(255, 255, 255, 0.08);\n  display: grid;\n  gap: 4px;\n}\n\n.qb-sidebar-meta small {\n  color: #94a3b8;\n  font-size: 12px;\n  letter-spacing: 0.04em;\n  text-transform: uppercase;\n}\n\n.qb-topbar-meta {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 12px;\n  color: var(--qb-muted);\n  font-size: 12px;\n  margin-top: 10px;\n}\n\n.qb-topbar-meta strong {\n  color: var(--qb-text);\n}\n\n.qb-topbar-actions .qb-topbar-link {\n  border: 1px solid var(--qb-border);\n  border-radius: 999px;\n  padding: 8px 12px;\n  background: var(--qb-surface-muted);\n}\n\n.qb-feedback {\n  border: 1px solid var(--qb-border);\n  border-radius: 16px;\n  background: var(--qb-surface);\n  padding: 16px 18px;\n  display: flex;\n  justify-content: space-between;\n  gap: 16px;\n  align-items: flex-start;\n  margin-bottom: 16px;\n}\n\n.qb-feedback.compact {\n  padding: 12px 14px;\n  border-radius: 14px;\n}\n\n.qb-feedback p {\n  margin: 8px 0 0;\n  color: var(--qb-muted);\n}\n\n.qb-feedback-loading { border-color: #cbd5e1; background: #f8fafc; }\n.qb-feedback-success { border-color: #86efac; background: #f0fdf4; }\n.qb-feedback-warning { border-color: #fcd34d; background: #fffbeb; }\n.qb-feedback-error { border-color: #fca5a5; background: #fef2f2; }\n.qb-feedback-offline { border-color: #cbd5e1; background: #f1f5f9; }\n\n.qb-feedback__action {\n  display: flex;\n  gap: 10px;\n  flex-wrap: wrap;\n}\n\n.qb-button-secondary {\n  border: 1px solid var(--qb-border);\n  border-radius: 999px;\n  padding: 10px 16px;\n  background: var(--qb-surface-muted);\n  color: var(--qb-text);\n  font-weight: 800;\n}\n\n.qb-button-danger {\n  border: 0;\n  border-radius: 999px;\n  padding: 10px 16px;\n  background: var(--qb-danger);\n  color: white;\n  font-weight: 800;\n}\n\n.qb-confirm-dialog {\n  border: 1px solid var(--qb-border);\n  border-radius: 18px;\n  padding: 0;\n  width: min(520px, calc(100vw - 32px));\n  box-shadow: var(--qb-shadow);\n}\n\n.qb-confirm-dialog::backdrop {\n  background: rgba(15, 23, 42, 0.55);\n}\n\n.qb-confirm-dialog__form {\n  padding: 18px;\n  display: grid;\n  gap: 12px;\n}\n\n.qb-confirm-dialog__form h3 {\n  margin: 0;\n}\n\n.qb-confirm-dialog__form p {\n  margin: 0;\n  color: var(--qb-muted);\n  line-height: 1.6;\n}\n\n.qb-confirm-dialog__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 12px;\n  margin: 0;\n  padding: 0;\n}\n""",
     )
 
 
 def _write_project_contract_test(app_dir: Path) -> None:
     _write_text(
         app_dir / "src/__tests__/project-routes-contract.test.ts",
-        """import { routes } from '../routes';\nimport { projectRouteInventory } from '../data/demoData';\nimport { normalizeProjectSummary, projectScopedApiPath } from '../app/projectContext';\nimport { ProjectWorkspace, projectScopedApiPaths } from '../services/projectWorkspace';\n\ndescribe('Phase106D project route contract', () => {\n  it('registers project list and project detail routes', () => {\n    expect(routes.some((route) => route.path === '/projects' && route.component === 'ProjectListPage')).toBe(true);\n    expect(routes.some((route) => route.path === '/projects/:projectId' && route.component === 'ProjectDetailPage')).toBe(true);\n    expect(projectRouteInventory.length).toBe(2);\n  });\n\n  it('normalizes project summaries and project-scoped API paths', () => {\n    const project = normalizeProjectSummary({ project_id: 'p-1', project_name: '项目详情验收', customer_name: '客户A', health_score: 88, risk_count: 2 });\n    expect(project.projectId).toBe('p-1');\n    expect(projectScopedApiPath('/api/v1/projects/{projectId}/risks', project.projectId)).toContain('/projects/p-1/risks');\n    expect(projectScopedApiPaths.some((item) => item.client === 'getExecutiveReport')).toBe(true);\n  });\n\n  it('exposes ProjectWorkspace for demo fallback and real API mode', () => {\n    const workspace = new ProjectWorkspace();\n    expect(workspace.listProjects).toBeInstanceOf(Function);\n    expect(workspace.createProjectDraft).toBeInstanceOf(Function);\n  });\n});\n""",
+        """import { routes } from '../routes';\nimport { projectRouteInventory } from '../data/demoData';\nimport { normalizeProjectSummary, projectScopedApiPath } from '../app/projectContext';\nimport { useSelectedProjectId } from '../hooks/useSelectedProjectId';\nimport { DangerConfirmButton } from '../components/DangerConfirmButton';\nimport { WorkspaceStateGate } from '../components/WorkspaceStateGate';\nimport { ProjectWorkspace, projectScopedApiPaths } from '../services/projectWorkspace';\n\ndescribe('Phase106D project route contract', () => {\n  it('registers project list and project detail routes', () => {\n    expect(routes.some((route) => route.path === '/projects' && route.component === 'ProjectListPage')).toBe(true);\n    expect(routes.some((route) => route.path === '/projects/:projectId' && route.component === 'ProjectDetailPage')).toBe(true);\n    expect(projectRouteInventory.length).toBe(2);\n  });\n\n  it('normalizes project summaries and project-scoped API paths', () => {\n    const project = normalizeProjectSummary({ project_id: 'p-1', project_name: '项目详情验收', customer_name: '客户A', health_score: 88, risk_count: 2 });\n    expect(project.projectId).toBe('p-1');\n    expect(projectScopedApiPath('/api/v1/projects/{projectId}/risks', project.projectId)).toContain('/projects/p-1/risks');\n    expect(projectScopedApiPaths.some((item) => item.client === 'getExecutiveReport')).toBe(true);\n  });\n\n  it('exposes ProjectWorkspace for demo fallback and real API mode', () => {\n    const workspace = new ProjectWorkspace();\n    expect(workspace.listProjects).toBeInstanceOf(Function);\n    expect(workspace.createProjectDraft).toBeInstanceOf(Function);\n  });\n\n  it('keeps product shell state and danger confirmation building blocks', () => {\n    expect(useSelectedProjectId).toBeTypeOf('function');\n    expect(DangerConfirmButton).toBeTypeOf('function');\n    expect(WorkspaceStateGate).toBeTypeOf('function');\n  });\n});\n""",
     )
 
 
@@ -334,6 +419,10 @@ def _write_project_readme(app_dir: Path) -> None:
 
 
 def _write_manifest_files(output_dir: Path, report: FrontendProjectRoutesAcceptanceReport | None = None) -> dict[str, Any]:
+    task_journeys = build_frontend_task_journeys()
+    ui_design_sources = build_ui_design_sources()
+    ui_screen_oracles = build_ui_screen_oracles()
+    ui_journey_oracles = build_ui_journey_oracles()
     manifest = redact_value(
         {
             "version": PHASE106D_VERSION,
@@ -342,11 +431,19 @@ def _write_manifest_files(output_dir: Path, report: FrontendProjectRoutesAccepta
             "entrypoint": f"{FRONTEND_APP_DIR}/index.html",
             "project_routes": list(PROJECT_ROUTE_CONTRACT),
             "project_scoped_api_paths": list(PROJECT_SCOPED_API_PATHS),
+            "frontend_task_journeys": task_journeys,
+            "ui_design_sources": ui_design_sources,
+            "ui_screen_oracles": ui_screen_oracles,
+            "ui_journey_oracles": ui_journey_oracles,
             "required_files": list(REQUIRED_PROJECT_ROUTE_FILES),
             "core_labels": list(CORE_PROJECT_ROUTE_LABELS),
             "artifacts": {
                 "manifest_json": PROJECT_ROUTES_MANIFEST_JSON,
                 "manifest_md": PROJECT_ROUTES_MANIFEST_MD,
+                "task_journeys_json": TASK_JOURNEYS_MANIFEST_JSON,
+                "task_journeys_md": TASK_JOURNEYS_MANIFEST_MD,
+                "ui_design_oracle_json": UI_DESIGN_ORACLE_MANIFEST_JSON,
+                "ui_design_oracle_md": UI_DESIGN_ORACLE_MANIFEST_MD,
                 "acceptance_json": PROJECT_ROUTES_ACCEPTANCE_JSON,
                 "acceptance_md": PROJECT_ROUTES_ACCEPTANCE_MD,
                 "checksums": PROJECT_ROUTES_CHECKSUMS,
@@ -358,9 +455,38 @@ def _write_manifest_files(output_dir: Path, report: FrontendProjectRoutesAccepta
     _write_text(output_dir / PROJECT_ROUTES_MANIFEST_JSON, _json_dump(manifest))
     route_lines = "\n".join(f"- `{item['path']}` → `{item['component']}`：{item['purpose']}" for item in manifest["project_routes"])
     api_lines = "\n".join(f"- `{item['method']} {item['path']}` → `{item['client']}` / {item['screen']}" for item in manifest["project_scoped_api_paths"])
+    journey_lines = "\n".join(
+        f"- `{item['journey_id']}` → `{item['entry_route']}` / `{item['defect_family']}`：步骤 {', '.join(item['steps'])}"
+        for item in task_journeys
+    )
+    oracle_lines = "\n".join(
+        f"- `{item['screen_id']}` → `{item['route']}`：组件 {', '.join(item['expected_components'])}"
+        for item in ui_screen_oracles
+    )
     _write_text(
         output_dir / PROJECT_ROUTES_MANIFEST_MD,
         f"""# Phase106D Frontend Project Routes Manifest\n\n- Version: `{manifest['version']}`\n- App dir: `{manifest['app_dir']}`\n- Entrypoint: `{manifest['entrypoint']}`\n\n## Project Routes\n\n{route_lines}\n\n## Project-scoped API Paths\n\n{api_lines}\n\n## Security\n\n默认脱敏，保留 demo fallback，项目级 API 请求绑定当前项目 ID。\n""",
+    )
+    _write_text(output_dir / TASK_JOURNEYS_MANIFEST_JSON, _json_dump({"version": PHASE106D_VERSION, "generated_at": _now(), "journeys": task_journeys}))
+    _write_text(
+        output_dir / TASK_JOURNEYS_MANIFEST_MD,
+        f"""# Phase106D Frontend Task Journeys\n\n- Version: `{manifest['version']}`\n- Entry app dir: `{manifest['app_dir']}`\n\n## Journeys\n\n{journey_lines}\n""",
+    )
+    _write_text(
+        output_dir / UI_DESIGN_ORACLE_MANIFEST_JSON,
+        _json_dump(
+            {
+                "version": "ui-design-oracle-v1",
+                "generated_at": _now(),
+                "design_sources": ui_design_sources,
+                "screens": ui_screen_oracles,
+                "journeys": ui_journey_oracles,
+            }
+        ),
+    )
+    _write_text(
+        output_dir / UI_DESIGN_ORACLE_MANIFEST_MD,
+        f"""# Phase106D UI Design Oracles\n\n- Version: `ui-design-oracle-v1`\n- Entry app dir: `{manifest['app_dir']}`\n\n## Screen Oracles\n\n{oracle_lines}\n""",
     )
     return manifest
 
@@ -407,6 +533,7 @@ def build_frontend_project_routes(
     _write_project_hook(app_dir)
     _write_project_components(app_dir)
     _write_project_pages(app_dir)
+    _patch_product_shell(app_dir)
     _patch_app_and_routes(app_dir)
     _write_project_styles(app_dir)
     _write_project_contract_test(app_dir)
@@ -462,8 +589,20 @@ def validate_frontend_project_routes(
     hook_ok = all(keyword in hook_text for keyword in ("useProjectWorkspace", "selectedProjectId", "selectProject", "scopedApiPaths", "refresh"))
     checks.append(FrontendProjectRoutesCheck("project_workspace_hook", hook_ok, "useProjectWorkspace 已提供项目级状态缓存" if hook_ok else "项目 Hook 不完整"))
 
+    selection_hook_text = _read_text(app_dir / "src/hooks/useSelectedProjectId.ts")
+    selection_hook_ok = all(keyword in selection_hook_text for keyword in ("useSelectedProjectId", "subscribeSelectedProject", "readSelectedProjectId"))
+    checks.append(FrontendProjectRoutesCheck("project_switch_continuity", selection_hook_ok, "useSelectedProjectId 支持项目切换连续性" if selection_hook_ok else "项目切换连续性 Hook 缺失或不完整"))
+
+    shell_text = _read_text(app_dir / "src/components/Topbar.tsx") + _read_text(app_dir / "src/components/Sidebar.tsx")
+    shell_ok = all(keyword in shell_text for keyword in ("顶部状态区", "运行模式", "后端状态", "全局产品壳", "导航", "ProjectSwitcher"))
+    checks.append(FrontendProjectRoutesCheck("product_shell", shell_ok, "全局产品壳包含导航与顶部状态区" if shell_ok else "全局产品壳缺少导航或顶部状态区信息"))
+
+    state_text = _read_text(app_dir / "src/components/WorkspaceStateGate.tsx") + _read_text(app_dir / "src/components/DangerConfirmButton.tsx")
+    state_ok = all(keyword in state_text for keyword in ("统一加载态", "统一空态", "统一失败态", "统一离线态", "危险动作确认", "<dialog"))
+    checks.append(FrontendProjectRoutesCheck("workspace_states", state_ok, "统一加载/空/失败/离线态与危险确认组件已接入" if state_ok else "统一状态反馈或危险确认组件不完整"))
+
     pages_text = _read_text(app_dir / "src/pages/ProjectListPage.tsx") + _read_text(app_dir / "src/pages/ProjectDetailPage.tsx")
-    missing_labels = [label for label in ("项目列表", "项目详情", "当前项目切换", "项目级 API 请求", "创建项目草案", "Phase104 API") if label not in pages_text]
+    missing_labels = [label for label in ("项目列表", "项目详情", "当前项目切换", "项目级 API 请求", "创建项目草案", "统一状态反馈", "Phase104 API") if label not in pages_text]
     checks.append(FrontendProjectRoutesCheck("project_pages_semantics", not missing_labels, "项目页面覆盖关键业务语义" if not missing_labels else f"项目页面缺失文案: {missing_labels}"))
 
     components_text = "\n".join(_read_text(app_dir / relative) for relative in ("src/components/ProjectSwitcher.tsx", "src/components/ProjectSummaryCard.tsx", "src/components/ProjectRouteGuard.tsx"))
@@ -479,7 +618,14 @@ def validate_frontend_project_routes(
     checks.append(FrontendProjectRoutesCheck("project_contract_test", contract_ok, "已生成项目路由合同测试" if contract_ok else "项目合同测试覆盖不足"))
 
     manifest = _read_json(root / PROJECT_ROUTES_MANIFEST_JSON)
-    manifest_ok = manifest.get("version") == PHASE106D_VERSION and len(manifest.get("project_routes") or []) == 2 and len(manifest.get("project_scoped_api_paths") or []) >= 7
+    manifest_ok = (
+        manifest.get("version") == PHASE106D_VERSION
+        and len(manifest.get("project_routes") or []) == 2
+        and len(manifest.get("project_scoped_api_paths") or []) >= 7
+        and len(manifest.get("frontend_task_journeys") or []) >= 5
+        and len(manifest.get("ui_screen_oracles") or []) >= 2
+        and len(manifest.get("ui_journey_oracles") or []) >= 2
+    )
     checks.append(FrontendProjectRoutesCheck("manifest", manifest_ok, "manifest 描述项目路由和项目级 API 清单" if manifest_ok else "manifest 内容不完整"))
 
     if skip_checksum:
@@ -510,6 +656,8 @@ def validate_frontend_project_routes(
             "project_list_route": "/projects",
             "project_detail_route": "/projects/:projectId",
             "manifest_json": PROJECT_ROUTES_MANIFEST_JSON,
+            "task_journeys_json": TASK_JOURNEYS_MANIFEST_JSON,
+            "ui_design_oracle_json": UI_DESIGN_ORACLE_MANIFEST_JSON,
             "acceptance_json": PROJECT_ROUTES_ACCEPTANCE_JSON,
             "checksums": PROJECT_ROUTES_CHECKSUMS,
             "zip": PROJECT_ROUTES_ZIP,

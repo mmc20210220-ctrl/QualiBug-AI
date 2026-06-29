@@ -9,10 +9,11 @@ Reasoner 引擎，输出标准假设格式，接入 Phase92A 证据管道。
 from __future__ import annotations
 
 import hashlib
-import json
 import re
+import json
 from typing import Any, Dict, List
 
+from .openapi_spec_utils import parse_openapi_spec
 
 class AnalyzersAdapter:
     """
@@ -130,19 +131,8 @@ class AnalyzersAdapter:
         return violations
 
     def _parse_api_spec(self, api_spec: str) -> Dict[str, Any]:
-        """解析 API 规格（简化版）"""
-        try:
-            if api_spec.strip().startswith("{"):
-                return json.loads(api_spec)
-        except Exception:
-            pass
-
-        return {
-            "paths": {
-                "/api/orders": {"get": {}, "post": {}},
-                "/api/users": {"get": {}},
-            }
-        }
+        """解析 API 规格，避免退化到固定 demo 路径。"""
+        return parse_openapi_spec(api_spec)
 
     def _build_route_catalog(self, api_spec_parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
         """构建轻量路由目录，供无 endpoint 场景做保守绑定。"""
