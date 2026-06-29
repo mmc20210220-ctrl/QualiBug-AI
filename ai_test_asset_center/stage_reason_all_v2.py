@@ -364,6 +364,177 @@ def _parse_engine_content(raw: str) -> tuple[list[dict] | None, str, str]:
     return hypotheses, status, ",".join(degradation_parts)
 
 
+def _hypothesis_identity(hypothesis: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Build a semantic cluster key across LLM and local analyzer hypotheses."""
+    title = " ".join(str(hypothesis.get("title", "") or "").lower().split())
+    expected = " ".join(str(hypothesis.get("expected_behavior", "") or "").lower().split())
+    risk_type = str(hypothesis.get("risk_type") or hypothesis.get("category") or "").lower().strip()
+    entity = str(hypothesis.get("entity") or hypothesis.get("source_entity") or "").lower().strip()
+    return title[:180], risk_type[:120], expected[:180], entity[:120]
+
+
+def _hypothesis_quality_score(hypothesis: dict[str, Any]) -> tuple[int, int, int, int]:
+    """Prefer hypotheses with executable bindings and richer local context."""
+    vm = hypothesis.get("verification_method", {})
+    if not isinstance(vm, dict):
+        vm = {}
+    step_count = sum(1 for key in ("path", "step1", "step2", "step3") if str(vm.get(key, "") or "").strip())
+    explicit_binding = 1 if step_count > 0 else 0
+    local_source = 1 if hypothesis.get("_hypothesis_source") == "local_analyzer" else 0
+    evidence_weight = len(str(hypothesis.get("evidence", "") or "")) + len(str(hypothesis.get("description", "") or ""))
+    severity = str(hypothesis.get("severity", "") or "").upper()
+    severity_weight = {"P0": 4, "P1": 3, "P2": 2, "P3": 1}.get(severity, 0)
+    return explicit_binding, step_count, local_source + severity_weight, evidence_weight
+
+
+def _merge_verification_method(primary: Any, secondary: Any) -> dict[str, Any]:
+    """Keep the richer executable binding while filling missing probe steps."""
+    left = dict(primary) if isinstance(primary, dict) else {}
+    right = dict(secondary) if isinstance(secondary, dict) else {}
+    merged = dict(left)
+    for key in ("method", "path", "step1", "step2", "step3", "_before_observer", "_after_observer", "_cross_observer"):
+        if not merged.get(key) and right.get(key):
+            merged[key] = right[key]
+    return merged
+
+
+def _merge_unique_lists(*values: Any) -> list[Any]:
+    """Merge small evidence lists while keeping order stable."""
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        items = value if isinstance(value, list) else ([value] if value not in (None, "", [], {}) else [])
+        for item in items:
+            marker = json.dumps(item, ensure_ascii=False, default=str, sort_keys=True)
+            if marker in seen:
+                continue
+            merged.append(item)
+            seen.add(marker)
+    return merged
+
+
+def _prefer_text(primary: Any, secondary: Any) -> str:
+    """Choose the more informative non-empty textual field."""
+    left = str(primary or "").strip()
+    right = str(secondary or "").strip()
+    if not left:
+        return right
+    if not right:
+        return left
+    return right if len(right) > len(left) else left
+
+
+def _merge_hypothesis_pair(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Merge a duplicate hypothesis cluster into a stronger executable hypothesis."""
+    current_score = _hypothesis_quality_score(current)
+    incoming_score = _hypothesis_quality_score(incoming)
+    base, extra = (incoming, current) if incoming_score > current_score else (current, incoming)
+
+    merged = dict(base)
+    merged["verification_method"] = _merge_verification_method(
+        base.get("verification_method"),
+        extra.get("verification_method"),
+    )
+
+    for field in (
+        "title",
+        "description",
+        "expected_behavior",
+        "actual_behavior",
+        "why_this_matters",
+        "symptoms_if_broken",
+        "entity",
+        "source_entity",
+        "risk_type",
+        "category",
+    ):
+        merged[field] = _prefer_text(base.get(field), extra.get(field))
+
+    base_evidence = base.get("evidence")
+    extra_evidence = extra.get("evidence")
+    if isinstance(base_evidence, dict) or isinstance(extra_evidence, dict):
+        merged_evidence = dict(base_evidence) if isinstance(base_evidence, dict) else {}
+        if isinstance(extra_evidence, dict):
+            for key, value in extra_evidence.items():
+                merged_evidence.setdefault(key, value)
+        if merged_evidence:
+            merged["evidence"] = merged_evidence
+
+    for field in ("reproduction_steps", "related_endpoints", "evidence_refs"):
+        values = _merge_unique_lists(base.get(field, []), extra.get(field, []))
+        if values:
+            merged[field] = values
+
+    merged_sources = _merge_unique_lists(
+        base.get("_merged_sources", []),
+        extra.get("_merged_sources", []),
+        base.get("_reasoner_engine"),
+        extra.get("_reasoner_engine"),
+        base.get("_hypothesis_source"),
+        extra.get("_hypothesis_source"),
+    )
+    if merged_sources:
+        merged["_merged_sources"] = merged_sources
+
+    merged_ids = _merge_unique_lists(
+        base.get("_merged_hypothesis_ids", []),
+        extra.get("_merged_hypothesis_ids", []),
+        base.get("hypothesis_id"),
+        extra.get("hypothesis_id"),
+    )
+    if merged_ids:
+        merged["_merged_hypothesis_ids"] = merged_ids
+
+    merged["_merge_count"] = max(
+        int(base.get("_merge_count", 1) or 1),
+        int(extra.get("_merge_count", 1) or 1),
+    ) + 1
+    return merged
+
+
+def _dedupe_hypotheses(hypotheses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicate hypotheses while preserving cross-source evidence."""
+    deduped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str, str]] = []
+    for hypothesis in hypotheses:
+        if not isinstance(hypothesis, dict):
+            continue
+        key = _hypothesis_identity(hypothesis)
+        if key not in deduped:
+            deduped[key] = hypothesis
+            order.append(key)
+            continue
+        deduped[key] = _merge_hypothesis_pair(deduped[key], hypothesis)
+    return [deduped[key] for key in order]
+
+
+def _execution_priority_score(hypothesis: dict[str, Any]) -> tuple[int, int, int, int, int]:
+    """Rank stronger hypotheses first without changing their executable shape."""
+    vm = hypothesis.get("verification_method", {})
+    if not isinstance(vm, dict):
+        vm = {}
+    step_count = sum(1 for key in ("path", "step1", "step2", "step3") if str(vm.get(key, "") or "").strip())
+    merged_sources = hypothesis.get("_merged_sources", [])
+    source_count = len(merged_sources) if isinstance(merged_sources, list) and merged_sources else 1
+    has_cross_source = 1 if source_count >= 2 else 0
+    severity = str(hypothesis.get("severity", "") or "").upper()
+    severity_weight = {"P0": 4, "P1": 3, "P2": 2, "P3": 1}.get(severity, 0)
+    evidence_weight = len(str(hypothesis.get("evidence", "") or "")) + len(str(hypothesis.get("description", "") or ""))
+    merge_count = int(hypothesis.get("_merge_count", 1) or 1)
+    return has_cross_source, source_count, step_count, severity_weight + merge_count, evidence_weight
+
+
+def _prioritize_hypotheses(hypotheses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort hypotheses so dual-source executable candidates run earlier."""
+    enumerated = list(enumerate(hypotheses))
+    ordered = sorted(
+        enumerated,
+        key=lambda item: (_execution_priority_score(item[1]), -item[0]),
+        reverse=True,
+    )
+    return [hypothesis for _, hypothesis in ordered]
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Engine Worker
 # ═══════════════════════════════════════════════════════════════════
@@ -483,7 +654,7 @@ def _run_reasoner_engine(
 
 def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
                          reader_output: dict, prior_findings=None) -> list[dict]:
-    """11 engines, max 4 parallel workers, independent clients, 2 attempts max."""
+    """11 engines + 8 analyzers, max 4 parallel workers, independent clients, 2 attempts max."""
 
     from .reasoner_prompt import REASONER_PROMPTS, REASONER_SYSTEM_PROMPT
     from ai_test_asset_center.llm_reasoning import ReasoningClient
@@ -773,6 +944,62 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             print(f"    [WARN] [local_bootstrap] {len(local_bootstrap_hypotheses)} read-only hypotheses (LLM reasoners unavailable)", flush=True)
 
     engine_names_for_report = [name for name, _ in engines] + (["local_bootstrap"] if "local_bootstrap" in results_by_engine else [])
+
+    # ── 新增：运行分析器（可选，通过环境变量控制）──
+    use_analyzers = str(os.environ.get("QUALIBUG_USE_ANALYZERS", "1")).lower() in {"1", "true", "yes"}
+    if use_analyzers:
+        try:
+            from .analyzers_adapter import build_analyzer_hypotheses, get_analyzer_engine_names
+
+            analyzer_engine_names = get_analyzer_engine_names()
+            print(f"\n[Stage 2] Analyzers — 运行 {len(analyzer_engine_names)} 个分析器...", flush=True)
+
+            analyzer_hypotheses_by_engine = build_analyzer_hypotheses(
+                prd_text=prd_text,
+                api_spec=api_spec,
+                max_hypotheses_per_analyzer=max_hypotheses_per_engine
+            )
+
+            analyzer_hypotheses_count = 0
+            for engine_name in analyzer_engine_names:
+                hypotheses = analyzer_hypotheses_by_engine.get(engine_name, [])
+                status = "success" if hypotheses or engine_name in analyzer_hypotheses_by_engine else "degraded"
+                results_by_engine[engine_name] = {
+                    "engine_name": engine_name,
+                    "hypotheses": hypotheses,
+                    "status": status,
+                    "attempts": 1,
+                    "retry_used": False,
+                    "raw_chars": 0,
+                    "content_chars": sum(len(str(h)) for h in hypotheses),
+                    "duration_seconds": 0.0,
+                    "error": "",
+                    "degradation_reason": "" if hypotheses else "analyzer_no_bindable_hypotheses",
+                }
+                all_hypotheses.extend(hypotheses)
+                analyzer_hypotheses_count += len(hypotheses)
+                status_label = "[OK]" if hypotheses else "[WARN]"
+                print(f"    {status_label} [{engine_name}] {len(hypotheses)} hypotheses", flush=True)
+            engine_names_for_report.extend(analyzer_engine_names)
+
+            print(f"  [OK] 分析器生成了 {analyzer_hypotheses_count} 条假设", flush=True)
+
+        except Exception as e:
+            print(f"  [WARN] 分析器集成失败: {e}", flush=True)
+
+    # ── Dedupe hypotheses across LLM and local analyzers ──
+    pre_dedupe_total = len(all_hypotheses)
+    all_hypotheses = _dedupe_hypotheses(all_hypotheses)
+    deduped_count = pre_dedupe_total - len(all_hypotheses)
+    if deduped_count > 0:
+        print(f"  [OK] 去重移除了 {deduped_count} 条重复假设", flush=True)
+    all_hypotheses = _prioritize_hypotheses(all_hypotheses)
+    if all_hypotheses:
+        top = all_hypotheses[0]
+        print(
+            f"  [OK] 最高优先级假设: [{top.get('severity','?')}] {str(top.get('title','?'))[:80]}",
+            flush=True,
+        )
 
     # ── Build engine health report ──
     self._last_engine_report = {

@@ -104,6 +104,53 @@ class ExecutionPolicy:
     fixture_strategy: str = "minimal"  # minimal | full | none
     max_tokens: int = 32768
     model: str = "deepseek-v4-pro"
+    execution_budget_enabled: bool = True
+    tier_a_max_hypotheses: int = 0
+    tier_b_max_hypotheses: int = 0
+    tier_c_max_hypotheses: int = 0
+    tier_a_async_delay_seconds: float = 3.0
+    tier_b_async_delay_seconds: float = 0.5
+    tier_c_async_delay_seconds: float = 0.0
+    tier_b_trim_steps_to: int = 3
+    tier_c_trim_steps_to: int = 1
+    deployment_mode: str = "private_deployment"  # private_deployment | public_saas | dedicated_cloud
+    learning_sync_mode: str = "local_only"  # local_only | import_only | sanitized_export_import | sanitized_api_sync | customer_hub_sync
+    deployment_scope_id: str = ""
+    environment_class: str = "sandbox"
+
+    def __post_init__(self):
+        self.max_requests = max(1, min(int(self.max_requests or 1), 1000))
+        self.max_concurrency = max(1, min(int(self.max_concurrency or 1), 8))
+        self.http_timeout_seconds = max(1, min(int(self.http_timeout_seconds or 1), 120))
+        self.max_tokens = max(32768, min(int(self.max_tokens or 32768), 100000))
+        self.execution_budget_enabled = bool(self.execution_budget_enabled)
+        # Migrate the previous hardcoded defaults (8/12/0) into uncapped dynamic mode.
+        if (
+            int(self.tier_a_max_hypotheses or 0) == 8
+            and int(self.tier_b_max_hypotheses or 0) == 12
+            and int(self.tier_c_max_hypotheses or 0) == 0
+        ):
+            self.tier_a_max_hypotheses = 0
+            self.tier_b_max_hypotheses = 0
+        self.tier_a_max_hypotheses = max(0, min(int(self.tier_a_max_hypotheses or 0), 200))
+        self.tier_b_max_hypotheses = max(0, min(int(self.tier_b_max_hypotheses or 0), 200))
+        self.tier_c_max_hypotheses = max(0, min(int(self.tier_c_max_hypotheses or 0), 200))
+        self.tier_a_async_delay_seconds = max(0.0, min(float(self.tier_a_async_delay_seconds or 0.0), 30.0))
+        self.tier_b_async_delay_seconds = max(0.0, min(float(self.tier_b_async_delay_seconds or 0.0), 10.0))
+        self.tier_c_async_delay_seconds = max(0.0, min(float(self.tier_c_async_delay_seconds or 0.0), 5.0))
+        self.tier_b_trim_steps_to = max(1, min(int(self.tier_b_trim_steps_to or 1), 10))
+        self.tier_c_trim_steps_to = max(1, min(int(self.tier_c_trim_steps_to or 1), 10))
+        deployment_mode = str(self.deployment_mode or "private_deployment").strip().lower()
+        if deployment_mode not in {"private_deployment", "public_saas", "dedicated_cloud"}:
+            deployment_mode = "private_deployment"
+        self.deployment_mode = deployment_mode
+        learning_sync_mode = str(self.learning_sync_mode or "local_only").strip().lower()
+        if learning_sync_mode not in {"local_only", "import_only", "sanitized_export_import", "sanitized_api_sync", "customer_hub_sync"}:
+            learning_sync_mode = "local_only"
+        self.learning_sync_mode = learning_sync_mode
+        self.deployment_scope_id = str(self.deployment_scope_id or "").strip()[:120]
+        environment_class = str(self.environment_class or "sandbox").strip().lower()
+        self.environment_class = environment_class or "sandbox"
 
 
 @dataclass

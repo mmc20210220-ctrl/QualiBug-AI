@@ -32,6 +32,14 @@ from typing import Any, Iterable
 
 from .business_world_model import build_business_world_model_profile
 from .concurrency_async_sandbox import build_concurrency_async_sandbox_plan
+from .deployment_config_resolver import (
+    build_deployment_config_snapshot,
+    detect_deployment_config_drift,
+    evaluate_deployment_drift_unlock,
+    load_deployment_config_snapshot,
+    persist_deployment_config_snapshot,
+    resolve_deployment_config,
+)
 from .document_contract_fuzzing import compile_document_contracts
 from .real_project_onboarding import ROOT, _safe_project_id, config_paths
 
@@ -588,6 +596,11 @@ def build_agent_discovery_loop(
     project = _safe_project_id(project_id)
     options = dict(options or {})
     actor = str(options.get("actor") or "agent_loop")
+    deployment_config = resolve_deployment_config(project_id=project, root=root, overrides=options.get("deployment_config") or options)
+    deployment_snapshot = build_deployment_config_snapshot(deployment_config)
+    previous_deployment_snapshot = load_deployment_config_snapshot(project, root)
+    deployment_drift = detect_deployment_config_drift(deployment_snapshot, previous_deployment_snapshot)
+    deployment_unlock = evaluate_deployment_drift_unlock(deployment_snapshot, deployment_drift, root=root)
     paths = _paths(project, root)
     with closing(_connect(paths["ledger"])) as connection:
         if not verify_agent_discovery_ledger(project, root).get("passed"):
@@ -601,7 +614,19 @@ def build_agent_discovery_loop(
         for item in source_items:
             _upsert_item(connection, project, item, actor)
         _refresh_scores(connection, project)
-        _event(connection, project, None, "loop_iteration_planned", actor, {"source_item_count": len(source_items)})
+        _event(
+            connection,
+            project,
+            None,
+            "loop_iteration_planned",
+            actor,
+            {
+                "source_item_count": len(source_items),
+                "deployment_config": deployment_snapshot,
+                "deployment_config_drift": deployment_drift,
+                "deployment_drift_unlock": deployment_unlock,
+            },
+        )
         connection.commit()
         rows = connection.execute("SELECT * FROM loop_items WHERE project_id = ? ORDER BY priority_score DESC, item_id", (project,)).fetchall()
         items = [_row_dict(row) for row in rows]
@@ -645,6 +670,9 @@ def build_agent_discovery_loop(
         "phase": PHASE,
         "project_id": project,
         "generated_at_utc": _now(),
+        "deployment_config": deployment_snapshot,
+        "deployment_config_drift": deployment_drift,
+        "deployment_drift_unlock": deployment_unlock,
         "canonical_store": {
             "kind": "sqlite",
             "path": str(paths["ledger"].relative_to(root)).replace("\\", "/"),
@@ -670,8 +698,23 @@ def build_agent_discovery_loop(
         },
     }
     paths["output"].mkdir(parents=True, exist_ok=True)
+    persist_deployment_config_snapshot(deployment_snapshot, root)
     paths["report"].write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    paths["dispatch"].write_text(json.dumps({"project_id": project, "generated_at_utc": _now(), "actions": actions}, ensure_ascii=False, indent=2), encoding="utf-8")
+    paths["dispatch"].write_text(
+        json.dumps(
+            {
+                "project_id": project,
+                "generated_at_utc": _now(),
+                "deployment_config": deployment_snapshot,
+                "deployment_config_drift": deployment_drift,
+                "deployment_drift_unlock": deployment_unlock,
+                "actions": actions,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     _export(paths, items)
     return report
 
