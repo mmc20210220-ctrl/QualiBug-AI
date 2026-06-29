@@ -29,10 +29,10 @@
   - [x] SubTask 6.2: 回归 `QualiBug_ECommerce_Benchmark`，记录 `api_count/endpoint_count/candidate_count/issue_count`
   - [x] SubTask 6.3: 对比旧 blind 基线与新 blind 结果，并总结剩余边界
 
-- [ ] Task 7: 提交、推送并输出最终 blind 复测结论
-  - [ ] SubTask 7.1: 仅提交本轮 blind 链相关改动
-  - [ ] SubTask 7.2: 推送到远端 `origin/main`
-  - [ ] SubTask 7.3: 给出 blind 与知识中心两条链的最终状态结论
+- [x] Task 7: 提交、推送并输出最终 blind 复测结论
+  - [x] SubTask 7.1: 仅提交本轮 blind 链相关改动
+  - [x] SubTask 7.2: 推送到远端 `origin/main`
+  - [x] SubTask 7.3: 给出 blind 与知识中心两条链的最终状态结论
 
 # Task Dependencies
 - Task 2 depends on Task 1

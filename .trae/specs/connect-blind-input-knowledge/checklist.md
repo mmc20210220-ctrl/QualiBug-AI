@@ -7,4 +7,4 @@
 - [x] 新增自动化测试覆盖 blind 链接入知识资产的关键路径
 - [x] `QualiBug_ECommerce_Benchmark` blind 回归中 `api_count` 与 `endpoint_count` 相比旧基线提升
 - [x] 若 `candidate_count` 或 `issue_count` 仍有限，结果中有明确边界说明
-- [ ] 本轮 blind 链改动已提交并推送，且最终 blind 复测结论已记录
+- [x] 本轮 blind 链改动已提交并推送，且最终 blind 复测结论已记录
