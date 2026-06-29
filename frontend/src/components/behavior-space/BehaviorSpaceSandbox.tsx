@@ -38,6 +38,17 @@ function formatSceneState(status: string): string {
   return "待判定";
 }
 
+function formatNodeKind(kind: string): string {
+  if (kind === "frontend") return "前端入口";
+  if (kind === "service") return "业务服务";
+  if (kind === "database") return "数据存储";
+  if (kind === "queue") return "消息队列";
+  if (kind === "external_api") return "外部接口";
+  if (kind === "worker") return "异步任务";
+  if (kind === "environment") return "环境信号";
+  return "系统节点";
+}
+
 function buildNodeLayouts(visualization: BehaviorSpaceVisualization): NodeLayout[] {
   const lanes = new Map<string, BehaviorSystemNode[]>();
   for (const node of visualization.systemNodes) {
@@ -285,7 +296,10 @@ export function BehaviorSpaceSandbox({ visualization }: { visualization: Behavio
             <div className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">Showcase Focus</div>
             <div className="mt-3 text-base font-semibold text-[var(--fg)]">{selected?.node.label}</div>
             <div className="mt-1 text-sm text-[var(--muted)]">
-              {selected?.node.kind} {selected?.node.domain ? `· ${selected.node.domain}` : ""} · {formatSceneState(selected?.node.status ?? "unknown")}
+              {formatNodeKind(selected?.node.kind ?? "other")}
+              {selected?.node.domain ? ` · ${selected.node.domain}` : ""}
+              {" · "}
+              {formatSceneState(selected?.node.status ?? "unknown")}
             </div>
             <div className="mt-4 grid gap-2">
               <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(255,255,255,0.03)] p-3 text-sm text-[var(--fg)]">风险暴露 {selected?.node.riskCount ?? 0} 个</div>

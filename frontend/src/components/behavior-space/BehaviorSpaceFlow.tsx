@@ -79,7 +79,7 @@ const toneStyles: Record<BehaviorSpaceTone, { border: string; glow: string; text
 
 function isSupportedHref(href: string | undefined): href is string {
   if (!href) return false;
-  return /^\/projects\/[^/]+(?:\/risks(?:\/[^/?#]+)?(?:\?.*)?(?:#.*)?|\/reports\/executive(?:#.*)?|\/execution(?:#.*)?|\/roi(?:#.*)?|(?:#.*)?)$/.test(
+  return /^\/projects\/[^/]+(?:\/risks(?:\/[^/?#]+)?(?:\?.*)?(?:#.*)?|\/reports\/executive(?:#.*)?|\/execution(?:#.*)?|\/roi(?:#.*)?|\/behavior-space(?:#.*)?|(?:#.*)?)$/.test(
     href,
   );
 }
@@ -136,6 +136,15 @@ function badgeForEntity(type: GraphEntityType): string {
 function formatAuditTimestamp(value: string | undefined): string {
   if (!value) return "时间待补充";
   return value.replace("T", " ").replace("Z", "");
+}
+
+function formatEvidenceKind(kind: BehaviorEvidenceRef["kind"]): string {
+  if (kind === "risk") return "风险证据";
+  if (kind === "environment") return "环境证据";
+  if (kind === "run") return "执行证据";
+  if (kind === "report") return "报告证据";
+  if (kind === "api") return "接口证据";
+  return "审计证据";
 }
 
 function buildReplayHref(replay: BehaviorReplayRef): string | undefined {
@@ -558,6 +567,34 @@ function renderAuditList(auditRefs: readonly BehaviorAuditRef[]) {
   );
 }
 
+function renderReplayList(
+  replayRefs: readonly BehaviorReplayRef[],
+  onSelect: (next: Selection) => void,
+  emptyText = "暂无复现包。",
+) {
+  if (!replayRefs.length) return <div className="text-sm text-[var(--muted)]">{emptyText}</div>;
+
+  return (
+    <div className="grid gap-2">
+      {replayRefs.slice(0, 6).map((replay) => (
+        <button
+          key={replay.replayRefId}
+          type="button"
+          onClick={() => onSelect({ type: "replay", id: replay.replayRefId })}
+          className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.32)] px-3 py-3 text-left text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
+        >
+          <div>{replay.label}</div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            步骤 {replay.steps.length}
+            {replay.updatedAt ? ` · 更新时间 ${formatAuditTimestamp(replay.updatedAt)}` : ""}
+          </div>
+          {replay.summary ? <div className="mt-2 text-xs text-[var(--muted)]">{replay.summary}</div> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function BehaviorSpaceInspector({
   selection,
   visualization,
@@ -624,23 +661,7 @@ function BehaviorSpaceInspector({
 
         <div>
           <div className="text-xs text-[var(--muted)]">回放入口</div>
-          <div className="mt-2 grid gap-2">
-            {visualization.replayRefs.length ? (
-              visualization.replayRefs.slice(0, 6).map((replay) => (
-                <button
-                  key={replay.replayRefId}
-                  type="button"
-                  onClick={() => onSelect({ type: "replay", id: replay.replayRefId })}
-                  className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.32)] px-3 py-3 text-left text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
-                >
-                  <div>{replay.label}</div>
-                  <div className="mt-1 text-xs text-[var(--muted)]">步骤 {replay.steps.length} · riskId {replay.riskId}</div>
-                </button>
-              ))
-            ) : (
-              <div className="text-sm text-[var(--muted)]">暂无复现包。</div>
-            )}
-          </div>
+          <div className="mt-2">{renderReplayList(visualization.replayRefs, onSelect)}</div>
         </div>
 
         <div>
@@ -713,6 +734,8 @@ function BehaviorSpaceInspector({
     if (!path) return null;
     const relatedFindings = path.findingIds.map((id) => findingById.get(id)).filter((item): item is BehaviorFinding => Boolean(item));
     const relatedNodes = path.nodeIds.map((id) => systemById.get(id)).filter((item): item is BehaviorSystemNode => Boolean(item));
+    const relatedEvidence = path.evidenceRefIds.map((id) => evidenceById.get(id)).filter((item): item is BehaviorEvidenceRef => Boolean(item));
+    const relatedReplays = path.replayRefIds.map((id) => replayById.get(id)).filter((item): item is BehaviorReplayRef => Boolean(item));
     const actions: LinkAction[] = [{ label: "查看关联风险", href: `/projects/${encodeURIComponent(visualization.scene.projectId)}/risks` }];
     const reportHref = visualization.evidenceRefs.find((ref) => ref.kind === "report" && isSupportedHref(ref.href))?.href;
     if (reportHref) actions.push({ label: "打开领导层报告", href: reportHref });
@@ -770,6 +793,16 @@ function BehaviorSpaceInspector({
             )}
           </div>
         </div>
+
+        <div>
+          <div className="text-xs text-[var(--muted)]">证据摘要</div>
+          <div className="mt-2">{renderEvidenceList(relatedEvidence, getEvidenceHref)}</div>
+        </div>
+
+        <div>
+          <div className="text-xs text-[var(--muted)]">复现包</div>
+          <div className="mt-2">{renderReplayList(relatedReplays, onSelect, "当前路径暂无复现包。")}</div>
+        </div>
       </div>
     );
   }
@@ -813,6 +846,7 @@ function BehaviorSpaceInspector({
             <div className="text-xs text-[var(--muted)]">回放摘要</div>
             <div className="mt-2 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.32)] p-3">
               <div className="text-sm text-[var(--fg)]">{replay.label}</div>
+              {replay.summary ? <div className="mt-2 text-xs text-[var(--muted)]">{replay.summary}</div> : null}
               <ul className="mt-2 grid gap-2 text-sm text-[var(--muted)]">
                 {replay.steps.slice(0, 6).map((step, index) => (
                   <li key={`${replay.replayRefId}:${index + 1}`}>{index + 1}. {step}</li>
@@ -842,6 +876,7 @@ function BehaviorSpaceInspector({
 
         <div>
           <div className="text-xs text-[var(--muted)]">复现步骤</div>
+        {replay.summary ? <div className="mt-2 text-sm text-[var(--muted)]">{replay.summary}</div> : null}
           <ul className="mt-2 grid gap-2 text-sm text-[var(--muted)]">
             {replay.steps.length ? replay.steps.map((step, index) => <li key={`${replay.replayRefId}:${index + 1}`}>{index + 1}. {step}</li>) : <li>暂无步骤。</li>}
           </ul>
@@ -871,7 +906,7 @@ function BehaviorSpaceInspector({
       <div>
         <div className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">Evidence</div>
         <h2 className="mt-2 text-lg font-semibold text-[var(--fg)]">{evidence.label}</h2>
-        <div className="mt-2 text-sm text-[var(--muted)]">{evidence.kind}</div>
+        <div className="mt-2 text-sm text-[var(--muted)]">{formatEvidenceKind(evidence.kind)}</div>
         <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{evidence.summary}</p>
         <ActionButtons actions={actions} />
       </div>

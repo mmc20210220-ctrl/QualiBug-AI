@@ -54,6 +54,7 @@ function playwrightBrowsersPresent() {
 function main() {
   run(npmBin, ["run", "typecheck"]);
   run(npmBin, ["run", "build"]);
+  run("node", ["scripts/perf/behavior-space-baseline.mjs"]);
   run(npmBin, ["run", "openapi:check"]);
   run(npmBin, ["run", "tests"]);
   run(npmBin, ["run", "redaction:scan"]);

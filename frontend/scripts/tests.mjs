@@ -12,6 +12,12 @@ const REQUIRED_FILES = [
   path.join(SRC, "app", "(auth)", "no-access", "page.tsx"),
 ];
 
+const BEHAVIOR_SPACE_FILES = {
+  page: path.join(SRC, "app", "(app)", "projects", "[projectId]", "behavior-space", "page.tsx"),
+  sandbox: path.join(SRC, "components", "behavior-space", "BehaviorSpaceSandbox.tsx"),
+  flow: path.join(SRC, "components", "behavior-space", "BehaviorSpaceFlow.tsx"),
+};
+
 const FORBIDDEN_TOKENS = [
   "X-QualiBug-Actor",
   "X-QualiBug-Role",
@@ -53,9 +59,49 @@ function scanForbiddenTokens() {
   }
 }
 
+function assertSourceIncludes(filePath, requiredSnippets) {
+  const text = fs.readFileSync(filePath, "utf8");
+  const missing = requiredSnippets.filter((snippet) => !text.includes(snippet));
+  if (missing.length) {
+    throw new Error(`Behavior Space guard failed: ${path.relative(ROOT, filePath)} missing ${missing.join(", ")}`);
+  }
+  return text;
+}
+
+function scanBehaviorSpaceGuards() {
+  const pageText = assertSourceIncludes(BEHAVIOR_SPACE_FILES.page, [
+    "是否可上线",
+    "风险成本",
+    "下一步动作",
+    "页面优先回答上线建议、风险成本和下一步动作",
+    "behavior-space-2d",
+    "behavior-space-replay",
+    "behavior-space-audit",
+  ]);
+  const sandboxText = assertSourceIncludes(BEHAVIOR_SPACE_FILES.sandbox, [
+    "只用于高价值演示，不替代 2D 主工作流",
+    "打开 2.5D 演示层",
+    "继续用 2D 主视图分析",
+  ]);
+  const flowText = assertSourceIncludes(BEHAVIOR_SPACE_FILES.flow, ["2D 主视图"]);
+
+  const pageForbidden = [/riskId\s*\{/, /pathId\s*\{/, /\{audit\.kind\}/];
+  const sandboxForbidden = [/\{\s*selected\?\.node\.kind\s*\}/];
+  const flowForbidden = [/\{evidence\.kind\}/];
+  const violations = [
+    ...pageForbidden.filter((rule) => rule.test(pageText)).map((rule) => `page:${rule}`),
+    ...sandboxForbidden.filter((rule) => rule.test(sandboxText)).map((rule) => `sandbox:${rule}`),
+    ...flowForbidden.filter((rule) => rule.test(flowText)).map((rule) => `flow:${rule}`),
+  ];
+  if (violations.length) {
+    throw new Error(`Behavior Space guard failed: raw technical fields leaked into UI source\n- ${violations.join("\n- ")}`);
+  }
+}
+
 function main() {
   for (const filePath of REQUIRED_FILES) assertFileExists(filePath);
   scanForbiddenTokens();
+  scanBehaviorSpaceGuards();
   process.stdout.write("OK\n");
 }
 

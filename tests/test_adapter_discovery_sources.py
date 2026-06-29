@@ -25,6 +25,27 @@ def test_discovery_adapters_generate_full_spectrum_probe_sources() -> None:
         "paths": {
             "/api/orders": {"get": {"responses": {"200": {"description": "ok"}}}},
             "/api/orders/{id}": {"get": {"responses": {"200": {"description": "ok"}}}},
+            "/api/admin/users/export": {
+                "get": {
+                    "summary": "export users",
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "email": {"type": "string"},
+                                            "phone": {"type": "string"},
+                                        },
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
         },
     }
     cfg = {"request_timeout_seconds": 5, "deployment_mode": "private_deployment", "environment_class": "sandbox"}

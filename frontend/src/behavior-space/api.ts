@@ -73,8 +73,7 @@ export async function getBehaviorSpaceDataBundle(projectId: string): Promise<Beh
         launchBlocking: pickBoolean(risk.launch_blocking) === true,
       };
     })
-    .sort((left, right) => Number(right.launchBlocking) - Number(left.launchBlocking))
-    .slice(0, 3);
+    .sort((left, right) => Number(right.launchBlocking) - Number(left.launchBlocking));
 
   const riskDetails = await Promise.all(
     detailTargets.map(async (target) => ({

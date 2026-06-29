@@ -90,6 +90,7 @@ export interface BehaviorPath {
   blockerCount: number;
   evidenceRefIds: readonly string[];
   findingIds: readonly string[];
+  replayRefIds: readonly string[];
 }
 
 export interface ProbeExecution {
@@ -135,13 +136,16 @@ export interface BehaviorReplayRef {
   replayRefId: string;
   label: string;
   riskId: string;
+  pathId?: string;
   href?: string;
   routeId?: string;
+  summary?: string;
+  updatedAt?: string;
   steps: readonly string[];
   evidenceRefIds: readonly string[];
 }
 
-export type BehaviorAuditKind = "snapshot" | "report" | "delivery" | "approval" | "export" | "execution";
+export type BehaviorAuditKind = "snapshot" | "report" | "delivery" | "approval" | "export" | "execution" | "signoff";
 
 export interface BehaviorAuditRef {
   auditRefId: string;
