@@ -51,6 +51,15 @@ export async function getBusinessModel(projectId: string): Promise<ApiEnvelope<u
   });
 }
 
+export async function getEnvironmentReadiness(projectId: string): Promise<ApiEnvelope<unknown>> {
+  return requestJson<ApiEnvelope<unknown>>({
+    method: "GET",
+    path: `/api/v1/projects/${encodeURIComponent(projectId)}/environment/readiness`,
+    timeoutMs: 8000,
+    retry: { retries: 1, baseDelayMs: 250, maxDelayMs: 1200 },
+  });
+}
+
 export async function listRisks(
   projectId: string,
   input: { severity?: string; status?: string; business_flow_id?: string; launch_blocking?: boolean } = {},
@@ -86,6 +95,15 @@ export async function getTestRun(projectId: string, runId: string): Promise<ApiE
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/test-runs/${encodeURIComponent(runId)}`,
+    timeoutMs: 8000,
+    retry: { retries: 1, baseDelayMs: 250, maxDelayMs: 1200 },
+  });
+}
+
+export async function getLiveMap(projectId: string): Promise<ApiEnvelope<unknown>> {
+  return requestJson<ApiEnvelope<unknown>>({
+    method: "GET",
+    path: `/api/v1/projects/${encodeURIComponent(projectId)}/live-map`,
     timeoutMs: 8000,
     retry: { retries: 1, baseDelayMs: 250, maxDelayMs: 1200 },
   });

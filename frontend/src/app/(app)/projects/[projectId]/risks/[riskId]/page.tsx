@@ -149,7 +149,7 @@ export default async function RiskEvidenceDetailPage({
               </ul>
             </div>
 
-            <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
+            <div id="replay" className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
               <div className="text-xs text-[var(--muted)]">复现步骤</div>
               <ul className="mt-2 grid gap-2 text-sm text-[var(--muted)]">
                 {reproduction.length ? reproduction.slice(0, 10).map((item) => <li key={maskId(String(item), 6, 4)}>{safeText(item)}</li>) : <li>—</li>}

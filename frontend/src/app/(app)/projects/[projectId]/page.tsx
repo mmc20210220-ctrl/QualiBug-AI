@@ -18,6 +18,12 @@ export default async function ProjectWorkspacePage({
 
         <div className="mt-5 flex flex-wrap gap-2">
           <Link
+            href={`/projects/${p}/behavior-space`}
+            className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(14,22,34,0.45)] px-3 py-2 text-sm hover:border-[rgba(89,243,194,0.30)]"
+          >
+            Behavior Space
+          </Link>
+          <Link
             href={`/projects/${p}/capabilities`}
             className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(14,22,34,0.45)] px-3 py-2 text-sm hover:border-[rgba(122,167,255,0.30)]"
           >

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 const items = [
   { href: (projectId: string) => `/projects/${projectId}`, label: "项目工作区" },
+  { href: (projectId: string) => `/projects/${projectId}/behavior-space`, label: "Behavior Space" },
   { href: (projectId: string) => `/projects/${projectId}/capabilities`, label: "能力中心" },
   { href: (projectId: string) => `/projects/${projectId}/risks`, label: "风险证据" },
   { href: (projectId: string) => `/projects/${projectId}/execution`, label: "执行" },
