@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from ai_test_asset_center.api_contract_discovery_adapter import generate_api_contract_probes
 from ai_test_asset_center.bug_family_coverage_report import build_bug_family_coverage_report
 from ai_test_asset_center.compatibility_discovery_adapter import collect_compatibility_issues, generate_compatibility_probes
@@ -9,6 +12,10 @@ from ai_test_asset_center.full_spectrum_capability_matrix import build_full_spec
 from ai_test_asset_center.performance_stability_discovery_adapter import (
     collect_performance_stability_issues,
     generate_performance_stability_probes,
+)
+from ai_test_asset_center.privacy_compliance_discovery_adapter import (
+    collect_privacy_compliance_issues,
+    generate_privacy_compliance_probes,
 )
 
 
@@ -28,9 +35,10 @@ def test_discovery_adapters_generate_full_spectrum_probe_sources() -> None:
     probes.extend(generate_frontend_ux_probes(openapi, cfg, "demo"))
     probes.extend(generate_compatibility_probes(openapi, cfg, "demo"))
     probes.extend(generate_performance_stability_probes(openapi, cfg, "demo"))
+    probes.extend(generate_privacy_compliance_probes(openapi, cfg, "demo"))
 
     families = {probe["defect_family"] for probe in probes}
-    assert {"api_contract", "ui", "uiux", "compatibility", "performance"}.issubset(families)
+    assert {"api_contract", "ui", "uiux", "compatibility", "performance", "privacy_compliance"}.issubset(families)
 
 
 def test_performance_and_compatibility_adapters_surface_actionable_issues() -> None:
@@ -113,3 +121,62 @@ def test_full_spectrum_coverage_tracks_declared_vs_materialized_sources() -> Non
     assert "frontend_runtime" in ui_row["materialized_sources"]
     assert ui_row["missing_source_count"] >= 1
     assert coverage["declared_source_count"] >= coverage["materialized_source_count"]
+
+
+def test_privacy_compliance_adapter_surfaces_materialized_sources(tmp_path: Path) -> None:
+    openapi = {
+        "openapi": "3.0.0",
+        "paths": {
+            "/api/admin/users/export": {
+                "get": {
+                    "summary": "export users",
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "email": {"type": "string"},
+                                            "phone": {"type": "string"},
+                                        },
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            }
+        },
+    }
+    control = {
+        "security_audit_report": {
+            "audit_events": [],
+            "risk_operations": [{"kind": "write_setup", "count": 1}],
+            "audit_chain_integrity": {"passed": False, "event_index": 0},
+            "credential_policy": {"plaintext_credentials_persisted": False},
+        }
+    }
+    probes = generate_privacy_compliance_probes(openapi, {}, "demo", tmp_path, enterprise_testops_control_plane=control)
+    issues = collect_privacy_compliance_issues(openapi, project_id="demo", root=tmp_path, enterprise_testops_control_plane=control)
+    matrix = build_full_spectrum_capability_matrix(
+        probes,
+        onboarding={
+            "checks": [
+                {"name": "base_url_reachable", "ok": True},
+                {"name": "safety_boundary", "ok": True},
+                {"name": "openapi_parse", "ok": True},
+                {"name": "openapi_paths", "count": 1},
+            ]
+        },
+        enterprise_testops_preflight=control,
+    )
+    coverage = build_bug_family_coverage_report(probes, issues, capability_rows=list(matrix["rows"]))
+    privacy_row = next(row for row in coverage["rows"] if row["family_id"] == "privacy_compliance")
+
+    assert any(probe["source"] == "audit_privacy_probe" for probe in probes)
+    assert any(issue["defect_family"] == "privacy_compliance" for issue in issues)
+    assert privacy_row["materialized_source_count"] >= 2
+    assert "audit_privacy_probe" in privacy_row["materialized_sources"]
+    assert coverage["covered_family_count"] >= 1

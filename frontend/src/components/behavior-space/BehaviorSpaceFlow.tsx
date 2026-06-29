@@ -36,6 +36,7 @@ type Selection = { type: "scene" | "system" | "path" | "finding" | "evidence" | 
 type LinkAction = { label: string; href: string };
 
 interface BehaviorGraphNodeData {
+  [key: string]: unknown;
   entityType: GraphEntityType;
   entityId: string;
   badge: string;
@@ -45,6 +46,10 @@ interface BehaviorGraphNodeData {
   tone: BehaviorSpaceTone;
   action?: LinkAction;
 }
+
+type GraphNode = Node<BehaviorGraphNodeData>;
+type GraphEdgeData = { entityType?: "path"; pathId?: string };
+type GraphEdge = Edge<GraphEdgeData>;
 
 const elk = new ELK();
 const DEFAULT_SELECTION: Selection = { type: "scene", id: "scene" };
@@ -156,7 +161,7 @@ function ActionButtons({ actions }: { actions: readonly LinkAction[] }) {
   );
 }
 
-function BehaviorNode({ data, selected }: NodeProps<Node<BehaviorGraphNodeData>>) {
+function BehaviorNode({ data, selected }: NodeProps<GraphNode>) {
   const palette = toneStyles[data.tone];
   const style: CSSProperties = {
     borderColor: palette.border,
@@ -203,7 +208,7 @@ function BehaviorNode({ data, selected }: NodeProps<Node<BehaviorGraphNodeData>>
 
 const nodeTypes = { behavior: BehaviorNode };
 
-async function layoutNodes(nodes: Node<BehaviorGraphNodeData>[], edges: Edge[]): Promise<Node<BehaviorGraphNodeData>[]> {
+async function layoutNodes(nodes: GraphNode[], edges: GraphEdge[]): Promise<GraphNode[]> {
   const graph = {
     id: "behavior-space",
     layoutOptions: {
@@ -244,9 +249,9 @@ async function layoutNodes(nodes: Node<BehaviorGraphNodeData>[], edges: Edge[]):
   });
 }
 
-function buildGraph(visualization: BehaviorSpaceVisualization): { nodes: Node<BehaviorGraphNodeData>[]; edges: Edge[] } {
-  const nodes: Node<BehaviorGraphNodeData>[] = [];
-  const edges: Edge[] = [];
+function buildGraph(visualization: BehaviorSpaceVisualization): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
 
   nodes.push({
     id: DEFAULT_SELECTION.id,
@@ -876,8 +881,8 @@ function BehaviorSpaceInspector({
 
 export function BehaviorSpaceFlow({ visualization }: { visualization: BehaviorSpaceVisualization }) {
   const graph = useMemo(() => buildGraph(visualization), [visualization]);
-  const [nodes, setNodes, onNodesChange] = useNodesState<BehaviorGraphNodeData>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<GraphEdge>([]);
   const [selection, setSelection] = useState<Selection>(DEFAULT_SELECTION);
 
   useEffect(() => {
@@ -897,7 +902,7 @@ export function BehaviorSpaceFlow({ visualization }: { visualization: BehaviorSp
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-h-[760px] overflow-hidden rounded-[var(--radius-md)] border border-[var(--border)] bg-[rgba(9,14,22,0.86)]">
-        <ReactFlow
+        <ReactFlow<GraphNode, GraphEdge>
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
@@ -919,7 +924,10 @@ export function BehaviorSpaceFlow({ visualization }: { visualization: BehaviorSp
           <MiniMap
             pannable
             zoomable
-            nodeColor={(node) => toneStyles[node.data.tone].border}
+            nodeColor={(node) => {
+              const tone = typeof node.data?.tone === "string" ? node.data.tone : "neutral";
+              return toneStyles[tone as BehaviorSpaceTone].border;
+            }}
             maskColor="rgba(7,10,18,0.72)"
             bgColor="rgba(11,15,20,0.96)"
           />

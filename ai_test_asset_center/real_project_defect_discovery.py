@@ -68,6 +68,10 @@ from .performance_stability_discovery_adapter import (
     collect_performance_stability_issues,
     generate_performance_stability_probes,
 )
+from .privacy_compliance_discovery_adapter import (
+    collect_privacy_compliance_issues,
+    generate_privacy_compliance_probes,
+)
 from .ui_design_oracle_signal_basis import (
     UI_DESIGN_ORACLE_SIGNAL_BASIS_BUCKETS,
     build_ui_design_oracle_signal_basis_legend,
@@ -580,6 +584,13 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     compatibility_probes = generate_compatibility_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
     performance_stability_probes = generate_performance_stability_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
     openapi_static_security_probes = generate_openapi_static_security_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
+    privacy_compliance_probes = generate_privacy_compliance_probes(
+        openapi if isinstance(openapi, dict) else {},
+        cfg,
+        project,
+        root,
+        enterprise_testops_control_plane=enterprise_testops_preflight or {},
+    )
     document_contract_fuzzing_probes = generate_document_contract_fuzzing_probes(project, root)
     if isinstance(risk_plan, dict) and isinstance(risk_plan.get("selected_probes"), list):
         probes = [dict(p) for p in risk_plan.get("selected_probes", [])]
@@ -635,6 +646,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             *history_probes,
             *api_contract_probes,
             *openapi_static_security_probes,
+            *privacy_compliance_probes,
             *document_contract_fuzzing_probes,
             *frontend_runtime_probes,
             *frontend_ux_probes,
@@ -653,6 +665,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     supplemental_probes = [
         *api_contract_probes,
         *openapi_static_security_probes,
+        *privacy_compliance_probes,
         *document_contract_fuzzing_probes,
         *browser_ui_replay_probes,
         *frontend_runtime_probes,
@@ -776,6 +789,13 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     for adapter_issue in collect_api_contract_issues(project, root, scenario=str(cfg.get("scenario") or "manufacturing")):
         _append_adapter_issue(issues, evidence_items, adapter_issue)
     for adapter_issue in collect_openapi_static_security_issues(openapi if isinstance(openapi, dict) else {}):
+        _append_adapter_issue(issues, evidence_items, adapter_issue)
+    for adapter_issue in collect_privacy_compliance_issues(
+        openapi if isinstance(openapi, dict) else {},
+        project_id=project,
+        root=root,
+        enterprise_testops_control_plane=enterprise_testops_preflight or {},
+    ):
         _append_adapter_issue(issues, evidence_items, adapter_issue)
     for adapter_issue in collect_browser_ui_replay_issues(project, root, cfg=cfg, scenario=str(cfg.get("scenario") or "manufacturing")):
         _append_adapter_issue(issues, evidence_items, adapter_issue)
@@ -1346,6 +1366,8 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             "frontend_ux_probe_count": len([p for p in probes if p.get("source") == "frontend_ux_adapter"]),
             "compatibility_probe_count": len([p for p in probes if p.get("source") == "compatibility_adapter"]),
             "performance_stability_probe_count": len([p for p in probes if p.get("source") == "performance_stability_adapter"]),
+            "privacy_compliance_probe_count": len([p for p in probes if resolve_defect_family(p).get("family_id") == "privacy_compliance"]),
+            "privacy_compliance_issue_count": len([i for i in issues if resolve_defect_family(i).get("family_id") == "privacy_compliance"]),
             "ui_design_oracle_issue_count": ui_design_oracle_issue_count,
             "ui_design_oracle_strong_signal_count": ui_design_oracle_strong_signal_count,
             "ui_design_oracle_weak_signal_count": ui_design_oracle_weak_signal_count,

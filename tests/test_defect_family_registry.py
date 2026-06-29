@@ -19,5 +19,8 @@ def test_resolve_defect_family_maps_runtime_signals() -> None:
     assert resolve_defect_family({"risk_type": "api_contract"})["family_id"] == "api_contract"
     assert resolve_defect_family({"title": "页面渲染失败"})["family_id"] == "ui"
     assert resolve_defect_family({"title": "timeout spike detected"})["family_id"] == "performance"
+    assert resolve_defect_family({"risk_type": "sensitive_field_leak"})["family_id"] == "privacy_compliance"
+    assert resolve_defect_family({"risk_type": "audit_log_missing"})["family_id"] == "privacy_compliance"
+    assert resolve_defect_family({"risk_type": "desensitization_failure"})["family_id"] == "privacy_compliance"
     assert get_defect_family("uiux")["display_name"] == "UIUX Bug"
 

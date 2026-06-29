@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getBehaviorSpaceVisualization } from "@/behavior-space/api";
 import { BehaviorSpaceFlow } from "@/components/behavior-space/BehaviorSpaceFlow";
+import { BehaviorSpaceSandbox } from "@/components/behavior-space/BehaviorSpaceSandbox";
 import { toSafeErrorView } from "@/lib/api/command-center";
 
 function isSupportedHref(href: string | undefined): href is string {
@@ -55,17 +56,18 @@ export default async function BehaviorSpacePage({
           </div>
 
           <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {visualization.valueSummary.fields.map((field) => (
-              <div key={field.fieldId} className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(11,15,20,0.48)] p-4">
-                <div className="text-xs text-[var(--muted)]">{field.label}</div>
-                <div className="mt-2 text-base font-semibold text-[var(--fg)]">{field.value}</div>
-                <div className="mt-2 text-sm text-[var(--muted)]">{field.supportingText ?? "—"}</div>
-                {field.actions?.length ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {field.actions
-                      .filter((action) => isSupportedHref(action.href))
-                      .slice(0, 2)
-                      .map((action) => (
+            {visualization.valueSummary.fields.map((field) => {
+              const safeActions: Array<{ label: string; href: string }> = (field.actions ?? []).flatMap((action) =>
+                isSupportedHref(action.href) ? [{ label: action.label, href: action.href }] : [],
+              );
+              return (
+                <div key={field.fieldId} className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(11,15,20,0.48)] p-4">
+                  <div className="text-xs text-[var(--muted)]">{field.label}</div>
+                  <div className="mt-2 text-base font-semibold text-[var(--fg)]">{field.value}</div>
+                  <div className="mt-2 text-sm text-[var(--muted)]">{field.supportingText ?? "—"}</div>
+                  {safeActions.length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {safeActions.slice(0, 2).map((action) => (
                         <Link
                           key={`${field.fieldId}:${action.label}`}
                           href={action.href}
@@ -74,10 +76,11 @@ export default async function BehaviorSpacePage({
                           {action.label}
                         </Link>
                       ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
 
           {actions.length ? (
@@ -101,7 +104,11 @@ export default async function BehaviorSpacePage({
           ) : null}
         </div>
 
-        <BehaviorSpaceFlow visualization={visualization} />
+        <BehaviorSpaceSandbox visualization={visualization} />
+
+        <div id="behavior-space-2d">
+          <BehaviorSpaceFlow visualization={visualization} />
+        </div>
       </div>
     );
   } catch (err) {

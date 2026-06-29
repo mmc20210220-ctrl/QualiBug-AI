@@ -57,6 +57,27 @@ def test_real_project_discovery_exposes_full_spectrum_coverage_contract(tmp_path
                     "/api/orders": {"get": {"responses": {"200": {"description": "ok"}}}},
                     "/api/orders/{id}": {"get": {"responses": {"200": {"description": "ok"}}}},
                     "/api/admin/orders": {"get": {"responses": {"200": {"description": "ok"}}}},
+                    "/api/admin/users/export": {
+                        "get": {
+                            "summary": "export users",
+                            "responses": {
+                                "200": {
+                                    "description": "ok",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "email": {"type": "string"},
+                                                    "phone": {"type": "string"},
+                                                },
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
                 },
             },
             ensure_ascii=False,
@@ -77,6 +98,8 @@ def test_real_project_discovery_exposes_full_spectrum_coverage_contract(tmp_path
     assert metrics["frontend_ux_probe_count"] >= 1
     assert metrics["compatibility_probe_count"] >= 1
     assert metrics["performance_stability_probe_count"] >= 1
+    assert metrics["privacy_compliance_probe_count"] >= 1
+    assert metrics["privacy_compliance_issue_count"] >= 1
     assert "ui_design_oracle_issue_count" in metrics
     assert "ui_design_oracle_strong_signal_count" in metrics
     assert "ui_design_oracle_weak_signal_count" in metrics
@@ -124,8 +147,12 @@ def test_real_project_discovery_exposes_full_spectrum_coverage_contract(tmp_path
     assert matrix["source_row_count"] >= coverage["declared_source_count"]
     assert matrix["summary"]["declared_source_count"] >= matrix["summary"]["materialized_source_count"]
     covered_families = {row["family_id"] for row in coverage["rows"] if row["probe_count"] > 0 or row["issue_count"] > 0}
-    assert {"api_contract", "ui", "uiux", "compatibility", "performance"}.issubset(covered_families)
+    assert {"api_contract", "ui", "uiux", "compatibility", "performance", "privacy_compliance"}.issubset(covered_families)
     api_contract_row = next(row for row in coverage["rows"] if row["family_id"] == "api_contract")
     assert api_contract_row["declared_source_count"] >= 2
     assert api_contract_row["materialized_source_count"] >= 1
     assert api_contract_row["missing_declared_sources"]
+    privacy_row = next(row for row in coverage["rows"] if row["family_id"] == "privacy_compliance")
+    assert privacy_row["probe_count"] >= 1
+    assert privacy_row["issue_count"] >= 1
+    assert privacy_row["materialized_source_count"] >= 1
