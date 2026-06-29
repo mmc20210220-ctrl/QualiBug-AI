@@ -7,6 +7,7 @@ const EXT_RE = /\.(ts|tsx|js|jsx|mjs|mts)$/;
 
 const FORBIDDEN = [
   { re: /\{\s*JSON\.stringify\s*\(/, reason: "UI 层禁止直接渲染 JSON dump（可能导致敏感信息/traceback 泄露）" },
+  { re: /<pre\b/i, reason: "UI 层禁止使用 <pre> 展示原始输出（容易退化为技术数据/JSON dump）" },
   { re: /dangerouslySetInnerHTML/, reason: "禁止使用 dangerouslySetInnerHTML（容易绕过脱敏策略）" },
   { re: /process\.env\./, reason: "UI 层禁止直接读取环境变量（可能渲染 secret）" },
   { re: /\b(error|err)\.stack\b/, reason: "UI 层禁止渲染 error.stack（可能泄露 traceback）" },
