@@ -149,6 +149,17 @@ def _bool_query(value: str | None) -> bool | None:
 
 
 def _load_ui_design_oracle_governance(project_id: str) -> dict[str, Any] | None:
+    payload = _load_real_project_discovery_payload(project_id)
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("risk_based_plan_summary") if isinstance(payload.get("risk_based_plan_summary"), dict) else {}
+    if not summary:
+        return None
+    governance = {str(k): v for k, v in summary.items() if str(k).startswith("ui_design_oracle_")}
+    return governance or None
+
+
+def _load_real_project_discovery_payload(project_id: str) -> dict[str, Any] | None:
     project = _safe_project_id(project_id)
     candidate = ROOT / "platform_outputs" / project / "real_project" / "real_project_defect_data.json"
     if not candidate.exists():
@@ -159,11 +170,7 @@ def _load_ui_design_oracle_governance(project_id: str) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, dict):
         return None
-    summary = payload.get("risk_based_plan_summary") if isinstance(payload.get("risk_based_plan_summary"), dict) else {}
-    if not summary:
-        return None
-    governance = {str(k): v for k, v in summary.items() if str(k).startswith("ui_design_oracle_")}
-    return governance or None
+    return payload
 
 
 def _augment_command_center_snapshot(project_id: str, envelope: Mapping[str, Any]) -> dict[str, Any]:
@@ -172,11 +179,20 @@ def _augment_command_center_snapshot(project_id: str, envelope: Mapping[str, Any
     data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else None
     if not isinstance(data, Mapping):
         return dict(envelope)
-    governance = _load_ui_design_oracle_governance(project_id)
-    if not governance:
-        return dict(envelope)
+    payload = _load_real_project_discovery_payload(project_id)
     updated_data = dict(data)
-    updated_data["ui_design_oracle_governance"] = governance
+    if isinstance(payload, dict):
+        governance = _load_ui_design_oracle_governance(project_id)
+        family_coverage = payload.get("bug_family_coverage") if isinstance(payload.get("bug_family_coverage"), dict) else None
+        capability_matrix = payload.get("full_spectrum_capability_matrix") if isinstance(payload.get("full_spectrum_capability_matrix"), dict) else None
+        if governance:
+            updated_data["ui_design_oracle_governance"] = governance
+        if family_coverage:
+            updated_data["bug_family_coverage"] = family_coverage
+        if capability_matrix:
+            updated_data["full_spectrum_capability_matrix"] = capability_matrix
+    if updated_data == dict(data):
+        return dict(envelope)
     updated = dict(envelope)
     updated["data"] = updated_data
     return updated

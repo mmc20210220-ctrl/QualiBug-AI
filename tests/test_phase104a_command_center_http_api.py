@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import ai_test_asset_center.phase104_command_center_http_api as phase104_http_api
 from ai_test_asset_center.phase104_command_center_http_api import Phase104CommandCenterHttpApp
 
 
@@ -173,3 +175,87 @@ def test_phase104a_returns_customer_safe_errors_and_cors_preflight() -> None:
     assert unsupported.json_body()["error"]["code"] == "METHOD_NOT_ALLOWED"
     assert options.status == 204
     assert options.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_phase104a_command_center_includes_full_spectrum_snapshot(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(phase104_http_api, "ROOT", tmp_path)
+    app = Phase104CommandCenterHttpApp()
+
+    project = _data(
+        app.handle(
+            "POST",
+            "/api/v1/projects",
+            _json(
+                {
+                    "project_name": "Full Spectrum Snapshot",
+                    "customer_name": "某客户",
+                    "system_name": "某系统",
+                    "industry": "saas",
+                }
+            ),
+        )
+    )
+    project_id = project["project_id"]
+    _data(
+        app.handle(
+            "POST",
+            f"/api/v1/projects/{project_id}/business-model/apply-template",
+            _json(
+                {
+                    "template_id": "industry_saas",
+                    "approved_by": "测试负责人",
+                    "role_config": {"admin_user": True, "operator_user": True},
+                }
+            ),
+        )
+    )
+    payload_path = tmp_path / "platform_outputs" / project_id / "real_project" / "real_project_defect_data.json"
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text(
+        json.dumps(
+            {
+                "risk_based_plan_summary": {
+                    "ui_design_oracle_issue_count": 2,
+                    "ui_design_oracle_strong_signal_count": 1,
+                },
+                "bug_family_coverage": {
+                    "covered_family_count": 6,
+                    "declared_source_count": 10,
+                    "materialized_source_count": 4,
+                    "missing_source_count": 6,
+                    "rows": [
+                        {
+                            "family_id": "api_contract",
+                            "declared_source_count": 2,
+                            "materialized_source_count": 1,
+                            "missing_declared_sources": ["phase104_api_contract"],
+                        }
+                    ],
+                },
+                "full_spectrum_capability_matrix": {
+                    "source_row_count": 10,
+                    "summary": {
+                        "declared_source_count": 10,
+                        "materialized_source_count": 4,
+                        "missing_source_count": 6,
+                    },
+                    "rows": [
+                        {
+                            "defect_family": "api_contract",
+                            "source_id": "phase104_api_contract",
+                            "preflight_lane": "plan_only",
+                            "reason_code": "E_SOURCE_NOT_MATERIALIZED",
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    dashboard = _data(app.handle("GET", f"/api/v1/projects/{project_id}/command-center"))
+
+    assert dashboard["ui_design_oracle_governance"]["ui_design_oracle_issue_count"] == 2
+    assert dashboard["bug_family_coverage"]["missing_source_count"] == 6
+    assert dashboard["full_spectrum_capability_matrix"]["source_row_count"] == 10
