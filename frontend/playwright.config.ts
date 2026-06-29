@@ -17,5 +17,18 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
-  projects: [{ name: "chromium", use: { browserName: "chromium" } }],
+  projects: [
+    {
+      name: "chromium",
+      use:
+        process.platform === "win32"
+          ? {
+              browserName: "chromium",
+              launchOptions: {
+                executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+              },
+            }
+          : { browserName: "chromium" },
+    },
+  ],
 });

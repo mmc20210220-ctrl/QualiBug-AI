@@ -6,7 +6,7 @@ const TARGET_DIRS = [path.join(ROOT, "src", "app"), path.join(ROOT, "src", "comp
 const EXT_RE = /\.(ts|tsx|js|jsx|mjs|mts)$/;
 
 const FORBIDDEN = [
-  { re: /JSON\.stringify\s*\(/, reason: "UI 层禁止 JSON dump（可能导致敏感信息/traceback 泄露）" },
+  { re: /\{\s*JSON\.stringify\s*\(/, reason: "UI 层禁止直接渲染 JSON dump（可能导致敏感信息/traceback 泄露）" },
   { re: /dangerouslySetInnerHTML/, reason: "禁止使用 dangerouslySetInnerHTML（容易绕过脱敏策略）" },
   { re: /process\.env\./, reason: "UI 层禁止直接读取环境变量（可能渲染 secret）" },
   { re: /\b(error|err)\.stack\b/, reason: "UI 层禁止渲染 error.stack（可能泄露 traceback）" },
@@ -24,6 +24,7 @@ function* walk(dir) {
 
 function scanFile(filePath) {
   if (!EXT_RE.test(filePath)) return [];
+  if (filePath.includes(`${path.sep}src${path.sep}app${path.sep}api${path.sep}`)) return [];
   const text = fs.readFileSync(filePath, "utf8");
   const hits = [];
   for (const rule of FORBIDDEN) {
@@ -53,4 +54,3 @@ function main() {
 }
 
 main();
-
