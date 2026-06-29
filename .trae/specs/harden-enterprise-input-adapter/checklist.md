@@ -1,0 +1,10 @@
+- [x] `PRD.md` 等普通需求文档不再被误判为 `openapi`
+- [x] `API_DOCS.md` 这类 markdown 接口文档能够产出结构化 `interfaces`
+- [x] `DATABASE_DESIGN.md` 与 `field_dictionary.md` 能补充业务对象、字段语义或约束线索
+- [x] `UIUX_SPEC.md` 能产出页面、状态或交互线索，而不是仅停留为浅层规则句
+- [x] `uiux/*.svg` 能提取出可用于 design oracle 的结构化线索，而不是全部结构化计数为 0
+- [x] 知识中心对格式支持的状态表达与真实解析能力一致，不再混淆“已 ingest”与“已适配”
+- [x] 关键格式的自动化测试覆盖分类、markdown API 提取、字段字典与 UIUX 线索提取
+- [x] `QualiBug_ECommerce_Benchmark` 回归结果中 `interface_count` 相比改造前提升
+- [x] `QualiBug_ECommerce_Benchmark` 回归结果中 `generated_probe_count` 相比改造前提升或明确解释剩余边界
+- [ ] 本轮改动完成后代码已提交并推送，且最终 benchmark 复测数据已记录

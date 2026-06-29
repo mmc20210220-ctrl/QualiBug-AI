@@ -122,10 +122,14 @@ paths:
   /api/knowledge/ingest:
     post:
       tags: [Knowledge]
-      summary: Upload and ingest a document (PRD, OpenAPI, etc.)
+      summary: Upload and ingest a knowledge source
       description: |
-        Accepts base64-encoded file content. Automatically classifies, 
-        deduplicates, versions, and builds knowledge assets.
+        Accepts base64-encoded file content and stores the decoded bytes verbatim
+        before parsing, so binary formats are not corrupted by a text round-trip.
+        The onboarding UI only exposes PRD/requirements documents and OpenAPI specs,
+        while this API also accepts other knowledge-source types such as Postman
+        collections, permission matrices, historical bugs, tickets, and generic
+        collaboration documents.
       requestBody:
         required: true
         content:
@@ -135,9 +139,17 @@ paths:
               required: [project_id, content]
               properties:
                 project_id: { type: string }
-                filename: { type: string, example: "openapi_order.yaml" }
-                type: { type: string, enum: [prd, openapi, mrd] }
-                content: { type: string, description: "Base64-encoded file content" }
+                filename:
+                  type: string
+                  example: "openapi_order.yaml"
+                  description: Original filename with extension, used for safer parsing and source classification.
+                type:
+                  type: string
+                  enum: [prd, mrd, openapi, postman, database_schema, permission_matrix, historical_bug, ticket, feishu_document, confluence_document, collaboration_document, other_document]
+                  description: Optional source-type hint. The backend may still refine classification from filename and content.
+                content:
+                  type: string
+                  description: Base64-encoded file content. Typical extensions include .md, .markdown, .txt, .pdf, .docx, .html, .htm, .yaml, .yml, .json, .csv, .sql, .xml, and .rst.
       responses:
         "200":
           description: Document ingested successfully
@@ -149,6 +161,16 @@ paths:
                   ok: { type: boolean }
                   filename: { type: string }
                   doc_type: { type: string }
+                  size_bytes: { type: integer }
+                  storage_mode:
+                    type: string
+                    example: verbatim_bytes
+                  supported_source_types:
+                    type: array
+                    items: { type: string }
+                  supported_extensions:
+                    type: array
+                    items: { type: string }
                   knowledge_updated: { type: boolean }
                   message: { type: string }
         "400":

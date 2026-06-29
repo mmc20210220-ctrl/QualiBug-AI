@@ -27,6 +27,46 @@ CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_a
 KNOWLEDGE_MANAGER_ROLES = {"knowledge_admin", "project_owner", "qa_lead", "admin"}
 SETTINGS_MANAGER_ROLES = {"project_owner", "security_owner", "testops_admin", "admin"}
 PROJECT_SCOPE_HEADER = "X-QualiBug-Project-Scopes"
+KNOWLEDGE_INGEST_SOURCE_TYPES = (
+    "prd",
+    "mrd",
+    "openapi",
+    "postman",
+    "database_schema",
+    "permission_matrix",
+    "historical_bug",
+    "ticket",
+    "feishu_document",
+    "confluence_document",
+    "collaboration_document",
+    "other_document",
+)
+KNOWLEDGE_INGEST_TEXT_EXTENSIONS = (
+    ".md",
+    ".markdown",
+    ".txt",
+    ".rst",
+    ".html",
+    ".htm",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".csv",
+    ".sql",
+    ".xml",
+)
+KNOWLEDGE_INGEST_BINARY_EXTENSIONS = (".pdf", ".docx")
+KNOWLEDGE_INGEST_EXTENSIONS = KNOWLEDGE_INGEST_TEXT_EXTENSIONS + KNOWLEDGE_INGEST_BINARY_EXTENSIONS
+ONBOARD_DOCUMENT_EXTENSIONS = (".md", ".markdown", ".txt", ".pdf", ".docx", ".html", ".htm")
+ONBOARD_OPENAPI_EXTENSIONS = (".yaml", ".yml", ".json")
+
+
+def _extensions_label(items: tuple[str, ...]) -> str:
+    return " ".join(items)
+
+
+def _extensions_accept(items: tuple[str, ...]) -> str:
+    return ",".join(items)
 
 
 def _root() -> Path:
@@ -311,12 +351,22 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         )
         body += section(u"项目准备度", f"{score}/100", clist, section_id="readiness")
 
-        body += section(u"① 导入项目资料", u"拖放 PRD 和 OpenAPI 规范 规范文件到下方区域，支持 .md / .txt / .yaml / .json",
+        body += section(
+            u"① 导入项目资料",
+            (
+                u"当前向导支持 PRD/需求文档与 OpenAPI 规范上传。"
+                u"文档侧支持 "
+                + _extensions_label(ONBOARD_DOCUMENT_EXTENSIONS)
+                + u"，OpenAPI 侧支持 "
+                + _extensions_label(ONBOARD_OPENAPI_EXTENSIONS)
+                + u"；更多知识源类型可通过 `/api/knowledge/ingest` 直接接入。"
+            ),
             f"""<div class="upload-grid">
-<div class="upload-zone" id="uz-prd"><strong>PRD / 需求文档</strong><p>.md .txt .pdf</p><input type="file" id="f-prd" accept=".md,.txt,.pdf" hidden onchange="upFile(this,'prd','uz-prd')"/><button class="btn btn-sm" onclick="document.getElementById('f-prd').click()">选择文件</button></div>
-<div class="upload-zone" id="uz-openapi"><strong>OpenAPI 规范</strong><p>.yaml .json</p><input type="file" id="f-openapi" accept=".yaml,.yml,.json" hidden onchange="upFile(this,'openapi','uz-openapi')"/><button class="btn btn-sm" onclick="document.getElementById('f-openapi').click()">选择文件</button></div>
+<div class="upload-zone" id="uz-prd"><strong>PRD / 需求文档</strong><p>{_extensions_label(ONBOARD_DOCUMENT_EXTENSIONS)}</p><input type="file" id="f-prd" accept="{_extensions_accept(ONBOARD_DOCUMENT_EXTENSIONS)}" hidden onchange="upFile(this,'prd','uz-prd')"/><button class="btn btn-sm" onclick="document.getElementById('f-prd').click()">选择文件</button></div>
+<div class="upload-zone" id="uz-openapi"><strong>OpenAPI 规范</strong><p>{_extensions_label(ONBOARD_OPENAPI_EXTENSIONS)}</p><input type="file" id="f-openapi" accept="{_extensions_accept(ONBOARD_OPENAPI_EXTENSIONS)}" hidden onchange="upFile(this,'openapi','uz-openapi')"/><button class="btn btn-sm" onclick="document.getElementById('f-openapi').click()">选择文件</button></div>
 </div><div id="up-status"></div>""",
-            section_id="step1")
+            section_id="step1",
+        )
 
         body += section(u"② 测试环境地址", u"填写目标测试环境的 API 根地址（协议 + 主机 + 端口，不含路径）",
             f"""<div class="env-form">
@@ -800,21 +850,21 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             return self._json({"ok": False, "error": "INTERNAL_ERROR", "message": str(exc)[:300]}, 500)
 
     def _handle_ingest(self, project: str, body: dict[str, Any], root: Path, actor: dict[str, str]) -> None:
-        """Handle document ingestion via API — base64-encoded file upload."""
+        """Handle document ingestion via API with verbatim byte storage."""
         import base64
         from .document_change_watcher import ingest_document
         from .enterprise_knowledge_center import ingest_enterprise_knowledge_documents
 
-        doc_type = str(body.get("type") or body.get("doc_type") or "prd")
-        filename = str(body.get("filename") or body.get("name") or f"{doc_type}.md")
+        doc_type = str(body.get("type") or body.get("doc_type") or "prd").strip().lower() or "prd"
+        filename = Path(str(body.get("filename") or body.get("name") or f"{doc_type}.md")).name or f"{doc_type}.md"
         content_b64 = str(body.get("content") or body.get("data") or "")
         if not content_b64:
             return self._json({"ok": False, "error": "MISSING_CONTENT", "message": "请提供 base64 编码的文件内容。"}, 400)
 
-        # Decode and save
+        # Decode once and persist the original bytes so PDF/DOCX uploads are not
+        # corrupted by an unnecessary UTF-8 text round-trip.
         try:
-            raw = base64.b64decode(content_b64)
-            text = raw.decode("utf-8", errors="replace")
+            raw = base64.b64decode(content_b64, validate=True)
         except Exception:
             return self._json({"ok": False, "error": "DECODE_FAILED", "message": "Base64 解码失败，请检查文件内容。"}, 400)
 
@@ -822,7 +872,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         input_dir = root / "platform_workspace" / project / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
         out_path = input_dir / filename
-        out_path.write_text(text, encoding="utf-8")
+        out_path.write_bytes(raw)
 
         # Run document intelligence pipeline
         from .document_change_watcher import ingest_document as _ingest
@@ -851,6 +901,9 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "doc_type": doc_type,
             "size_bytes": len(raw),
             "path": str(out_path),
+            "storage_mode": "verbatim_bytes",
+            "supported_source_types": list(KNOWLEDGE_INGEST_SOURCE_TYPES),
+            "supported_extensions": list(KNOWLEDGE_INGEST_EXTENSIONS),
             "doc_info": doc_info,
             "knowledge_updated": knowledge_updated,
             "message": f"'{filename}' 导入成功。{'已更新知识库。' if knowledge_updated else '文件已保存。'}",

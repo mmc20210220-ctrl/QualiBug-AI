@@ -46,20 +46,31 @@ SOURCE_TYPES = {
     "prd",
     "mrd",
     "openapi",
+    "markdown_api",
     "postman",
     "database_schema",
+    "db_field_dictionary",
     "permission_matrix",
     "historical_bug",
     "ticket",
+    "uiux_spec",
+    "uiux_svg",
     "feishu_document",
     "confluence_document",
     "collaboration_document",
     "other_document",
 }
-TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml"}
+TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml", ".svg"}
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+MARKDOWN_API_ENDPOINT_RE = re.compile(
+    r"(?im)^(?:#{1,6}\s*)?(?P<methods>(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)(?:\s*/\s*(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS))*)\s+`?(?P<path>/[^\s`]+)`?\s*$"
+)
+SVG_TEXT_RE = re.compile(r"(?is)<text\b[^>]*>(.*?)</text>")
+SVG_TAG_ATTR_RE = re.compile(r'(?i)\b(?:id|data-name|aria-label)="([^"]+)"')
+SVG_TITLE_RE = re.compile(r"(?is)<title\b[^>]*>(.*?)</title>")
+SVG_DESC_RE = re.compile(r"(?is)<desc\b[^>]*>(.*?)</desc>")
 ROLE_WORDS = {
     "admin": ["admin", "administrator", "管理员", "系统管理员"],
     "operator": ["operator", "运营", "操作员", "客服"],
@@ -258,12 +269,112 @@ def _json_or_none(text: str) -> Any:
         return None
 
 
+def _contains_markdown_api_sections(text: str) -> bool:
+    return bool(MARKDOWN_API_ENDPOINT_RE.search(text or ""))
+
+
+def _looks_like_field_dictionary(name: str, text: str, payload: Any = None) -> bool:
+    name_low = _norm(name)
+    low = _norm(text[:8000])
+    name_markers = (
+        "field_dictionary",
+        "data_dictionary",
+        "schema_dictionary",
+        "字段字典",
+        "字段说明",
+        "数据字典",
+        "表结构说明",
+        "字段清单",
+    )
+    content_markers = (
+        "字段字典",
+        "数据字典",
+        "field dictionary",
+        "data dictionary",
+        "column description",
+        "字段说明",
+        "column name",
+    )
+    if any(token in name_low for token in name_markers):
+        return True
+    if any(token in low for token in content_markers):
+        return True
+    rows = payload if isinstance(payload, list) else payload.get("fields") if isinstance(payload, dict) else None
+    if isinstance(rows, list):
+        for row in rows[:10]:
+            if not isinstance(row, dict):
+                continue
+            keys = {_norm(key) for key in row}
+            if {"table", "field"} <= keys or {"tablename", "fieldname"} <= keys:
+                return True
+    sample_rows = _csv_rows(text)
+    if sample_rows:
+        keys = {_norm(key) for key in sample_rows[0]}
+        if {"table", "field"} <= keys or {"tablename", "fieldname"} <= keys:
+            return True
+    return False
+
+
+def _looks_like_uiux_spec(name: str, text: str) -> bool:
+    name_low = _norm(name)
+    low = _norm(text[:12000])
+    if name.lower().endswith(".svg") or "<svg" in str(text or "").lower():
+        return True
+    name_markers = (
+        "uiux",
+        "ui_ux",
+        "wireframe",
+        "prototype",
+        "mockup",
+        "设计稿",
+        "原型",
+        "交互",
+        "界面",
+    )
+    content_markers = (
+        "页面",
+        "按钮",
+        "弹窗",
+        "空状态",
+        "错误态",
+        "加载态",
+        "design spec",
+        "wireframe",
+        "prototype",
+        "user flow",
+        "component",
+    )
+    return any(token in name_low for token in name_markers) or sum(1 for token in content_markers if token in low) >= 2
+
+
+def _clean_markup_text(value: str, limit: int = 200) -> str:
+    text = re.sub(r"<[^>]+>", " ", str(value or ""))
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
+
+def _doc_bool(value: Any) -> bool:
+    normalized = _norm(value)
+    if not normalized:
+        return False
+    if normalized in {"yes", "true", "required", "必填", "是", "y"}:
+        return True
+    if normalized in {"no", "false", "nullable", "optional", "否", "非必填", "n"}:
+        return False
+    return False
+
+
 def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
     explicit = str(explicit or "").strip().lower()
     if explicit in SOURCE_TYPES:
         return explicit
     name_low = _norm(name)
     low = _norm(f"{name} {text[:5000]}")
+    data = _json_or_none(text)
+    suffix = Path(name).suffix.lower()
+    if suffix == ".svg" or "<svg" in str(text or "").lower():
+        return "uiux_svg"
     if any(token in name_low for token in ("permission", "permissions", "matrix", "权限矩阵", "rbac", "acl")):
         return "permission_matrix"
     if any(token in name_low for token in ("historical_bug", "historical-bug", "bugs", "bug", "defect", "缺陷")):
@@ -276,7 +387,6 @@ def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
         return "confluence_document"
     if any(token in name_low for token in ("feishu", "lark", "飞书")):
         return "feishu_document"
-    data = _json_or_none(text)
     if isinstance(data, dict):
         if isinstance(data.get("paths"), dict) and (data.get("openapi") or data.get("swagger")):
             return "openapi"
@@ -284,9 +394,19 @@ def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
             return "postman"
     if name.lower().endswith(".sql") or "create table" in low or "alter table" in low:
         return "database_schema"
+    if _looks_like_field_dictionary(name, text, data):
+        return "db_field_dictionary"
+    if "mrd" in name_low or re.search(r"\bMRD\b", name, flags=re.I) or "市场需求" in low:
+        return "mrd"
+    if "prd" in name_low or re.search(r"\bPRD\b", name, flags=re.I) or "产品需求" in low or "需求说明" in low:
+        return "prd"
     if "postman" in low and ("collection" in low or '"item"' in low):
         return "postman"
-    if any(token in low for token in ["openapi", "swagger", "接口文档", "api contract"]):
+    if _contains_markdown_api_sections(text) or (suffix in {".md", ".txt", ".rst"} and any(token in name_low for token in ("api", "接口")) and any(token in low for token in ("请求参数", "响应参数", "response", "request", "curl", "header"))):
+        return "markdown_api"
+    if _looks_like_uiux_spec(name, text):
+        return "uiux_spec"
+    if any(token in low for token in ["openapi", "swagger", "api contract"]):
         return "openapi"
     if any(token in low for token in ["权限矩阵", "permission matrix", "role matrix", "rbac", "acl"]):
         return "permission_matrix"
@@ -298,10 +418,6 @@ def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
         return "confluence_document"
     if any(token in low for token in ["飞书", "feishu", "lark"]):
         return "feishu_document"
-    if "mrd" in name_low or re.search(r"\bMRD\b", name, flags=re.I) or "市场需求" in low:
-        return "mrd"
-    if "prd" in name_low or re.search(r"\bPRD\b", name, flags=re.I) or "产品需求" in low or "需求说明" in low:
-        return "prd"
     return "collaboration_document"
 
 
@@ -376,6 +492,210 @@ def _postman_operations(payload: Any, source_id: str = "") -> list[dict[str, Any
     return rows
 
 
+def _json_blocks(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for match in re.finditer(r"```json\s*(.*?)```", text or "", re.I | re.S):
+        body = str(match.group(1) or "").strip()
+        try:
+            value = json.loads(body)
+        except Exception:
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
+
+
+def _flatten_json_field_names(value: Any, prefix: str = "", depth: int = 0) -> list[str]:
+    if depth > 3:
+        return []
+    if isinstance(value, dict):
+        fields: list[str] = []
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            fields.append(path)
+            fields.extend(_flatten_json_field_names(child, path, depth + 1))
+        return fields
+    if isinstance(value, list) and value:
+        return _flatten_json_field_names(value[0], f"{prefix}[]".rstrip("."), depth + 1)
+    return []
+
+
+def _markdown_table_blocks(text: str) -> list[list[dict[str, str]]]:
+    blocks: list[list[dict[str, str]]] = []
+    current: list[str] = []
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            current.append(stripped)
+            continue
+        if len(current) >= 2:
+            blocks.append(current[:])
+        current = []
+    if len(current) >= 2:
+        blocks.append(current[:])
+    tables: list[list[dict[str, str]]] = []
+    for block in blocks:
+        headers = [part.strip() for part in block[0].strip("|").split("|")]
+        if not headers or not any(headers):
+            continue
+        rows: list[dict[str, str]] = []
+        for line in block[2:] if len(block) >= 2 and re.fullmatch(r"[\|\-\:\s]+", block[1]) else block[1:]:
+            values = [part.strip() for part in line.strip("|").split("|")]
+            if len(values) != len(headers):
+                continue
+            rows.append({str(headers[idx]): values[idx] for idx in range(len(headers))})
+        if rows:
+            tables.append(rows)
+    return tables
+
+
+def _pick_first(item: dict[str, Any], keys: Iterable[str]) -> str:
+    norm_map = {_norm(key): key for key in item}
+    for key in keys:
+        actual = norm_map.get(_norm(key))
+        if actual:
+            return str(item.get(actual) or "").strip()
+    return ""
+
+
+def _infer_field_rows_from_markdown(text: str, source_id: str = "") -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    current_table = ""
+    lines = str(text or "").splitlines()
+    for line in lines:
+        heading = re.match(r"^\s*#{1,6}\s*(.+?)\s*$", line)
+        if heading:
+            label = heading.group(1).strip()
+            table_match = re.search(r"(?i)(?:table|表|数据表)\s*[:：]?\s*([A-Za-z0-9_\-\u4e00-\u9fff]+)", label)
+            current_table = table_match.group(1) if table_match else label
+        inline = re.search(r"(?i)(?:table|表|数据表)\s*[:：=]\s*([A-Za-z0-9_\-\u4e00-\u9fff]+)", line)
+        if inline:
+            current_table = inline.group(1)
+    for block in _markdown_table_blocks(text):
+        for row in block:
+            table_name = _pick_first(row, ("table", "table_name", "table name", "表", "数据表")) or current_table
+            field_name = _pick_first(row, ("field", "field_name", "field name", "column", "column_name", "字段", "列名", "属性"))
+            if not field_name:
+                continue
+            field_type = _pick_first(row, ("type", "data_type", "datatype", "字段类型", "类型"))
+            description = _pick_first(row, ("description", "desc", "comment", "说明", "描述", "备注"))
+            required = _pick_first(row, ("required", "nullable", "必填", "是否必填"))
+            rows.append({
+                "field_id": f"field:{source_id}:{_short_hash({'table': table_name or 'default', 'field': field_name})}",
+                "source_id": source_id,
+                "table": table_name or "default",
+                "table_id": f"table:{table_name or 'default'}",
+                "field": field_name,
+                "field_path": field_name,
+                "type": field_type,
+                "required": _doc_bool(required),
+                "description": _redact_text(description, 320),
+                "tokens": sorted(_tokens(f"{table_name} {field_name} {field_type} {description}")),
+            })
+    return rows
+
+
+def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        for key in ("fields", "items", "columns", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                candidates.extend([item for item in value if isinstance(item, dict)])
+        tables = payload.get("tables")
+        if isinstance(tables, list):
+            for table in tables:
+                if not isinstance(table, dict):
+                    continue
+                table_name = str(table.get("name") or table.get("table") or "")
+                for field in table.get("fields") or table.get("columns") or []:
+                    if isinstance(field, dict):
+                        item = dict(field)
+                        item.setdefault("table", table_name)
+                        candidates.append(item)
+    elif isinstance(payload, list):
+        candidates.extend([item for item in payload if isinstance(item, dict)])
+    candidates.extend(_csv_rows(text))
+    for item in candidates:
+        table_name = _pick_first(item, ("table", "table_name", "tableName", "表", "数据表"))
+        field_name = _pick_first(item, ("field", "field_name", "fieldName", "column", "column_name", "字段", "列名", "name"))
+        if not field_name:
+            continue
+        field_type = _pick_first(item, ("type", "data_type", "dataType", "字段类型", "类型"))
+        description = _pick_first(item, ("description", "desc", "comment", "说明", "描述", "remark", "备注"))
+        required = _pick_first(item, ("required", "nullable", "必填", "is_required"))
+        rows.append({
+            "field_id": f"field:{source_id}:{_short_hash({'table': table_name or 'default', 'field': field_name})}",
+            "source_id": source_id,
+            "table": table_name or "default",
+            "table_id": f"table:{table_name or 'default'}",
+            "field": field_name,
+            "field_path": field_name,
+            "type": field_type,
+            "required": _doc_bool(required),
+            "description": _redact_text(description, 320),
+            "tokens": sorted(_tokens(f"{table_name} {field_name} {field_type} {description}")),
+        })
+    rows.extend(_infer_field_rows_from_markdown(text, source_id))
+    return _dedupe_by_id(rows, "field_id")
+
+
+def _field_dictionary_tables(entries: list[dict[str, Any]], source_id: str = "") -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in entries:
+        if isinstance(row, dict):
+            grouped[str(row.get("table") or "default")].append(row)
+    tables: list[dict[str, Any]] = []
+    for table_name, items in grouped.items():
+        columns = sorted({str(item.get("field") or "") for item in items if str(item.get("field") or "")})
+        tables.append({
+            "table_id": f"table:{table_name}",
+            "source_id": source_id,
+            "name": table_name,
+            "columns": columns,
+            "foreign_keys": [],
+            "field_dictionary": items,
+            "tokens": sorted(_tokens(f"{table_name} {' '.join(columns)} {' '.join(str(item.get('description') or '') for item in items[:12])}")),
+        })
+    return tables
+
+
+def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, Any]]:
+    matches = list(MARKDOWN_API_ENDPOINT_RE.finditer(text or ""))
+    rows: list[dict[str, Any]] = []
+    if not matches:
+        return rows
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text or "")
+        section = str(text or "")[start:end]
+        methods = [part.strip().upper() for part in re.split(r"\s*/\s*", match.group("methods")) if part.strip()]
+        json_examples = _json_blocks(section)
+        example_fields = sorted({name for sample in json_examples[:2] for name in _flatten_json_field_names(sample)})
+        table_fields = [str(row.get("field") or "") for row in _field_dictionary_entries(section, None, source_id)]
+        all_fields = sorted({field for field in [*example_fields, *table_fields] if field})
+        summary_line = next((line.strip(" #-*") for line in section.splitlines() if line.strip() and not line.strip().startswith("|")), "")
+        tag_candidates = re.findall(r"`([A-Za-z0-9_\-]{2,40})`", section[:600])
+        for method in methods:
+            path = str(match.group("path") or "/")
+            rows.append({
+                "interface_id": f"markdown_api:{method}:{path}",
+                "source_id": source_id,
+                "source_kind": "markdown_api",
+                "method": method,
+                "path": path,
+                "operation_id": _safe_slug(f"{method.lower()}_{path.strip('/').replace('/', '_').replace('{', '').replace('}', '') or 'root'}", 64),
+                "summary": summary_line or f"{method} {path}",
+                "tags": sorted(set(tag_candidates[:8])),
+                "parameters": [field.split(".", 1)[0].replace("[]", "") for field in all_fields[:24]],
+                "field_dictionary": all_fields[:40],
+                "source_excerpt": _redact_text((match.group(0) + "\n" + section[:900]).strip(), 900),
+                "tokens": sorted(_tokens(f"{path} {summary_line} {' '.join(all_fields)} {' '.join(tag_candidates[:8])}")),
+            })
+    return rows
+
+
 def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
     tables: list[dict[str, Any]] = []
     for match in re.finditer(r"(?is)create\s+table\s+(?:if\s+not\s+exists\s+)?[`\"\[]?([a-zA-Z0-9_]+)[`\"\]]?\s*\((.*?)\)\s*;", text):
@@ -422,6 +742,47 @@ def _json_schema_tables(payload: Any, source_id: str = "") -> list[dict[str, Any
             "tokens": sorted(_tokens(f"{name} {' '.join(str(x) for x in columns)} {' '.join(foreign_keys)}")),
         })
     return tables
+
+
+def _uiux_specs_from_text(text: str, source_id: str, source_type: str, filename: str) -> list[dict[str, Any]]:
+    if source_type not in {"uiux_spec", "uiux_svg"}:
+        return []
+    specs: list[dict[str, Any]] = []
+    title = _clean_markup_text(next(iter(SVG_TITLE_RE.findall(text or "")), "")) if source_type == "uiux_svg" else ""
+    description = _clean_markup_text(next(iter(SVG_DESC_RE.findall(text or "")), ""))
+    text_labels = [_clean_markup_text(item, 80) for item in SVG_TEXT_RE.findall(text or "")]
+    attr_labels = [_clean_markup_text(item, 80) for item in SVG_TAG_ATTR_RE.findall(text or "")]
+    labels = [label for label in [*text_labels, *attr_labels] if label]
+    component_keywords = re.findall(r"(?im)(?:component|组件|控件|button|input|table|modal|drawer|chart|card)\s*[:：-]?\s*([A-Za-z0-9_\-\u4e00-\u9fff ]{2,60})", text or "")
+    state_keywords = re.findall(r"(?im)^\s*(?:state|states|状态)\s*[:：-]\s*([A-Za-z0-9_\-\u4e00-\u9fff、, /]{2,120})\s*$", text or "")
+    components = sorted({label for label in [*component_keywords, *labels[:20]] if label})[:24]
+    states: list[str] = []
+    for item in state_keywords:
+        states.extend([part.strip() for part in re.split(r"[,/|、]", item) if part.strip()])
+    known_state_labels = ("Loading", "Error", "Empty", "Success", "加载", "错误", "空状态", "成功")
+    for label in labels:
+        for token in known_state_labels:
+            if _norm(token) in _norm(label):
+                states.append(label)
+                break
+    if not states:
+        low = _norm(text[:8000])
+        for token in ("loading", "error", "empty", "success", "加载", "错误", "空状态", "成功"):
+            if _norm(token) in low:
+                states.append(token)
+    name = title or Path(filename).stem
+    specs.append({
+        "ui_spec_id": f"ui:{source_id}:{_short_hash({'name': name, 'type': source_type})}",
+        "source_id": source_id,
+        "source_type": source_type,
+        "name": name,
+        "description": _redact_text(description or " ".join(labels[:6]), 320),
+        "components": components,
+        "states": sorted(set(states))[:12],
+        "text_labels": labels[:30],
+        "tokens": sorted(_tokens(f"{name} {description} {' '.join(components)} {' '.join(labels[:20])}")),
+    })
+    return specs
 
 
 def _csv_rows(text: str) -> list[dict[str, str]]:
@@ -596,8 +957,14 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     openapi = payload if source_type == "openapi" and isinstance(payload, dict) else {}
     postman = payload if source_type == "postman" and isinstance(payload, dict) else {}
     operations = _openapi_operations(openapi, source_id) + _postman_operations(postman, source_id)
+    if source_type == "markdown_api":
+        operations.extend(_markdown_api_operations(text, source_id))
     tables = _sql_tables(text, source_id) if source_type == "database_schema" else []
     tables += _json_schema_tables(payload, source_id) if source_type in {"database_schema", "openapi"} else []
+    field_dictionary = _field_dictionary_entries(text, payload, source_id) if source_type in {"db_field_dictionary", "database_schema"} else []
+    if source_type == "db_field_dictionary":
+        tables += _field_dictionary_tables(field_dictionary, source_id)
+    ui_specs = _uiux_specs_from_text(text, source_id, source_type, filename)
     permissions = _permission_entries(text, payload, source_id) if source_type == "permission_matrix" else []
     tickets = _ticket_rows(text, payload, source_id, source_type) if source_type in {"historical_bug", "ticket"} else []
     return {
@@ -606,6 +973,8 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "openapi": openapi,
         "operations": operations,
         "tables": tables,
+        "field_dictionary": field_dictionary,
+        "ui_specs": ui_specs,
         "permissions": permissions,
         "tickets": tickets,
         "rules": _rules_from_text(text, source_id, source_type),
@@ -621,7 +990,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
 def _record_parse(record: dict[str, Any], root: Path) -> dict[str, Any]:
     stored = root / str(record.get("stored_path") or "")
     if not stored.exists():
-        return {"text": "", "payload": None, "openapi": {}, "operations": [], "tables": [], "permissions": [], "tickets": [], "rules": [], "roles": [], "state_machines": [], "parse_status": "missing_source", "parser": "none", "text_hash": "", "text_length": 0}
+        return {"text": "", "payload": None, "openapi": {}, "operations": [], "tables": [], "field_dictionary": [], "ui_specs": [], "permissions": [], "tickets": [], "rules": [], "roles": [], "state_machines": [], "parse_status": "missing_source", "parser": "none", "text_hash": "", "text_length": 0}
     return _parse_source(stored.read_bytes(), str(record.get("original_name") or stored.name), str(record.get("source_type") or "other_document"), str(record.get("source_id") or ""))
 
 
@@ -699,6 +1068,8 @@ def ingest_enterprise_knowledge_documents(
                     "text_length": parsed["text_length"],
                     "operation_count": len(parsed["operations"]),
                     "table_count": len(parsed["tables"]),
+                    "field_count": len(parsed["field_dictionary"]),
+                    "ui_spec_count": len(parsed["ui_specs"]),
                     "permission_count": len(parsed["permissions"]),
                     "rule_count": len(parsed["rules"]),
                     "ticket_count": len(parsed["tickets"]),
@@ -1013,6 +1384,24 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     merged_openapi = _merge_openapi(openapi_parts)
     interfaces = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("operations") or []], "interface_id")
     tables = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("tables") or []], "table_id")
+    field_dictionary = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("field_dictionary") or []], "field_id")
+    ui_specs = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("ui_specs") or []], "ui_spec_id")
+    known_tables = {str(row.get("table_id") or "") for row in tables}
+    for row in field_dictionary:
+        table_id = str(row.get("table_id") or "")
+        table_name = str(row.get("table") or "default")
+        if table_id and table_id not in known_tables:
+            grouped_fields = [item for item in field_dictionary if str(item.get("table_id") or "") == table_id]
+            tables.append({
+                "table_id": table_id,
+                "source_id": row.get("source_id"),
+                "name": table_name,
+                "columns": sorted({str(item.get("field") or "") for item in grouped_fields if str(item.get("field") or "")}),
+                "foreign_keys": [],
+                "field_dictionary": grouped_fields,
+                "tokens": sorted(_tokens(f"{table_name} {' '.join(str(item.get('field') or '') for item in grouped_fields)}")),
+            })
+            known_tables.add(table_id)
     permissions = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("permissions") or []], "permission_id")
     rules = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("rules") or []], "rule_id")
     roles = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("roles") or []], "role_id")
@@ -1071,12 +1460,13 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         *_links_by_overlap(rules, interfaces, "rule_id", "interface_id", relation="rule_to_interface"),
         *_links_by_overlap(rules, tables, "rule_id", "table_id", relation="rule_to_table"),
         *_links_by_overlap(interfaces, tables, "interface_id", "table_id", relation="interface_to_table"),
+        *_links_by_overlap(ui_specs, interfaces, "ui_spec_id", "interface_id", relation="ui_to_interface"),
     ]
     for source in active:
         sid = str(source.get("source_id"))
-        for row in [*rules, *interfaces, *tables, *permissions, *state_machines]:
+        for row in [*rules, *interfaces, *tables, *field_dictionary, *ui_specs, *permissions, *state_machines]:
             if str(row.get("source_id") or "") == sid:
-                node_id = row.get("rule_id") or row.get("interface_id") or row.get("table_id") or row.get("permission_id") or row.get("state_machine_id")
+                node_id = row.get("rule_id") or row.get("interface_id") or row.get("table_id") or row.get("field_id") or row.get("ui_spec_id") or row.get("permission_id") or row.get("state_machine_id")
                 if node_id:
                     relation_edges.append({"edge_id": f"edge:{_short_hash({'source': sid, 'node': node_id})}", "from": f"source:{sid}", "to": node_id, "relation": "source_to_asset", "confidence": 1.0, "evidence": {"source_version": source.get("version")}})
     relation_edges = _dedupe_by_id(relation_edges, "edge_id")
@@ -1094,7 +1484,9 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         "state_machines": state_machines,
         "interfaces": interfaces,
         "data_fields": [{"table_id": table.get("table_id"), "table": table.get("name"), "fields": table.get("columns") or [], "source_id": table.get("source_id")} for table in tables],
+        "field_dictionary": field_dictionary,
         "data_tables": tables,
+        "ui_design_specs": ui_specs,
         "rule_library": rules,
         "permission_matrix": permissions,
         "data_dependencies": dependencies,
@@ -1126,7 +1518,9 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         "role_count": len(asset["roles"]),
         "state_machine_count": len(asset["state_machines"]),
         "interface_count": len(asset["interfaces"]),
+        "field_dictionary_count": len(asset["field_dictionary"]),
         "data_table_count": len(asset["data_tables"]),
+        "ui_design_spec_count": len(asset["ui_design_specs"]),
         "rule_count": len(asset["rule_library"]),
         "permission_matrix_count": len(asset["permission_matrix"]),
         "data_dependency_count": len(asset["data_dependencies"]),
