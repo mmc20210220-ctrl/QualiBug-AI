@@ -68,6 +68,16 @@ export interface BehaviorScene {
   sourceCapabilities: readonly string[];
 }
 
+export interface BehaviorRoleNode {
+  roleId: string;
+  label: string;
+  summary: string;
+  pathIds: readonly string[];
+  evidenceRefIds: readonly string[];
+  riskCount: number;
+  status: BehaviorSpaceSceneStatus;
+}
+
 export interface BehaviorSystemNode {
   nodeId: string;
   label: string;
@@ -82,12 +92,16 @@ export interface BehaviorSystemNode {
 export interface BehaviorPath {
   pathId: string;
   label: string;
+  summary?: string;
   sourceNodeId?: string;
   targetNodeId?: string;
   nodeIds: readonly string[];
   coverageStatus: BehaviorCoverageStatus;
+  coveragePercent: number;
   riskCount: number;
   blockerCount: number;
+  roleIds: readonly string[];
+  riskTypes: readonly string[];
   evidenceRefIds: readonly string[];
   findingIds: readonly string[];
   replayRefIds: readonly string[];
@@ -109,6 +123,7 @@ export interface ProbeExecution {
 export interface BehaviorFinding {
   findingId: string;
   title: string;
+  riskType: string;
   severity: string;
   summary: string;
   businessImpact?: string;
@@ -160,6 +175,7 @@ export interface BehaviorAuditRef {
 
 export interface BehaviorSpaceVisualization {
   scene: BehaviorScene;
+  roleNodes: readonly BehaviorRoleNode[];
   systemNodes: readonly BehaviorSystemNode[];
   behaviorPaths: readonly BehaviorPath[];
   probeExecutions: readonly ProbeExecution[];

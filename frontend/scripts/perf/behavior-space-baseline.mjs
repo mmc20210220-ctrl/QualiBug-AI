@@ -16,6 +16,8 @@ const MANIFEST_PATH = path.join(
 );
 const ENTRY_KEY = "/(app)/projects/[projectId]/behavior-space/page";
 const MODULE_KEY = "[project]/src/app/(app)/projects/[projectId]/behavior-space/page";
+const DEFERRED_MODULE_KEY = "[project]/src/components/behavior-space/BehaviorSpaceDeferredVisualizations.tsx";
+const DEFERRED_SOURCE_PATH = path.join(ROOT, "src", "components", "behavior-space", "BehaviorSpaceDeferredVisualizations.tsx");
 const MAX_ENTRY_CHUNK_COUNT = 5;
 const MAX_TOTAL_JS_BYTES = 2_800_000;
 const MAX_LARGEST_CHUNK_BYTES = 2_650_000;
@@ -46,6 +48,15 @@ function statChunk(chunkPath) {
   };
 }
 
+function deferredVisualizationsSource() {
+  if (!fs.existsSync(DEFERRED_SOURCE_PATH)) {
+    throw new Error(
+      `Behavior Space perf baseline missing deferred visualization source: ${path.relative(ROOT, DEFERRED_SOURCE_PATH)}`,
+    );
+  }
+  return fs.readFileSync(DEFERRED_SOURCE_PATH, "utf8");
+}
+
 function main() {
   const manifest = loadManifest();
   if (!manifest) {
@@ -58,11 +69,22 @@ function main() {
   }
 
   const clientModules = Object.keys(manifest.clientModules ?? {});
-  if (!clientModules.some((key) => key.includes("BehaviorSpaceFlow.tsx"))) {
-    throw new Error("Behavior Space perf baseline missing 2D entry module");
-  }
-  if (!clientModules.some((key) => key.includes("BehaviorSpaceSandbox.tsx"))) {
-    throw new Error("Behavior Space perf baseline missing 2.5D entry module");
+  const hasDirectFlowModule = clientModules.some((key) => key.includes("BehaviorSpaceFlow.tsx"));
+  const hasDirectSandboxModule = clientModules.some((key) => key.includes("BehaviorSpaceSandbox.tsx"));
+  const hasDeferredModule = clientModules.includes(DEFERRED_MODULE_KEY);
+
+  if (!hasDirectFlowModule || !hasDirectSandboxModule) {
+    if (!hasDeferredModule) {
+      throw new Error("Behavior Space perf baseline missing deferred visualization entry module");
+    }
+
+    const deferredSource = deferredVisualizationsSource();
+    if (!deferredSource.includes('import("./BehaviorSpaceFlow")')) {
+      throw new Error("Behavior Space perf baseline missing deferred 2D entry import");
+    }
+    if (!deferredSource.includes('import("./BehaviorSpaceSandbox")')) {
+      throw new Error("Behavior Space perf baseline missing deferred 2.5D entry import");
+    }
   }
 
   const chunkStats = entryJsFiles.map(statChunk);

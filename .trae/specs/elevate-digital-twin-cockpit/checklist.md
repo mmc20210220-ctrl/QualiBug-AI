@@ -1,0 +1,16 @@
+- [x] 首页第一屏显示 `Environment Gate / 客户环境门禁`，并优先回答“能不能跑、为什么不能跑、需要修复什么、修复后能进入哪些探针”
+- [x] 首页或工作区明确显示 `runtime_start_allowed`、`readonly_probe_allowed`、`write_probe_allowed`、`p0p1_validation_allowed`
+- [x] `/projects/[projectId]/environment` 提供完整 2.5D 拓扑，并至少展示 10 个环境节点
+- [x] 环境节点支持 `passed`、`warning`、`blocked`、`checking`、`unknown` 五种状态
+- [x] 点击环境节点、阻断项、失败事件或风险条目都能打开统一的 `Evidence Drawer`
+- [x] `Evidence Drawer` 显示状态、影响范围、证据、修复动作和关联 artifact，并支持关闭与复制 action
+- [x] 主导航与当前 URL 严格一致，任意时刻仅有一个主导航项 active
+- [x] 所有环境诊断 UI 都从 `EnvironmentDiagnosticGraph` 渲染，不在组件中散落硬编码业务文案
+- [x] 页面数据访问通过 adapter 层统一收敛，mock 与真实 API 可切换
+- [x] Behavior Space 展示角色、行为、系统、证据、风险的分层关系，并支持筛选与 coverage 展示
+- [x] Runtime 执行页具备事件流、路径高亮、失败点证据下钻和执行总结卡片
+- [x] 单条 Finding/风险详情具备可播放、可暂停、可跳转失败点的证据回放时间线
+- [x] ROI/价值页展示风险、节省、覆盖率、customer-ready finding、证据包和客户配合项
+- [x] SSE 连接状态具备 disconnected/error 处理，且真实健康检查失败时不得显示为在线
+- [x] 页面、mock 数据和测试中不暴露客户真实 host、token、cookie、secret 或原始敏感日志
+- [x] Demo mock 数据下主要页面可启动、可点击、可演示，不出现明显报错

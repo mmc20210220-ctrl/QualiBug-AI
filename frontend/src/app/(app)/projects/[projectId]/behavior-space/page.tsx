@@ -63,9 +63,9 @@ export default async function BehaviorSpacePage({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xs text-[var(--muted)]">Behavior Space</div>
-              <h1 className="mt-2 text-xl font-semibold tracking-tight">2D 行为空间主视图</h1>
+              <h1 className="mt-2 text-xl font-semibold tracking-tight">分层行为空间页</h1>
               <p className="mt-2 max-w-4xl text-sm text-[var(--muted)]">
-                用系统建模、业务路径、覆盖状态、风险暴露点和证据入口解释“客户系统已被建模、真实路径已被覆盖、风险可下钻、证据可回放”。
+                用角色层、行为层、系统层、证据层和风险层解释“谁触发了哪条真实路径、路径覆盖到哪里、风险暴露在哪、证据和回放如何下钻”。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -271,7 +271,7 @@ export default async function BehaviorSpacePage({
         </div>
 
         <div className="rounded-[var(--radius-md)] border border-[rgba(122,167,255,0.14)] bg-[rgba(122,167,255,0.05)] p-4 text-sm text-[var(--muted)]">
-          重型可视化已调整为按需加载：页面先返回上线建议、风险成本、回放和审计关联，再在浏览器空闲或滚动到对应区域时初始化图布局与演示层。
+          分层图谱与 2.5D 演示层继续按需加载：页面先返回上线建议、风险成本、coverage、回放和审计关联，再在浏览器空闲或滚动到对应区域时初始化图布局与演示层。
         </div>
 
         <BehaviorSpaceDeferredVisualizations visualization={visualization} />
@@ -283,7 +283,7 @@ export default async function BehaviorSpacePage({
       <div className="grid gap-4">
         <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[rgba(16,24,38,0.55)] p-6 shadow-[var(--shadow-1)] backdrop-blur">
           <div className="text-xs text-[var(--muted)]">Behavior Space</div>
-          <h1 className="mt-2 text-xl font-semibold tracking-tight">2D 行为空间主视图</h1>
+          <h1 className="mt-2 text-xl font-semibold tracking-tight">分层行为空间页</h1>
         </div>
 
         <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[rgba(14,22,34,0.40)] p-5">

@@ -2,30 +2,23 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
-const items = [
-  { href: (projectId: string) => `/projects/${projectId}`, label: "项目工作区" },
-  { href: (projectId: string) => `/projects/${projectId}/behavior-space`, label: "Behavior Space" },
-  { href: (projectId: string) => `/projects/${projectId}/capabilities`, label: "能力中心" },
-  { href: (projectId: string) => `/projects/${projectId}/risks`, label: "风险证据" },
-  { href: (projectId: string) => `/projects/${projectId}/execution`, label: "执行" },
-  { href: (projectId: string) => `/projects/${projectId}/reports/executive`, label: "报告" },
-  { href: (projectId: string) => `/projects/${projectId}/roi`, label: "ROI/价值" },
-] as const;
+import { getActiveProjectNavKey, projectNavItems } from "@/components/layout/navigation";
 
 export function ProjectNav({ projectId }: { projectId: string }) {
   const pathname = usePathname();
+  const activeKey = getActiveProjectNavKey(pathname, projectId);
 
   return (
     <nav className="grid gap-1">
-      {items.map((item) => {
-        const href = item.href(encodeURIComponent(projectId));
-        const active = pathname === href || pathname.startsWith(`${href}/`);
+      {projectNavItems.map((item) => {
+        const href = item.href(projectId);
+        const active = activeKey === item.key;
 
         return (
           <Link
-            key={item.label}
+            key={item.key}
             href={href}
+            aria-current={active ? "page" : undefined}
             className={[
               "rounded-[var(--radius-sm)] px-3 py-2 text-sm transition",
               active

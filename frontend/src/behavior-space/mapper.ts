@@ -4,6 +4,7 @@ import type {
   BehaviorCoverageStatus,
   BehaviorPath,
   BehaviorReplayRef,
+  BehaviorRoleNode,
   BehaviorSpaceActionItem,
   BehaviorSpaceDataBundle,
   BehaviorSpaceSceneStatus,
@@ -385,6 +386,94 @@ function deriveNodeKind(input: Record<string, unknown>): BehaviorSystemNode["kin
   return "other";
 }
 
+function deriveCoveragePercent(input: { status: string; blockerCount: number; riskCount: number; rate: number | null }): number {
+  if (input.rate !== null) {
+    const normalized = input.rate <= 1 ? input.rate * 100 : input.rate;
+    return Math.max(0, Math.min(100, Math.round(normalized)));
+  }
+  const coverageStatus = deriveCoverageStatus(input);
+  if (coverageStatus === "covered") return 100;
+  if (coverageStatus === "partial") return input.riskCount > 0 ? 62 : 55;
+  if (coverageStatus === "blocked") return 35;
+  if (coverageStatus === "uncovered") return 10;
+  return 0;
+}
+
+function deriveRiskType(input: { title: string; summary: string; flowName: string }): string {
+  const normalized = `${input.title} ${input.summary} ${input.flowName}`.toLowerCase();
+  if (normalized.includes("支付") || normalized.includes("charge") || normalized.includes("payment")) return "支付一致性";
+  if (
+    normalized.includes("退款") ||
+    normalized.includes("ledger") ||
+    normalized.includes("对账") ||
+    normalized.includes("账务") ||
+    normalized.includes("consisten")
+  ) {
+    return "账务一致性";
+  }
+  if (normalized.includes("notify") || normalized.includes("通知") || normalized.includes("message") || normalized.includes("短信")) {
+    return "通知补偿";
+  }
+  if (normalized.includes("auth") || normalized.includes("权限") || normalized.includes("认证")) return "认证授权";
+  if (normalized.includes("timeout") || normalized.includes("latency") || normalized.includes("性能")) return "性能稳定性";
+  if (normalized.includes("idempot") || normalized.includes("重入") || normalized.includes("重复") || normalized.includes("幂等")) {
+    return "幂等并发";
+  }
+  return "通用风险";
+}
+
+function deriveRoleSeeds(input: {
+  pathId: string;
+  pathLabel: string;
+  domain?: string;
+  nodes: readonly Record<string, unknown>[];
+}): Array<{ roleId: string; label: string; summary: string }> {
+  const seeds: Array<{ roleId: string; label: string; summary: string }> = [];
+  const normalized = `${input.pathLabel} ${input.domain ?? ""} ${input.nodes
+    .map((node) => safeText(node.name, ""))
+    .join(" ")}`.toLowerCase();
+  const frontendLabels = input.nodes
+    .filter((node) => deriveNodeKind(node) === "frontend")
+    .map((node) => safeText(node.name, "入口"));
+
+  if (normalized.includes("运营") || normalized.includes("console") || normalized.includes("refund") || normalized.includes("退款")) {
+    seeds.push({
+      roleId: "role:operations",
+      label: "运营角色",
+      summary: frontendLabels[0] ? `${frontendLabels[0]} 发起或复核关键动作。` : "运营后台负责发起和复核关键动作。",
+    });
+  }
+  if (
+    normalized.includes("web") ||
+    normalized.includes("app") ||
+    normalized.includes("用户") ||
+    normalized.includes("客户") ||
+    normalized.includes("下单") ||
+    normalized.includes("支付")
+  ) {
+    seeds.push({
+      roleId: "role:customer",
+      label: "客户角色",
+      summary: frontendLabels[0] ? `${frontendLabels[0]} 代表终端用户入口。` : "终端用户从前台入口触发真实业务行为。",
+    });
+  }
+  if (normalized.includes("通知") || normalized.includes("notify") || normalized.includes("补偿") || normalized.includes("queue")) {
+    seeds.push({
+      roleId: "role:runtime",
+      label: "系统补偿角色",
+      summary: "异步任务、消息队列和补偿动作持续推进该行为路径。",
+    });
+  }
+  if (!seeds.length) {
+    seeds.push({
+      roleId: `role:${input.pathId}`,
+      label: input.domain ? `${input.domain} 责任角色` : "业务角色",
+      summary: "该角色代表此路径的业务责任人与操作者。",
+    });
+  }
+  return seeds;
+}
+
 export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): BehaviorSpaceVisualization {
   const commandCenter = asRecordData(bundle.commandCenter);
   const businessModel = asRecordData(bundle.businessModel);
@@ -401,6 +490,7 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
   const evidenceRefs: BehaviorEvidenceRef[] = [];
   const replayRefs: BehaviorReplayRef[] = [];
   const behaviorPaths: BehaviorPath[] = [];
+  const roleNodeMap = new Map<string, BehaviorRoleNode>();
   const systemNodeMap = new Map<string, BehaviorSystemNode>();
   const riskCountByFlow = new Map<string, { total: number; blockers: number }>();
 
@@ -446,6 +536,38 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
     }
 
     const stats = riskCountByFlow.get(flowId) ?? { total: 0, blockers: 0 };
+    const coveragePercent = deriveCoveragePercent({
+      status: safeText(flow.status, "unknown"),
+      blockerCount: stats.blockers,
+      riskCount: stats.total,
+      rate: pickNumber(flow.coverage_rate),
+    });
+    const roleSeeds = deriveRoleSeeds({
+      pathId: flowId,
+      pathLabel: flowName,
+      domain: firstNonEmpty(flow.domain) ?? undefined,
+      nodes: nodeItems,
+    });
+    const roleIds = roleSeeds.map((item) => item.roleId);
+    for (const roleSeed of roleSeeds) {
+      const existing = roleNodeMap.get(roleSeed.roleId);
+      if (existing) {
+        roleNodeMap.set(roleSeed.roleId, {
+          ...existing,
+          pathIds: existing.pathIds.includes(flowId) ? existing.pathIds : [...existing.pathIds, flowId],
+        });
+      } else {
+        roleNodeMap.set(roleSeed.roleId, {
+          roleId: roleSeed.roleId,
+          label: roleSeed.label,
+          summary: roleSeed.summary,
+          pathIds: [flowId],
+          evidenceRefIds: [],
+          riskCount: 0,
+          status: valueSummary.environmentStatus.tone === "critical" ? "blocked" : "ready",
+        });
+      }
+    }
     const pathId = flowId;
     const pathCoverage = deriveCoverageStatus({
       status: safeText(flow.status, "unknown"),
@@ -456,12 +578,16 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
     behaviorPaths.push({
       pathId,
       label: flowName,
+      summary: `${firstNonEmpty(flow.domain, "核心域")} · coverage ${coveragePercent}%`,
       sourceNodeId: nodeIds[0],
       targetNodeId: nodeIds[nodeIds.length - 1],
       nodeIds,
       coverageStatus: pathCoverage,
+      coveragePercent,
       riskCount: stats.total,
       blockerCount: stats.blockers,
+      roleIds,
+      riskTypes: [],
       evidenceRefIds: [],
       findingIds: [],
       replayRefIds: [],
@@ -482,6 +608,12 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
     const discoveryPath = pickArray(evidence.discovery_path);
     const summary = firstNonEmpty(evidence.summary, risk.summary, risk.business_impact, risk.title, "风险详情待补充") ?? "风险详情待补充";
     const evidenceRefIds: string[] = [];
+    const flowName = safeText(flow.name, "");
+    const riskType = deriveRiskType({
+      title: safeText(risk.title, riskId),
+      summary,
+      flowName,
+    });
     const evidenceRefId = `evidence:risk:${riskId}`;
     evidenceRefs.push({
       evidenceRefId,
@@ -564,6 +696,7 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
     const finding: BehaviorFinding = {
       findingId: riskId,
       title: safeText(risk.title, riskId),
+      riskType,
       severity: safeText(risk.severity, "unknown"),
       summary,
       businessImpact: firstNonEmpty(risk.business_impact) ?? undefined,
@@ -580,6 +713,7 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
     const relatedFindings = Array.from(findingById.values()).filter((finding) => finding.pathIds.includes(path.pathId));
     behaviorPaths[index] = {
       ...path,
+      riskTypes: Array.from(new Set(relatedFindings.map((finding) => finding.riskType))),
       findingIds: relatedFindings.map((finding) => finding.findingId),
       evidenceRefIds: relatedFindings.flatMap((finding) => finding.evidenceRefIds),
       replayRefIds: relatedFindings.flatMap((finding) => (finding.replayRefId ? [finding.replayRefId] : [])),
@@ -595,6 +729,20 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
       riskCount: relatedFindings.length,
       evidenceRefIds: relatedFindings.flatMap((finding) => finding.evidenceRefIds),
       status: relatedFindings.some((finding) => finding.launchBlocking) ? "warning" : node.status,
+    });
+  }
+
+  for (const roleNode of roleNodeMap.values()) {
+    const relatedFindings = Array.from(findingById.values()).filter((finding) =>
+      finding.pathIds.some((pathId) => roleNode.pathIds.includes(pathId)),
+    );
+    roleNodeMap.set(roleNode.roleId, {
+      ...roleNode,
+      riskCount: relatedFindings.length,
+      evidenceRefIds: Array.from(new Set(relatedFindings.flatMap((finding) => finding.evidenceRefIds))),
+      status: relatedFindings.some((finding) => finding.launchBlocking)
+        ? "warning"
+        : roleNode.status,
     });
   }
 
@@ -759,6 +907,7 @@ export function mapBehaviorSpaceVisualization(bundle: BehaviorSpaceDataBundle): 
         "test_run_detail",
       ],
     },
+    roleNodes: Array.from(roleNodeMap.values()),
     systemNodes: Array.from(systemNodeMap.values()),
     behaviorPaths,
     probeExecutions,

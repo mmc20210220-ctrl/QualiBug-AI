@@ -166,7 +166,7 @@ function DeferredSection({
             <button
               type="button"
               onClick={() => setReady(true)}
-              className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.42)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
+              className="inline-flex min-h-[40px] items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.42)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
             >
               立即加载
             </button>

@@ -6,19 +6,32 @@ export function TopBar({
   projects,
   userLabel,
   showLogout,
+  activeLabel,
+  isProjectRoute,
 }: {
   projectId?: string;
   projects: { projectId: string; name: string }[];
   userLabel: string;
   showLogout?: boolean;
+  activeLabel?: string;
+  isProjectRoute?: boolean;
 }) {
   return (
     <header className="border-b border-[var(--border)] bg-[rgba(11,15,20,0.75)] backdrop-blur">
-      <div className="mx-auto flex w-full max-w-[1400px] items-center gap-4 px-4 py-3">
-        <Link href="/projects" className="flex items-baseline gap-2">
-          <span className="text-sm font-semibold tracking-tight">QualiBug</span>
-          <span className="text-[11px] text-[var(--muted)]">Console</span>
-        </Link>
+      <div className="mx-auto flex w-full max-w-[1760px] items-center gap-4 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link href="/projects" className="flex items-baseline gap-2">
+            <span className="text-sm font-semibold tracking-tight">QualiBug</span>
+            <span className="text-[11px] text-[var(--muted)]">Console</span>
+          </Link>
+          {activeLabel ? (
+            <div className="hidden min-w-0 items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(14,22,34,0.45)] px-3 py-1.5 lg:flex">
+              <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{isProjectRoute ? "项目视图" : "全局视图"}</span>
+              <span className="truncate text-sm text-[var(--fg)]">{activeLabel}</span>
+              {projectId ? <span className="truncate text-xs text-[var(--muted)]">/{projectId}</span> : null}
+            </div>
+          ) : null}
+        </div>
 
         <div className="flex-1" />
 

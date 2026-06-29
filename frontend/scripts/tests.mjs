@@ -14,6 +14,7 @@ const REQUIRED_FILES = [
 
 const BEHAVIOR_SPACE_FILES = {
   page: path.join(SRC, "app", "(app)", "projects", "[projectId]", "behavior-space", "page.tsx"),
+  deferred: path.join(SRC, "components", "behavior-space", "BehaviorSpaceDeferredVisualizations.tsx"),
   sandbox: path.join(SRC, "components", "behavior-space", "BehaviorSpaceSandbox.tsx"),
   flow: path.join(SRC, "components", "behavior-space", "BehaviorSpaceFlow.tsx"),
 };
@@ -74,20 +75,27 @@ function scanBehaviorSpaceGuards() {
     "风险成本",
     "下一步动作",
     "页面优先回答上线建议、风险成本和下一步动作",
-    "behavior-space-2d",
     "behavior-space-replay",
     "behavior-space-audit",
+  ]);
+  const deferredText = assertSourceIncludes(BEHAVIOR_SPACE_FILES.deferred, [
+    "behavior-space-2d",
+    'import("./BehaviorSpaceFlow")',
+    'import("./BehaviorSpaceSandbox")',
   ]);
   const sandboxText = assertSourceIncludes(BEHAVIOR_SPACE_FILES.sandbox, [
     "只用于高价值演示，不替代 2D 主工作流",
     "打开 2.5D 演示层",
     "继续用 2D 主视图分析",
   ]);
-  const flowText = assertSourceIncludes(BEHAVIOR_SPACE_FILES.flow, ["2D 主视图"]);
+  const flowText = assertSourceIncludes(BEHAVIOR_SPACE_FILES.flow, ["2D 分层主视图"]);
 
   const pageForbidden = [/riskId\s*\{/, /pathId\s*\{/, /\{audit\.kind\}/];
   const sandboxForbidden = [/\{\s*selected\?\.node\.kind\s*\}/];
   const flowForbidden = [/\{evidence\.kind\}/];
+  if (!flowText.includes("2D 主视图") && !flowText.includes("2D 分层主视图")) {
+    throw new Error("Behavior Space guard failed: missing 2D primary-view copy");
+  }
   const violations = [
     ...pageForbidden.filter((rule) => rule.test(pageText)).map((rule) => `page:${rule}`),
     ...sandboxForbidden.filter((rule) => rule.test(sandboxText)).map((rule) => `sandbox:${rule}`),

@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { demoProjects } from "@/lib/demo-projects";
+import { getProjectBasePath } from "@/components/layout/navigation";
 
 export function ProjectSwitcher({
   projectId,
@@ -12,14 +12,11 @@ export function ProjectSwitcher({
   projects?: { projectId: string; name: string }[];
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const params = useParams<{ projectId?: string }>();
   const routeProjectId = typeof params.projectId === "string" ? params.projectId : undefined;
   const options = projects && projects.length ? projects : demoProjects;
-  const initial = useMemo(
-    () => routeProjectId ?? projectId ?? options[0]?.projectId ?? "",
-    [options, projectId, routeProjectId],
-  );
-  const [value, setValue] = useState<string>(initial);
+  const value = routeProjectId ?? projectId ?? options[0]?.projectId ?? "";
 
   return (
     <div className="flex items-center gap-2">
@@ -30,8 +27,13 @@ export function ProjectSwitcher({
         value={value}
         onChange={(e) => {
           const nextId = e.target.value;
-          setValue(nextId);
-          router.push(`/projects/${encodeURIComponent(nextId)}`);
+          const currentBase = routeProjectId ? getProjectBasePath(routeProjectId) : projectId ? getProjectBasePath(projectId) : null;
+          const nextBase = getProjectBasePath(nextId);
+          const nextPath =
+            currentBase && pathname.startsWith(currentBase)
+              ? `${nextBase}${pathname.slice(currentBase.length)}`
+              : nextBase;
+          router.push(nextPath || nextBase);
         }}
       >
         {options.map((p) => (

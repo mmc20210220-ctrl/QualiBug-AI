@@ -230,7 +230,7 @@ export function BehaviorSpaceSandbox({ visualization }: { visualization: Behavio
           <button
             type="button"
             onClick={() => setOpen((value) => !value)}
-            className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(122,167,255,0.12)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
+            className="inline-flex min-h-[40px] items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(122,167,255,0.12)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
           >
             {open ? "收起 2.5D 演示层" : "打开 2.5D 演示层"}
           </button>
@@ -238,7 +238,7 @@ export function BehaviorSpaceSandbox({ visualization }: { visualization: Behavio
             <Link
               key={link.href}
               href={link.href}
-              className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.42)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
+              className="inline-flex min-h-[40px] items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.42)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
             >
               {link.label}
             </Link>
@@ -254,8 +254,8 @@ export function BehaviorSpaceSandbox({ visualization }: { visualization: Behavio
       </div>
 
       {open ? (
-        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="min-h-[560px] overflow-hidden rounded-[20px] border border-[var(--border)] bg-[radial-gradient(circle_at_top,rgba(122,167,255,0.18),rgba(6,10,18,0.96)_62%)]">
+        <div className="relative isolate mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="relative z-0 min-h-[560px] overflow-hidden rounded-[20px] border border-[var(--border)] bg-[radial-gradient(circle_at_top,rgba(122,167,255,0.18),rgba(6,10,18,0.96)_62%)]">
             <Canvas camera={{ position: [0, 18, 24], fov: 42 }} shadows>
               <color attach="background" args={["#050913"]} />
               <ambientLight intensity={0.75} />
@@ -292,7 +292,7 @@ export function BehaviorSpaceSandbox({ visualization }: { visualization: Behavio
             </Canvas>
           </div>
 
-          <aside className="rounded-[20px] border border-[var(--border)] bg-[rgba(11,18,29,0.76)] p-4">
+          <aside className="relative z-10 min-w-0 rounded-[20px] border border-[var(--border)] bg-[rgba(11,18,29,0.76)] p-4">
             <div className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">Showcase Focus</div>
             <div className="mt-3 text-base font-semibold text-[var(--fg)]">{selected?.node.label}</div>
             <div className="mt-1 text-sm text-[var(--muted)]">
@@ -320,7 +320,7 @@ export function BehaviorSpaceSandbox({ visualization }: { visualization: Behavio
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.44)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
+                  className="inline-flex min-h-[40px] items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.44)] px-3 py-2 text-sm text-[var(--fg)] hover:border-[rgba(255,255,255,0.18)]"
                 >
                   {link.label}
                 </Link>

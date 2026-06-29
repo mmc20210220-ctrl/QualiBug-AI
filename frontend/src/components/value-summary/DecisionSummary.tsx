@@ -1,7 +1,5 @@
 import Link from "next/link";
 import { buildBehaviorSpaceValueSummary } from "@/behavior-space";
-import { maskId } from "@/lib/redact";
-
 export function DecisionSummary({ projectId, snapshot }: { projectId: string; snapshot: unknown }) {
   const summary = buildBehaviorSpaceValueSummary({ projectId, commandCenter: snapshot });
 
@@ -35,8 +33,8 @@ export function DecisionSummary({ projectId, snapshot }: { projectId: string; sn
         <div className="text-xs text-[var(--muted)]">下一步动作</div>
         <ul className="mt-3 grid gap-2 text-sm text-[var(--muted)]">
           {summary.nextActions.actions?.length ? (
-            summary.nextActions.actions.slice(0, 4).map((item) => (
-              <li key={maskId(item.label, 6, 4)}>
+            summary.nextActions.actions.slice(0, 4).map((item, index) => (
+              <li key={`decision-action:${index}:${item.href ?? "plain"}:${item.label}`}>
                 {item.href ? (
                   <Link href={item.href} className="text-[var(--fg)] hover:underline">
                     {item.label}

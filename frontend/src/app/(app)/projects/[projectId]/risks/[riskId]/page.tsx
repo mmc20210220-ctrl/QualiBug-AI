@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { RiskReplayTimelinePanel } from "@/components/risk/RiskReplayTimeline";
 import { DecisionSummary } from "@/components/value-summary/DecisionSummary";
+import { buildRiskReplayTimeline } from "@/features/risk-replay/adapter";
 import { getCommandCenterSnapshot, getRiskDetail, toSafeErrorView } from "@/lib/api/command-center";
 import { redactUnknown, maskId } from "@/lib/redact";
 
@@ -59,17 +61,21 @@ export default async function RiskEvidenceDetailPage({
 
     const request = pickRecord(evidence.request_summary) ?? {};
     const response = pickRecord(evidence.response_summary) ?? {};
-    const discoveryPath = pickArray(evidence.discovery_path);
-    const reproduction = pickArray(evidence.reproduction_steps);
     const suggestedFix = safeText(evidence.suggested_fix);
     const closure = pickArray(evidence.closure_criteria);
+    const replayTimeline = buildRiskReplayTimeline({
+      projectId,
+      riskId,
+      detail,
+      snapshot: snapshotEnvelope.data,
+    });
 
     return (
       <div className="grid gap-4">
         <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[rgba(16,24,38,0.55)] p-6 shadow-[var(--shadow-1)] backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-xs text-[var(--muted)]">风险详情</div>
+              <div className="text-xs text-[var(--muted)]">Finding / 风险详情</div>
               <h1 className="mt-2 truncate text-xl font-semibold tracking-tight">{title}</h1>
               <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
                 <span>riskId {maskId(String(risk.risk_id ?? riskId), 6, 4)}</span>
@@ -89,7 +95,7 @@ export default async function RiskEvidenceDetailPage({
 
         <DecisionSummary projectId={projectId} snapshot={snapshotEnvelope.data} />
 
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 xl:grid-cols-3">
           <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[rgba(14,22,34,0.40)] p-5">
             <div className="text-xs text-[var(--muted)]">业务影响</div>
             <div className="mt-3 text-sm text-[var(--fg)]">{impact}</div>
@@ -104,10 +110,32 @@ export default async function RiskEvidenceDetailPage({
             <div className="mt-3 text-sm text-[var(--fg)]">{suggested}</div>
             <div className="mt-4 text-xs text-[var(--muted)]">关闭准则来自后端规则（默认已脱敏）。</div>
             <ul className="mt-2 grid gap-2 text-sm text-[var(--muted)]">
-              {closure.length ? closure.slice(0, 6).map((item) => <li key={maskId(String(item), 6, 4)}>{safeText(item)}</li>) : <li>—</li>}
+              {closure.length ? closure.slice(0, 6).map((item, index) => <li key={`closure:${index}:${safeText(item)}`}>{safeText(item)}</li>) : <li>—</li>}
             </ul>
           </div>
+
+          <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[rgba(14,22,34,0.40)] p-5">
+            <div className="text-xs text-[var(--muted)]">Replay Readiness</div>
+            <div className="mt-3 grid gap-3">
+              <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
+                <div className="text-xs text-[var(--muted)]">回放步骤</div>
+                <div className="mt-2 text-sm font-semibold text-[var(--fg)]">{replayTimeline.metrics.totalSteps}</div>
+              </div>
+              <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
+                <div className="text-xs text-[var(--muted)]">失败落点</div>
+                <div className="mt-2 text-sm font-semibold text-[var(--fg)]">{replayTimeline.metrics.failureSteps}</div>
+              </div>
+              <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
+                <div className="text-xs text-[var(--muted)]">结构化复现</div>
+                <div className="mt-2 text-sm font-semibold text-[var(--fg)]">
+                  {replayTimeline.metrics.replayReady ? "已就绪" : "待补充"}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
+
+        <RiskReplayTimelinePanel timeline={replayTimeline} />
 
         <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[rgba(14,22,34,0.40)] p-5">
           <div className="text-xs text-[var(--muted)]">证据链摘要（严格脱敏）</div>
@@ -124,36 +152,9 @@ export default async function RiskEvidenceDetailPage({
             <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
               <div className="text-xs text-[var(--muted)]">响应摘要</div>
               <div className="mt-2 grid gap-1 text-sm text-[var(--muted)]">
-                <div>状态码：{safeText(response.status_code)}</div>
-                <div>观察到的问题：{safeText(response.observed_issue)}</div>
+                <div>状态码：{safeText(response.status_code ?? response.status)}</div>
+                <div>观察到的问题：{safeText(response.observed_issue ?? response.key_signal)}</div>
               </div>
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
-              <div className="text-xs text-[var(--muted)]">发现路径</div>
-              <ul className="mt-2 grid gap-2 text-sm text-[var(--muted)]">
-                {discoveryPath.length
-                  ? discoveryPath.slice(0, 10).map((item, idx) => {
-                      const step = pickRecord(item);
-                      const name = safeText(step?.name, `步骤 ${idx + 1}`);
-                      const status = safeText(step?.status, "passed");
-                      return (
-                        <li key={maskId(`${idx}-${name}-${status}`, 6, 4)}>
-                          {idx + 1}. {name} · {status}
-                        </li>
-                      );
-                    })
-                  : "—"}
-              </ul>
-            </div>
-
-            <div id="replay" className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(16,24,38,0.35)] p-4">
-              <div className="text-xs text-[var(--muted)]">复现步骤</div>
-              <ul className="mt-2 grid gap-2 text-sm text-[var(--muted)]">
-                {reproduction.length ? reproduction.slice(0, 10).map((item) => <li key={maskId(String(item), 6, 4)}>{safeText(item)}</li>) : <li>—</li>}
-              </ul>
             </div>
           </div>
 
