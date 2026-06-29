@@ -1,0 +1,10 @@
+- [x] `bug-engine-input-only` 能在 strict no-peek 下构建并消费 input-only 知识资产
+- [x] blind 报告中的 `api_count` 不再在 markdown API 文档存在时维持为 0
+- [x] blind 报告中的 `endpoint_count` 能反映知识资产中的结构化接口
+- [x] blind 项目上下文能体现 `business_objects`、`data_tables`、`field_dictionary` 等结构化实体信息
+- [x] grounded candidate 生成已消费 `oracle_library`、`interfaces`、`data_dependencies` 或 `ui_design_specs`
+- [x] `seed.sql` 等边界文件的 no-peek 处理规则明确且可解释
+- [x] 新增自动化测试覆盖 blind 链接入知识资产的关键路径
+- [x] `QualiBug_ECommerce_Benchmark` blind 回归中 `api_count` 与 `endpoint_count` 相比旧基线提升
+- [x] 若 `candidate_count` 或 `issue_count` 仍有限，结果中有明确边界说明
+- [ ] 本轮 blind 链改动已提交并推送，且最终 blind 复测结论已记录

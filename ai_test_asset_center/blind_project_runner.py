@@ -14,6 +14,7 @@ finding as a runtime-confirmed bug when no live target is configured.
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -21,6 +22,11 @@ from typing import Any
 
 import yaml
 
+from .enterprise_knowledge_center import (
+    build_enterprise_business_knowledge_asset,
+    ingest_enterprise_knowledge_files,
+    load_enterprise_business_knowledge_asset,
+)
 from .input_grounded_candidate_compiler import write_grounded_candidate_outputs
 from .grounded_probe_executor import run_grounded_probe_executor
 from .project_context_compiler import ProjectContextCompiler
@@ -60,8 +66,24 @@ def _sha256(path: Path) -> str:
 
 
 def _is_forbidden(path: Path) -> bool:
-    text = "/".join(part.lower() for part in path.parts)
-    return any(token in text for token in FORBIDDEN_TOKENS)
+    def normalize(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+    def matches(segment: str, token: str) -> bool:
+        normalized = normalize(segment)
+        if not normalized:
+            return False
+        return (
+            normalized == token
+            or normalized.startswith(f"{token}_")
+            or normalized.endswith(f"_{token}")
+            or f"_{token}_" in normalized
+        )
+
+    for part in path.parts:
+        if any(matches(part, token) or matches(Path(part).stem, token) for token in FORBIDDEN_TOKENS):
+            return True
+    return False
 
 
 def _read(path: Path) -> str:
@@ -78,6 +100,111 @@ def _load_openapi_yaml_or_json(input_dir: Path) -> tuple[dict[str, Any], str]:
         if p.exists():
             return yaml.safe_load(_read(p) or "{}") or {}, name
     return {}, ""
+
+
+def _knowledge_asset_to_data_dictionary(asset: dict[str, Any] | None) -> dict[str, list[str]]:
+    asset = asset if isinstance(asset, dict) else {}
+    data_dictionary: dict[str, list[str]] = {}
+    for row in asset.get("data_tables") or []:
+        if not isinstance(row, dict):
+            continue
+        table_name = str(row.get("name") or row.get("table") or "").strip()
+        if not table_name:
+            continue
+        columns = [str(item) for item in (row.get("columns") or []) if str(item).strip()]
+        if columns:
+            data_dictionary.setdefault(table_name, []).extend(columns)
+    for row in asset.get("field_dictionary") or []:
+        if not isinstance(row, dict):
+            continue
+        table_name = str(row.get("table") or "default").strip() or "default"
+        field_name = str(row.get("field") or row.get("name") or "").strip()
+        if field_name:
+            data_dictionary.setdefault(table_name, []).append(field_name)
+    return {
+        table: sorted(dict.fromkeys(field for field in fields if field))
+        for table, fields in data_dictionary.items()
+    }
+
+
+def _merge_openapi_with_knowledge_asset(openapi: dict[str, Any], asset: dict[str, Any] | None) -> dict[str, Any]:
+    asset = asset if isinstance(asset, dict) else {}
+    interfaces = [row for row in (asset.get("interfaces") or []) if isinstance(row, dict)]
+    if not interfaces:
+        return openapi if isinstance(openapi, dict) else {}
+
+    merged = json.loads(json.dumps(openapi if isinstance(openapi, dict) else {}))
+    merged.setdefault("openapi", "3.0.3")
+    merged.setdefault("info", {"title": "input_only_knowledge_asset", "version": "1.0"})
+    paths = merged.setdefault("paths", {})
+
+    for row in interfaces:
+        method = str(row.get("method") or "GET").lower()
+        path = str(row.get("path") or "/").strip() or "/"
+        if not path.startswith("/"):
+            path = "/" + path
+        if method not in {"get", "post", "put", "patch", "delete", "head", "options"}:
+            continue
+        operation = paths.setdefault(path, {}).setdefault(method, {})
+        summary = str(row.get("summary") or row.get("title") or row.get("operation_id") or f"{method.upper()} {path}").strip()
+        if summary and not operation.get("summary"):
+            operation["summary"] = summary
+        operation.setdefault("operationId", str(row.get("operation_id") or f"{method}_{path.strip('/').replace('/', '_').replace('{', '').replace('}', '') or 'root'}"))
+        existing_params = {
+            str(item.get("name") or "")
+            for item in (operation.get("parameters") or [])
+            if isinstance(item, dict) and item.get("name")
+        }
+        for name in [str(item) for item in (row.get("parameters") or []) if str(item).strip()]:
+            if name in existing_params:
+                continue
+            operation.setdefault("parameters", []).append({
+                "name": name,
+                "in": "path" if "{" + name + "}" in path else "query",
+                "required": "{" + name + "}" in path,
+                "schema": {"type": "string"},
+            })
+            existing_params.add(name)
+        operation.setdefault("responses", {"200": {"description": "documented in enterprise knowledge asset"}})
+        token_space = " ".join([path, summary, " ".join(str(x) for x in (row.get("parameters") or [])), " ".join(str(x) for x in (row.get("tags") or [])), " ".join(str(x) for x in (row.get("tokens") or []))])
+        if re.search(r"auth|authorization|bearer|token|登录|鉴权|认证|权限", token_space, re.I) and not operation.get("security"):
+            operation["security"] = [{"bearerAuth": []}]
+    return merged
+
+
+def _sync_input_only_knowledge_asset(project_id: str, root: Path) -> dict[str, Any]:
+    project = _safe_project_id(project_id)
+    input_dir = root / "platform_inputs" / project
+    files = [path for path in sorted(input_dir.rglob("*")) if path.is_file()]
+    result = {
+        "enabled": False,
+        "source_file_count": len(files),
+        "summary": {},
+        "ingest": {},
+        "error": "",
+        "asset": None,
+    }
+    if not files:
+        return result
+    actor = {"name": "blind_project_runner", "role": "project_owner"}
+    try:
+        ingest = ingest_enterprise_knowledge_files(project, files, root=root, actor=actor)
+        asset = load_enterprise_business_knowledge_asset(project, root)
+        if not asset or ingest.get("rebuild_recommended"):
+            asset = build_enterprise_business_knowledge_asset(project, root)
+        result.update({
+            "enabled": bool(asset),
+            "summary": (asset or {}).get("summary") or {},
+            "ingest": {
+                "created_count": len(ingest.get("created") or []),
+                "duplicate_count": len(ingest.get("duplicates") or []),
+                "error_count": len(ingest.get("errors") or []),
+            },
+            "asset": asset,
+        })
+    except Exception as exc:
+        result["error"] = str(exc)[:500]
+    return result
 
 
 def _copy_input_only(source_input_dir: Path, dest_input_dir: Path) -> dict[str, Any]:
@@ -167,14 +294,21 @@ def _normalize_platform_inputs(project_id: str, source_input_dir: Path, root: Pa
     return manifest
 
 
-def _compile_project_context(project_id: str, root: Path) -> dict[str, Any]:
+def _compile_project_context(project_id: str, root: Path, knowledge_asset: dict[str, Any] | None = None) -> dict[str, Any]:
     project = _safe_project_id(project_id)
     input_dir = root / "platform_inputs" / project
     prd = _read(input_dir / "prd.md")
     api_docs = _read(input_dir / "api.md")
     openapi = json.loads(_read(input_dir / "openapi.json") or "{}")
+    openapi = _merge_openapi_with_knowledge_asset(openapi, knowledge_asset)
+    data_dictionary = _knowledge_asset_to_data_dictionary(knowledge_asset)
     compiler = ProjectContextCompiler()
-    ctx = compiler.compile(prd_text=prd, openapi_spec=openapi, api_docs_text=api_docs)
+    ctx = compiler.compile(
+        prd_text=prd,
+        openapi_spec=openapi,
+        api_docs_text=api_docs,
+        data_dictionary=data_dictionary,
+    )
     payload = compiler.to_dict(ctx)
     out = root / "platform_outputs" / project / "input_only_project_context.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -186,6 +320,8 @@ def _compile_project_context(project_id: str, root: Path) -> dict[str, Any]:
         "observer_count": len(payload.get("observers") or []),
         "candidate_invariant_count": len(payload.get("candidate_invariants") or []),
         "candidate_lifecycle_count": len(payload.get("candidate_lifecycle_transitions") or []),
+        "knowledge_data_dictionary_count": len(data_dictionary),
+        "knowledge_interface_count": len((knowledge_asset or {}).get("interfaces") or []),
     }
 
 
@@ -232,7 +368,9 @@ def run_input_only_project(
     input_dir = Path(project_input_dir).resolve()
     project = _safe_project_id(project_id or input_dir.parent.name)
     manifest = _normalize_platform_inputs(project, input_dir, root_path)
-    context_summary = _compile_project_context(project, root_path)
+    knowledge_sync = _sync_input_only_knowledge_asset(project, root_path)
+    knowledge_asset = knowledge_sync.get("asset") if isinstance(knowledge_sync.get("asset"), dict) else None
+    context_summary = _compile_project_context(project, root_path, knowledge_asset=knowledge_asset)
     onboarding = run_onboarding_check(project, root_path)
 
     output_dir = root_path / "platform_outputs" / project / "input_only_run"
@@ -240,6 +378,7 @@ def run_input_only_project(
         root_path / "platform_inputs" / project,
         output_dir,
         project_id=project,
+        knowledge_asset=knowledge_asset,
     )
 
     probe_execution: dict[str, Any] | None = None
@@ -279,6 +418,13 @@ def run_input_only_project(
         "allowed_source_root": str(input_dir),
         "forbidden_sources": sorted(FORBIDDEN_TOKENS),
         "input_manifest": manifest,
+        "knowledge_asset_summary": knowledge_sync.get("summary") or {},
+        "knowledge_asset_sync": {
+            "enabled": bool(knowledge_asset),
+            "source_file_count": int(knowledge_sync.get("source_file_count") or 0),
+            "ingest": knowledge_sync.get("ingest") or {},
+            "error": knowledge_sync.get("error") or "",
+        },
         "project_context_summary": context_summary,
         "onboarding_ok": bool(onboarding.get("ok")),
         "discovery_summary": discovery_summary,
@@ -288,6 +434,8 @@ def run_input_only_project(
         "legacy_static_shadow_summary": _summarize_discovery(discovery),
         "outputs": {
             "platform_input_dir": str(root_path / "platform_inputs" / project),
+            "knowledge_asset": str(root_path / "platform_outputs" / project / "enterprise_knowledge_center" / "enterprise_business_knowledge_asset.json"),
+            "knowledge_asset_report": str(root_path / "platform_outputs" / project / "enterprise_knowledge_center" / "enterprise_business_knowledge_report.html"),
             "project_context": context_summary.get("project_context"),
             "grounded_candidates": str(output_dir / "grounded_candidates.json"),
             "grounded_candidates_md": str(output_dir / "grounded_candidates.md"),

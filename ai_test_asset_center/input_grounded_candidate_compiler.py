@@ -248,6 +248,181 @@ def parse_business_rules(text: str) -> list[BusinessRule]:
     return rules
 
 
+def _dedupe_strings(values: list[str], *, limit: int | None = None) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = _clean(str(raw or ""))
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(text)
+        if limit and len(items) >= limit:
+            break
+    return items
+
+
+def _merge_state_models(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "states": _dedupe_strings(list(base.get("states") or []) + list(extra.get("states") or []), limit=24),
+        "terminal_states": _dedupe_strings(list(base.get("terminal_states") or []) + list(extra.get("terminal_states") or []), limit=16),
+    }
+
+
+def _knowledge_asset_roles(asset: dict[str, Any]) -> list[str]:
+    roles: list[str] = []
+    for row in asset.get("roles") or []:
+        if not isinstance(row, dict):
+            continue
+        roles.append(str(row.get("role") or row.get("name") or row.get("title") or ""))
+    return _dedupe_strings(roles, limit=24)
+
+
+def _knowledge_asset_entities(asset: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for row in asset.get("business_objects") or []:
+        if isinstance(row, dict):
+            names.append(str(row.get("object") or row.get("name") or ""))
+    for row in asset.get("data_tables") or []:
+        if isinstance(row, dict):
+            names.append(str(row.get("name") or row.get("table") or ""))
+    for row in asset.get("field_dictionary") or []:
+        if isinstance(row, dict):
+            names.append(str(row.get("table") or ""))
+    return _dedupe_strings(names, limit=40)
+
+
+def _knowledge_asset_state_model(asset: dict[str, Any]) -> dict[str, Any]:
+    states: list[str] = []
+    terminals: list[str] = []
+    for row in asset.get("state_machines") or []:
+        if not isinstance(row, dict):
+            continue
+        states.extend([str(x) for x in (row.get("states") or []) if str(x).strip()])
+        transitions = row.get("transitions") or []
+        for item in transitions:
+            if isinstance(item, dict):
+                states.extend([str(item.get("from") or ""), str(item.get("to") or "")])
+        for token in row.get("terminal_states") or []:
+            if str(token).strip():
+                terminals.append(str(token))
+        for token in row.get("states") or []:
+            low = str(token).strip().lower()
+            if low in {"completed", "complete", "cancelled", "canceled", "closed", "archived", "refunded", "done", "finished", "终态", "已完成", "已取消", "已关闭", "已归档"}:
+                terminals.append(str(token))
+    return {
+        "states": _dedupe_strings(states, limit=24),
+        "terminal_states": _dedupe_strings(terminals, limit=16),
+    }
+
+
+def _knowledge_rule_code(row: dict[str, Any], index: int) -> str:
+    raw = str(row.get("rule_id") or row.get("source_rule_id") or row.get("risk_id") or "").strip()
+    if raw:
+        return raw.replace(":", "_").replace("/", "_")[:48]
+    return f"KA_{index:03d}"
+
+
+def _knowledge_asset_rules(asset: dict[str, Any]) -> list[BusinessRule]:
+    rules: list[BusinessRule] = []
+    for index, row in enumerate(asset.get("rule_library") or [], 1):
+        if not isinstance(row, dict):
+            continue
+        statement = _clean(str(row.get("statement") or row.get("expected") or row.get("title") or ""))
+        if not statement:
+            continue
+        source_id = str(row.get("source_id") or "knowledge_asset")
+        title = _clean(str(row.get("rule_type") or row.get("risk_type") or "knowledge_rule")) or "knowledge_rule"
+        rules.append(BusinessRule(
+            code=_knowledge_rule_code(row, index),
+            title=title,
+            rule_text=statement,
+            source_ref=_source(f"knowledge_asset:{source_id}", title, statement, kind="knowledge_rule"),
+        ))
+    return rules
+
+
+def _knowledge_asset_endpoints(asset: dict[str, Any]) -> list[ApiEndpoint]:
+    endpoints: list[ApiEndpoint] = []
+    for row in asset.get("interfaces") or []:
+        if not isinstance(row, dict):
+            continue
+        method = str(row.get("method") or "GET").upper()
+        path = str(row.get("path") or "/").strip() or "/"
+        if not path.startswith("/"):
+            path = "/" + path
+        summary = _clean(str(row.get("summary") or row.get("title") or row.get("operation_id") or f"{method} {path}"))
+        parameters = [str(x) for x in (row.get("parameters") or []) if str(x).strip()]
+        token_space = " ".join(
+            [path, summary, " ".join(parameters), " ".join(str(x) for x in (row.get("tags") or [])), " ".join(str(x) for x in (row.get("tokens") or []))]
+        )
+        checks: list[str] = []
+        if re.search(r"auth|authorization|bearer|token|login|permission|权限|鉴权|认证", token_space, re.I):
+            checks.append("auth")
+        if re.search(r"tenant|org|owner|scope|租户|组织|归属", token_space, re.I):
+            checks.append("tenant")
+        if re.search(r"idempotency|幂等|duplicate|retry|重试|external_event_id|event_id", token_space, re.I):
+            checks.append("idempotency")
+        if re.search(r"state|transition|approve|cancel|refund|archive|状态|流转|审批|撤回|取消|退款|归档", token_space, re.I):
+            checks.append("state")
+        if re.search(r"audit|privacy|export|import|report|admin|config|隐私|审计|导出|导入|配置", token_space, re.I):
+            checks.append("audit")
+        source_id = str(row.get("source_id") or "knowledge_asset")
+        section = str(row.get("interface_id") or f"{method} {path}")
+        quote = summary or f"{method} {path}"
+        endpoints.append(ApiEndpoint(
+            path=path,
+            method=method,
+            capability_code="",
+            capability=summary,
+            actors=[],
+            checks=sorted(dict.fromkeys(checks)),
+            failure_statuses=[],
+            summary=summary,
+            source_refs=[_source(f"knowledge_asset:{source_id}", section, quote, kind="knowledge_interface")],
+        ))
+    return endpoints
+
+
+def _knowledge_row_to_candidate_risks(row: dict[str, Any], text: str) -> list[str]:
+    low = f"{str(row.get('risk_type') or '')} {str(row.get('rule_type') or '')} {text}".lower()
+    risks: list[str] = []
+    if re.search(r"permission|auth|authorization|登录|鉴权|认证", low):
+        risks.append("auth_boundary_probe")
+    if re.search(r"tenant|scope|owner|ownership|租户|归属|组织|越权", low):
+        risks.append("ownership_scope_probe")
+    if re.search(r"idempotency|duplicate|replay|retry|幂等|重复|重试|回调", low):
+        risks.extend(["idempotency_replay_probe", "async_external_event_probe"])
+    if re.search(r"state|transition|workflow|status|状态|流转|审批|终态|取消|退款|归档", low):
+        risks.append("state_transition_probe")
+    if re.search(r"conservation|reconciliation|balance|ledger|inventory|amount|quota|fund|库存|金额|余额|账本|额度|积分|对账", low):
+        risks.append("conservation_probe")
+    if re.search(r"audit|privacy|sensitive|export|import|审计|隐私|敏感|导出|导入", low):
+        risks.append("audit_privacy_probe")
+    return _dedupe_strings(risks, limit=6)
+
+
+def _knowledge_asset_support_refs(asset: dict[str, Any]) -> dict[str, list[SourceRef]]:
+    refs: dict[str, list[SourceRef]] = defaultdict(list)
+    for collection_name in ("rule_library", "risk_domains"):
+        for row in asset.get(collection_name) or []:
+            if not isinstance(row, dict):
+                continue
+            quote = _clean(str(row.get("statement") or row.get("expected") or row.get("title") or ""))
+            if not quote:
+                continue
+            source_id = str(row.get("source_id") or row.get("source_rule_id") or "knowledge_asset")
+            section = str(row.get("rule_id") or row.get("risk_id") or row.get("rule_type") or row.get("risk_type") or collection_name)
+            kind = "knowledge_rule" if collection_name == "rule_library" else "knowledge_risk"
+            ref = _source(f"knowledge_asset:{source_id}", section, quote, kind=kind)
+            for risk_type in _knowledge_row_to_candidate_risks(row, quote):
+                refs[risk_type].append(ref)
+    return {key: value[:8] for key, value in refs.items()}
+
+
 def parse_api_md(text: str) -> list[ApiEndpoint]:
     endpoints: list[ApiEndpoint] = []
     # Matches sections like: ### 3. /api/v1/ecommerce/订单/{id}
@@ -474,7 +649,7 @@ def _capability_code_from_endpoint(ep: ApiEndpoint) -> str:
     return f"C{int(m.group(1)):02d}" if m else ""
 
 
-def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", max_candidates: int | None = None) -> dict[str, Any]:
+def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", max_candidates: int | None = None, knowledge_asset: dict[str, Any] | None = None) -> dict[str, Any]:
     input_path = Path(input_dir).resolve()
     docs = load_input_documents(input_path)
     prd = docs.get("PRD.md", "") or docs.get("prd.md", "")
@@ -482,16 +657,21 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
     rules_text = docs.get("BUSINESS_RULES.md", "") or docs.get("business_rules.md", "")
     schema_text = docs.get("schema.sql", "") or docs.get("DATABASE_DESIGN.md", "")
     risk_text = docs.get("RISK_SURFACE_MODEL.md", "")
+    knowledge_asset = knowledge_asset if isinstance(knowledge_asset, dict) else {}
 
-    roles = parse_roles(prd, api_md)
-    entities = parse_entities(prd, schema_text)
-    state_model = parse_state_machine(prd)
-    rules = parse_business_rules(rules_text)
+    roles = _dedupe_strings(parse_roles(prd, api_md) + _knowledge_asset_roles(knowledge_asset), limit=24)
+    entities = _dedupe_strings(parse_entities(prd, schema_text) + _knowledge_asset_entities(knowledge_asset), limit=40)
+    state_model = _merge_state_models(parse_state_machine(prd), _knowledge_asset_state_model(knowledge_asset))
+    rules = parse_business_rules(rules_text) + _knowledge_asset_rules(knowledge_asset)
     endpoints = merge_endpoints(parse_api_md(api_md), parse_openapi_endpoints(input_path))
+    knowledge_endpoints = _knowledge_asset_endpoints(knowledge_asset)
+    if knowledge_endpoints:
+        endpoints = merge_endpoints(endpoints, knowledge_endpoints)
     by_rule = _rule_lookup(rules)
     prd_refs = parse_prd_grounding_refs(prd)
     api_global_refs = parse_api_global_constraint_refs(api_md)
     risk_refs_by_code = parse_risk_surface_refs(risk_text)
+    knowledge_support_refs = _knowledge_asset_support_refs(knowledge_asset)
     strict_document_grounding = os.environ.get("QUALIBUG_STRICT_DOCUMENT_GROUNDING", "1") != "0"
 
     candidates: list[GroundedCandidate] = []
@@ -513,6 +693,7 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
         for support_key in _risk_support_keys(risk_type):
             support_refs.extend((prd_refs.get(support_key) or [])[:2])
             support_refs.extend((api_global_refs.get(support_key) or [])[:2])
+        support_refs.extend((knowledge_support_refs.get(risk_type) or [])[:3])
 
         seen_ref_keys: set[tuple[str, str, str, str]] = set()
         deduped_endpoint_refs: list[SourceRef] = []
@@ -731,6 +912,7 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
             "state_machine": state_model,
             "business_rule_count": len(rules),
             "endpoint_count": len(endpoints),
+            "knowledge_asset_attached": bool(knowledge_asset),
         },
         "summary": {
             "candidate_count": len(candidates),
@@ -739,6 +921,8 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
             "needs_human_review": len(candidates),
             "strict_document_grounding": strict_document_grounding,
             "discarded_ungrounded_count": discarded_ungrounded_count,
+            "knowledge_asset_rule_count": len(knowledge_asset.get("rule_library") or []) if knowledge_asset else 0,
+            "knowledge_asset_interface_count": len(knowledge_asset.get("interfaces") or []) if knowledge_asset else 0,
             "by_risk_type": dict(sorted(by_risk.items())),
             "by_execution_policy": dict(sorted(by_policy.items())),
             "by_severity": dict(sorted(by_sev.items())),
@@ -924,10 +1108,10 @@ def render_runtime_validation_queue_markdown(queue: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def write_grounded_candidate_outputs(input_dir: str | Path, output_dir: str | Path, *, project_id: str = "", max_candidates: int | None = None) -> dict[str, Any]:
+def write_grounded_candidate_outputs(input_dir: str | Path, output_dir: str | Path, *, project_id: str = "", max_candidates: int | None = None, knowledge_asset: dict[str, Any] | None = None) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    payload = compile_grounded_candidates(input_dir, project_id=project_id, max_candidates=max_candidates)
+    payload = compile_grounded_candidates(input_dir, project_id=project_id, max_candidates=max_candidates, knowledge_asset=knowledge_asset)
     json_path = output / "grounded_candidates.json"
     md_path = output / "grounded_candidates.md"
     probe_path = output / "grounded_probe_plan.json"
