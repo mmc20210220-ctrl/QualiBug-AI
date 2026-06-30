@@ -1,5 +1,5 @@
-import { readAuthConfig } from "@/lib/auth/config";
 import { ApiClientError, requestJson } from "@/lib/api/client";
+import { readDataSourceConfig } from "@/lib/runtime-data-source";
 
 export type RuntimeHealthSource = "demo" | "real";
 
@@ -14,9 +14,13 @@ function pickString(value: unknown): string | undefined {
 }
 
 export async function getRuntimeHealth(): Promise<RuntimeHealthState> {
-  const config = readAuthConfig();
-  if (config.mode === "demo") {
-    return { state: "unverified", source: "demo", detail: "demo 模式不进行后端探测" };
+  const dataSource = readDataSourceConfig();
+  if (dataSource.resolvedMode === "demo") {
+    return {
+      state: "unverified",
+      source: "demo",
+      detail: dataSource.requestedMode === "demo" ? "当前数据源固定为 demo 模式" : "未配置旧后端 API，当前回退为 demo 数据",
+    };
   }
 
   try {

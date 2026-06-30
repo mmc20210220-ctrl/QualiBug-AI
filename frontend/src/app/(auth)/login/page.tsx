@@ -2,6 +2,7 @@ import Link from "next/link";
 import { readAuthConfig } from "@/lib/auth/config";
 import { getRuntimeHealth } from "@/lib/api/runtime-health";
 import { RuntimeHealthBadge, RuntimeHealthDetail } from "@/components/runtime/RuntimeHealthBadge";
+import { readDataSourceConfig } from "@/lib/runtime-data-source";
 
 export default async function LoginPage({
   searchParams,
@@ -12,6 +13,7 @@ export default async function LoginPage({
   const next = typeof params.next === "string" ? params.next : undefined;
   const error = typeof params.error === "string" ? params.error : undefined;
   const config = readAuthConfig();
+  const dataSource = readDataSourceConfig();
   const health = await getRuntimeHealth();
   const oidcLoginHref = `/auth/login${next ? `?next=${encodeURIComponent(next)}` : ""}`;
 
@@ -34,7 +36,7 @@ export default async function LoginPage({
             </Link>
           ) : (
             <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(14,22,34,0.55)] px-4 py-3 text-sm text-[var(--muted)]">
-              当前为 demo 模式（AUTH_MODE=demo），无需登录
+              当前为 demo 登录模式（AUTH_MODE=demo），无需登录
             </div>
           )}
 
@@ -50,7 +52,7 @@ export default async function LoginPage({
               className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[rgba(14,22,34,0.55)] px-4 py-3 text-sm text-[var(--muted)] hover:text-[var(--fg)]"
               href="/projects"
             >
-              进入演示模式
+              {dataSource.resolvedMode === "real" ? "进入控制台" : "进入演示模式"}
             </Link>
           ) : null}
         </div>
@@ -71,6 +73,8 @@ export default async function LoginPage({
           <RuntimeHealthBadge health={health} />
         </div>
         <ul className="mt-3 grid gap-2 text-sm text-[var(--muted)]">
+          <li>认证模式：{config.mode}</li>
+          <li>数据源模式：{dataSource.resolvedMode}</li>
           <li>在线：真实健康检查成功</li>
           <li>未验证：仅配置/未进行探测</li>
           <li>离线：探测失败或不可达</li>

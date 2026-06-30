@@ -1,6 +1,5 @@
 import "server-only";
 import { requestJson, ApiClientError } from "@/lib/api/client";
-import { readAuthConfig } from "@/lib/auth/config";
 import {
   getDemoBusinessModel,
   getDemoCommandCenterSnapshot,
@@ -15,6 +14,7 @@ import {
   startDemoTestRun,
 } from "@/lib/api/command-center-demo";
 import { redactUnknown } from "@/lib/redact";
+import { shouldUseDemoData } from "@/lib/runtime-data-source";
 
 export interface ApiEnvelope<T> {
   success: boolean;
@@ -39,7 +39,7 @@ function toErrorMessage(err: unknown): string {
 }
 
 export async function getCommandCenterSnapshot(projectId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoCommandCenterSnapshot(projectId);
+  if (shouldUseDemoData()) return getDemoCommandCenterSnapshot(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/command-center`,
@@ -49,7 +49,7 @@ export async function getCommandCenterSnapshot(projectId: string): Promise<ApiEn
 }
 
 export async function getValueMetrics(projectId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoValueMetrics(projectId);
+  if (shouldUseDemoData()) return getDemoValueMetrics(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/value-metrics`,
@@ -59,7 +59,7 @@ export async function getValueMetrics(projectId: string): Promise<ApiEnvelope<un
 }
 
 export async function getBusinessModel(projectId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoBusinessModel(projectId);
+  if (shouldUseDemoData()) return getDemoBusinessModel(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/business-model`,
@@ -69,7 +69,7 @@ export async function getBusinessModel(projectId: string): Promise<ApiEnvelope<u
 }
 
 export async function getEnvironmentReadiness(projectId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoEnvironmentReadiness(projectId);
+  if (shouldUseDemoData()) return getDemoEnvironmentReadiness(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/environment/readiness`,
@@ -82,7 +82,7 @@ export async function listRisks(
   projectId: string,
   input: { severity?: string; status?: string; business_flow_id?: string; launch_blocking?: boolean } = {},
 ): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoRisks(projectId, input);
+  if (shouldUseDemoData()) return getDemoRisks(projectId, input);
   const query = buildQuery(input);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
@@ -93,7 +93,7 @@ export async function listRisks(
 }
 
 export async function getRiskDetail(projectId: string, riskId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoRiskDetail(projectId, riskId);
+  if (shouldUseDemoData()) return getDemoRiskDetail(projectId, riskId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/risks/${encodeURIComponent(riskId)}`,
@@ -103,7 +103,7 @@ export async function getRiskDetail(projectId: string, riskId: string): Promise<
 }
 
 export async function getOnboarding(projectId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoOnboarding(projectId);
+  if (shouldUseDemoData()) return getDemoOnboarding(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/onboarding`,
@@ -113,7 +113,7 @@ export async function getOnboarding(projectId: string): Promise<ApiEnvelope<unkn
 }
 
 export async function getTestRun(projectId: string, runId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoTestRun(projectId, runId);
+  if (shouldUseDemoData()) return getDemoTestRun(projectId, runId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/test-runs/${encodeURIComponent(runId)}`,
@@ -123,7 +123,7 @@ export async function getTestRun(projectId: string, runId: string): Promise<ApiE
 }
 
 export async function getLiveMap(projectId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoLiveMap(projectId);
+  if (shouldUseDemoData()) return getDemoLiveMap(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/live-map`,
@@ -136,7 +136,7 @@ export async function startTestRun(
   projectId: string,
   input: { run_id?: string; findings?: Record<string, unknown>[] } = {},
 ): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return startDemoTestRun(projectId);
+  if (shouldUseDemoData()) return startDemoTestRun(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "POST",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/test-runs`,
@@ -146,7 +146,7 @@ export async function startTestRun(
 }
 
 export async function getExecutiveReport(projectId: string): Promise<ApiEnvelope<unknown>> {
-  if (readAuthConfig().mode === "demo") return getDemoExecutiveReport(projectId);
+  if (shouldUseDemoData()) return getDemoExecutiveReport(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "GET",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/reports/executive`,
@@ -156,6 +156,7 @@ export async function getExecutiveReport(projectId: string): Promise<ApiEnvelope
 }
 
 export async function generateExecutiveReport(projectId: string): Promise<ApiEnvelope<unknown>> {
+  if (shouldUseDemoData()) return getDemoExecutiveReport(projectId);
   return requestJson<ApiEnvelope<unknown>>({
     method: "POST",
     path: `/api/v1/projects/${encodeURIComponent(projectId)}/reports/generate`,

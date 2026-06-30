@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getCommandCenterSnapshot, getEnvironmentReadiness } from "@/lib/api/command-center";
-import { readAuthConfig } from "@/lib/auth/config";
+import { readDataSourceConfig } from "@/lib/runtime-data-source";
 import { redactUnknown } from "@/lib/redact";
 import { buildEnvironmentDiagnosticsMockGraph } from "./mock";
 import type {
@@ -347,7 +347,7 @@ function updateEdges(base: readonly EnvironmentDiagnosticEdge[], nodes: readonly
 }
 
 function inferGraphSource(): EnvironmentDiagnosticGraph["source"] {
-  return readAuthConfig().mode === "demo" ? "demo" : "real";
+  return readDataSourceConfig().resolvedMode;
 }
 
 export async function getEnvironmentDiagnosticGraph(projectId: string): Promise<EnvironmentDiagnosticGraph> {

@@ -1,26 +1,32 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { actorHasRole } from "@/lib/auth/authz";
 import { readAuthConfig } from "@/lib/auth/config";
+import { getRuntimeHealth } from "@/lib/api/runtime-health";
 import { getSession } from "@/lib/auth/server";
-import { demoProjects } from "@/lib/demo-projects";
 import { maskEmail, maskId } from "@/lib/redact";
+import { buildSessionProjectOptions, listProjectOptionsFromApi } from "@/lib/project-options";
+import { readDataSourceConfig } from "@/lib/runtime-data-source";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const config = readAuthConfig();
+  const dataSource = readDataSourceConfig();
   const session = await getSession();
   const actor = session?.actor;
   const allowAll = actor ? actorHasRole(actor, "tenant_admin") || actor.projectIds.includes("*") : true;
-  const projects = actor
-    ? allowAll
-      ? demoProjects.map((p) => ({ projectId: p.projectId, name: p.name }))
-      : actor.projectIds.map((projectId) => {
-          const hit = demoProjects.find((p) => p.projectId === projectId);
-          return hit ? { projectId: hit.projectId, name: hit.name } : { projectId, name: `项目 ${maskId(projectId)}` };
-        })
-    : demoProjects.map((p) => ({ projectId: p.projectId, name: p.name }));
+  let projects = buildSessionProjectOptions({ allowAll, projectIds: actor?.projectIds ?? [] });
+  if (dataSource.resolvedMode === "real") {
+    const health = await getRuntimeHealth();
+    if (health.state === "online") {
+      try {
+        projects = await listProjectOptionsFromApi();
+      } catch {}
+    }
+  }
   const userLabel =
     config.mode === "demo"
-      ? "Demo"
+      ? dataSource.resolvedMode === "real"
+        ? "Demo Login"
+        : "Demo"
       : actor?.email
         ? maskEmail(actor.email)
         : actor?.name

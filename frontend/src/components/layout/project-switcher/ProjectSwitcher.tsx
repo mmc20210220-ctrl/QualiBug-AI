@@ -15,7 +15,11 @@ export function ProjectSwitcher({
   const pathname = usePathname();
   const params = useParams<{ projectId?: string }>();
   const routeProjectId = typeof params.projectId === "string" ? params.projectId : undefined;
-  const options = projects && projects.length ? projects : demoProjects;
+  const baseOptions = projects && projects.length ? projects : demoProjects;
+  const options =
+    routeProjectId && !baseOptions.some((project) => project.projectId === routeProjectId)
+      ? [{ projectId: routeProjectId, name: `当前项目 ${routeProjectId}` }, ...baseOptions]
+      : baseOptions;
   const value = routeProjectId ?? projectId ?? options[0]?.projectId ?? "";
 
   return (
