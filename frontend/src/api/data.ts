@@ -133,9 +133,11 @@ function computeBCS(findings: Finding[], raw: any): number {
 }
 
 function parseKnowledgeSources(raw: any): KnowledgeSource[] {
-  const asset = raw?.knowledge_asset;
-  if (!asset?.sources) return [];
-  return asset.sources.map((s: any) => ({
+  // New format: {"ok": true, "sources": [...]}
+  // Old format: {"ok": true, "knowledge_asset": {"sources": [...]}}
+  const sources = raw?.sources || raw?.knowledge_asset?.sources;
+  if (!sources || !Array.isArray(sources)) return [];
+  return sources.map((s: any) => ({
     source_id: s.source_id || s.id || '',
     filename: s.filename || s.name || '',
     source_type: s.source_type || s.type || '',

@@ -302,6 +302,43 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         except Exception:
             return {"ok": True, "history": []}
 
+    def _list_project_inputs(self, project: str, root: Path) -> dict[str, Any]:
+        """List project input files as knowledge sources from disk."""
+        import json as _json, os as _os
+        input_dir = root / "platform_inputs" / project
+        sources = []
+        if input_dir.exists():
+            config_path = input_dir / "real_project_config.json"
+            source_dir = input_dir
+            if config_path.exists():
+                try:
+                    config = _json.loads(config_path.read_text(encoding="utf-8"))
+                    src = config.get("source_dataset", "")
+                    if src and _os.path.isdir(src):
+                        source_dir = Path(src)
+                except Exception:
+                    pass
+            for f in sorted(source_dir.iterdir()):
+                if f.is_file() and not f.name.startswith("."):
+                    ext = f.suffix.lower()
+                    if ext in (".md",):
+                        stype = "PRD" if "prd" in f.name.lower() else "\u4e1a\u52a1\u6587\u6863"
+                    elif ext in (".yaml", ".yml", ".json"):
+                        stype = "OpenAPI" if "openapi" in f.name.lower() else "\u89c4\u8303\u6587\u4ef6"
+                    elif ext == ".sql":
+                        stype = "\u6570\u636e\u5e93 Schema"
+                    else:
+                        stype = "\u4e1a\u52a1\u6587\u6863"
+                    sources.append({
+                        "source_id": f"input-{f.name}",
+                        "filename": f.name,
+                        "source_type": stype,
+                        "status": "active",
+                        "size_bytes": f.stat().st_size,
+                        "uploaded_at": "",
+                    })
+        return {"ok": True, "sources": sources}
+
     def _render_onboard(self, project: str, root: Path) -> None:
         """Render the project onboarding wizard page."""
         import json as _json, os as _os
@@ -638,7 +675,12 @@ async function saveLLM(){var url=document.getElementById('llm-url').value;var mo
         if parsed.path == "/api/knowledge/asset":
             from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset, load_enterprise_business_knowledge_asset
 
-            return self._json({"ok": True, "knowledge_asset": load_enterprise_business_knowledge_asset(project, root) or build_enterprise_business_knowledge_asset(project, root)})
+            asset = load_enterprise_business_knowledge_asset(project, root) or build_enterprise_business_knowledge_asset(project, root)
+            # Also include project input files as knowledge sources
+            input_files = self._list_project_inputs(project, root)
+            asset["sources"] = input_files.get("sources", [])
+            asset["summary"]["active_source_count"] = len(asset["sources"])
+            return self._json({"ok": True, "knowledge_asset": asset})
         if parsed.path == "/api/knowledge/preview":
             return self._handle_preview(project, {"source_id": parse_qs(parsed.query).get("source_id", [""])[0]}, root)
         if parsed.path == "/api/benchmark/report":
