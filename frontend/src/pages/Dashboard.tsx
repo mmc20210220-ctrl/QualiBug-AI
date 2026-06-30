@@ -11,7 +11,7 @@ import { buildReportData, renderReportHTML } from '../api/report';
 import { BugTypeBreakdown } from '../components/BugTypeBreakdown';
 import type { Finding, CoverageData } from '../types';
 
-function Skeleton({ h = 20, w = '100%', br = 4 }: { h?: number; w?: string; br?: number }) {
+function Skeleton({ h = 20, w = '100%', br = 4 }: { h?: number; w?: string | number; br?: number }) {
   return (
     <div style={{
       height: h, width: w, borderRadius: br, background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',

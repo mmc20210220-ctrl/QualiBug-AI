@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { saveSettings, saveEnvConfig } from '../api/client';
 
@@ -13,6 +13,23 @@ export function Settings() {
   const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:8000/api');
   const [timeout, setTimeout_] = useState('30');
   const [envStatus, setEnvStatus] = useState('');
+  const [backendStatus, setBackendStatus] = useState<Record<string, any> | null>(null);
+
+  useEffect(() => {
+    fetch('/api/findings?project_id=' + encodeURIComponent(project))
+      .then(r => r.json())
+      .then(d => {
+        const exec = d?.report?.executive_summary || {};
+        const discovery = d?.report?.stage2_discovery || {};
+        setBackendStatus({
+          totalFindings: discovery.total_findings || exec.total_bugs_found || 0,
+          llmPowered: discovery.llm_powered || exec.llm_powered_analyses || 0,
+          pipelineStatus: d?.report?.status || 'unknown',
+          scanTime: d?.report?.pipeline_completed_at_utc?.slice(0, 16) || '—',
+        });
+      })
+      .catch(() => {});
+  }, [project]);
 
   const saveLLM = async () => {
     setLlmStatus('验证中...');
@@ -53,7 +70,9 @@ export function Settings() {
           <div style={{ fontSize: 12 }}>
             {[
               { k: '产品版本', v: 'QualiBug Enterprise v2' },
-              { k: '服务状态', v: '🟢 运行中 · 行为空间持续监控' },
+              { k: '引擎状态', v: backendStatus ? `🟢 ${backendStatus.pipelineStatus === 'completed' ? '就绪' : '运行中'}` : '检测中...' },
+              { k: '最近扫描', v: backendStatus?.scanTime || '—' },
+              { k: '当前发现', v: backendStatus ? `${backendStatus.totalFindings} 条` : '—' },
               { k: '审计链路', v: '完整 · 全部可追溯' },
             ].map(r => (
               <div key={r.k} className="flex items-center justify-between mb-1" style={{ padding: '6px 0', borderBottom: '1px solid var(--line)' }}>

@@ -78,7 +78,7 @@ export interface ReleaseGateStatus {
 
 export interface ReleaseCheck {
   name: string;
-  status: 'pass' | 'fail' | 'pending';
+  status: 'pass' | 'fail' | 'pending' | 'warning';
   detail: string;
 }
 
