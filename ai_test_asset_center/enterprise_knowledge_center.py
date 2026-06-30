@@ -88,6 +88,12 @@ RISK_TERMS = {
     "data_conservation": ["balance", "amount", "ledger", "inventory", "stock", "quota", "金额", "余额", "账本", "库存", "额度", "数量"],
     "data_reconciliation": ["reconcile", "match", "consistency", "对账", "一致", "匹配", "同步"],
     "idempotency": ["idempotent", "duplicate", "retry", "幂等", "重复", "重试"],
+    "async_event": [
+        "callback", "webhook", "event", "message", "notify", "queue", "sms",
+        "back_in_stock", "restock", "inventory_sync", "inventory_restore",
+        "回调", "事件", "消息", "通知", "短信", "异步",
+        "到货提醒", "补货提醒", "库存同步", "库存恢复", "恢复库存", "库存回补",
+    ],
     "sensitive_data": ["medical", "patient", "pii", "personal", "敏感", "病历", "隐私", "身份证"],
     "historical_regression": ["bug", "defect", "incident", "issue", "缺陷", "故障", "工单", "事故"],
 }
@@ -124,6 +130,98 @@ def _tokens(value: Any) -> set[str]:
     # Preserve Chinese semantic chunks without bringing in an NLP dependency.
     out.update(re.findall(r"[\u4e00-\u9fff]{2,8}", text))
     return out
+
+
+ENGLISH_STATE_TOKENS = {
+    "active",
+    "applied",
+    "approved",
+    "archived",
+    "cancelled",
+    "canceled",
+    "closed",
+    "complete",
+    "completed",
+    "confirmed",
+    "created",
+    "deleted",
+    "delivered",
+    "disabled",
+    "done",
+    "draft",
+    "enabled",
+    "expired",
+    "failed",
+    "finished",
+    "inactive",
+    "init",
+    "new",
+    "paid",
+    "pending",
+    "processing",
+    "received",
+    "refunded",
+    "refunding",
+    "rejected",
+    "returned",
+    "returning",
+    "settled",
+    "shipped",
+    "submitted",
+    "success",
+    "void",
+    "wait_return",
+}
+CHINESE_STATE_HINTS = (
+    "待",
+    "已",
+    "审核",
+    "审批",
+    "通过",
+    "拒绝",
+    "驳回",
+    "支付",
+    "付款",
+    "发货",
+    "收货",
+    "完成",
+    "取消",
+    "关闭",
+    "退款",
+    "退货",
+    "归档",
+    "成功",
+    "失败",
+    "处理中",
+    "创建",
+    "新建",
+    "提交",
+    "受理",
+    "配送",
+    "草稿",
+    "启用",
+    "停用",
+)
+
+
+def _normalize_state_token(value: Any) -> str:
+    token = str(value or "").strip().strip("`\"'[](){}<>.:;，。")
+    if not token or len(token) > 24 or any(ch.isspace() for ch in token):
+        return ""
+    low = token.lower()
+    if any(marker in low for marker in ("http", "www", ".com", "/", "\\", "px", "rem", "em", "%")):
+        return ""
+    if re.fullmatch(r"\d+(?:\.\d+)?", low):
+        return ""
+    if re.search(r"\d", token) and not re.fullmatch(r"[A-Z][A-Z0-9_]{1,23}", token):
+        return ""
+    if re.fullmatch(r"[A-Z][A-Z0-9_]{1,23}", token):
+        return token
+    if re.fullmatch(r"[a-z][a-z0-9_]{1,23}", low):
+        return token if low in ENGLISH_STATE_TOKENS else ""
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", token):
+        return token if any(marker in token for marker in CHINESE_STATE_HINTS) else ""
+    return ""
 
 
 def _safe_slug(name: str, limit: int = 72) -> str:
@@ -871,6 +969,8 @@ def _rule_type_from_text(text: str) -> str:
     norm = _norm(text)
     if any(term in norm for term in RISK_TERMS["permission_boundary"]):
         return "permission"
+    if any(term in norm for term in RISK_TERMS["async_event"]):
+        return "async_event"
     if any(term in norm for term in RISK_TERMS["data_conservation"]):
         return "conservation"
     if any(term in norm for term in RISK_TERMS["data_reconciliation"]):
@@ -884,7 +984,13 @@ def _rule_type_from_text(text: str) -> str:
 
 def _risk_type_from_text(text: str) -> str:
     norm = _norm(text)
+    if any(term in norm for term in RISK_TERMS["async_event"]):
+        return "async_event"
+    if any(term in norm for term in RISK_TERMS["idempotency"]):
+        return "idempotency"
     for name, terms in RISK_TERMS.items():
+        if name in {"async_event", "idempotency"}:
+            continue
         if any(_norm(term) in norm for term in terms):
             return name
     return "business_rule"
@@ -892,20 +998,28 @@ def _risk_type_from_text(text: str) -> str:
 
 def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
+    allow_relaxed_async_rules = source_type == "collaboration_document"
+    seen_statements: set[str] | None = set() if source_type == "collaboration_document" else None
     lines = [line.strip(" -•\t") for line in re.split(r"[\n。.!?；;]", text) if line.strip()]
     for idx, line in enumerate(lines):
         norm = _norm(line)
         if len(norm) < 8:
             continue
         indicator = any(marker in norm for marker in ("必须", "不得", "只能", "禁止", "应当", "should", "must", "only", "not allowed", "cannot", "require", "一致", "守恒", "审批"))
-        if not indicator:
-            continue
         rule_type = _rule_type_from_text(line)
+        if not indicator and not (allow_relaxed_async_rules and rule_type in {"idempotency", "async_event"}):
+            continue
+        statement = _redact_text(line, 720)
+        if seen_statements is not None:
+            key = _norm(statement)
+            if key in seen_statements:
+                continue
+            seen_statements.add(key)
         rules.append({
             "rule_id": f"rule:{source_id}:{idx+1}",
             "source_id": source_id,
             "source_type": source_type,
-            "statement": _redact_text(line, 720),
+            "statement": statement,
             "rule_type": rule_type,
             "risk_type": _risk_type_from_text(line),
             "severity": "P0" if rule_type in {"conservation", "permission"} and any(x in norm for x in ("资金", "余额", "账本", "payment", "balance", "tenant", "租户", "病历")) else "P1" if rule_type in {"conservation", "permission", "reconciliation"} else "P2",
@@ -928,8 +1042,9 @@ def _state_machines_from_text(text: str, source_id: str) -> list[dict[str, Any]]
     out: list[dict[str, Any]] = []
     transitions: list[tuple[str, str]] = []
     for match in re.finditer(r"([A-Za-z0-9_\-\u4e00-\u9fff]{2,32})\s*(?:->|→|到|至)\s*([A-Za-z0-9_\-\u4e00-\u9fff]{2,32})", text):
-        src, dst = match.group(1), match.group(2)
-        if _norm(src) != _norm(dst):
+        src = _normalize_state_token(match.group(1))
+        dst = _normalize_state_token(match.group(2))
+        if src and dst and _norm(src) != _norm(dst):
             transitions.append((src, dst))
     if transitions:
         states = []

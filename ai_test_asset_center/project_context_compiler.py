@@ -610,11 +610,29 @@ class ProjectContextCompiler:
                 method=d["method"],
                 capability=d.get("capability", "unknown"),
                 entity_alias=d.get("entity_alias", ""),
+                entity=d.get("entity", ""),
+                entity_id_param=d.get("entity_id_param", ""),
+                operation_id=d.get("operation_id", ""),
+                summary=d.get("summary", ""),
+                description=d.get("description", ""),
+                tags=d.get("tags", []),
                 is_observer_candidate=d.get("is_observer_candidate", False),
                 is_action_candidate=d.get("is_action_candidate", False),
                 has_entity_id=d.get("has_entity_id", False),
+                has_entity_id_in_path=d.get("has_entity_id_in_path", False),
+                has_entity_id_in_response=d.get("has_entity_id_in_response", False),
                 has_correlation_id=d.get("has_correlation_id", False),
                 has_tenant_id=d.get("has_tenant_id", False),
+                supports_pagination=d.get("supports_pagination", False),
+                supports_filtering=d.get("supports_filtering", False),
+                request_body_required=d.get("request_body_required", False),
+                deprecated=d.get("deprecated", False),
+                path_params=d.get("path_params", []),
+                query_params=d.get("query_params", []),
+                header_params=d.get("header_params", []),
+                body_schema=d.get("body_schema"),
+                response_schema=d.get("response_schema"),
+                security=d.get("security", []),
                 confidence=d.get("confidence", 0.0),
                 evidence=d.get("evidence", []),
             )
@@ -899,6 +917,48 @@ class ProjectContextCompiler:
         entity_map: dict[str, EntityCandidate] = {e.entity_alias: e for e in entities}
         paths = spec.get("paths", {})
 
+        def _extract_content_schema(content: dict | None) -> dict | None:
+            if not isinstance(content, dict):
+                return None
+            preferred = (
+                "application/json",
+                "application/problem+json",
+                "application/vnd.api+json",
+            )
+            for media_type in preferred:
+                media = content.get(media_type)
+                if isinstance(media, dict) and isinstance(media.get("schema"), dict):
+                    return deepcopy(media["schema"])
+            for media in content.values():
+                if isinstance(media, dict) and isinstance(media.get("schema"), dict):
+                    return deepcopy(media["schema"])
+            return None
+
+        def _extract_response_schema(operation: dict) -> dict | None:
+            responses = operation.get("responses")
+            if not isinstance(responses, dict):
+                return None
+            preferred_codes = (
+                "200",
+                "201",
+                "202",
+                "203",
+                "204",
+                "default",
+            )
+            for code in preferred_codes:
+                response = responses.get(code)
+                if isinstance(response, dict):
+                    schema = _extract_content_schema(response.get("content"))
+                    if isinstance(schema, dict):
+                        return schema
+            for response in responses.values():
+                if isinstance(response, dict):
+                    schema = _extract_content_schema(response.get("content"))
+                    if isinstance(schema, dict):
+                        return schema
+            return None
+
         for path, path_item in paths.items():
             if not isinstance(path_item, dict):
                 continue
@@ -906,9 +966,28 @@ class ProjectContextCompiler:
                 operation = path_item.get(method)
                 if not operation:
                     continue
+                if not isinstance(operation, dict):
+                    continue
 
                 capability = _classify_capability(method, path, operation)
                 entity_alias = _extract_entity_from_path(path) or "unknown"
+                parameters = [p for p in operation.get("parameters", []) if isinstance(p, dict)]
+                request_body = operation.get("requestBody") if isinstance(operation.get("requestBody"), dict) else {}
+                request_body_content = request_body.get("content") if isinstance(request_body, dict) else {}
+                body_schema = _extract_content_schema(request_body_content)
+                response_schema = _extract_response_schema(operation)
+                summary = str(operation.get("summary") or "").strip()
+                description = str(operation.get("description") or "").strip()
+                tags = [str(tag) for tag in (operation.get("tags") or []) if str(tag).strip()]
+                security = deepcopy(
+                    operation.get("security")
+                    or path_item.get("security")
+                    or spec.get("security")
+                    or []
+                )
+                path_params = [deepcopy(p) for p in parameters if str(p.get("in") or "").lower() == "path"]
+                query_params = [deepcopy(p) for p in parameters if str(p.get("in") or "").lower() == "query"]
+                header_params = [deepcopy(p) for p in parameters if str(p.get("in") or "").lower() == "header"]
 
                 # Check if this API corresponds to a known entity
                 is_observer = capability in ("read", "list") and entity_alias in entity_map
@@ -917,19 +996,25 @@ class ProjectContextCompiler:
                 # Check for entity ID in path or parameters
                 has_entity_id = "{" in path or any(
                     p.get("name", "").lower() in _IDENTITY_TOKENS
-                    for p in operation.get("parameters", [])
+                    for p in parameters
                 )
+                has_entity_id_in_path = "{" in path
+                has_entity_id_in_response = any(
+                    isinstance(response_schema.get("properties", {}).get(name), dict)
+                    for name in (response_schema.get("properties", {}) if isinstance(response_schema, dict) else {})
+                    if str(name).lower() in _IDENTITY_TOKENS
+                ) if isinstance(response_schema, dict) else False
 
                 # Check for correlation ID
                 has_correlation_id = any(
                     "correlation" in (p.get("name", "") or "").lower()
-                    for p in operation.get("parameters", [])
+                    for p in parameters
                 )
 
                 # Check for tenant ID
                 has_tenant_id = any(
                     any(tok in ((p.get("name") or "").lower()) for tok in _TENANT_TOKENS)
-                    for p in operation.get("parameters", [])
+                    for p in parameters
                 )
 
                 apis.append(APICapability(
@@ -937,11 +1022,33 @@ class ProjectContextCompiler:
                     method=method.upper(),
                     capability=capability,
                     entity_alias=entity_alias,
+                    operation_id=str(operation.get("operationId") or ""),
+                    summary=summary,
+                    description=description,
+                    tags=tags,
                     is_observer_candidate=is_observer,
                     is_action_candidate=is_action,
                     has_entity_id=has_entity_id,
+                    has_entity_id_in_path=has_entity_id_in_path,
+                    has_entity_id_in_response=has_entity_id_in_response,
                     has_correlation_id=has_correlation_id,
                     has_tenant_id=has_tenant_id,
+                    supports_pagination=any(
+                        str(p.get("name") or "").lower() in {"page", "page_size", "limit", "offset"}
+                        for p in query_params
+                    ),
+                    supports_filtering=any(
+                        str(p.get("name") or "").lower() not in {"page", "page_size", "limit", "offset", "sort"}
+                        for p in query_params
+                    ),
+                    request_body_required=bool(request_body.get("required")),
+                    deprecated=bool(operation.get("deprecated")),
+                    path_params=path_params,
+                    query_params=query_params,
+                    header_params=header_params,
+                    body_schema=body_schema,
+                    response_schema=response_schema,
+                    security=security if isinstance(security, list) else [],
                     confidence=_CONFIDENCE_BY_SOURCE["api_path_segment"],
                     evidence=[
                         _make_evidence(

@@ -51,6 +51,8 @@ class BusinessRule:
     title: str
     rule_text: str
     source_ref: SourceRef
+    source_type: str = ""
+    tokens: list[str] | None = None
 
 
 @dataclass
@@ -76,6 +78,67 @@ class GroundedCandidate:
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+
+
+_ROLE_ALIASES = {
+    "admin": "admin",
+    "administrator": "admin",
+    "管理员": "admin",
+    "approver": "approver",
+    "审批人": "approver",
+    "审核员": "approver",
+    "operator": "operator",
+    "ops": "operator",
+    "运营": "operator",
+    "操作员": "operator",
+    "buyer": "buyer",
+    "customer": "buyer",
+    "user": "buyer",
+    "member": "buyer",
+    "买家": "buyer",
+    "用户": "buyer",
+    "会员": "buyer",
+    "merchant": "merchant",
+    "seller": "merchant",
+    "商家": "merchant",
+    "customer_service": "customer_service",
+    "support": "customer_service",
+    "客服": "customer_service",
+    "finance": "finance_manager",
+    "finance_manager": "finance_manager",
+    "财务": "finance_manager",
+    "auditor": "auditor",
+    "anonymous": "anonymous",
+    "guest": "anonymous",
+    "游客": "anonymous",
+    "匿名": "anonymous",
+}
+
+_ROLE_TEXT_PATTERNS = (
+    r"\b(?:admin(?:istrator)?|approver|operator|buyer|customer_service|customer|user|member|merchant|seller|finance(?:_manager)?|auditor)\b",
+    r"(?:管理员|审批人|审核员|操作员|运营|买家|用户|会员|商家|客服|财务)",
+)
+
+_ACTOR_LABELS = {
+    "admin": "管理员",
+    "approver": "审批人",
+    "operator": "运营",
+    "buyer": "买家",
+    "merchant": "商家",
+    "customer_service": "客服",
+    "finance_manager": "财务",
+    "auditor": "审计",
+    "anonymous": "匿名用户",
+}
+
+_BUSINESS_GROUP_ALIASES = {
+    "cart": {"cart", "carts", "basket", "购物车"},
+    "order": {"order", "orders", "订单"},
+    "payment": {"payment", "payments", "pay", "charge", "capture", "settle", "支付"},
+    "refund": {"refund", "refunds", "after_sale", "aftersale", "return", "售后", "退款", "退货"},
+    "product": {"product", "products", "sku", "goods", "商品"},
+    "user": {"user", "users", "member", "account", "customer", "用户", "会员"},
+}
 
 
 def _clean(text: str) -> str:
@@ -106,6 +169,187 @@ def _split_sections(markdown: str) -> list[tuple[str, str]]:
     return sections
 
 
+def _normalize_actor_values(values: list[str], *, limit: int = 12) -> list[str]:
+    actors: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw or "").replace("\n", " ")
+        for piece in re.split(r"[/,，、|]+", text):
+            token = _clean(piece).strip("`\"'[](){}<>.:;。，")
+            if not token or len(token) > 40:
+                continue
+            if any(marker in token for marker in ("##", "###", "{", "}", "|")):
+                continue
+            key = token.lower().replace("-", "_").replace(" ", "_")
+            canonical = _ROLE_ALIASES.get(token) or _ROLE_ALIASES.get(key)
+            if not canonical and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{1,31}", key):
+                if key in _ROLE_ALIASES:
+                    canonical = _ROLE_ALIASES[key]
+            if not canonical:
+                continue
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            actors.append(canonical)
+            if len(actors) >= limit:
+                return actors
+    return actors
+
+
+def _actor_variants(values: list[str], *, limit: int = 3) -> list[list[str]]:
+    actors = [actor for actor in _normalize_actor_values(values, limit=limit + 2) if actor != "anonymous"]
+    variants = [[actor] for actor in actors[:limit]]
+    return variants or [[]]
+
+
+def _actor_title_prefix(actors: list[str]) -> str:
+    if len(actors) != 1:
+        return ""
+    return f"{_ACTOR_LABELS.get(actors[0], actors[0])}"
+
+
+def _business_groups(text: str, extra_tokens: list[str] | None = None) -> set[str]:
+    raw = _clean(text)
+    low = raw.lower()
+    terms = [raw, low]
+    if extra_tokens:
+        terms.extend(str(token or "") for token in extra_tokens)
+        terms.extend(str(token or "").lower() for token in extra_tokens)
+    matched: set[str] = set()
+    for group, aliases in _BUSINESS_GROUP_ALIASES.items():
+        for alias in aliases:
+            if alias.lower() in low or alias in raw or any(alias.lower() in str(term).lower() for term in terms):
+                matched.add(group)
+                break
+    return matched
+
+
+_ENGLISH_STATE_TOKENS = {
+    "active",
+    "applied",
+    "approved",
+    "archived",
+    "cancelled",
+    "canceled",
+    "closed",
+    "complete",
+    "completed",
+    "confirmed",
+    "created",
+    "deleted",
+    "delivered",
+    "disabled",
+    "done",
+    "draft",
+    "enabled",
+    "expired",
+    "failed",
+    "finished",
+    "inactive",
+    "init",
+    "new",
+    "paid",
+    "pending",
+    "processing",
+    "received",
+    "refunded",
+    "refunding",
+    "rejected",
+    "returned",
+    "returning",
+    "settled",
+    "shipped",
+    "submitted",
+    "success",
+    "void",
+    "wait_return",
+}
+_CHINESE_STATE_HINTS = (
+    "待",
+    "已",
+    "审核",
+    "审批",
+    "通过",
+    "拒绝",
+    "驳回",
+    "支付",
+    "付款",
+    "发货",
+    "收货",
+    "完成",
+    "取消",
+    "关闭",
+    "退款",
+    "退货",
+    "归档",
+    "成功",
+    "失败",
+    "处理中",
+    "创建",
+    "新建",
+    "提交",
+    "受理",
+    "配送",
+    "草稿",
+    "启用",
+    "停用",
+)
+
+
+def _normalize_state_token(value: Any) -> str:
+    token = _clean(str(value or "")).strip("`\"'[](){}<>.:;，。")
+    if not token or len(token) > 24 or any(ch.isspace() for ch in token):
+        return ""
+    low = token.lower()
+    if any(marker in low for marker in ("http", "www", ".com", "/", "\\", "px", "rem", "em", "%")):
+        return ""
+    if re.fullmatch(r"\d+(?:\.\d+)?", low):
+        return ""
+    if re.search(r"\d", token) and not re.fullmatch(r"[A-Z][A-Z0-9_]{1,23}", token):
+        return ""
+    if re.fullmatch(r"[A-Z][A-Z0-9_]{1,23}", token):
+        return token
+    if re.fullmatch(r"[a-z][a-z0-9_]{1,23}", low):
+        return token if low in _ENGLISH_STATE_TOKENS else ""
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", token):
+        return token if any(marker in token for marker in _CHINESE_STATE_HINTS) else ""
+    return ""
+
+
+def _sanitize_state_values(values: list[Any], *, limit: int) -> list[str]:
+    states: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        token = _normalize_state_token(raw)
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        states.append(token)
+        if len(states) >= limit:
+            break
+    return states
+
+
+def _contains_state_token(text: str, states: list[str]) -> bool:
+    haystack = str(text or "")
+    low = haystack.lower()
+    for token in states:
+        norm = _normalize_state_token(token)
+        if not norm:
+            continue
+        token_low = norm.lower()
+        if re.fullmatch(r"[a-z0-9_]+", token_low):
+            if re.search(rf"\b{re.escape(token_low)}\b", low):
+                return True
+            continue
+        if norm in haystack:
+            return True
+    return False
+
+
 def load_input_documents(input_dir: Path) -> dict[str, str]:
     docs: dict[str, str] = {}
     for path in sorted(input_dir.rglob("*")):
@@ -118,13 +362,14 @@ def load_input_documents(input_dir: Path) -> dict[str, str]:
 
 
 def parse_roles(prd_text: str, api_text: str) -> list[str]:
-    roles: list[str] = []
+    role_tokens: list[str] = []
     for text in (prd_text, api_text):
-        for role in re.findall(r"`([^`]+)`", text or ""):
-            token = role.strip()
-            if token and re.search(r"(admin|buyer|user|manager|rep|doctor|patient|merchant|tenant|staff|finance|auditor|teacher|student|operator|nurse|warehouse|planner|qc|member|agent|approver)", token, re.I):
-                roles.append(token)
-    return sorted(dict.fromkeys(roles))
+        if not text:
+            continue
+        role_tokens.extend(match.group(1) for match in re.finditer(r"`([^`\n]{1,40})`", text))
+        for pattern in _ROLE_TEXT_PATTERNS:
+            role_tokens.extend(match.group(0) for match in re.finditer(pattern, text, re.I))
+    return _normalize_actor_values(role_tokens, limit=12)
 
 
 def parse_entities(prd_text: str, schema_text: str) -> list[str]:
@@ -149,7 +394,10 @@ def parse_state_machine(prd_text: str) -> dict[str, Any]:
     t = re.search(r"终态[：:]\s*`?([^`\n]+)`?", prd_text or "")
     if t:
         terminals = [s.strip() for s in re.split(r"/|、|,|，|\s+", t.group(1)) if s.strip()]
-    return {"states": states, "terminal_states": terminals}
+    return {
+        "states": _sanitize_state_values(states, limit=24),
+        "terminal_states": _sanitize_state_values(terminals, limit=16),
+    }
 
 def parse_prd_grounding_refs(prd_text: str) -> dict[str, list[SourceRef]]:
     """Extract reusable PRD evidence snippets that justify probe generation.
@@ -214,6 +462,8 @@ def parse_risk_surface_refs(risk_text: str) -> dict[str, list[SourceRef]]:
 
 def _risk_support_keys(risk_type: str) -> list[str]:
     return {
+        "business_rule_probe": ["business_rule"],
+        "read_consistency_probe": ["business_rule"],
         "auth_boundary_probe": ["auth", "api_contract"],
         "ownership_scope_probe": ["ownership", "auth"],
         "idempotency_replay_probe": ["idempotency"],
@@ -244,6 +494,8 @@ def parse_business_rules(text: str) -> list[BusinessRule]:
                 title=rule_title,
                 rule_text=rule_text,
                 source_ref=_source("BUSINESS_RULES.md", title, rule_text, kind="business_rule"),
+                source_type="business_rule_document",
+                tokens=[],
             ))
     return rules
 
@@ -267,8 +519,8 @@ def _dedupe_strings(values: list[str], *, limit: int | None = None) -> list[str]
 
 def _merge_state_models(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     return {
-        "states": _dedupe_strings(list(base.get("states") or []) + list(extra.get("states") or []), limit=24),
-        "terminal_states": _dedupe_strings(list(base.get("terminal_states") or []) + list(extra.get("terminal_states") or []), limit=16),
+        "states": _sanitize_state_values(list(base.get("states") or []) + list(extra.get("states") or []), limit=24),
+        "terminal_states": _sanitize_state_values(list(base.get("terminal_states") or []) + list(extra.get("terminal_states") or []), limit=16),
     }
 
 
@@ -278,7 +530,7 @@ def _knowledge_asset_roles(asset: dict[str, Any]) -> list[str]:
         if not isinstance(row, dict):
             continue
         roles.append(str(row.get("role") or row.get("name") or row.get("title") or ""))
-    return _dedupe_strings(roles, limit=24)
+    return _normalize_actor_values(roles, limit=12)
 
 
 def _knowledge_asset_entities(asset: dict[str, Any]) -> list[str]:
@@ -314,8 +566,8 @@ def _knowledge_asset_state_model(asset: dict[str, Any]) -> dict[str, Any]:
             if low in {"completed", "complete", "cancelled", "canceled", "closed", "archived", "refunded", "done", "finished", "终态", "已完成", "已取消", "已关闭", "已归档"}:
                 terminals.append(str(token))
     return {
-        "states": _dedupe_strings(states, limit=24),
-        "terminal_states": _dedupe_strings(terminals, limit=16),
+        "states": _sanitize_state_values(states, limit=24),
+        "terminal_states": _sanitize_state_values(terminals, limit=16),
     }
 
 
@@ -341,6 +593,32 @@ def _knowledge_asset_rules(asset: dict[str, Any]) -> list[BusinessRule]:
             title=title,
             rule_text=statement,
             source_ref=_source(f"knowledge_asset:{source_id}", title, statement, kind="knowledge_rule"),
+            source_type=str(row.get("source_type") or ""),
+            tokens=[str(token) for token in (row.get("tokens") or []) if str(token).strip()],
+        ))
+    return rules
+
+
+def _knowledge_asset_historical_risk_rules(asset: dict[str, Any]) -> list[BusinessRule]:
+    rules: list[BusinessRule] = []
+    for row in asset.get("risk_domains") or []:
+        if not isinstance(row, dict):
+            continue
+        source_type = str(row.get("source_type") or "")
+        oracle_family = str(row.get("oracle_family") or "")
+        if source_type != "historical_bug" and oracle_family != "historical_regression_oracle":
+            continue
+        statement = _clean(str(row.get("expected") or row.get("title") or ""))
+        if not statement:
+            continue
+        source_id = str(row.get("source_id") or "knowledge_asset")
+        rules.append(BusinessRule(
+            code=_knowledge_rule_code(row, len(rules) + 1),
+            title=_clean(str(row.get("risk_type") or row.get("oracle_family") or "historical_risk")),
+            rule_text=statement,
+            source_ref=_source(f"knowledge_asset:{source_id}", str(row.get("risk_id") or row.get("risk_type") or "historical_risk"), statement, kind="knowledge_risk"),
+            source_type=source_type or "historical_bug",
+            tokens=[str(token) for token in (row.get("tokens") or []) if str(token).strip()],
         ))
     return rules
 
@@ -360,11 +638,11 @@ def _knowledge_asset_endpoints(asset: dict[str, Any]) -> list[ApiEndpoint]:
             [path, summary, " ".join(parameters), " ".join(str(x) for x in (row.get("tags") or [])), " ".join(str(x) for x in (row.get("tokens") or []))]
         )
         checks: list[str] = []
-        if re.search(r"auth|authorization|bearer|token|login|permission|权限|鉴权|认证", token_space, re.I):
+        if re.search(r"auth|authorization|bearer|token|login|permission|权限|鉴权|认证|管理员|admin|登录态|未登录|角色", token_space, re.I):
             checks.append("auth")
-        if re.search(r"tenant|org|owner|scope|租户|组织|归属", token_space, re.I):
-            checks.append("tenant")
-        if re.search(r"idempotency|幂等|duplicate|retry|重试|external_event_id|event_id", token_space, re.I):
+        if re.search(r"tenant|org|owner|ownership|scope|租户|组织|归属|所有者|本人|自己的|仅本人|仅管理员|管理员可|管理员可以|对象归属|越权", token_space, re.I):
+            checks.extend(["tenant", "object_owner"])
+        if re.search(r"idempotency|幂等|duplicate|retry|重试|external_event_id|event_id|callback|webhook|notify|replay|回调|重放|重复提交|重复支付|重复退款|支付回调|payment|payments|refund|refunds|charge|capture|settle|支付|退款", token_space, re.I):
             checks.append("idempotency")
         if re.search(r"state|transition|approve|cancel|refund|archive|状态|流转|审批|撤回|取消|退款|归档", token_space, re.I):
             checks.append("state")
@@ -378,7 +656,7 @@ def _knowledge_asset_endpoints(asset: dict[str, Any]) -> list[ApiEndpoint]:
             method=method,
             capability_code="",
             capability=summary,
-            actors=[],
+            actors=_normalize_actor_values([str(x) for x in (row.get("actors") or [])], limit=6),
             checks=sorted(dict.fromkeys(checks)),
             failure_statuses=[],
             summary=summary,
@@ -390,11 +668,17 @@ def _knowledge_asset_endpoints(asset: dict[str, Any]) -> list[ApiEndpoint]:
 def _knowledge_row_to_candidate_risks(row: dict[str, Any], text: str) -> list[str]:
     low = f"{str(row.get('risk_type') or '')} {str(row.get('rule_type') or '')} {text}".lower()
     risks: list[str] = []
+    if re.search(r"\bbusiness_rule\b|业务规则", low):
+        risks.append("business_rule_probe")
+    if re.search(r"list|search|query|page|pagination|filter|sort|列表|搜索|查询|分页|排序|过滤", low):
+        risks.append("read_consistency_probe")
     if re.search(r"permission|auth|authorization|登录|鉴权|认证", low):
         risks.append("auth_boundary_probe")
     if re.search(r"tenant|scope|owner|ownership|租户|归属|组织|越权", low):
         risks.append("ownership_scope_probe")
-    if re.search(r"idempotency|duplicate|replay|retry|幂等|重复|重试|回调", low):
+    if re.search(r"async_event|callback|webhook|event|message|notify|queue|sms|back[_ -]?in[_ -]?stock|restock|inventory[_ -]?sync|inventory[_ -]?restore|回调|事件|消息|通知|短信|异步|到货提醒|补货提醒|库存同步|库存恢复|恢复库存|库存回补", low):
+        risks.append("async_external_event_probe")
+    if re.search(r"idempotency|duplicate|replay|retry|幂等|重复|重试", low):
         risks.extend(["idempotency_replay_probe", "async_external_event_probe"])
     if re.search(r"state|transition|workflow|status|状态|流转|审批|终态|取消|退款|归档", low):
         risks.append("state_transition_probe")
@@ -421,6 +705,108 @@ def _knowledge_asset_support_refs(asset: dict[str, Any]) -> dict[str, list[Sourc
             for risk_type in _knowledge_row_to_candidate_risks(row, quote):
                 refs[risk_type].append(ref)
     return {key: value[:8] for key, value in refs.items()}
+
+
+def _infer_risk_types_from_text(text: str) -> list[str]:
+    low = _clean(text).lower()
+    risks: list[str] = []
+    if re.search(r"\bbusiness_rule\b|业务规则", low):
+        risks.append("business_rule_probe")
+    if re.search(r"list|search|query|page|pagination|filter|sort|列表|搜索|查询|分页|排序|过滤", low):
+        risks.append("read_consistency_probe")
+    if re.search(r"permission|auth|authorization|登录|鉴权|认证|管理员|admin|未登录|token|bearer", low):
+        risks.append("auth_boundary_probe")
+    if re.search(r"tenant|scope|owner|ownership|租户|归属|组织|越权|所有者|自己的|本人", low):
+        risks.append("ownership_scope_probe")
+    if re.search(r"async_event|callback|webhook|event|message|notify|queue|sms|back[_ -]?in[_ -]?stock|restock|inventory[_ -]?sync|inventory[_ -]?restore|回调|支付回调|事件|消息|通知|短信|异步|到货提醒|补货提醒|库存同步|库存恢复|恢复库存|库存回补", low):
+        risks.append("async_external_event_probe")
+    if re.search(r"idempotency|duplicate|replay|retry|幂等|重复|重试", low):
+        risks.extend(["idempotency_replay_probe", "async_external_event_probe"])
+    if re.search(r"state|transition|workflow|status|状态|流转|审批|终态|取消|退款|归档", low):
+        risks.append("state_transition_probe")
+    if re.search(r"conservation|reconciliation|balance|ledger|inventory|amount|quota|fund|库存|金额|余额|账本|额度|积分|对账|应付金额", low):
+        risks.append("conservation_probe")
+    if re.search(r"audit|privacy|sensitive|export|import|审计|隐私|敏感|导出|导入|日志|密钥", low):
+        risks.append("audit_privacy_probe")
+    return _dedupe_strings(risks, limit=8)
+
+
+def _zh_overlap_terms(text: str) -> set[str]:
+    terms: set[str] = set()
+    for token in re.findall(r"[\u4e00-\u9fff]{2,12}", _clean(text)):
+        if token in {"返回", "请求", "接口", "当前", "创建", "获取"}:
+            continue
+        terms.add(token)
+        if len(token) > 4:
+            for size in (2, 3, 4):
+                for index in range(0, len(token) - size + 1):
+                    piece = token[index:index + size]
+                    if piece not in {"返回", "请求", "接口", "当前", "创建", "获取"}:
+                        terms.add(piece)
+    return terms
+
+
+def _endpoint_rule_matches(ep: ApiEndpoint, rules: list[BusinessRule]) -> dict[str, list[str]]:
+    endpoint_text = _clean(" ".join([ep.path, ep.capability or "", ep.summary or ""]))
+    endpoint_low = endpoint_text.lower()
+    path_terms = {
+        token.lower()
+        for token in re.findall(r"[A-Za-z_]{3,}", ep.path)
+        if token.lower() not in {"api", "get", "post", "put", "patch", "delete", "head", "options", "admin", "auth"}
+    }
+    zh_terms = _zh_overlap_terms(endpoint_text)
+    endpoint_groups = _business_groups(endpoint_text)
+    matches: dict[str, list[str]] = defaultdict(list)
+    for rule in rules:
+        rule_text = _clean(f"{rule.title} {rule.rule_text}")
+        rule_low = rule_text.lower()
+        rule_groups = _business_groups(rule_text, rule.tokens or [])
+        related = False
+        if any(term in rule_low for term in path_terms):
+            related = True
+        if not related and any(term in rule.rule_text for term in zh_terms):
+            related = True
+        if not related and endpoint_low and endpoint_low in rule_low:
+            related = True
+        if not related and "business_rule" in rule_low and endpoint_groups and rule_groups and endpoint_groups.intersection(rule_groups):
+            related = True
+        if (
+            not related
+            and endpoint_groups
+            and rule_groups
+            and endpoint_groups.intersection(rule_groups)
+            and re.search(r"tenant|scope|owner|ownership|租户|归属|组织|越权|所有者|自己的|本人|仅本人", rule_low, re.I)
+        ):
+            related = True
+        if (
+            not related
+            and endpoint_groups
+            and rule_groups
+            and endpoint_groups.intersection(rule_groups)
+            and endpoint_groups.intersection({"cart", "order", "product", "inventory", "notification", "logistics"})
+            and rule_groups.intersection({"cart", "order", "product", "inventory", "notification", "logistics"})
+            and re.search(
+                r"callback|webhook|events?|message|notify|third|signature|nonce|timestamp|external_event_id|idempotency|replay|retry|back[_ -]?in[_ -]?stock|restock|inventory[_ -]?sync|inventory[_ -]?restore|幂等|回调|验签|签名|重试|重放|消息|通知|第三方事件号|到货提醒|补货提醒|库存同步|库存恢复|恢复库存|库存回补",
+                rule_low,
+                re.I,
+            )
+        ):
+            related = True
+        if not related and str(rule.source_type or "") == "historical_bug" and endpoint_groups and rule_groups and endpoint_groups.intersection(rule_groups):
+            related = True
+        if not related and str(rule.source_type or "") == "historical_bug":
+            historical_tokens = [str(token) for token in (rule.tokens or []) if str(token).strip()]
+            if endpoint_groups and _business_groups(" ".join(historical_tokens), historical_tokens).intersection(endpoint_groups):
+                related = True
+        if not related:
+            continue
+        for risk_type in _infer_risk_types_from_text(f"{rule.code} {rule_text}"):
+            matches[risk_type].append(rule.code)
+    return {
+        risk_type: _dedupe_strings(codes, limit=8)
+        for risk_type, codes in matches.items()
+        if codes
+    }
 
 
 def parse_api_md(text: str) -> list[ApiEndpoint]:
@@ -464,7 +850,7 @@ def parse_api_md(text: str) -> list[ApiEndpoint]:
             method=method,
             capability_code=capability_code,
             capability=capability,
-            actors=actors,
+            actors=_normalize_actor_values(actors, limit=6),
             checks=checks,
             failure_statuses=statuses,
             summary=capability,
@@ -541,17 +927,18 @@ def _canonical_api_suffix(path: str) -> str:
 def merge_endpoints(api_md: list[ApiEndpoint], openapi: list[ApiEndpoint]) -> list[ApiEndpoint]:
     # Prefer API.md paths because they usually contain the enterprise base prefix
     # (/api/v1/<domain>). Merge OpenAPI details into the matching API.md
-    # endpoint by canonical suffix instead of emitting duplicates. If API.md did
-    # not state a method and we inferred the wrong one, the OpenAPI method wins.
+    # endpoint by canonical suffix instead of emitting duplicates. Do not merge
+    # across different HTTP methods: same-path GET/POST pairs often represent
+    # distinct read/write capabilities, and collapsing them silently removes the
+    # write-side bug surface.
     merged: dict[tuple[str, str], ApiEndpoint] = {}
     suffix_index: dict[tuple[str, str], tuple[str, str]] = {}
-    suffix_any_index: dict[str, tuple[str, str] | None] = {}
 
     def absorb(target: ApiEndpoint, src: ApiEndpoint) -> None:
         target.capability_code = target.capability_code or src.capability_code
         target.capability = target.capability or src.capability
         target.summary = target.summary or src.summary
-        target.actors = sorted(dict.fromkeys((target.actors or []) + (src.actors or [])))
+        target.actors = _normalize_actor_values(list(target.actors or []) + list(src.actors or []), limit=8)
         target.checks = sorted(dict.fromkeys((target.checks or []) + (src.checks or [])))
         target.failure_statuses = sorted(dict.fromkeys((target.failure_statuses or []) + (src.failure_statuses or [])))
         refs = list((target.source_refs or []) + (src.source_refs or []))
@@ -574,7 +961,6 @@ def merge_endpoints(api_md: list[ApiEndpoint], openapi: list[ApiEndpoint]) -> li
         merged[key] = ep
         suffix = _canonical_api_suffix(ep.path)
         suffix_index[(ep.method, suffix)] = key
-        suffix_any_index[suffix] = key if suffix not in suffix_any_index else None
 
     for ep in openapi:
         ep.method = ep.method.upper()
@@ -588,20 +974,9 @@ def merge_endpoints(api_md: list[ApiEndpoint], openapi: list[ApiEndpoint]) -> li
         if target_key and target_key in merged:
             absorb(merged[target_key], ep)
             continue
-        any_key = suffix_any_index.get(suffix)
-        if any_key and any_key in merged:
-            target = merged.pop(any_key)
-            target.method = ep.method
-            new_key = (target.method, target.path)
-            absorb(target, ep)
-            merged[new_key] = target
-            suffix_index[(target.method, suffix)] = new_key
-            suffix_any_index[suffix] = new_key
-            continue
         key = (ep.method, ep.path)
         merged[key] = ep
         suffix_index[suffix_key] = key
-        suffix_any_index[suffix] = key if suffix not in suffix_any_index else None
 
     return sorted(merged.values(), key=lambda e: (_canonical_api_suffix(e.path), e.path, e.method))
 
@@ -635,6 +1010,59 @@ def _has_check(ep: ApiEndpoint, check: str) -> bool:
     return check.lower() in {c.lower() for c in (ep.checks or [])}
 
 
+def _signature_parts(values: list[Any], *, limit: int = 8) -> tuple[str, ...]:
+    tokens = sorted({
+        _clean(str(value or "")).lower()
+        for value in values
+        if _clean(str(value or ""))
+    })
+    return tuple(tokens[:limit])
+
+
+def _probe_signature_parts(probe: dict[str, Any]) -> tuple[str, ...]:
+    values: list[Any] = []
+    for key in (
+        "headers",
+        "negative_headers",
+        "mutations",
+        "expected_status",
+        "terminal_states",
+        "sensitive_fields",
+        "oracle",
+    ):
+        raw = probe.get(key)
+        if isinstance(raw, list):
+            values.extend(raw)
+        elif raw not in (None, ""):
+            values.append(raw)
+    return _signature_parts(values, limit=12)
+
+
+def _candidate_dedupe_key(
+    ep: ApiEndpoint,
+    risk_type: str,
+    *,
+    actors: list[str] | None = None,
+    rule_codes: list[str] | None = None,
+    probe: dict[str, Any] | None = None,
+    title: str = "",
+    expected: str = "",
+    failure: str = "",
+) -> tuple[str, str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    candidate_actors = _signature_parts(list(actors or ep.actors or []), limit=6)
+    scenario_parts = _signature_parts([title, expected, failure], limit=6)
+    rule_parts = _signature_parts(list(rule_codes or []), limit=8)
+    probe_parts = _probe_signature_parts(probe or {})
+    return (
+        ep.method.upper(),
+        ep.path,
+        risk_type,
+        candidate_actors,
+        scenario_parts + rule_parts,
+        probe_parts,
+    )
+
+
 def _capability_code_from_endpoint(ep: ApiEndpoint) -> str:
     if ep.capability_code:
         return ep.capability_code
@@ -649,6 +1077,19 @@ def _capability_code_from_endpoint(ep: ApiEndpoint) -> str:
     return f"C{int(m.group(1)):02d}" if m else ""
 
 
+def _resolve_candidate_limit(max_candidates: int | None, *, endpoint_count: int, role_count: int = 0) -> int:
+    if isinstance(max_candidates, int) and max_candidates > 0:
+        return max_candidates
+    raw_env = (os.environ.get("QUALIBUG_INPUT_ONLY_MAX_CANDIDATES") or "").strip()
+    if raw_env:
+        return max(1, int(raw_env))
+    # Default blind/input-only candidate volume must scale with both API surface
+    # and grounded actor variants; otherwise role-level expansion gets silently
+    # truncated and lower-priority risk families disappear from the report.
+    multiplier = 36 if role_count >= 8 else 30 if role_count >= 4 else 4 if role_count >= 2 else 3
+    return max(180, min(5000, endpoint_count * multiplier))
+
+
 def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", max_candidates: int | None = None, knowledge_asset: dict[str, Any] | None = None) -> dict[str, Any]:
     input_path = Path(input_dir).resolve()
     docs = load_input_documents(input_path)
@@ -659,10 +1100,14 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
     risk_text = docs.get("RISK_SURFACE_MODEL.md", "")
     knowledge_asset = knowledge_asset if isinstance(knowledge_asset, dict) else {}
 
-    roles = _dedupe_strings(parse_roles(prd, api_md) + _knowledge_asset_roles(knowledge_asset), limit=24)
+    roles = [
+        actor
+        for actor in _normalize_actor_values(parse_roles(prd, api_md) + _knowledge_asset_roles(knowledge_asset), limit=12)
+        if actor != "anonymous"
+    ]
     entities = _dedupe_strings(parse_entities(prd, schema_text) + _knowledge_asset_entities(knowledge_asset), limit=40)
     state_model = _merge_state_models(parse_state_machine(prd), _knowledge_asset_state_model(knowledge_asset))
-    rules = parse_business_rules(rules_text) + _knowledge_asset_rules(knowledge_asset)
+    rules = parse_business_rules(rules_text) + _knowledge_asset_rules(knowledge_asset) + _knowledge_asset_historical_risk_rules(knowledge_asset)
     endpoints = merge_endpoints(parse_api_md(api_md), parse_openapi_endpoints(input_path))
     knowledge_endpoints = _knowledge_asset_endpoints(knowledge_asset)
     if knowledge_endpoints:
@@ -675,12 +1120,39 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
     strict_document_grounding = os.environ.get("QUALIBUG_STRICT_DOCUMENT_GROUNDING", "1") != "0"
 
     candidates: list[GroundedCandidate] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = set()
     discarded_ungrounded_count = 0
 
-    def add(ep: ApiEndpoint, risk_type: str, title: str, expected: str, failure: str, probe: dict[str, Any], policy: str, required_evidence: list[str], rule_codes: list[str], severity: str = "P2", confidence: float = 0.62) -> None:
+    def add(
+        ep: ApiEndpoint,
+        risk_type: str,
+        title: str,
+        expected: str,
+        failure: str,
+        probe: dict[str, Any],
+        policy: str,
+        required_evidence: list[str],
+        rule_codes: list[str],
+        severity: str = "P2",
+        confidence: float = 0.62,
+        candidate_actors: list[str] | None = None,
+    ) -> None:
         nonlocal discarded_ungrounded_count
-        key = (ep.method.upper(), ep.path, risk_type)
+        actor_set = _normalize_actor_values(list(candidate_actors or ep.actors or roles[:4]), limit=4)
+        if not actor_set and risk_type == "auth_boundary_probe":
+            actor_set = ["anonymous"]
+        if not actor_set:
+            actor_set = _normalize_actor_values(roles[:3], limit=3)
+        key = _candidate_dedupe_key(
+            ep,
+            risk_type,
+            actors=actor_set,
+            rule_codes=rule_codes,
+            probe=probe,
+            title=title,
+            expected=expected,
+            failure=failure,
+        )
         if key in seen:
             return
         seen.add(key)
@@ -727,7 +1199,7 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
             confidence=round(adj_conf, 2),
             endpoint={"method": ep.method.upper(), "path": ep.path, "capability_code": _capability_code_from_endpoint(ep), "capability": ep.capability or ep.summary or ""},
             affected_entities=_endpoint_entity(ep.path + " " + (ep.capability or ""), entities) or entities[:4],
-            actors=list(ep.actors or roles[:3]),
+            actors=actor_set,
             expected_behavior=expected,
             suspected_failure_pattern=failure,
             probe_plan=probe,
@@ -749,9 +1221,121 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
         code = _capability_code_from_endpoint(ep)
         checks = {c.lower() for c in (ep.checks or [])}
         path_low = ep.path.lower()
-        cap_low = (ep.capability or ep.summary or "").lower()
+        capability_text = ep.capability or ep.summary or ""
+        cap_low = capability_text.lower()
         combined = f"{path_low} {cap_low}"
-        actors = ep.actors or roles
+        endpoint_text = _clean(" ".join([ep.path, ep.capability or "", ep.summary or ""]))
+        endpoint_groups = _business_groups(endpoint_text)
+        state_text_signal = bool(re.search(r"状态|终态|流转|生命周期|state transition|terminal state|initial state", capability_text, re.I))
+        state_token_signal = _contains_state_token(capability_text, list(state_model.get("states") or []))
+        state_endpoint_signal = (
+            "state" in checks
+            or state_text_signal
+            or state_token_signal
+            or "transition" in path_low
+            or "archive" in path_low
+            or "approve" in path_low
+            or "cancel" in path_low
+            or "payment" in path_low
+            or "refund" in path_low
+            or "return" in path_low
+            or "ship" in path_low
+            or "receive" in path_low
+        )
+        actors = [actor for actor in _normalize_actor_values(list(ep.actors or roles), limit=8) if actor != "anonymous"]
+        non_admin_actors = [actor for actor in actors if actor not in {"admin", "approver"}]
+        admin_actors = [actor for actor in actors if actor == "admin"]
+        base_write_actors = non_admin_actors or actors
+        write_actors = _dedupe_strings(base_write_actors + roles, limit=6)
+        non_admin_variants = _actor_variants(non_admin_actors or actors[:3], limit=4)
+        write_actor_variants = _actor_variants(write_actors, limit=5)
+        audit_actor_variants = _actor_variants(_dedupe_strings(actors + roles, limit=6), limit=6)
+        matched_rule_codes = _endpoint_rule_matches(ep, rules)
+        inferred_rule_risks = set(matched_rule_codes.keys())
+        if "auth_boundary_probe" in inferred_rule_risks:
+            checks.add("auth")
+        if "ownership_scope_probe" in inferred_rule_risks:
+            checks.update({"tenant", "object_owner"})
+        if "idempotency_replay_probe" in inferred_rule_risks or "async_external_event_probe" in inferred_rule_risks:
+            checks.add("idempotency")
+        if "state_transition_probe" in inferred_rule_risks:
+            checks.add("state")
+        if "audit_privacy_probe" in inferred_rule_risks:
+            checks.add("audit")
+
+        def rule_codes_for(risk_type: str, defaults: list[str]) -> list[str]:
+            return _dedupe_strings(defaults + matched_rule_codes.get(risk_type, []), limit=8)
+
+        def variant_codes_for(risk_type: str, *, limit: int) -> list[str | None]:
+            codes = matched_rule_codes.get(risk_type, [])
+            if codes:
+                return codes[:limit]
+            return [None]
+
+        def rule_codes_variant_for(risk_type: str, defaults: list[str], focus_code: str | None) -> list[str]:
+            focused = [focus_code] if focus_code else []
+            return _dedupe_strings(defaults + focused, limit=8)
+
+        if "business_rule_probe" in inferred_rule_risks:
+            for focus_code in variant_codes_for("business_rule_probe", limit=8):
+                rule = by_rule.get(str(focus_code or "")) if focus_code else None
+                rule_title = _clean(str(getattr(rule, "rule_text", "") or "")) if rule else ""
+                if rule_title:
+                    rule_title = rule_title[:60] + ("…" if len(rule_title) > 60 else "")
+                else:
+                    rule_title = "业务规则"
+                actor_variants = write_actor_variants if _is_write(ep.method) else non_admin_variants
+                for actor_variant in actor_variants[:3]:
+                    actor_prefix = _actor_title_prefix(actor_variant)
+                    add(
+                        ep,
+                        "business_rule_probe",
+                        f"{actor_prefix}{ep.method.upper()} {ep.path} 的业务规则校验候选：{rule_title}",
+                        "接口行为必须满足客户业务规则与约束，返回/副作用应与规则一致。",
+                        "接口可能忽略业务规则约束，导致列表过滤缺失、状态约束缺失、越权或业务不一致。",
+                        {
+                            "steps": ["提取规则中的约束字段与边界条件", "构造满足与违反规则的请求对照组", "对比返回字段/数量/状态变化并断言与规则一致"],
+                            "focus_rule": focus_code or "",
+                            "rule_text": getattr(rule, "rule_text", "") if rule else "",
+                        },
+                        "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
+                        ["request_response_pair", "response_schema", "negative_control"] if not _is_write(ep.method) else ["before_after_snapshot", "side_effect_diff", "request_response_pair"],
+                        rule_codes_variant_for("business_rule_probe", [code or "BR00"], focus_code),
+                        severity="P1",
+                        confidence=0.72,
+                        candidate_actors=actor_variant,
+                    )
+
+        list_endpoint_signal = ep.method.upper() == "GET" and not re.search(r"\{[^}]+\}", ep.path)
+        if list_endpoint_signal and "business_rule_probe" in inferred_rule_risks:
+            for focus_code in variant_codes_for("business_rule_probe", limit=8):
+                rule = by_rule.get(str(focus_code or "")) if focus_code else None
+                rule_title = _clean(str(getattr(rule, "rule_text", "") or "")) if rule else ""
+                if rule_title:
+                    rule_title = rule_title[:60] + ("…" if len(rule_title) > 60 else "")
+                else:
+                    rule_title = "业务规则"
+                for actor_variant in non_admin_variants[:3]:
+                    actor_prefix = _actor_title_prefix(actor_variant)
+                    add(
+                        ep,
+                        "read_consistency_probe",
+                        f"{actor_prefix}{ep.method.upper()} {ep.path} 的列表/分页/过滤一致性候选：{rule_title}",
+                        "列表/搜索接口必须在分页、过滤、排序、权限与租户边界下保持一致性，返回集合与总数不得泄露越权对象。",
+                        "接口可能缺少租户/归属过滤、分页总数不一致、排序/过滤绕过或 cursor/page 参数导致越权对象混入。",
+                        {
+                            "steps": ["构造分页/过滤/排序的对照组请求", "对比 items/total/count 与边界条件一致性", "检查越权对象是否混入以及总数是否泄露"],
+                            "focus_rule": focus_code or "",
+                            "rule_text": getattr(rule, "rule_text", "") if rule else "",
+                            "controls": ["page", "page_size", "cursor", "sort", "filter"],
+                        },
+                        "read_only_safe",
+                        ["request_response_pair", "pagination_invariants", "filter_invariants", "negative_control"],
+                        rule_codes_variant_for("business_rule_probe", [code or "BRL00"], focus_code),
+                        severity="P1",
+                        confidence=0.7,
+                        candidate_actors=actor_variant,
+                    )
 
         if "auth" in checks or {"401", "403"}.intersection(set(ep.failure_statuses or [])):
             add(
@@ -767,121 +1351,297 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
                 },
                 "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
                 ["request_response_pair", "status_code", "body_redaction_check"],
-                [code or "C03", "C03"],
+                rule_codes_for("auth_boundary_probe", [code or "C03", "C03"]),
                 severity="P1" if not _is_write(ep.method) else "P2",
                 confidence=0.66,
+                candidate_actors=["anonymous"],
             )
+            if re.search(r"admin|管理员|仅管理员|审批", combined, re.I) and non_admin_actors:
+                for actor_variant in non_admin_variants:
+                    actor_prefix = _actor_title_prefix(actor_variant)
+                    add(
+                        ep,
+                        "auth_boundary_probe",
+                        f"{actor_prefix}已登录访问 {ep.method.upper()} {ep.path} 的授权边界候选",
+                        "接口若声明仅管理员/审批角色可访问，则低权限已登录角色必须返回 403/404，且不得看到对象存在性或业务字段。",
+                        "接口可能只校验登录态，未继续校验角色边界，导致普通用户、客服或运营以已登录状态访问管理接口。",
+                        {
+                            "steps": ["使用低权限但已登录的角色访问接口", "保留合法 Authorization 与必填参数", "断言响应为 403/404 且无敏感业务字段"],
+                            "headers": ["Authorization"],
+                            "expected_status": [403, 404],
+                        },
+                        "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
+                        ["request_response_pair", "status_code", "role_matrix", "negative_control"],
+                        rule_codes_for("auth_boundary_probe", [code or "C03", "C03"]),
+                        severity="P1",
+                        confidence=0.7,
+                        candidate_actors=actor_variant,
+                    )
         if {"tenant", "org_scope", "object_owner"}.intersection(checks) or "tenant" in path_low or "tenant_id" in path_low:
-            add(
-                ep,
-                "ownership_scope_probe",
-                f"跨租户/跨组织/跨归属访问 {ep.method.upper()} {ep.path} 的数据隔离候选",
-                "请求必须校验 tenant、org_scope 和 object_owner；跨租户或非归属对象访问必须被拒绝，且错误信息不得泄露对象是否存在。",
-                "接口可能只校验登录态，不校验数据归属、组织范围或租户过滤，导致越权读写。",
-                {
-                    "steps": ["准备 A/B 两个租户或两个 owner 的对象", "使用 A 身份访问/修改 B 对象", "断言 403/404 且无 B 对象字段返回"],
-                    "mutations": ["tenant_id", "object_id", "owner_user_id", "org_id"],
-                    "expected_status": [403, 404],
-                },
-                "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
-                ["actor_matrix", "object_binding", "request_response_pair", "negative_control"],
-                [code or "C05", "C05", "C03"],
-                severity="P1",
-                confidence=0.7,
+            for actor_variant in non_admin_variants or _actor_variants(actors[:2], limit=2):
+                actor_prefix = _actor_title_prefix(actor_variant)
+                for focus_code in variant_codes_for("ownership_scope_probe", limit=6):
+                    add(
+                        ep,
+                        "ownership_scope_probe",
+                        f"{actor_prefix}跨租户/跨组织/跨归属访问 {ep.method.upper()} {ep.path} 的数据隔离候选",
+                        "请求必须校验 tenant、org_scope 和 object_owner；跨租户或非归属对象访问必须被拒绝，且错误信息不得泄露对象是否存在。",
+                        "接口可能只校验登录态，不校验数据归属、组织范围或租户过滤，导致越权读写。",
+                        {
+                            "steps": ["准备 A/B 两个租户或两个 owner 的对象", "使用 A 身份访问/修改 B 对象", "断言 403/404 且无 B 对象字段返回"],
+                            "mutations": ["tenant_id", "object_id", "owner_user_id", "org_id"],
+                            "expected_status": [403, 404],
+                            "focus_rule": focus_code or "",
+                        },
+                        "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
+                        ["actor_matrix", "object_binding", "request_response_pair", "negative_control"],
+                        rule_codes_variant_for("ownership_scope_probe", [code or "C05", "C05", "C03"], focus_code),
+                        severity="P1",
+                        confidence=0.7,
+                        candidate_actors=actor_variant,
+                    )
+            if admin_actors and (re.search(r"admin|管理员", combined, re.I) or "ownership_scope_probe" in inferred_rule_risks):
+                for focus_code in variant_codes_for("ownership_scope_probe", limit=3):
+                    add(
+                        ep,
+                        "ownership_scope_probe",
+                        f"管理员跨组织/跨租户访问 {ep.method.upper()} {ep.path} 的越权候选",
+                        "管理员也必须受 tenant、org_scope 和对象归属边界约束，不能把管理员角色当作全局无边界权限。",
+                        "接口可能仅判断 is_admin=true，遗漏 tenant/org_scope 过滤，导致管理员跨组织读取或修改无授权对象。",
+                        {
+                            "steps": ["准备不同 tenant/org 的对象", "使用管理员身份访问非授权 tenant/org 的对象", "断言 403/404 且无越权数据返回"],
+                            "mutations": ["tenant_id", "org_id", "object_id"],
+                            "expected_status": [403, 404],
+                            "focus_rule": focus_code or "",
+                        },
+                        "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
+                        ["actor_matrix", "object_binding", "request_response_pair", "negative_control"],
+                        rule_codes_variant_for("ownership_scope_probe", [code or "C05", "C05", "C03"], focus_code),
+                        severity="P1",
+                        confidence=0.74,
+                        candidate_actors=admin_actors[:1],
+                    )
+        idempotency_endpoint_signal = bool(
+            _is_write(ep.method)
+            and (
+                "idempotency" in checks
+                or "idempotency" in combined
+                or "submit" in path_low
+                or "callback" in path_low
+                or "sync" in path_low
+                or "process" in path_low
+                or (
+                    endpoint_groups.intersection({"payment", "refund", "order", "cart"})
+                    and (prd_refs.get("idempotency") or "idempotency_replay_probe" in inferred_rule_risks)
+                )
             )
-        if _is_write(ep.method) and ("idempotency" in checks or "idempotency" in combined or "submit" in path_low or "callback" in path_low or "sync" in path_low or "process" in path_low):
-            add(
-                ep,
-                "idempotency_replay_probe",
-                f"重复提交/重放 {ep.method.upper()} {ep.path} 的幂等候选",
-                "核心写接口必须使用业务唯一键或 Idempotency-Key，同一业务意图或第三方事件只能产生一次副作用。",
-                "重复请求可能重复扣减库存/金额、重复创建对象、重复发送通知或重复处理回调。",
-                {
-                    "steps": ["构造同一业务唯一键或 Idempotency-Key 的写请求", "连续发送两次或并发发送 N 次", "比较业务对象、流水、库存/额度、审计日志数量"],
-                    "headers": ["Idempotency-Key"],
-                    "oracle": "side_effect_count == 1 and ledger_delta_not_duplicated",
-                },
-                "disposable_sandbox_required",
-                ["before_after_snapshot", "side_effect_count", "idempotency_key", "ledger_or_audit_diff"],
-                [code or "C10", "C10", "C11"],
-                severity="P1",
-                confidence=0.74,
-            )
-        if _is_write(ep.method) and ("state" in checks or "transition" in path_low or "archive" in path_low or "approve" in path_low or "cancel" in path_low or "refund" in path_low):
+        )
+        if idempotency_endpoint_signal:
+            for focus_code in variant_codes_for("idempotency_replay_probe", limit=8):
+                for actor_variant in write_actor_variants:
+                    actor_prefix = _actor_title_prefix(actor_variant)
+                    add(
+                        ep,
+                        "idempotency_replay_probe",
+                        f"{actor_prefix}顺序重复提交/重放 {ep.method.upper()} {ep.path} 的幂等候选",
+                        "核心写接口必须使用业务唯一键或 Idempotency-Key，同一业务意图或第三方事件只能产生一次副作用。",
+                        "重复请求可能重复扣减库存/金额、重复创建对象、重复发送通知或重复处理回调。",
+                        {
+                            "steps": ["构造同一业务唯一键或 Idempotency-Key 的写请求", "连续发送两次或并发发送 N 次", "比较业务对象、流水、库存/额度、审计日志数量"],
+                            "headers": ["Idempotency-Key"],
+                            "oracle": "side_effect_count == 1 and ledger_delta_not_duplicated",
+                            "focus_rule": focus_code or "",
+                        },
+                        "disposable_sandbox_required",
+                        ["before_after_snapshot", "side_effect_count", "idempotency_key", "ledger_or_audit_diff"],
+                        rule_codes_variant_for("idempotency_replay_probe", [code or "C10", "C10", "C11"], focus_code),
+                        severity="P1",
+                        confidence=0.74,
+                        candidate_actors=actor_variant,
+                    )
+                    add(
+                        ep,
+                        "idempotency_replay_probe",
+                        f"{actor_prefix}并发重复提交 {ep.method.upper()} {ep.path} 的幂等竞争窗口候选",
+                        "同一业务唯一键在并发压力下也只能产生一次副作用，不能因竞争窗口造成重复扣减、重复创建或重复发送。",
+                        "接口可能只在顺序重放下幂等，但并发到达时缺少唯一约束/锁/compare-and-set，导致 side effect 被重复执行。",
+                        {
+                            "steps": ["构造同一业务唯一键或 Idempotency-Key", "并发发送相同写请求 N 次", "核对对象数量、库存/金额变化、流水与审计日志是否只发生一次"],
+                            "headers": ["Idempotency-Key"],
+                            "concurrency": 5,
+                            "oracle": "side_effect_count == 1 and ledger_delta_not_duplicated",
+                            "focus_rule": focus_code or "",
+                        },
+                        "disposable_sandbox_required",
+                        ["before_after_snapshot", "side_effect_count", "idempotency_key", "ledger_or_audit_diff"],
+                        rule_codes_variant_for("idempotency_replay_probe", [code or "C10", "C10", "C11"], focus_code),
+                        severity="P1",
+                        confidence=0.76,
+                        candidate_actors=actor_variant,
+                    )
+        if _is_write(ep.method) and state_endpoint_signal:
             terminals = state_model.get("terminal_states") or []
-            add(
-                ep,
-                "state_transition_probe",
-                f"终态/非法状态流转调用 {ep.method.upper()} {ep.path} 的状态机候选",
-                "对象只能按 PRD 状态机推进；cancelled/refunded/completed 等终态不得再产生副作用。",
-                "接口可能未检查当前状态，允许终态重入、跳跃状态、重复审批或归档后修改。",
-                {
-                    "steps": ["构造处于终态或非法前置状态的对象", "调用目标写接口", "断言 409/422，且金额/库存/审计/消息无新增副作用"],
-                    "state_machine": state_model.get("states") or [],
-                    "terminal_states": terminals,
-                    "expected_status": [409, 422],
-                },
-                "disposable_sandbox_required",
-                ["pre_state_snapshot", "post_state_snapshot", "side_effect_diff", "state_transition_log"],
-                [code or "C06", "C06", "C07"],
-                severity="P1",
-                confidence=0.76,
+            if terminals:
+                for focus_code in variant_codes_for("state_transition_probe", limit=6):
+                    for actor_variant in write_actor_variants:
+                        actor_prefix = _actor_title_prefix(actor_variant)
+                        add(
+                            ep,
+                            "state_transition_probe",
+                            f"{actor_prefix}终态重入调用 {ep.method.upper()} {ep.path} 的状态机候选",
+                            "对象进入 cancelled/refunded/completed 等终态后不得再次执行写入、副作用或重复审批。",
+                            "接口可能未检查终态，允许终态重入、重复退款或归档后继续修改。",
+                            {
+                                "steps": ["构造处于终态的对象", "调用目标写接口", "断言 409/422 且金额/库存/审计/消息无新增副作用"],
+                                "state_machine": state_model.get("states") or [],
+                                "terminal_states": terminals,
+                                "expected_status": [409, 422],
+                                "focus_rule": focus_code or "",
+                            },
+                            "disposable_sandbox_required",
+                            ["pre_state_snapshot", "post_state_snapshot", "side_effect_diff", "state_transition_log"],
+                            rule_codes_variant_for("state_transition_probe", [code or "C06", "C06", "C07"], focus_code),
+                            severity="P1",
+                            confidence=0.76,
+                            candidate_actors=actor_variant,
+                        )
+            if len(state_model.get("states") or []) >= 3:
+                for focus_code in variant_codes_for("state_transition_probe", limit=6):
+                    for actor_variant in write_actor_variants:
+                        actor_prefix = _actor_title_prefix(actor_variant)
+                        add(
+                            ep,
+                            "state_transition_probe",
+                            f"{actor_prefix}跳跃/非法前置状态调用 {ep.method.upper()} {ep.path} 的状态机候选",
+                            "对象只能按 PRD 声明的状态机顺序推进，不能跳过前置状态直接完成审批、发货、退款或归档。",
+                            "接口可能只校验目标动作合法，未校验前置状态，导致跳跃状态、越序审批或异常回滚路径漏拦截。",
+                            {
+                                "steps": ["构造缺失前置状态的对象", "调用目标写接口", "断言 409/422 且状态轨迹与副作用均未错误推进"],
+                                "state_machine": state_model.get("states") or [],
+                                "expected_status": [409, 422],
+                                "focus_rule": focus_code or "",
+                            },
+                            "disposable_sandbox_required",
+                            ["pre_state_snapshot", "post_state_snapshot", "side_effect_diff", "state_transition_log"],
+                            rule_codes_variant_for("state_transition_probe", [code or "C06", "C06", "C07"], focus_code),
+                            severity="P1",
+                            confidence=0.74,
+                            candidate_actors=actor_variant,
+                        )
+        if _is_write(ep.method) and (
+            re.search(r"库存|amount|payment|refund|settle|ledger|quota|额度|points|balance|deduct|transactions|billing|invoice|reimburse|credit|capacity", combined, re.I)
+            or "conservation_probe" in inferred_rule_risks
+        ):
+            for actor_variant in write_actor_variants:
+                actor_prefix = _actor_title_prefix(actor_variant)
+                add(
+                    ep,
+                    "conservation_probe",
+                    f"{actor_prefix}{ep.method.upper()} {ep.path} 的负库存/负金额/额度下溢候选",
+                    "核心资源字段必须存在下界保护，库存、金额、积分、额度和余额不得出现负值或超过业务上限。",
+                    "接口可能缺少边界校验，导致重复扣减、超额退款、负库存或负额度。",
+                    {
+                        "steps": ["记录资源字段基线", "构造边界值、超额扣减或超额退款请求", "断言库存/金额/额度不出现负值且错误码稳定"],
+                        "oracle": "no_negative_quantity and no_negative_balance and bounded_amount_delta",
+                    },
+                    "disposable_sandbox_required",
+                    ["db_snapshot_before_after", "negative_quantity_check", "request_response_pair", "boundary_value_matrix"],
+                    rule_codes_for("conservation_probe", [code or "C08", "C08", "C14", "C23"]),
+                    severity="P1",
+                    confidence=0.78,
+                    candidate_actors=actor_variant,
+                )
+                add(
+                    ep,
+                    "conservation_probe",
+                    f"{actor_prefix}{ep.method.upper()} {ep.path} 的主表/流水/汇总不一致候选",
+                    "核心资源必须守恒：主表、明细、流水、汇总和报表在事务或补偿后保持一致，局部失败也必须可对账。",
+                    "接口可能局部成功、漏写流水、补偿不完整或报表延迟未收敛，导致主表与汇总/流水不一致。",
+                    {
+                        "steps": ["记录主对象、资源账户、流水和报表快照", "执行目标业务动作与异常路径", "对账主表/明细/流水/汇总差异并确认补偿是否收敛"],
+                        "oracle": "resource_balance_after == resource_balance_before + sum(ledger_delta) and report_consistent_with_primary_record",
+                    },
+                    "disposable_sandbox_required",
+                    ["db_snapshot_before_after", "ledger_reconciliation", "report_consistency", "side_effect_diff"],
+                    rule_codes_for("conservation_probe", [code or "C08", "C08", "C14", "C23"]),
+                    severity="P1",
+                    confidence=0.8,
+                    candidate_actors=actor_variant,
+                )
+        audit_signal = bool(
+            "audit" in checks
+            or re.search(r"export|import|approve|admin|config|rules|audit|privacy|file|download|report", combined, re.I)
+            or (
+                ep.method.upper() == "GET"
+                and re.search(
+                    r"user|users|member|members|account|accounts|profile|/me\b|admin|audit[_-]?log|logs?|privacy|sensitive|email|phone|id_card|address|手机号|邮箱|身份证|收货地址|隐私|敏感|脱敏|审计",
+                    combined,
+                    re.I,
+                )
             )
-        if _is_write(ep.method) and re.search(r"库存|amount|payment|refund|settle|ledger|quota|额度|points|balance|deduct|transactions|billing|invoice|reimburse|credit|capacity", combined, re.I):
-            add(
-                ep,
-                "conservation_probe",
-                f"{ep.method.upper()} {ep.path} 对金额/库存/额度/流水守恒的候选",
-                "核心资源必须守恒：主表、明细、流水、汇总和报表在事务或补偿后保持一致，数量不得小于 0。",
-                "接口可能局部成功、重复扣减、漏写流水、主表与汇总不一致或负库存/负额度。",
-                {
-                    "steps": ["记录主对象、资源账户、流水和报表快照", "执行目标业务动作或异常路径", "对账主表/明细/流水/汇总差异"],
-                    "oracle": "resource_balance_after == resource_balance_before + sum(ledger_delta) and no_negative_quantity",
-                },
-                "disposable_sandbox_required",
-                ["db_snapshot_before_after", "ledger_reconciliation", "negative_quantity_check", "report_consistency"],
-                [code or "C08", "C08", "C14", "C23"],
-                severity="P1",
-                confidence=0.78,
+        )
+        if audit_signal:
+            for focus_code in variant_codes_for("audit_privacy_probe", limit=3):
+                for actor_variant in audit_actor_variants:
+                    actor_prefix = _actor_title_prefix(actor_variant)
+                    add(
+                        ep,
+                        "audit_privacy_probe",
+                        f"{actor_prefix}{ep.method.upper()} {ep.path} 的审计/隐私/导出边界候选",
+                        "管理员、导入导出、隐私字段和配置变更必须校验权限、脱敏并产生审计日志。",
+                        "接口可能允许未授权导出、敏感字段未脱敏、缺少审计日志或导出过滤条件缺失租户/角色范围。",
+                        {
+                            "steps": ["以最低权限角色执行或读取目标接口", "检查敏感字段最小化/脱敏", "检查 audit_logs 是否记录 actor/action/object/before-after"],
+                            "sensitive_fields": ["email", "phone", "id_card", "amount", "payload_json", "before_json", "after_json"],
+                            "focus_rule": focus_code or "",
+                        },
+                        "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
+                        ["role_matrix", "response_schema", "sensitive_field_scan", "audit_log_snapshot"],
+                        rule_codes_variant_for("audit_privacy_probe", [code or "C31", "C22", "C31"], focus_code),
+                        severity="P1" if re.search(r"export|privacy|audit", combined, re.I) else "P2",
+                        confidence=0.7,
+                        candidate_actors=actor_variant,
+                    )
+        async_endpoint_signal = bool(
+            _is_write(ep.method)
+            and (
+                re.search(r"callback|webhook|events|process|sync|retry|message|notify|third|payment|logistics", combined, re.I)
+                or "idempotency" in checks
+                or "async_external_event_probe" in inferred_rule_risks
+                or (
+                    endpoint_groups.intersection({"payment", "refund", "order"})
+                    and (prd_refs.get("async") or prd_refs.get("idempotency") or "idempotency_replay_probe" in inferred_rule_risks)
+                )
             )
-        if ("audit" in checks or re.search(r"export|import|approve|admin|config|rules|audit|privacy|file|download|report", combined, re.I)):
-            add(
-                ep,
-                "audit_privacy_probe",
-                f"{ep.method.upper()} {ep.path} 的审计/隐私/导出边界候选",
-                "管理员、导入导出、隐私字段和配置变更必须校验权限、脱敏并产生审计日志。",
-                "接口可能允许未授权导出、敏感字段未脱敏、缺少审计日志或导出过滤条件缺失租户/角色范围。",
-                {
-                    "steps": ["以最低权限角色执行或读取目标接口", "检查敏感字段最小化/脱敏", "检查 audit_logs 是否记录 actor/action/object/before-after"],
-                    "sensitive_fields": ["email", "phone", "id_card", "amount", "payload_json", "before_json", "after_json"],
-                },
-                "read_only_safe" if not _is_write(ep.method) else "disposable_sandbox_required",
-                ["role_matrix", "response_schema", "sensitive_field_scan", "audit_log_snapshot"],
-                [code or "C31", "C22", "C31"],
-                severity="P1" if re.search(r"export|privacy|audit", combined, re.I) else "P2",
-                confidence=0.7,
-            )
-        if _is_write(ep.method) and re.search(r"callback|webhook|events|process|sync|retry|message|notify|third|payment|logistics", combined, re.I):
-            add(
-                ep,
-                "async_external_event_probe",
-                f"{ep.method.upper()} {ep.path} 的异步/第三方事件幂等与验签候选",
-                "第三方回调、消息和异步任务必须验签、幂等、可重试、可死信并防乱序。",
-                "接口可能接受伪造回调、重复事件、乱序事件或失败重试导致重复副作用。",
-                {
-                    "steps": ["构造缺失签名/过期 nonce/重复 external_event_id 的事件", "重放和乱序发送", "断言拒绝或只处理一次且可审计"],
-                    "mutations": ["signature", "nonce", "timestamp", "external_event_id", "idempotency_key"],
-                },
-                "disposable_sandbox_required",
-                ["event_id", "signature_result", "retry_log", "side_effect_count", "dead_letter_or_error_record"],
-                [code or "C19", "C19", "C20", "C32"],
-                severity="P1",
-                confidence=0.74,
-            )
+        )
+        if async_endpoint_signal:
+            for focus_code in variant_codes_for("async_external_event_probe", limit=8):
+                for actor_variant in audit_actor_variants:
+                    actor_prefix = _actor_title_prefix(actor_variant)
+                    add(
+                        ep,
+                        "async_external_event_probe",
+                        f"{actor_prefix}{ep.method.upper()} {ep.path} 的异步/第三方事件幂等与验签候选",
+                        "第三方回调、消息和异步任务必须验签、幂等、可重试、可死信并防乱序。",
+                        "接口可能接受伪造回调、重复事件、乱序事件或失败重试导致重复副作用。",
+                        {
+                            "steps": ["构造缺失签名/过期 nonce/重复 external_event_id 的事件", "重放和乱序发送", "断言拒绝或只处理一次且可审计"],
+                            "mutations": ["signature", "nonce", "timestamp", "external_event_id", "idempotency_key"],
+                            "focus_rule": focus_code or "",
+                        },
+                        "disposable_sandbox_required",
+                        ["event_id", "signature_result", "retry_log", "side_effect_count", "dead_letter_or_error_record"],
+                        rule_codes_variant_for("async_external_event_probe", [code or "C19", "C19", "C20", "C32"], focus_code),
+                        severity="P1",
+                        confidence=0.74,
+                        candidate_actors=actor_variant,
+                    )
 
-    max_n = max_candidates or int(os.environ.get("QUALIBUG_INPUT_ONLY_MAX_CANDIDATES", "180") or 180)
+    max_n = _resolve_candidate_limit(max_candidates, endpoint_count=len(endpoints), role_count=len(roles))
     # Prioritize stronger, write-side business risks but keep read-only auth/tenant probes visible.
     order = {
+        "business_rule_probe": 0,
+        "read_consistency_probe": 0,
         "ownership_scope_probe": 0,
         "auth_boundary_probe": 1,
         "conservation_probe": 2,

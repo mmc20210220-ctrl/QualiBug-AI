@@ -86,6 +86,61 @@ def test_parse_source_extracts_markdown_api_field_dictionary_and_svg() -> None:
     assert "Loading" in svg["ui_specs"][0]["states"]
 
 
+def test_parse_source_state_machine_ignores_sentence_and_layout_noise() -> None:
+    workflow_doc = """# Workflow
+
+CREATED -> PAID -> SHIPPED -> FINISHED
+游客购物车应在登录后自动合并到用户购物车。
+移动端 360px 到 430px 宽度必须可用。
+普通用户只能看到自己的订单。
+"""
+    parsed = _parse_source(workflow_doc.encode("utf-8"), "PRD.md", "prd", "src_workflow")
+
+    assert len(parsed["state_machines"]) == 1
+    machine = parsed["state_machines"][0]
+    assert machine["states"] == ["CREATED", "PAID", "SHIPPED", "FINISHED"]
+    assert machine["transitions"] == [
+        {"from": "CREATED", "to": "PAID"},
+        {"from": "SHIPPED", "to": "FINISHED"},
+    ]
+
+
+def test_parse_source_extracts_idempotency_rule_without_must_keywords() -> None:
+    doc = """# Scenarios
+
+- 订单提交可重试，重复提交不能产生额外副作用。
+"""
+    parsed = _parse_source(doc.encode("utf-8"), "acceptance_scenarios.md", "collaboration_document", "src_scenarios")
+
+    assert any(row.get("rule_type") == "idempotency" for row in parsed.get("rules") or [])
+
+
+def test_parse_source_extracts_async_event_rule_without_must_keywords() -> None:
+    doc = """# Scenarios
+
+- 订单创建后会发送通知消息，失败时进入重试队列并补发短信。
+"""
+    parsed = _parse_source(doc.encode("utf-8"), "acceptance_scenarios.md", "collaboration_document", "src_async")
+
+    assert any(row.get("rule_type") == "async_event" for row in parsed.get("rules") or [])
+    assert any(row.get("risk_type") == "async_event" for row in parsed.get("rules") or [])
+
+
+def test_parse_source_extracts_back_in_stock_and_inventory_sync_as_async_event_rules() -> None:
+    doc = """# Scenarios
+
+- 当用户购买库存为 0 的商品时，按钮应置灰，但商品详情仍允许加入购物车用于到货提醒。
+- 订单取消后库存应恢复，若商品已经下架则不恢复库存。
+- 购物车记录需要保证库存同步。
+"""
+    parsed = _parse_source(doc.encode("utf-8"), "acceptance_scenarios.md", "collaboration_document", "src_inventory_async")
+
+    rules = parsed.get("rules") or []
+    assert any(row.get("rule_type") == "async_event" and "到货提醒" in str(row.get("statement") or "") for row in rules)
+    assert any(row.get("rule_type") == "async_event" and "库存应恢复" in str(row.get("statement") or "") for row in rules)
+    assert any(row.get("rule_type") == "async_event" and "库存同步" in str(row.get("statement") or "") for row in rules)
+
+
 def test_build_asset_includes_new_extracted_structures(tmp_path: Path) -> None:
     project_id = "enterprise_knowledge_parse_case"
     actor = {"name": "tester", "role": "project_owner"}

@@ -1,0 +1,21 @@
+-- migration batch 24
+CREATE INDEX idx_legacy_table_24_1_amount ON legacy_table_24_1(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_24_2 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_24_3 INTEGER DEFAULT -1;
+CREATE TABLE legacy_table_24_4 (id INTEGER PRIMARY KEY, email VARCHAR(32), phone VARCHAR(8), payload TEXT);
+CREATE UNIQUE INDEX uniq_legacy_table_24_5_name ON products(name);
+ALTER TABLE users ADD COLUMN balance_backup_24_6 DECIMAL(5,2) DEFAULT 99999;
+CREATE TABLE legacy_table_24_7 (id VARCHAR(12) PRIMARY KEY, order_id INTEGER, status VARCHAR(4), note VARCHAR(16));
+CREATE TABLE legacy_table_24_8 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_24_9_amount ON legacy_table_24_9(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_24_10 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_24_11 INTEGER DEFAULT -1;
+CREATE TABLE legacy_table_24_12 (id INTEGER PRIMARY KEY, email VARCHAR(32), phone VARCHAR(8), payload TEXT);
+CREATE UNIQUE INDEX uniq_legacy_table_24_13_name ON products(name);
+ALTER TABLE users ADD COLUMN balance_backup_24_14 DECIMAL(5,2) DEFAULT 99999;
+CREATE TABLE legacy_table_24_15 (id VARCHAR(12) PRIMARY KEY, order_id INTEGER, status VARCHAR(4), note VARCHAR(16));
+CREATE TABLE legacy_table_24_16 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_24_17_amount ON legacy_table_24_17(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_24_18 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_24_19 INTEGER DEFAULT -1;
+CREATE TABLE legacy_table_24_20 (id INTEGER PRIMARY KEY, email VARCHAR(32), phone VARCHAR(8), payload TEXT);

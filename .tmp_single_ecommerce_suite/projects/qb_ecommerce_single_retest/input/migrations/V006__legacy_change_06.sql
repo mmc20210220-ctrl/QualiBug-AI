@@ -1,0 +1,21 @@
+-- migration batch 6
+CREATE TABLE legacy_table_6_1 (id VARCHAR(12) PRIMARY KEY, order_id INTEGER, status VARCHAR(4), note VARCHAR(16));
+CREATE TABLE legacy_table_6_2 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_6_3_amount ON legacy_table_6_3(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_6_4 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_6_5 INTEGER DEFAULT -1;
+CREATE TABLE legacy_table_6_6 (id INTEGER PRIMARY KEY, email VARCHAR(32), phone VARCHAR(8), payload TEXT);
+CREATE UNIQUE INDEX uniq_legacy_table_6_7_name ON products(name);
+ALTER TABLE users ADD COLUMN balance_backup_6_8 DECIMAL(5,2) DEFAULT 99999;
+CREATE TABLE legacy_table_6_9 (id VARCHAR(12) PRIMARY KEY, order_id INTEGER, status VARCHAR(4), note VARCHAR(16));
+CREATE TABLE legacy_table_6_10 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_6_11_amount ON legacy_table_6_11(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_6_12 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_6_13 INTEGER DEFAULT -1;
+CREATE TABLE legacy_table_6_14 (id INTEGER PRIMARY KEY, email VARCHAR(32), phone VARCHAR(8), payload TEXT);
+CREATE UNIQUE INDEX uniq_legacy_table_6_15_name ON products(name);
+ALTER TABLE users ADD COLUMN balance_backup_6_16 DECIMAL(5,2) DEFAULT 99999;
+CREATE TABLE legacy_table_6_17 (id VARCHAR(12) PRIMARY KEY, order_id INTEGER, status VARCHAR(4), note VARCHAR(16));
+CREATE TABLE legacy_table_6_18 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_6_19_amount ON legacy_table_6_19(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_6_20 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';

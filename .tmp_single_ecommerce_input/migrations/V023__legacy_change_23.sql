@@ -1,0 +1,21 @@
+-- migration batch 23
+CREATE TABLE legacy_table_23_1 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_23_2_amount ON legacy_table_23_2(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_23_3 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_23_4 INTEGER DEFAULT -1;
+CREATE TABLE legacy_table_23_5 (id INTEGER PRIMARY KEY, email VARCHAR(32), phone VARCHAR(8), payload TEXT);
+CREATE UNIQUE INDEX uniq_legacy_table_23_6_name ON products(name);
+ALTER TABLE users ADD COLUMN balance_backup_23_7 DECIMAL(5,2) DEFAULT 99999;
+CREATE TABLE legacy_table_23_8 (id VARCHAR(12) PRIMARY KEY, order_id INTEGER, status VARCHAR(4), note VARCHAR(16));
+CREATE TABLE legacy_table_23_9 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_23_10_amount ON legacy_table_23_10(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_23_11 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_23_12 INTEGER DEFAULT -1;
+CREATE TABLE legacy_table_23_13 (id INTEGER PRIMARY KEY, email VARCHAR(32), phone VARCHAR(8), payload TEXT);
+CREATE UNIQUE INDEX uniq_legacy_table_23_14_name ON products(name);
+ALTER TABLE users ADD COLUMN balance_backup_23_15 DECIMAL(5,2) DEFAULT 99999;
+CREATE TABLE legacy_table_23_16 (id VARCHAR(12) PRIMARY KEY, order_id INTEGER, status VARCHAR(4), note VARCHAR(16));
+CREATE TABLE legacy_table_23_17 (id INTEGER, user_id INTEGER, amount DECIMAL(6,2), created_at TEXT);
+CREATE INDEX idx_legacy_table_23_18_amount ON legacy_table_23_18(user_id);
+ALTER TABLE orders ADD COLUMN ext_status_23_19 VARCHAR(8) DEFAULT 'CREATED_AND_PAID';
+ALTER TABLE products ADD COLUMN stock_snapshot_23_20 INTEGER DEFAULT -1;
