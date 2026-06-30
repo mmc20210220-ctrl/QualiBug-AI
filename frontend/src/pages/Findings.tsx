@@ -165,9 +165,9 @@ export function Findings() {
 
   const filters: Array<{ label: string; value: FindingType }> = [
     { label: `全部 (${findings.length})`, value: 'all' },
-    { label: `API (${findings.filter(f => f.repro_path).length})`, value: 'API' },
-    { label: `DB (${findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('流水')).length})`, value: 'DB' },
-    { label: `业务 (${findings.filter(f => !f.repro_path && !f.title.includes('DB Verified') && !f.title.includes('库存') && !f.title.includes('BOM')).length})`, value: '业务' },
+    { label: `API (${findings.filter(f => f.repro_path || f.title.toLowerCase().includes('api') || f.title.includes('接口')).length})`, value: 'API' },
+    { label: `DB (${findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('流水') || f.title.includes('数据库')).length})`, value: 'DB' },
+    { label: `业务 (${findings.filter(f => !f.repro_path && !f.title.includes('DB Verified') && !f.title.includes('库存') && !f.title.includes('BOM') && !f.title.includes('数据库')).length})`, value: '业务' },
     { label: `P0`, value: 'P0' },
     { label: `P1`, value: 'P1' },
     { label: `P2`, value: 'P2' },
@@ -176,9 +176,9 @@ export function Findings() {
   const displayData = (() => {
     if (filter === 'all') return findings;
     if (filter === 'P0' || filter === 'P1' || filter === 'P2') return findings.filter(f => f.severity === filter);
-    if (filter === 'API') return findings.filter(f => !!f.repro_path);
-    if (filter === 'DB') return findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('流水'));
-    if (filter === '业务') return findings.filter(f => !f.repro_path && !f.title.includes('DB Verified') && !f.title.includes('库存') && !f.title.includes('BOM'));
+    if (filter === 'API') return findings.filter(f => !!f.repro_path || f.title.toLowerCase().includes('api') || f.title.includes('接口'));
+    if (filter === 'DB') return findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('流水') || f.title.includes('数据库'));
+    if (filter === '业务') return findings.filter(f => !f.repro_path && !f.title.includes('DB Verified') && !f.title.includes('库存') && !f.title.includes('BOM') && !f.title.includes('数据库'));
     return findings;
   })();
 

@@ -10,7 +10,7 @@ export function Settings() {
   const [llmKey, setLlmKey] = useState('');
   const [llmStatus, setLlmStatus] = useState('');
   const [envName, setEnvName] = useState('MES-BugLab Test');
-  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:8000/api');
+  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:8000');
   const [timeout, setTimeout_] = useState('30');
   const [envStatus, setEnvStatus] = useState('');
   const [backendStatus, setBackendStatus] = useState<Record<string, any> | null>(null);

@@ -172,12 +172,15 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         return Path(configured).resolve() if configured else _root()
 
     def _json(self, body: Any, status: int = 200) -> None:
-        raw = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
+        try:
+            raw = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        except (ConnectionAbortedError, ConnectionResetError, OSError):
+            pass  # client disconnected
 
     def _html(self, body: str, status: int = 200) -> None:
         raw = body.encode("utf-8")

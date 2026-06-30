@@ -14,15 +14,15 @@ export function EvidenceChain() {
 
   const withEvidence = findings.filter(f => f.evidence_chain.length >= 2);
 
-  const apiEvidence = findings.filter(f => f.repro_path).length;
-  const dbEvidence = findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM')).length;
-  const docEvidence = findings.filter(f => !f.repro_path && !f.title.includes('DB Verified')).length;
+  const apiEvidence = findings.filter(f => f.repro_path || f.title.toLowerCase().includes('api 接口') || f.title.toLowerCase().includes('接口')).length;
+  const dbEvidence = findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('数据库') || f.title.includes('DB')).length;
+  const docEvidence = Math.max(0, findings.length - apiEvidence - dbEvidence);
 
   const displayData = (() => {
     if (filter === 'all') return withEvidence;
-    if (filter === 'API') return withEvidence.filter(f => f.repro_path);
-    if (filter === 'DB') return withEvidence.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM'));
-    if (filter === '文档') return withEvidence.filter(f => !f.repro_path && !f.title.includes('DB Verified'));
+    if (filter === 'API') return withEvidence.filter(f => f.repro_path || f.title.toLowerCase().includes('api') || f.title.includes('接口'));
+    if (filter === 'DB') return withEvidence.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('数据库'));
+    if (filter === '文档') return withEvidence.filter(f => !f.repro_path && !f.title.includes('DB Verified') && !f.title.includes('库存') && !f.title.includes('BOM') && !f.title.includes('数据库'));
     return withEvidence;
   })();
 

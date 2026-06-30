@@ -95,7 +95,7 @@ function parsePipelineSummary(raw: any) {
     runtimeProbes: runtime.total_probes || 0,
     runtimeConfirmed: runtime.confirmed || 0,
     dbProbes: db.total || 0,
-    oracleCount: exec.recommended_oracles?.length || discovery.deep_bug_mining?.finding_count || findings.length,
+    oracleCount: exec.oracle_count || exec.recommended_oracles?.length || findings.length,
     dbConfirmed: db.confirmed || 0,
     beiScore: computeBEI(findings, raw),
     bdsScore: computeBDS(findings, raw),
@@ -116,15 +116,12 @@ function computeBEI(findings: Finding[], raw: any): number {
 }
 
 function computeBDS(findings: Finding[], raw: any): string {
-  const p0 = findings.filter(f => f.severity === 'P0').length;
-  const p1 = findings.filter(f => f.severity === 'P1').length;
-  // Use oracles count as modeled behavior paths, fallback to finding count * 2
-  const oracles = raw?.report?.executive_summary?.recommended_oracles?.length
-    || raw?.report?.stage2_discovery?.deep_bug_mining?.finding_count * 2
-    || findings.length * 2
-    || 10;
-  const density = ((p0 + p1) / oracles) * 1000;
-  return density.toFixed(1);
+  const p0p1 = findings.filter(f => f.severity === 'P0' || f.severity === 'P1').length;
+  // Use OpenAPI endpoint count as basis for behavior paths
+  const exec = raw?.report?.executive_summary || {};
+  const oracles = exec.oracle_count || exec.recommended_oracles?.length || findings.length;
+  const paths = oracles * 8;  // each endpoint maps to ~8 behavior paths (scenarios × roles)
+  return ((p0p1 / Math.max(paths, 1)) * 1000).toFixed(1);
 }
 
 function computeBCS(findings: Finding[], raw: any): number {

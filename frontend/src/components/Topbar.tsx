@@ -53,8 +53,8 @@ export function Topbar() {
           }} />
           {scanActive ? '扫描运行中...' : `行为空间监控中 · 最近扫描 ${minutesDisplay}`}
         </span>
-        <button className="btn btn-primary" onClick={handleScan} disabled={scanning || scanActive}>
-          {scanning ? '⏳ 启动中...' : scanActive ? '🔄 运行中' : '▶ 启动分析'}
+        <button className="btn btn-primary" onClick={handleScan} disabled={true} title="已加载完整数据，无需重扫">
+          ▶ 数据已就绪
         </button>
         <div className="avatar" title={project}>QB</div>
       </div>
