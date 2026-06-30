@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { EnvironmentDiagnosticPanel } from "@/components/environment-diagnostics/EnvironmentDiagnosticPanel";
 import { WorkspaceBlockerDrilldown } from "@/components/environment-diagnostics/WorkspaceBlockerDrilldown";
+import { ProjectDigitalTwinStage } from "@/components/project/ProjectDigitalTwinStage";
 import { ValueSurfacePanel } from "@/components/value-surface/ValueSurfacePanel";
 import { getEnvironmentDiagnosticGraph, type EnvironmentDiagnosticGraph, type GateStatus } from "@/features/environment-diagnostics";
 
@@ -283,6 +284,8 @@ export default async function ProjectWorkspacePage({
           </div>
         </div>
       </div>
+
+      <ProjectDigitalTwinStage projectId={projectId} graph={environmentGraph} />
 
       <EnvironmentDiagnosticPanel graph={environmentGraph} mode="summary" />
 
