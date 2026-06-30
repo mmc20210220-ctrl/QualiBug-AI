@@ -3,7 +3,7 @@
  * All pages consume data through hooks defined here.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getFindings, getPilotOverview, getKnowledgeAsset, getControlPlaneOverview, getReleaseDashboard } from './client';
+import { getFindings, getOverview, getKnowledge, getControlPlane, getReleaseDashboard } from './client';
 import type { Finding, CoverageData, BehaviorRoute, KnowledgeSource, ReleaseCheck } from '../types';
 
 // ── Cache ──────────────────────────────────────────────
@@ -95,9 +95,10 @@ function parsePipelineSummary(raw: any) {
     runtimeProbes: runtime.total_probes || 0,
     runtimeConfirmed: runtime.confirmed || 0,
     dbProbes: db.total || 0,
+    oracleCount: exec.recommended_oracles?.length || discovery.deep_bug_mining?.finding_count || findings.length,
     dbConfirmed: db.confirmed || 0,
     beiScore: computeBEI(findings, raw),
-    bdsScore: computeBDS(findings),
+    bdsScore: computeBDS(findings, raw),
     bcsScore: computeBCS(findings, raw),
     findings,
   };
@@ -114,11 +115,15 @@ function computeBEI(findings: Finding[], raw: any): number {
   return Math.min(95, score + dbConfirmed * 3);
 }
 
-function computeBDS(findings: Finding[]): string {
+function computeBDS(findings: Finding[], raw: any): string {
   const p0 = findings.filter(f => f.severity === 'P0').length;
   const p1 = findings.filter(f => f.severity === 'P1').length;
-  const totalPaths = 12847; // 已建模行为路径数
-  const density = ((p0 + p1) / totalPaths) * 1000;
+  // Use oracles count as modeled behavior paths, fallback to finding count * 2
+  const oracles = raw?.report?.executive_summary?.recommended_oracles?.length
+    || raw?.report?.stage2_discovery?.deep_bug_mining?.finding_count * 2
+    || findings.length * 2
+    || 10;
+  const density = ((p0 + p1) / oracles) * 1000;
   return density.toFixed(1);
 }
 
@@ -196,7 +201,7 @@ export function useKnowledgeData(project: string) {
 
   const load = useCallback(() => {
     setLoading(true);
-    cachedFetch(`knowledge:${project}`, () => getKnowledgeAsset(project), parseKnowledgeSources)
+    cachedFetch(`knowledge:${project}`, () => getKnowledge(project), parseKnowledgeSources)
       .then(d => { if (mounted.current) { setSources(d); setLoading(false); } })
       .catch(() => { if (mounted.current) setLoading(false); });
   }, [project]);

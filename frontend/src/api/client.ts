@@ -13,23 +13,19 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export async function getFindings(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/findings?project_id=${encodeURIComponent(projectId)}`);
+  return fetchJSON<any>(`${API_BASE}/findings?project=${encodeURIComponent(projectId)}`);
 }
-
-export async function getPilotOverview(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/pilot/overview?project_id=${encodeURIComponent(projectId)}`);
+export async function getOverview(projectId: string) {
+  return fetchJSON<any>(`${API_BASE}/pilot/overview?project=${encodeURIComponent(projectId)}`);
 }
-
-export async function getKnowledgeAsset(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/knowledge/asset?project_id=${encodeURIComponent(projectId)}`);
+export async function getKnowledge(projectId: string) {
+  return fetchJSON<any>(`${API_BASE}/knowledge/asset?project=${encodeURIComponent(projectId)}`);
 }
-
-export async function getControlPlaneOverview(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/control-plane/overview?project_id=${encodeURIComponent(projectId)}`);
+export async function getControlPlane(projectId: string) {
+  return fetchJSON<any>(`${API_BASE}/control-plane/overview?project=${encodeURIComponent(projectId)}`);
 }
-
 export async function getReleaseDashboard(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/release/dashboard?project_id=${encodeURIComponent(projectId)}`);
+  return fetchJSON<any>(`${API_BASE}/release/dashboard?project=${encodeURIComponent(projectId)}`);
 }
 
 export async function runScan(projectId: string) {

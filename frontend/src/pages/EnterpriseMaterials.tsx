@@ -33,10 +33,7 @@ export function EnterpriseMaterials() {
     }
   };
 
-  const displaySources = sources.length > 0 ? sources : [
-    { source_id: 'demo-1', filename: 'PRD_v2.1.md', source_type: 'PRD', status: 'active', size_bytes: 45820, uploaded_at: '2026-06-30' },
-    { source_id: 'demo-2', filename: 'openapi_mes_v3.yaml', source_type: 'OpenAPI', status: 'active', size_bytes: 124500, uploaded_at: '2026-06-30' },
-  ];
+  const displaySources = sources;
 
   const formatSize = (b: number) => b > 102400 ? `${(b/1024).toFixed(0)}KB` : `${b} B`;
 
@@ -83,7 +80,13 @@ export function EnterpriseMaterials() {
             <div className="spinner" style={{ margin: '0 auto' }} />
           </div>
         )}
-        {!loading && (
+        {!loading && sources.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '32px 20px' }}>
+            <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 8 }}>暂无导入资料</p>
+            <p style={{ color: 'var(--subtle)', fontSize: 11 }}>上传 PRD、OpenAPI 或业务文档以构建行为模型</p>
+          </div>
+        )}
+        {!loading && (sources.length > 0) && (
           <div className="overflow-x-auto">
             <table className="data-table">
               <thead><tr><th>文件名</th><th>类型</th><th style={{ textAlign: 'right' }}>大小</th><th>状态</th><th>导入时间</th></tr></thead>
