@@ -165,35 +165,57 @@ export function usePipelineData(project: string) {
   const [data, setData] = useState<ReturnType<typeof parsePipelineSummary> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const mounted = useRef(true);
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError('');
-    cachedFetch(`findings:${project}`, () => getFindings(project), parsePipelineSummary)
-      .then(d => { if (mounted.current) { setData(d); setLoading(false); } })
-      .catch(e => { if (mounted.current) { setError(e.message); setLoading(false); } });
+    setData(null);
+    bustCache(`findings:${project}`);
+    getFindings(project)
+      .then(raw => {
+        if (cancelled) return;
+        setData(parsePipelineSummary(raw));
+        setLoading(false);
+      })
+      .catch(e => {
+        if (cancelled) return;
+        setError(e.message);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [project]);
 
-  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; }; }, [load]);
-  return { data, loading, error, refetch: () => { bustCache(`findings:${project}`); load(); } };
+  return { data, loading, error, refetch: () => { bustCache(`findings:${project}`); } };
 }
 
 export function useFindingsData(project: string) {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const mounted = useRef(true);
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    cachedFetch(`findings:${project}`, () => getFindings(project), parseFindings)
-      .then(d => { if (mounted.current) { setFindings(d); setLoading(false); } })
-      .catch(e => { if (mounted.current) { setError(e.message); setLoading(false); } });
+    setError('');
+    setFindings([]);
+    bustCache(`findings:${project}`);
+    getFindings(project)
+      .then(raw => {
+        if (cancelled) return;
+        const parsed = parseFindings(raw);
+        setFindings(parsed);
+        setLoading(false);
+      })
+      .catch(e => {
+        if (cancelled) return;
+        setError(e.message);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [project]);
 
-  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; }; }, [load]);
-  return { findings, loading, error, refetch: () => { bustCache(`findings:${project}`); load(); } };
+  return { findings, loading, error, refetch: () => { bustCache(`findings:${project}`); } };
 }
 
 export function useKnowledgeData(project: string) {
