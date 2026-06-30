@@ -1,0 +1,73 @@
+import { useState } from 'react';
+import type { Finding } from '../types';
+
+interface EvidenceFeedProps { findings: Finding[] }
+
+export function EvidenceFeed({ findings }: EvidenceFeedProps) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'all' | 'P0' | 'P1' | 'P2'>('all');
+
+  const filtered = filter === 'all' ? findings : findings.filter(f => f.severity === filter);
+  const displayFindings = filtered;
+
+  const toggle = (id: string) => setExpandedId(expandedId === id ? null : id);
+  const isOpen = (id: string) => expandedId === id;
+
+  const filters: Array<{ label: string; value: typeof filter }> = [
+    { label: '全部', value: 'all' }, { label: 'P0', value: 'P0' }, { label: 'P1', value: 'P1' }, { label: 'P2', value: 'P2' },
+  ];
+
+  return (
+    <div>
+      <div className="feed-header">
+        <h2>行为裂隙 · 证据链</h2>
+        <div className="filters">
+          {filters.map(f => (
+            <button key={f.value} onClick={() => setFilter(f.value)}
+              className={`filter${filter === f.value ? ' active' : ''}`}>{f.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {displayFindings.length === 0 && (
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: 48, textAlign: 'center' }}>
+          <p className="text-muted">暂无风险记录</p>
+          <p className="text-muted mt-1" style={{ fontSize: 11 }}>运行扫描以发现系统中的行为风险</p>
+        </div>
+      )}
+
+      {displayFindings.map(finding => (
+        <div key={finding.id} className={`evidence-item ${finding.severity.toLowerCase()}${isOpen(finding.id) ? ' open' : ''}`}>
+          <div className="evidence-head" onClick={() => toggle(finding.id)}>
+            <span className={`severity ${finding.severity.toLowerCase()}`}>{finding.severity}</span>
+            <span className="evidence-title">{finding.title}</span>
+            <span className="evidence-meta">
+              <span>复现 {finding.reproducibility_count} 次</span>
+              <time>{finding.timestamp}</time>
+            </span>
+            <span className="evidence-expand">▼</span>
+          </div>
+          <div className="evidence-body" style={{ display: isOpen(finding.id) ? 'block' : 'none' }}>
+            <div className="evidence-chain">
+              {finding.evidence_chain.map((step, i) => (
+                <div className="chain-step" key={i}>
+                  <span className={`step-tag ${step.tag}`}>{step.label}</span>
+                  <strong>{step.content}</strong>
+                  <code>{step.detail}</code>
+                </div>
+              ))}
+            </div>
+            <div className="evidence-proof">
+              <svg viewBox="0 0 24 24" width="16" height="16"><path d="M20 6 9 17l-5-5" /></svg>
+              <div>
+                <strong>证据验证通过 · 复现率 {finding.proof.repro_rate}%</strong>
+                <code>{finding.proof.hash}</code>
+                <code>{finding.proof.script_path}</code>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

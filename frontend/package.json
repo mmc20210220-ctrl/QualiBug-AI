@@ -15,17 +15,21 @@
     "redaction:scan": "node scripts/security/redaction-scan.mjs",
     "audit:check": "node scripts/security/npm-audit-baseline.mjs",
     "e2e": "playwright test",
-    "ci:gate": "node scripts/ci/gate.mjs"
+    "ci:gate": "node scripts/ci/gate.mjs",
+    "dev:vite": "vite --host"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.4",
     "@react-three/fiber": "^9.4.0",
+    "@vitejs/plugin-react": "^6.0.3",
     "@xyflow/react": "^12.11.1",
     "elkjs": "^0.11.1",
     "next": "16.2.9",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "three": "^0.181.1"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.18.1",
+    "three": "^0.181.1",
+    "vite": "^8.1.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",
