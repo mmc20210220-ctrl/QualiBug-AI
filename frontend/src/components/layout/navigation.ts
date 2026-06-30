@@ -30,6 +30,12 @@ export const projectNavItems: ProjectNavItem[] = [
     matches: (pathname: string, projectId: string) => pathname === getProjectBasePath(projectId),
   },
   {
+    key: "environment",
+    label: "客户环境诊断",
+    href: (projectId: string) => `${getProjectBasePath(projectId)}/environment`,
+    matches: (pathname: string, projectId: string) => isProjectSection(pathname, projectId, "/environment"),
+  },
+  {
     key: "behavior-space",
     label: "Behavior Space",
     href: (projectId: string) => `${getProjectBasePath(projectId)}/behavior-space`,

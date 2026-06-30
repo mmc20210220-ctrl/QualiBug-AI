@@ -4,6 +4,8 @@ import { useParams, usePathname } from "next/navigation";
 import { GlobalNav } from "@/components/layout/GlobalNav";
 import { TopBar } from "@/components/layout/TopBar";
 import { ProjectNav } from "@/components/layout/project-nav/ProjectNav";
+import { ProjectEventStream } from "@/components/layout/ProjectEventStream";
+import { ProjectReadinessRail } from "@/components/layout/ProjectReadinessRail";
 import {
   getActiveGlobalNavKey,
   getActiveProjectNavKey,
@@ -11,28 +13,6 @@ import {
   globalNavItems,
   projectNavItems,
 } from "@/components/layout/navigation";
-
-function PlaceholderPanel({
-  title,
-  description,
-  className,
-}: {
-  title: string;
-  description: string;
-  className?: string;
-}) {
-  return (
-    <section
-      className={[
-        "rounded-[var(--radius-md)] border border-dashed border-[rgba(255,255,255,0.12)] bg-[rgba(14,22,34,0.28)] p-4 text-sm text-[var(--muted)]",
-        className ?? "",
-      ].join(" ")}
-    >
-      <div className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{title}</div>
-      <p className="mt-2 leading-6">{description}</p>
-    </section>
-  );
-}
 
 export function AppShell({
   projects,
@@ -84,27 +64,21 @@ export function AppShell({
 
           <main className="min-w-0">{children}</main>
 
-          {isProjectRoute ? (
+          {isProjectRoute && projectId ? (
             <aside className="hidden xl:block">
               <div className="sticky top-4">
-                <PlaceholderPanel
-                  title="RightEvidenceDrawer"
-                  description="预留右侧证据抽屉区域，后续可承载风险证据详情、回放入口和修复建议，不影响当前页面内容宽度与路由结构。"
-                  className="min-h-[320px] shadow-[var(--shadow-1)] backdrop-blur"
-                />
+                <ProjectReadinessRail projectId={projectId} />
               </div>
             </aside>
           ) : null}
         </div>
 
-        {isProjectRoute ? (
+        {isProjectRoute && projectId ? (
           <div className="mt-4 grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)_320px]">
             <div className="hidden xl:block" />
-            <PlaceholderPanel
-              title="BottomEventStream"
-              description="预留底部事件流区域，后续可承载执行事件、轮询状态和风险回流时间线；当前保持空壳，不侵入现有页面实现。"
-              className="xl:col-span-2"
-            />
+            <div className="xl:col-span-2">
+              <ProjectEventStream projectId={projectId} />
+            </div>
           </div>
         ) : null}
       </div>
