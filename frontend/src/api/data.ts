@@ -90,14 +90,17 @@ function buildProjectSummary(raw: unknown, project: string): ProjectSummary {
   const payload = (raw ?? {}) as Partial<FindingsSnapshot>;
   const resolvedProjectId = getResolvedProjectId(raw);
   const findings = getReportFindings(raw);
+  const executive = payload.executiveSummary || {};
+  const canonicalTotal = Number(executive.totalBugsFound || executive.totalFindings || findings.length || 0);
+  const canonicalP0 = Number(executive.criticalBugs || findings
+    .filter((finding): finding is { severity?: string } => Boolean(finding) && typeof finding === 'object')
+    .filter((finding) => finding.severity === 'P0')
+    .length || 0);
   return {
     resolvedProjectId,
     projectName: String(payload.projectName || project || '').trim() || '未选择客户',
-    findingsCount: findings.length,
-    p0Count: findings
-      .filter((finding): finding is { severity?: string } => Boolean(finding) && typeof finding === 'object')
-      .filter((finding) => finding.severity === 'P0')
-      .length,
+    findingsCount: canonicalTotal,
+    p0Count: canonicalP0,
   };
 }
 
@@ -418,8 +421,8 @@ function computeCommercialValue(findings: Finding[], raw: any) {
   const discoveryFunnel = raw?.discoveryFunnel || {};
   const capabilityMatrix = raw?.fullSpectrumCapabilityMatrix || {};
   const familyCoverage = raw?.bugFamilyCoverage || {};
-  const p0 = findings.filter((finding) => finding.severity === 'P0').length;
-  const p1 = findings.filter((finding) => finding.severity === 'P1').length;
+  const p0 = Number(exec.criticalBugs || findings.filter((finding) => finding.severity === 'P0').length || 0);
+  const p1 = Number(exec.highPriorityBugs || findings.filter((finding) => finding.severity === 'P1').length || 0);
   const evidenceTrust = Math.round((valueMetrics.evidence_trust_score || 0) * 100) || computeBCS(findings, raw);
   const aiTestPoints = valueMetrics.ai_equivalent_test_points || exec.llmPoweredAnalyses || runtime.totalProbes || findings.length;
   const explored = discoveryFunnel.explored_paths || discoveryFunnel.total_candidates || runtime.total_probes || aiTestPoints;
@@ -624,9 +627,9 @@ function parsePipelineSummary(raw: any) {
       score: Number(scanMeta.score || exec.overallScore || 0),
       reportPath: String(scanMeta.reportPath || ''),
     },
-    totalBugs: exec.totalBugsFound || exec.totalFindings || findings.length,
-    criticalBugs: exec.criticalBugs || findings.filter((finding) => finding.severity === 'P0').length,
-    highPriorityBugs: exec.highPriorityBugs || findings.filter((finding) => finding.severity === 'P1').length,
+    totalBugs: Number(exec.totalBugsFound || exec.totalFindings || findings.length || 0),
+    criticalBugs: Number(exec.criticalBugs || findings.filter((finding) => finding.severity === 'P0').length || 0),
+    highPriorityBugs: Number(exec.highPriorityBugs || findings.filter((finding) => finding.severity === 'P1').length || 0),
     llmAnalyses: exec.llmPoweredAnalyses || 0,
     runtimeProbes: runtime.totalProbes || 0,
     runtimeConfirmed: runtime.confirmed || 0,

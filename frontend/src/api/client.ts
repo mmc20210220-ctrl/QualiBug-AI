@@ -468,8 +468,14 @@ async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapsho
     const knowledgeSummary = asRecord(snapshot.knowledge_summary);
     const risks = asArray(snapshot.risks).map(asRecord);
     const findings = risks.map(toLegacyFinding);
+    const executive = asRecord(snapshot.executive_summary);
+    const scanTotalFindings = asNumber(scanMeta.total_findings, findings.length);
+    const canonicalTotalFindings = asNumber(executive.total_findings, scanTotalFindings);
+    const canonicalTotalBugsFound = asNumber(executive.total_bugs_found, canonicalTotalFindings);
     const p0 = findings.filter((item) => item.severity === 'P0').length;
     const p1 = findings.filter((item) => item.severity === 'P1').length;
+    const canonicalP0 = asNumber(executive.critical_bugs, asNumber(valueMetrics.p0_count, p0));
+    const canonicalP1 = asNumber(executive.high_priority_bugs, asNumber(valueMetrics.p1_count, p1));
     const evidenceTrustScore = asNumber(valueMetrics.evidence_trust_score, 0);
     const aiEquivalentTestPoints = asNumber(valueMetrics.ai_equivalent_test_points, 0);
     const totalBusinessFlows = asNumber(businessFlowSummary.total, 0);
@@ -492,13 +498,13 @@ async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapsho
       },
       findings,
       executiveSummary: {
-        totalFindings: findings.length,
-        totalBugsFound: findings.length,
-        criticalBugs: p0,
-        highPriorityBugs: p1,
+        totalFindings: canonicalTotalFindings,
+        totalBugsFound: canonicalTotalBugsFound,
+        criticalBugs: canonicalP0,
+        highPriorityBugs: canonicalP1,
         llmPoweredAnalyses: aiEquivalentTestPoints,
-        systemGrade: asString(asRecord(snapshot.executive_summary).system_grade),
-        overallScore: asNumber(asRecord(snapshot.executive_summary).overall_score, 0),
+        systemGrade: asString(executive.system_grade),
+        overallScore: asNumber(executive.overall_score, 0),
       },
       runtimeVerification: {
         totalProbes: totalBusinessFlows,
@@ -515,7 +521,7 @@ async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapsho
         firstScanAt: asString(scanMeta.first_scan_at),
         lastScanAt: asString(scanMeta.last_scan_at) || asString(snapshot.updated_at),
         totalMs: asNumber(scanMeta.total_ms, 0),
-        totalFindings: asNumber(scanMeta.total_findings, findings.length),
+        totalFindings: canonicalTotalFindings,
         grade: asString(scanMeta.grade),
         score: asNumber(scanMeta.score, 0),
         reportPath: asString(scanMeta.report_path),

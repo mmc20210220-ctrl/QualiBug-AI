@@ -431,8 +431,10 @@ export function Dashboard() {
   }
 
   const findings = data?.findings || [];
-  const p0Count = findings.filter(f => f.severity === 'P0').length;
-  const p1Count = findings.filter(f => f.severity === 'P1').length;
+  const totalRiskCount = Number(data?.totalBugs || data?.scanMeta?.totalFindings || findings.length || 0);
+  const materializedFindingCount = findings.length;
+  const p0Count = Number(data?.criticalBugs || findings.filter(f => f.severity === 'P0').length || 0);
+  const p1Count = Number(data?.highPriorityBugs || findings.filter(f => f.severity === 'P1').length || 0);
   const beiScore = data?.beiScore ?? 0;
   const bdsScore = data?.bdsScore ?? '0.0';
   const bcsScore = data?.bcsScore ?? 0;
@@ -442,14 +444,14 @@ export function Dashboard() {
   const scanMeta = data?.scanMeta;
 
   const coverage = {
-    modeled_paths: data?.continuousDiscovery?.totalPaths || Math.max(findings.length, 0),
+    modeled_paths: data?.continuousDiscovery?.totalPaths || Math.max(totalRiskCount, materializedFindingCount, 0),
     executed_probes: data?.continuousDiscovery?.totalDiscovered || (data?.runtimeProbes || 0) + (data?.dbProbes || 0),
-    confirmed_findings: findings.length,
+    confirmed_findings: totalRiskCount,
     evidence_completeness: findings.length > 0 ? Math.min(98, 70 + Math.round(findings.filter(f => f.evidence_chain.length >= 3).length / Math.max(1, findings.length) * 30)) : 0,
   };
   const displayedCoveragePaths = coverage.modeled_paths > 0 ? Math.min(coverage.executed_probes, coverage.modeled_paths) : coverage.executed_probes;
   const hasCoverageOverflow = coverage.modeled_paths > 0 && coverage.executed_probes > coverage.modeled_paths;
-  const hasMaterializedMetrics = findings.length > 0 || coverage.executed_probes > 0 || (data?.dbConfirmed || 0) > 0;
+  const hasMaterializedMetrics = totalRiskCount > 0 || materializedFindingCount > 0 || coverage.executed_probes > 0 || (data?.dbConfirmed || 0) > 0;
   const highPriorityCount = p0Count + p1Count;
   const heroMetrics = [
     {
@@ -507,7 +509,8 @@ export function Dashboard() {
             · 多源资料一致性持续监控 · 证据链完整可复现
           </p>
           <div className="page-summary-strip">
-            <span className="summary-pill strong">已识别 {findings.length.toLocaleString()} 个风险发现</span>
+            <span className="summary-pill strong">已识别 {totalRiskCount.toLocaleString()} 个风险发现</span>
+            {materializedFindingCount !== totalRiskCount ? <span className="summary-pill">可展开证据 {materializedFindingCount}</span> : null}
             <span className="summary-pill">高优先级风险 {highPriorityCount}</span>
             <span className="summary-pill">证据完备度 {coverage.evidence_completeness}%</span>
             {scanMeta?.runCount ? <span className="summary-pill">最近运行 第 {scanMeta.runCount} 轮</span> : null}
@@ -537,7 +540,7 @@ export function Dashboard() {
             <strong>第 {scanMeta.runCount} 轮 · {formatScanTime(scanMeta.lastScanAt)}</strong>
           </div>
           <div className="scan-meta-grid">
-            <span><em>本次返回</em><b>{scanMeta.totalFindings || findings.length}</b></span>
+            <span><em>本次返回</em><b>{scanMeta.totalFindings || totalRiskCount}</b></span>
             <span><em>耗时</em><b>{formatDuration(scanMeta.totalMs)}</b></span>
             <span><em>评级</em><b>{scanMeta.grade || '暂无'}</b></span>
             <span><em>Scan ID</em><b>{scanMeta.scanId || '暂无'}</b></span>
@@ -568,10 +571,10 @@ export function Dashboard() {
       {/* Quick Stats Row */}
       <div className="dashboard-stat-grid mb-4">
         {[
-          { label: '风险发现', val: findings.length, tone: 'neutral', note: '当前轮次累计识别' },
+          { label: '风险发现', val: totalRiskCount, tone: 'neutral', note: '当前轮次累计识别' },
           { label: 'P0 阻塞', val: p0Count, tone: 'danger', note: '优先进入修复闭环' },
           { label: 'P1 高风险', val: p1Count, tone: 'warning', note: '影响发布与履约' },
-          { label: 'P2 提示', val: findings.filter(f => f.severity === 'P2').length, tone: 'primary', note: '建议纳入后续回归' },
+          { label: 'P2 提示', val: Math.max(0, totalRiskCount - p0Count - p1Count), tone: 'primary', note: '建议纳入后续回归' },
         ].map(m => (
           <div key={m.label} className={`dashboard-stat-card tone-${m.tone}`}>
             <div className="dashboard-stat-value">
@@ -583,7 +586,7 @@ export function Dashboard() {
         ))}
       </div>
 
-      {continuousDiscovery ? <ContinuousDiscoveryPanel value={continuousDiscovery} /> : <ContinuousDiscoveryEmptyPanel findingsCount={findings.length} />}
+      {continuousDiscovery ? <ContinuousDiscoveryPanel value={continuousDiscovery} /> : <ContinuousDiscoveryEmptyPanel findingsCount={totalRiskCount} />}
       {commercialValue && <CommercialValuePanel value={commercialValue} />}
 
       {/* Full-Spectrum Bug Detection Status */}

@@ -1299,6 +1299,57 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         except Exception:
             return default
 
+    @staticmethod
+    def _report_signal_count(payload: dict[str, Any]) -> int:
+        def _count_list(value: Any) -> int:
+            return len(value) if isinstance(value, list) else 0
+
+        direct_counts = [
+            payload.get("risk_total"),
+            payload.get("risk_count"),
+            payload.get("total_findings"),
+            payload.get("total_bugs_found"),
+            payload.get("total_found"),
+            payload.get("raw_total"),
+            (payload.get("executive_summary") or {}).get("total_findings") if isinstance(payload.get("executive_summary"), dict) else None,
+            (payload.get("summary") or {}).get("total_findings") if isinstance(payload.get("summary"), dict) else None,
+        ]
+        materialized = max(
+            _count_list(payload.get("real_findings")),
+            _count_list(payload.get("findings")),
+            _count_list(payload.get("bug_scores")),
+            _count_list(payload.get("e2e_findings")),
+            _count_list(payload.get("deep_findings")),
+            _count_list(payload.get("ui_findings")),
+            _count_list((payload.get("db_verification") or {}).get("findings") if isinstance(payload.get("db_verification"), dict) else None),
+        )
+        parsed_counts: list[int] = [materialized]
+        for value in direct_counts:
+            try:
+                parsed_counts.append(int(float(value)))
+            except Exception:
+                continue
+        return max(parsed_counts or [0])
+
+    @staticmethod
+    def _report_summary_number(report: dict[str, Any], *keys: str, fallback: int = 0) -> int:
+        scopes: list[Any] = [report]
+        for nested in ("executive_summary", "summary", "value_metrics", "scan_meta"):
+            value = report.get(nested)
+            if isinstance(value, dict):
+                scopes.append(value)
+        for scope in scopes:
+            if not isinstance(scope, dict):
+                continue
+            for key in keys:
+                if key not in scope:
+                    continue
+                try:
+                    return int(float(scope.get(key)))
+                except Exception:
+                    continue
+        return fallback
+
     def _load_v12_report(self, project_id: str, root: Path) -> dict[str, Any]:
         project = _safe_project_id(project_id)
         explicit_candidates = [
@@ -1310,17 +1361,34 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             root / "platform_workspace" / project / "scan_result.json",
             root / "benchmark_outputs" / project / "intelligence_report.json",
         ]
-        existing = [path for path in explicit_candidates if path.exists()]
-        if existing:
-            existing.sort(key=lambda item: item.stat().st_mtime, reverse=True)
-            payload = self._read_json_dict(existing[0])
-            if payload:
-                payload.setdefault("report_source_path", str(existing[0].relative_to(root)) if existing[0].is_relative_to(root) else str(existing[0]))
-                return payload
+
+        # Do not return the first/newest JSON blindly. Real backend runs can write
+        # summary numbers to one report while evidence files are written under
+        # platform_workspace. Pick the strongest source-of-truth by materialized
+        # finding signal, then by mtime. This prevents the React page from reading
+        # an older/empty scan_result while the backend report shows newer totals.
+        candidate_payloads: list[tuple[int, float, dict[str, Any]]] = []
+        for path in explicit_candidates:
+            if not path.exists():
+                continue
+            payload = self._read_json_dict(path)
+            if not payload:
+                continue
+            payload.setdefault("report_source_path", str(path.relative_to(root)) if path.is_relative_to(root) else str(path))
+            candidate_payloads.append((self._report_signal_count(payload), path.stat().st_mtime, payload))
 
         workspace_report = self._load_workspace_report(project, root)
         if workspace_report:
-            return workspace_report
+            workspace_path = root / "platform_workspace" / project
+            candidate_payloads.append((
+                self._report_signal_count(workspace_report),
+                workspace_path.stat().st_mtime if workspace_path.exists() else time.time(),
+                workspace_report,
+            ))
+
+        if candidate_payloads:
+            candidate_payloads.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            return candidate_payloads[0][2]
 
         # Last-resort benchmark aggregate: useful when a benchmark run was written
         # outside platform_outputs but the frontend still asks for that project.
@@ -1780,15 +1848,22 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 f.setdefault("defect_family", "ui")
             risks.extend(ui)
         risks = self._dedupe_risks([item for item in risks if isinstance(item, dict)])
-        total = len(risks)
+        materialized_total = len(risks)
         p0 = sum(1 for item in risks if self._normalize_severity(item.get("severity")) == "P0")
         p1 = sum(1 for item in risks if self._normalize_severity(item.get("severity")) == "P1")
         p2 = sum(1 for item in risks if self._normalize_severity(item.get("severity")) in {"P2", "P3"})
+        canonical_total = max(
+            materialized_total,
+            self._report_summary_number(report, "risk_total", "risk_count", "total_findings", "total_bugs_found", "total_found", "raw_total", fallback=0),
+        )
+        canonical_p0 = self._report_summary_number(report, "p0", "p0_count", "critical_bugs", fallback=p0)
+        canonical_p1 = self._report_summary_number(report, "p1", "p1_count", "high_priority_bugs", fallback=p1)
+        canonical_p2 = max(0, canonical_total - canonical_p0 - canonical_p1) if canonical_total else p2
         evidence_trust = self._evidence_trust_score(risks)
         try:
-            ai_points = max(int(report.get("raw_total") or 0), int(report.get("total_findings") or 0), total)
+            ai_points = max(int(report.get("raw_total") or 0), int(report.get("total_findings") or 0), canonical_total)
         except Exception:
-            ai_points = total
+            ai_points = canonical_total
         scan_counter = self._scan_counter(project_id, root)
         scan_meta = {
             "scan_id": str(report.get("scan_id") or ""),
@@ -1796,9 +1871,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "first_scan_at": str(scan_counter.get("first_scan_at") or ""),
             "last_scan_at": str(scan_counter.get("last_scan_at") or report.get("generated_at_utc") or ""),
             "total_ms": int(report.get("total_ms") or 0),
-            "total_findings": total,
-            "grade": str(report.get("grade") or report.get("system_grade") or ("A+" if total else "C")),
-            "score": float(report.get("score") or report.get("overall_score") or (97.0 if total else 0)),
+            "total_findings": canonical_total,
+            "materialized_findings": materialized_total,
+            "grade": str(report.get("grade") or report.get("system_grade") or ("A+" if canonical_total else "C")),
+            "score": float(report.get("score") or report.get("overall_score") or (97.0 if canonical_total else 0)),
             "report_path": str(report.get("report_path") or report.get("report_source_path") or ""),
         }
         data = {
@@ -1812,17 +1888,19 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "value_metrics": {
                 "evidence_trust_score": evidence_trust,
                 "ai_equivalent_test_points": ai_points,
-                "canonical_risk_count": total,
-                "p0_count": p0,
-                "p1_count": p1,
-                "p2_count": p2,
+                "canonical_risk_count": canonical_total,
+                "materialized_risk_count": materialized_total,
+                "p0_count": canonical_p0,
+                "p1_count": canonical_p1,
+                "p2_count": canonical_p2,
             },
             "business_flow_summary": {"total": ai_points},
             "executive_summary": {
-                "total_findings": total,
-                "total_bugs_found": total,
-                "critical_bugs": p0,
-                "high_priority_bugs": p1,
+                "total_findings": canonical_total,
+                "total_bugs_found": canonical_total,
+                "critical_bugs": canonical_p0,
+                "high_priority_bugs": canonical_p1,
+                "materialized_findings": materialized_total,
                 "llm_powered_analyses": ai_points,
                 "system_grade": scan_meta["grade"],
                 "overall_score": scan_meta["score"],
