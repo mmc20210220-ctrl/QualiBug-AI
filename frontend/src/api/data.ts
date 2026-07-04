@@ -225,12 +225,106 @@ function parseFindings(raw: any): Finding[] {
       source_entity: f.source_entity || f.evidence?.summary || '',
       source_value: f.source_value || f.evidence?.operation_id || '',
       evidence_hint: f.evidence_hint || '',
+      evidence_quality: buildEvidenceQuality(f, reproPath),
       business_impact: f.business_impact || { summary: '', urgency: '', module: '' },
       investigation_guidance: f.investigation_guidance || { primary_area: '', relevant_apis: [], relevant_tables: [], log_search: '', sql_verify: '' },
       reproduce_steps_business: f.reproduce_steps_business || [],
       docRefs: Array.isArray(f._doc_refs) ? f._doc_refs : [],
     };
   });
+}
+
+function cleanText(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function hasAnyValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasAnyValue);
+  if (value && typeof value === 'object') return Object.values(value).some(hasAnyValue);
+  return cleanText(value).length > 0;
+}
+
+function buildEvidenceQuality(f: any, reproPath: string): Finding['evidence_quality'] {
+  const verified: string[] = [];
+  const missing: string[] = [];
+  const nextActions: string[] = [];
+
+  const method = cleanText(f._api_method || f.evidence?.method || f.method || 'GET').toUpperCase();
+  const hasApiTarget = Boolean(cleanText(reproPath));
+  const hasActual = Boolean(cleanText(f.actual_behavior || f.actual || f.description));
+  const hasExpected = Boolean(cleanText(f.expected_behavior || f.expected));
+  const hasDocs = Array.isArray(f._doc_refs) && f._doc_refs.length > 0;
+  const hasDbSignal = Boolean(cleanText(f.source_entity || f.source_value)) || hasAnyValue(f.investigation_guidance?.relevant_tables);
+  const hasLogSignal = Boolean(cleanText(f.investigation_guidance?.log_search || f.evidence_hint));
+  const hasRuntimeProof = Boolean(
+    f.reproducibility?.reproducible ||
+    cleanText(f.verdict).toLowerCase() === 'confirmed' ||
+    cleanText(f.validation_verdict).toLowerCase().includes('confirmed') ||
+    hasAnyValue(f.evidence?.response) ||
+    hasAnyValue(f.evidence?.responses) ||
+    hasAnyValue(f.evidence?.status_code)
+  );
+
+  if (hasApiTarget) verified.push(`接口目标：${method} ${reproPath}`);
+  else missing.push('缺少可执行接口地址 / 页面地址');
+
+  if (hasRuntimeProof) verified.push('存在运行时验证结果');
+  else missing.push('缺少真实请求响应、状态码或浏览器执行结果');
+
+  if (hasActual) verified.push('已记录实际行为');
+  else missing.push('缺少实际行为截图、响应体或异常日志');
+
+  if (hasExpected) verified.push('已记录预期行为');
+  else missing.push('缺少来自 PRD / API 规范的预期规则');
+
+  if (hasDbSignal) verified.push('存在业务数据核验线索');
+  else missing.push('缺少 DB 前后快照或业务主键');
+
+  if (hasDocs) verified.push('已关联企业资料出处');
+  else missing.push('缺少 PRD / API / 业务规则文档出处');
+
+  if (hasLogSignal) verified.push('存在日志检索线索');
+  else missing.push('缺少 traceId、时间窗口或日志关键词');
+
+  if (!hasApiTarget) nextActions.push('在客户设置中配置可访问的测试地址，并重新执行扫描');
+  if (!hasRuntimeProof) nextActions.push('补跑一次真实请求 / 浏览器用例，保存状态码、响应体、截图和时间戳');
+  if (!hasDbSignal) nextActions.push('补充订单号、用户号、退款号等业务主键，并导出请求前后 DB 快照');
+  if (!hasDocs) nextActions.push('上传 PRD、API 规范或验收规则，让缺陷结论能回链到需求出处');
+  if (!hasLogSignal) nextActions.push('接入应用日志或 traceId，形成请求、日志、数据三方闭环');
+
+  const score = Math.min(100, Math.round(
+    (hasApiTarget ? 16 : 0) +
+    (hasRuntimeProof ? 24 : 0) +
+    (hasActual ? 14 : 0) +
+    (hasExpected ? 12 : 0) +
+    (hasDbSignal ? 14 : 0) +
+    (hasDocs ? 12 : 0) +
+    (hasLogSignal ? 8 : 0)
+  ));
+  const level: Finding['evidence_quality']['level'] =
+    score >= 72 && hasRuntimeProof ? 'validated' : score >= 38 ? 'partial' : 'needs_evidence';
+  const label =
+    level === 'validated' ? '可交付证据' : level === 'partial' ? '待补强证据' : '仅为风险线索';
+  const summary =
+    level === 'validated'
+      ? '具备进入企业缺陷单的基础证据，可用于验收、复盘和研发定位。'
+      : level === 'partial'
+        ? '已有部分定位信息，但还缺少关键运行时证据，暂不应作为已验证缺陷交付。'
+        : '当前更像检测线索，缺少真实复现、数据核验或文档出处，企业交付价值不足。';
+
+  return {
+    level,
+    score,
+    label,
+    summary,
+    verified,
+    missing: missing.slice(0, 6),
+    next_actions: nextActions.slice(0, 5),
+    can_reproduce: hasApiTarget && hasRuntimeProof,
+    curl_command: hasApiTarget
+      ? `curl -X ${method} "${'${BASE_URL}'}${reproPath}" -H "Content-Type: application/json" -v`
+      : '',
+  };
 }
 
 function buildEvidenceChain(f: any): Finding['evidence_chain'] {

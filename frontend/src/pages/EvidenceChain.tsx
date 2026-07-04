@@ -122,6 +122,17 @@ export function EvidenceChain() {
       {displayData.map(f => {
         const isOpen = expandedId === f.id;
         const pv = persona(f.id);
+        const quality = f.evidence_quality;
+        const debugItems = [
+          { label: '定位线索', tone: 'tone-info', code: getEvidenceLocatorText(f) },
+          {
+            label: quality.curl_command ? 'cURL 复现命令' : 'cURL 复现命令缺口',
+            tone: quality.curl_command ? 'tone-cyan' : 'tone-warning',
+            code: quality.curl_command || '缺少可访问测试地址或真实运行结果，暂不能生成企业可复现 cURL。请先配置测试地址并补跑扫描。',
+          },
+          { label: 'SQL 核验建议', tone: 'tone-success', code: getEvidenceSqlHint(f) },
+          { label: '日志排查建议', tone: 'tone-warning', code: getEvidenceLogHint(f) },
+        ];
 
         return (
           <div key={f.id} className={`evidence-item ${f.severity.toLowerCase()}${isOpen ? ' open' : ''}`}>
@@ -150,6 +161,13 @@ export function EvidenceChain() {
               {/* === BUSINESS VIEW === */}
               {pv === 'business' && (
                 <div className="persona-panel">
+                  <div className={`evidence-quality-card ${quality.level}`}>
+                    <div>
+                      <span className="evidence-quality-label">{quality.label}</span>
+                      <strong>{quality.score}/100</strong>
+                    </div>
+                    <p>{quality.summary}</p>
+                  </div>
                   <div className="persona-section hero">
                     <div className="persona-kicker">业务影响</div>
                     <p className="persona-summary">{f.business_impact?.summary || f.actual || '该缺陷可能导致业务流程异常，影响用户体验和业务数据一致性。'}</p>
@@ -175,6 +193,20 @@ export function EvidenceChain() {
                       <p>请在企业资料页面上传 PRD / API 规范文档，缺陷将自动关联到对应文档出处。</p>
                     )}
                   </div>
+                  <div className="evidence-check-grid">
+                    <div className="evidence-check-panel verified">
+                      <div className="persona-kicker">已具备证据</div>
+                      <ul>
+                        {(quality.verified.length ? quality.verified : ['暂无可交付证据']).map(item => <li key={item}>{item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="evidence-check-panel missing">
+                      <div className="persona-kicker">企业验收缺口</div>
+                      <ul>
+                        {quality.missing.map(item => <li key={item}>{item}</li>)}
+                      </ul>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -183,25 +215,35 @@ export function EvidenceChain() {
                 <div className="persona-panel">
                   <div className="persona-section success">
                     <div className="persona-kicker">复现步骤</div>
-                    <ol className="persona-step-list">
-                      {(f.repro_steps?.length ? f.repro_steps : f.reproduce_steps_business?.length ? f.reproduce_steps_business : [
-                        `向 ${f.repro_path || '目标接口'} 发起 ${f.repro_method || 'POST'} 请求`,
-                        f.actual || `观察返回状态码和响应体内容`,
-                        `验证业务状态是否符合预期 — 当前存在异常行为`,
-                      ]).map((step: string, i: number) => (
-                        <li key={i}><code>{step}</code></li>
-                      ))}
-                    </ol>
+                    {(f.repro_steps?.length || f.reproduce_steps_business?.length) ? (
+                      <ol className="persona-step-list">
+                        {(f.repro_steps?.length ? f.repro_steps : f.reproduce_steps_business).map((step: string, i: number) => (
+                          <li key={i}><code>{step}</code></li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <div className="persona-empty-note strong">
+                        当前没有真实复现脚本或浏览器操作录屏，不能作为企业验收证据。请按下方“下一步采证”补跑。
+                      </div>
+                    )}
                   </div>
                   <div className="persona-compare-grid">
                     <div className="persona-compare-card danger">
                       <span>实际行为</span>
-                      <code>{f.actual || '服务器接受并处理了本应被拒绝的请求'}</code>
+                      <code>{f.actual || '未采集到真实响应体、截图或运行日志，暂不能断言实际行为。'}</code>
                     </div>
                     <div className="persona-compare-card success">
                       <span>预期行为</span>
-                      <code>{f.expected || '服务器应返回 4xx 错误码并拒绝该操作'}</code>
+                      <code>{f.expected || '未关联 PRD / API 规范，暂不能给出可审计预期行为。'}</code>
                     </div>
+                  </div>
+                  <div className="persona-section neutral">
+                    <div className="persona-kicker">下一步采证</div>
+                    <ol className="persona-step-list">
+                      {(quality.next_actions.length ? quality.next_actions : ['补充真实执行证据后重新生成缺陷报告']).map((step, i) => (
+                        <li key={i}><code>{step}</code></li>
+                      ))}
+                    </ol>
                   </div>
                   <div className="persona-section warning">
                     <div className="persona-kicker">文档出处</div>
@@ -217,7 +259,11 @@ export function EvidenceChain() {
                       </div>
                     )}
                   </div>
-                  <div className="persona-footnote">以上证据均可追溯到原始资料与验证动作，支持验收与复盘。</div>
+                  <div className="persona-footnote">
+                    {quality.level === 'validated'
+                      ? '以上证据可追溯到原始资料与验证动作，支持验收与复盘。'
+                      : '当前证据仍有缺口，请补齐真实请求、日志、DB 快照或文档出处后再进入企业缺陷交付。'}
+                  </div>
                 </div>
               )}
 
@@ -226,12 +272,7 @@ export function EvidenceChain() {
                 <div className="persona-panel">
                   <div className="dev-debug-panel">
                     <div className="persona-kicker dark">调试信息</div>
-                    {[
-                      { label: '定位线索', tone: 'tone-info', code: getEvidenceLocatorText(f) },
-                      { label: 'cURL 复现命令', tone: 'tone-cyan', code: `curl -X ${f.repro_method || 'GET'} '${f.repro_path ? '${BASE_URL}' + f.repro_path : '(请配置测试地址)'}' -H 'Content-Type: application/json' -v` },
-                      { label: 'SQL 核验建议', tone: 'tone-success', code: getEvidenceSqlHint(f) },
-                      { label: '日志排查建议', tone: 'tone-warning', code: getEvidenceLogHint(f) },
-                    ].map((item, idx) => (
+                    {debugItems.map((item, idx) => (
                       <div key={idx} className="dev-debug-item">
                         <div className="dev-debug-head">
                           <span>{item.label}</span>
@@ -247,7 +288,7 @@ export function EvidenceChain() {
                     <div className="persona-kicker">证据概览</div>
                     <div className="dev-evidence-meta">
                       <span>{getEvidenceSummaryText(f)}</span>
-                      <span>复现率: {f.proof?.repro_rate || 100}%</span>
+                      <span>复现率: {quality.can_reproduce ? f.proof?.repro_rate || 100 : 0}%</span>
                     </div>
                   </div>
                 </div>

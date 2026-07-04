@@ -4,6 +4,12 @@ import { resolveFindingTaxonomy } from '../lib/finding-taxonomy';
 const API_V1_BASE = '/api/v1';
 const TOKEN_KEY = 'qualibug_token';
 type JsonRecord = Record<string, unknown>;
+export type LoginResult = {
+  ok: boolean;
+  token: string;
+  tenantId: string;
+  role: string;
+};
 
 async function ensureAuth(): Promise<void> {
   if (localStorage.getItem(TOKEN_KEY)) return;
@@ -23,7 +29,7 @@ async function ensureAuth(): Promise<void> {
   );
 }
 
-export async function login(username: string, password: string): Promise<boolean> {
+export async function loginDetailed(username: string, password: string): Promise<LoginResult | null> {
   const resp = await fetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -32,17 +38,98 @@ export async function login(username: string, password: string): Promise<boolean
   const data = await resp.json() as Record<string, unknown>;
   if (data.token) {
     localStorage.setItem(TOKEN_KEY, data.token as string);
-    return true;
+    authStorageEvent();
+    return {
+      ok: Boolean(data.ok ?? true),
+      token: String(data.token),
+      tenantId: String(data.tenant_id || data.tenantId || username),
+      role: String(data.role || ''),
+    };
   }
+  if (!resp.ok) throw new Error(asString(data.message) || asString(data.error) || `HTTP ${resp.status}`);
+  return null;
+}
+
+export async function login(username: string, password: string): Promise<boolean> {
+  const result = await loginDetailed(username, password);
+  return Boolean(result?.token);
+}
+
+export type RegisterResult = {
+  ok: boolean;
+  tenantId: string;
+  username: string;
+  role: string;
+};
+
+export async function register({
+  tenantId,
+  name,
+  username,
+  password,
+  role = 'admin',
+}: {
+  tenantId: string;
+  name: string;
+  username: string;
+  password: string;
+  role?: string;
+}): Promise<RegisterResult | null> {
+  const resp = await fetch('/api/tenants/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tenant_id: tenantId,
+      name,
+      username,
+      password,
+      role: role || 'admin',
+    }),
+  });
+  const data = await resp.json() as Record<string, unknown>;
+  if (!resp.ok) throw new Error(asString(data.message) || asString(data.error) || `HTTP ${resp.status}`);
+  if (data.ok) {
+    return {
+      ok: true,
+      tenantId: String(data.tenant_id || tenantId),
+      username: String(data.username || username),
+      role: String(data.role || 'admin'),
+    };
+  }
+  return null;
+}
+
+export function currentToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || '';
+}
+
+export function clearDevToken(): void {
+  localStorage.removeItem('qualibug_dev_token');
+}
+
+export function authStorageEvent(): void {
+  window.dispatchEvent(new Event('qualibug-auth-change'));
+}
+
+export function setAuthenticatedToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  authStorageEvent();
+}
+
+export function hasUsableAuth(): boolean {
+  if (currentToken()) return true;
+  if (localStorage.getItem('qualibug_dev_token')) return true;
   return false;
 }
 
 export function logout(): void {
   localStorage.removeItem(TOKEN_KEY);
+  clearDevToken();
+  authStorageEvent();
 }
 
 export function isAuthenticated(): boolean {
-  return Boolean(localStorage.getItem(TOKEN_KEY));
+  return hasUsableAuth();
 }
 
 async function fetchWithTenant(url: string, init?: RequestInit): Promise<unknown> {

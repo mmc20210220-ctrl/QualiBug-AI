@@ -42,6 +42,17 @@ export interface Finding {
   source_value: string;
   docRefs?: Array<{ source_id?: string; display_name?: string; excerpt?: string; type?: string }>;
   evidence_hint: string;
+  evidence_quality: {
+    level: 'validated' | 'partial' | 'needs_evidence';
+    score: number;
+    label: string;
+    summary: string;
+    verified: string[];
+    missing: string[];
+    next_actions: string[];
+    can_reproduce: boolean;
+    curl_command: string;
+  };
   business_impact: { summary: string; urgency: string; module: string };
   investigation_guidance: {
     primary_area: string;

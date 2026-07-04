@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { useSearchParams, useLocation } from 'react-router-dom';
+import { useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { emitScanCompleted, useLiveStatus, useProjectSummary, useWorkspaceDirectory } from '../api/data';
-import { getFindings, runV12Scan, type V12ScanResult } from '../api/client';
+import { getFindings, logout, runV12Scan, type V12ScanResult } from '../api/client';
 import { formatCustomerName } from '../lib/customer';
 import { useProjectNavigation } from '../lib/project-navigation';
 
@@ -24,6 +24,7 @@ type TopbarProps = {
 export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const [params] = useSearchParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const project = params.get('project')?.trim() || '';
   const { switchProject } = useProjectNavigation();
   const { workspaceOptions } = useWorkspaceDirectory();
@@ -183,6 +184,16 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
                 </div>
               )}
             </div>
+          <button
+            type="button"
+            className="btn btn-secondary topbar-logout-btn"
+            onClick={() => {
+              logout();
+              navigate(`/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`, { replace: true });
+            }}
+          >
+            退出
+          </button>
         </div>
       </header>
       {showResult && scanRes?.ok && (

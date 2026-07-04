@@ -2,7 +2,7 @@ import type { Finding } from '../types';
 
 type EvidenceLike = Pick<
   Finding,
-  'title' | 'severity' | 'repro_method' | 'repro_path' | 'source_entity' | 'docRefs' | 'evidence_chain' | 'investigation_guidance'
+  'title' | 'severity' | 'repro_method' | 'repro_path' | 'source_entity' | 'docRefs' | 'evidence_chain' | 'investigation_guidance' | 'evidence_quality'
 >;
 
 function clean(value: string | undefined) {
@@ -10,6 +10,10 @@ function clean(value: string | undefined) {
 }
 
 export function getEvidenceSummaryText(finding: EvidenceLike) {
+  if (finding.evidence_quality) {
+    return `${finding.evidence_quality.label} · ${finding.evidence_quality.score}/100 · ${finding.evidence_quality.summary}`;
+  }
+
   const parts: string[] = [];
 
   if (clean(finding.repro_path)) parts.push('接口复现链路已附');
@@ -39,16 +43,16 @@ export function getEvidenceLocatorText(finding: EvidenceLike) {
 export function getEvidenceSqlHint(finding: EvidenceLike) {
   const entity = clean(finding.source_entity);
   if (entity) {
-    return `-- 核查 ${entity} 相关业务数据\n-- 对比关键字段、状态流转与预期结果是否一致`;
+    return `-- 企业核验目标：${entity}\n-- 1. 导出请求前业务主键、状态、金额、归属用户\n-- 2. 执行复现动作后再次导出相同字段\n-- 3. 对比状态流转、金额正负、权限归属与 PRD / API 规则是否一致`;
   }
-  return '-- 核查关联业务数据\n-- 对比请求前后状态变化与关键字段是否符合预期';
+  return '-- 当前缺少业务主键或表字段，无法形成可审计 SQL 证据\n-- 请补充订单号 / 用户号 / 退款号等主键，并导出请求前后 DB 快照';
 }
 
 export function getEvidenceLogHint(finding: EvidenceLike) {
   const path = clean(finding.repro_path);
   if (path) {
     const method = clean(finding.repro_method) || 'GET';
-    return `# 按接口路径检索相关日志\n# 关键词：${method.toUpperCase()} ${path}\n# 结合请求时间窗口、返回码与业务主键交叉定位`;
+    return `# 按接口路径检索相关日志\n# 关键词：${method.toUpperCase()} ${path}\n# 必须补齐：请求时间窗口、traceId / requestId、状态码、业务主键\n# 与响应体、DB 快照交叉验证后再标记为已验证缺陷`;
   }
-  return '# 按缺陷标题、发生时间与业务对象检索日志\n# 结合异常返回与状态变更记录交叉定位';
+  return '# 当前缺少可检索接口路径或页面地址\n# 请先补跑真实请求 / 浏览器用例，记录时间戳、traceId、状态码和错误摘要';
 }
