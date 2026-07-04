@@ -48,6 +48,10 @@ export function EvidenceChain() {
   const apiEvidence = findings.filter(f => f.repro_path).length;
   const dbEvidence = findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM')).length;
   const docEvidence = findings.filter(f => !f.repro_path && !f.title.includes('DB Verified')).length;
+  const validatedEvidence = findings.filter(f => f.evidence_quality?.level === 'validated').length;
+  const partialEvidence = findings.filter(f => f.evidence_quality?.level === 'partial').length;
+  const needsEvidence = findings.filter(f => f.evidence_quality?.level === 'needs_evidence').length;
+  const evidenceClosedLoop = Math.round((validatedEvidence / Math.max(withEvidence.length, 1)) * 100);
   const displayData = (() => {
     if (filter === 'all') return withEvidence;
     if (filter === 'API') return withEvidence.filter(f => f.repro_path);
@@ -75,7 +79,7 @@ export function EvidenceChain() {
             <span className="summary-pill strong">证据链 {withEvidence.length}</span>
             <span className="summary-pill">API 证据 {apiEvidence}</span>
             <span className="summary-pill">数据证据 {dbEvidence}</span>
-            <span className="summary-pill">已确认 {findings.filter(f => f.verdict === 'confirmed').length}</span>
+            <span className="summary-pill">闭环率 {evidenceClosedLoop}%</span>
           </div>
         </div>
       </div>
@@ -83,10 +87,10 @@ export function EvidenceChain() {
       <div className="evidence-stat-grid mb-4">
         {[
           { label: '证据链总数', val: withEvidence.length, tone: '' },
-          { label: 'API 证据', val: apiEvidence, tone: 'tone-primary' },
-          { label: 'DB 证据', val: dbEvidence, tone: dbEvidence > 0 ? 'tone-danger' : 'tone-success' },
-          { label: '文档证据', val: docEvidence, tone: 'tone-warning' },
-          { label: '已确认', val: findings.filter(f => f.verdict === 'confirmed').length, tone: 'tone-success' },
+          { label: '可交付证据', val: validatedEvidence, tone: 'tone-success' },
+          { label: '待补强证据', val: partialEvidence, tone: 'tone-primary' },
+          { label: '仅风险线索', val: needsEvidence, tone: 'tone-warning' },
+          { label: '闭环率', val: `${evidenceClosedLoop}%`, tone: evidenceClosedLoop >= 70 ? 'tone-success' : 'tone-warning' },
         ].map(m => (
           <article key={m.label} className={`evidence-stat-card${m.tone ? ` ${m.tone}` : ''}`}>
             <strong>{m.val}</strong>
@@ -146,6 +150,34 @@ export function EvidenceChain() {
               <span className="evidence-expand">{isOpen ? '▲' : '▼'}</span>
             </div>
             <div className="evidence-body">
+              <div className={`evidence-dossier ${quality.level}`}>
+                <div className="evidence-dossier-head">
+                  <div>
+                    <span className="panel-kicker">证据闭环概要</span>
+                    <strong>{quality.label} · {quality.score}/100</strong>
+                  </div>
+                  <span className="evidence-dossier-status">{quality.can_reproduce ? '可复现' : '待补证'}</span>
+                </div>
+                <div className="evidence-dossier-flow">
+                  {f.evidence_chain.slice(0, 5).map((step, idx) => (
+                    <div key={`${f.id}-${step.label}-${idx}`} className={`dossier-step ${step.tag}`}>
+                      <span>{idx + 1}</span>
+                      <div>
+                        <b>{step.label}</b>
+                        <p>{step.content || '暂无内容'}</p>
+                        {step.detail && <em>{step.detail}</em>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="evidence-dossier-proof">
+                  <span><em>复现入口</em><strong>{f.repro_method || 'GET'} {f.repro_path || '待配置'}</strong></span>
+                  <span><em>预期规则</em><strong>{f.expected ? '已记录' : '待关联'}</strong></span>
+                  <span><em>实际结果</em><strong>{f.actual ? '已记录' : '待采集'}</strong></span>
+                  <span><em>验收缺口</em><strong>{quality.missing.length}</strong></span>
+                </div>
+              </div>
+
               {/* Persona tabs */}
               <div className="persona-tabs">
                 {personaTabs.map(t => (

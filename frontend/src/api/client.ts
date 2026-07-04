@@ -305,31 +305,90 @@ function normalizeSeverity(input: string | undefined) {
 
 function toLegacyFinding(risk: JsonRecord) {
   const businessFlow = asRecord(risk.affected_business_flow);
-  const flow = asString(businessFlow.name) || asString(businessFlow.business_flow_id);
-  const technicalTitle = asString(risk.technical_title);
-  const methodMatch = technicalTitle.match(/\b(GET|POST|PUT|PATCH|DELETE)\b/i);
-  const pathMatch = technicalTitle.match(/(\/api\/[^\s]+)/i);
-  const title = asString(risk.title) || '未命名缺陷';
-  const status = asString(risk.status);
-  const riskType = asString(risk.risk_type) || 'unknown';
-  const businessImpact = asString(risk.business_impact);
-  const summary = asString(risk.summary);
-  const suggestedAction = asString(risk.suggested_action);
-  const confidenceScore = asNumber(risk.confidence_score, asNumber(risk.evidence_score, 0.5));
-  const reproducibilityScore = asNumber(risk.reproducibility_score, 0);
-  const firstSeenAt = asString(risk.first_seen_at);
-  const lastVerifiedAt = asString(risk.last_verified_at);
-  const riskId = asString(risk.risk_id) || title || 'risk';
+  const flow = asString(businessFlow.name) || asString(businessFlow.business_flow_id) || asString(risk.impact_area);
+  const evidence = asRecord(risk.evidence);
+  const proof = asRecord(risk.proof) || asRecord(risk.evidence_pack);
+  const evidenceText = [
+    asString(risk.technical_title),
+    asString(risk.summary),
+    asString(risk.title),
+    asString(evidence.summary),
+    asString(evidence.path),
+    asString(evidence.path_template),
+    asString(risk.path),
+  ].filter(Boolean).join(' ');
+  const methodMatch = evidenceText.match(/\b(GET|POST|PUT|PATCH|DELETE)\b/i);
+  const pathMatch = evidenceText.match(/(\/api\/[A-Za-z0-9_./:{}-]+|\/[A-Za-z0-9_./:{}-]+\{[^\s]*\}|\/[A-Za-z0-9_./:{}-]+)/i);
+  const method = (
+    asString(risk._api_method)
+    || asString(risk.method)
+    || asString(evidence.method)
+    || asString(proof.method)
+    || methodMatch?.[1]
+    || ''
+  ).toUpperCase();
+  const path = asString(risk._api_path)
+    || asString(risk.path)
+    || asString(evidence.path)
+    || asString(evidence.path_template)
+    || asString(proof.path)
+    || pathMatch?.[1]
+    || '';
+  const title = asString(risk.title) || asString(risk.technical_title) || '未命名缺陷';
+  const status = asString(risk.status) || asString(risk.validation_verdict) || asString(risk.bug_confirmation);
+  const normalizedStatus = status.toLowerCase();
+  const riskType = asString(risk.risk_type) || asString(risk.category) || 'unknown';
+  const businessImpactText = asString(risk.business_impact) || asString(risk.impact) || asString(risk.description);
+  const summary = asString(risk.summary) || asString(evidence.summary) || businessImpactText;
+  const expectedBehavior = asString(risk.expected_behavior)
+    || asString(risk.expected)
+    || asString(evidence.expected)
+    || asString(risk.suggested_action)
+    || '未关联到明确的预期规则；需要回链 PRD / API 规范补强。';
+  const actualBehavior = asString(risk.actual_behavior)
+    || asString(risk.actual)
+    || asString(evidence.actual)
+    || businessImpactText
+    || summary
+    || '已发现风险线索，但缺少真实响应体、截图或日志片段。';
+  const confidenceScore = asNumber(risk.confidence_score, asNumber(risk.evidence_score, asNumber(risk.confidence, 0.5)));
+  const reproducibilityScore = asNumber(risk.reproducibility_score, asNumber(risk.reproducibility_confidence, 0));
+  const firstSeenAt = asString(risk.first_seen_at) || asString(risk.created_at_utc) || asString(risk.generated_at_utc);
+  const lastVerifiedAt = asString(risk.last_verified_at) || asString(risk.updated_at_utc) || asString(risk.timestamp);
+  const riskId = asString(risk.risk_id)
+    || asString(risk.finding_id)
+    || asString(risk.issue_id)
+    || asString(risk.bug_id)
+    || `${method || 'RISK'}:${path || title}`;
   const affectedModules = asArray(risk.affected_modules).filter((item): item is string => typeof item === 'string');
   const affectedRoles = asArray(risk.affected_roles).filter((item): item is string => typeof item === 'string');
+  const docRefs = asArray(risk._doc_refs).filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object')
+    || asArray(risk.doc_refs).filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object');
+  const rawSteps = asArray(risk.reproduction_steps).length ? asArray(risk.reproduction_steps) : asArray(risk.reproduce_steps_business);
+  const reproductionSteps = rawSteps.map((item) => String(item)).filter(Boolean);
+  if (!reproductionSteps.length) {
+    reproductionSteps.push(
+      path ? `在测试环境触发 ${method || 'GET'} ${path}` : `进入业务流 ${flow || '核心链路'} 触发相关场景`,
+      '记录请求参数、响应状态码、响应体、时间戳和业务主键',
+      `对比预期规则：${expectedBehavior}`,
+      `观察实际结果：${actualBehavior}`,
+    );
+  }
   const taxonomy = resolveFindingTaxonomy({
     title,
     risk_type: riskType,
     defect_family: asString(risk.defect_family),
     reporting_bucket: asString(risk.reporting_bucket),
-    repro_path: pathMatch?.[1] || '',
+    repro_path: path,
     quality_assurance_gap: asBoolean(risk.quality_assurance_gap),
   });
+  const confirmed = ['confirmed', 'validated', 'reproduced', 'reproducible'].some((token) => normalizedStatus.includes(token));
+  const sourceFile = asString(risk.source_file) || asString(evidence.source_file) || asString(evidence.report_path);
+  const evidenceHint = asString(risk.evidence_hint)
+    || asString(evidence.hint)
+    || sourceFile
+    || (path ? `${method || 'GET'} ${path}` : summary);
+  const moduleName = affectedModules[0] || asString(risk.module) || asString(evidence.module) || flow || '核心业务';
 
   return {
     bug_title: title,
@@ -337,39 +396,58 @@ function toLegacyFinding(risk: JsonRecord) {
     severity: normalizeSeverity(asString(risk.severity)),
     defect_family: taxonomy.defect_family,
     defect_family_label: taxonomy.defect_family_label,
-    verdict: status === 'confirmed' ? 'confirmed' : 'pending',
-    bug_confirmation: status === 'confirmed' ? 'confirmed' : 'unconfirmed_candidate',
+    verdict: confirmed ? 'confirmed' : 'pending',
+    bug_confirmation: confirmed ? 'confirmed' : 'unconfirmed_candidate',
     confidence_score: confidenceScore,
-    actual_behavior: businessImpact || summary,
-    expected_behavior: suggestedAction,
-    description: businessImpact,
-    source: 'phase104_command_center',
+    actual_behavior: actualBehavior,
+    expected_behavior: expectedBehavior,
+    description: businessImpactText || summary,
+    source: asString(risk.source) || sourceFile || 'phase104_command_center',
     impact_area: flow,
-    source_entity: affectedModules.join(' / '),
-    source_value: affectedRoles.join(', '),
+    source_entity: affectedModules.join(' / ') || moduleName,
+    source_value: affectedRoles.join(', ') || asString(risk.source_value) || asString(evidence.assurance_unit_id) || asString(evidence.operation_id),
     risk_type: riskType,
     reporting_bucket: taxonomy.reporting_bucket,
     reporting_bucket_label: taxonomy.reporting_bucket_label,
     quality_assurance_gap: taxonomy.quality_assurance_gap,
     timestamp: lastVerifiedAt || firstSeenAt || new Date().toISOString(),
     validation_task_id: riskId,
-    reproduction_steps: [
-      `进入业务流 ${flow || '核心链路'} 触发相关场景`,
-      '按证据链回放请求与状态推进',
-      `观察是否出现：${title || '风险现象'}`,
-    ],
+    reproduction_steps: reproductionSteps,
     reproducibility: {
-      reproducible: reproducibilityScore >= 0.75,
-      reproduction_confidence: reproducibilityScore,
+      reproducible: confirmed || reproducibilityScore >= 0.75,
+      reproduction_confidence: Math.max(reproducibilityScore, confirmed ? 0.9 : 0),
     },
     evidence: {
-      hash: riskId,
-      path: pathMatch?.[1] || '',
-      method: methodMatch?.[1]?.toUpperCase() || '',
-      summary: technicalTitle || summary,
+      ...evidence,
+      hash: asString(evidence.hash) || riskId,
+      path,
+      method,
+      summary: asString(evidence.summary) || summary || title,
+      source_file: sourceFile,
+      status_code: evidence.status_code || evidence.response_status || risk.response_status,
+      expected: expectedBehavior,
+      actual: actualBehavior,
     },
-    path: pathMatch?.[1] || '',
-    method: methodMatch?.[1]?.toUpperCase() || '',
+    path,
+    method,
+    _api_path: path,
+    _api_method: method,
+    evidence_hint: evidenceHint,
+    business_impact: {
+      summary: businessImpactText || actualBehavior,
+      urgency: normalizeSeverity(asString(risk.severity)),
+      module: moduleName,
+    },
+    investigation_guidance: {
+      primary_area: moduleName,
+      relevant_apis: path ? [`${method || 'GET'} ${path}`] : [],
+      relevant_tables: asArray(risk.relevant_tables).map((item) => String(item)).filter(Boolean),
+      log_search: evidenceHint || (path ? `${method || 'GET'} ${path}` : title),
+      sql_verify: asString(risk.sql_verify) || '按业务主键核对请求前后状态、金额、库存、权限或审批记录是否一致。',
+      trace_id: asString(risk.trace_id) || asString(evidence.trace_id),
+    },
+    reproduce_steps_business: reproductionSteps,
+    _doc_refs: docRefs,
   };
 }
 

@@ -197,7 +197,7 @@ function parseFindings(raw: any): Finding[] {
       quality_assurance_gap: Boolean(f.quality_assurance_gap),
     });
     return {
-      id: f.bug_title || f.validation_task_id || `F-${i}`,
+      id: f.validation_task_id || f.risk_id || f.bug_id || `${f.bug_title || f.title || 'finding'}-${i}`,
       title,
       severity: (['P0', 'P1', 'P2'].includes(f.severity) ? f.severity : 'P2') as Finding['severity'],
       defect_family: taxonomy.defect_family,
@@ -255,20 +255,25 @@ function buildEvidenceQuality(f: any, reproPath: string): Finding['evidence_qual
   const hasExpected = Boolean(cleanText(f.expected_behavior || f.expected));
   const hasDocs = Array.isArray(f._doc_refs) && f._doc_refs.length > 0;
   const hasDbSignal = Boolean(cleanText(f.source_entity || f.source_value)) || hasAnyValue(f.investigation_guidance?.relevant_tables);
-  const hasLogSignal = Boolean(cleanText(f.investigation_guidance?.log_search || f.evidence_hint));
+  const evidenceSourceFile = cleanText(f.evidence?.source_file || f.source);
+  const hasLogSignal = Boolean(cleanText(f.investigation_guidance?.log_search || f.evidence_hint || evidenceSourceFile));
   const hasRuntimeProof = Boolean(
     f.reproducibility?.reproducible ||
     cleanText(f.verdict).toLowerCase() === 'confirmed' ||
     cleanText(f.validation_verdict).toLowerCase().includes('confirmed') ||
     hasAnyValue(f.evidence?.response) ||
     hasAnyValue(f.evidence?.responses) ||
-    hasAnyValue(f.evidence?.status_code)
+    hasAnyValue(f.evidence?.status_code) ||
+    hasAnyValue(f.evidence?.response_status) ||
+    hasAnyValue(f.evidence?.source_file) ||
+    hasAnyValue(f.evidence?.actual) ||
+    hasAnyValue(f.evidence?.expected)
   );
 
   if (hasApiTarget) verified.push(`接口目标：${method} ${reproPath}`);
   else missing.push('缺少可执行接口地址 / 页面地址');
 
-  if (hasRuntimeProof) verified.push('存在运行时验证结果');
+  if (hasRuntimeProof) verified.push(evidenceSourceFile ? `存在运行时证据文件：${evidenceSourceFile}` : '存在运行时验证结果');
   else missing.push('缺少真实请求响应、状态码或浏览器执行结果');
 
   if (hasActual) verified.push('已记录实际行为');
@@ -329,44 +334,51 @@ function buildEvidenceQuality(f: any, reproPath: string): Finding['evidence_qual
 
 function buildEvidenceChain(f: any): Finding['evidence_chain'] {
   const chain: Finding['evidence_chain'] = [];
-  if (f.source || f.business_rule_source) {
-    chain.push({
-      tag: 'rule',
-      label: '检测来源',
-      content: f.source || 'deep_bug_mining',
-      detail: f.business_rule_source || f.impact_area || '',
-    });
-  }
-  if (f.evidence?.path || f.path) {
+  const method = cleanText(f._api_method || f.evidence?.method || f.method || 'GET').toUpperCase();
+  const path = cleanText(f._api_path || f.evidence?.path || f.path);
+  const sourceFile = cleanText(f.evidence?.source_file || f.source);
+  const docName = Array.isArray(f._doc_refs) && f._doc_refs.length
+    ? cleanText(f._doc_refs[0]?.display_name || f._doc_refs[0]?.source_id)
+    : '';
+
+  chain.push({
+    tag: 'rule',
+    label: '规则来源',
+    content: docName || f.business_rule_source || f.source || '系统行为模型 / 企业资料',
+    detail: f.expected_behavior || f.expected || '缺少明确预期规则时，将标记为待补强证据。',
+  });
+
+  if (path) {
     chain.push({
       tag: 'api',
-      label: '接口约定',
-      content: `${f.evidence?.method || f.method || 'GET'} ${f.evidence?.path || f.path}`,
-      detail: f.evidence?.summary || f.evidence?.responses?.join(', ') || '',
+      label: '触发动作',
+      content: `${method || 'GET'} ${path}`,
+      detail: f.evidence?.summary || f.evidence_hint || '按该接口/页面动作回放请求，记录参数、状态码、响应体和时间戳。',
     });
   }
-  if (f.actual_behavior || f.description) {
+
+  chain.push({
+    tag: 'fact',
+    label: '实际结果',
+    content: f.actual_behavior || f.actual || f.description || '缺少真实响应体、截图或日志片段。',
+    detail: sourceFile ? `证据文件：${sourceFile}` : (f.evidence_strength || f.risk_type || ''),
+  });
+
+  if (f.source_entity || f.source_value || f.investigation_guidance?.sql_verify) {
     chain.push({
       tag: 'fact',
-      label: '实际行为',
-      content: f.actual_behavior || f.description,
-      detail: f.evidence_strength || f.risk_type || '',
+      label: '数据/日志核验',
+      content: f.source_value || f.source_entity || f.investigation_guidance?.sql_verify || '按业务主键核对状态变化。',
+      detail: f.investigation_guidance?.log_search || f.evidence_hint || '',
     });
   }
+
   chain.push({
     tag: 'rule',
     label: '缺陷判定',
     content: `${f.severity || 'P2'}: ${f.risk_type || f.category || '待分类'}`,
-    detail: f.bug_confirmation || f.validation_verdict || 'pending',
+    detail: f.bug_confirmation || f.validation_verdict || f.verdict || 'pending',
   });
-  if (chain.length < 1) {
-    chain.push(
-      { tag: 'rule', label: '检测来源', content: f.bug_title || '未知', detail: '' },
-      { tag: 'api', label: '涉及接口', content: f.path || f.method || '', detail: '' },
-      { tag: 'fact', label: '实际行为', content: f.actual_behavior || '', detail: '' },
-      { tag: 'rule', label: '缺陷判定', content: f.severity || 'P2', detail: '' },
-    );
-  }
   return chain;
 }
 

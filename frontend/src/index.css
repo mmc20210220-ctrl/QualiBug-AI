@@ -1551,7 +1551,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .findings-stat-grid,
 .evidence-stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px;
 }
 .findings-stat-card,
@@ -5312,4 +5312,131 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .spectrum-summary strong {
   color: var(--ink);
   font-weight: 700;
+}
+
+/* Commercial evidence dossier: turns a finding into a reviewable proof package. */
+.evidence-dossier {
+  margin-bottom: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(226,232,240,.92);
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,251,255,.96));
+  box-shadow: var(--shadow-soft);
+}
+.evidence-dossier.validated {
+  border-color: rgba(14,165,113,.22);
+  background: linear-gradient(180deg, #f0fdf4, #ffffff);
+}
+.evidence-dossier.partial {
+  border-color: rgba(245,158,11,.26);
+  background: linear-gradient(180deg, #fffbeb, #ffffff);
+}
+.evidence-dossier.needs_evidence {
+  border-color: rgba(248,113,113,.24);
+  background: linear-gradient(180deg, #fef2f2, #ffffff);
+}
+.evidence-dossier-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.evidence-dossier-head strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 950;
+  color: var(--ink);
+}
+.evidence-dossier-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: rgba(15,23,42,.06);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.evidence-dossier-flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.dossier-step {
+  position: relative;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(226,232,240,.92);
+  background: #fff;
+}
+.dossier-step > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-bottom: 9px;
+  border-radius: 999px;
+  background: var(--primary-muted);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 950;
+}
+.dossier-step.api > span { background: #e0e7ff; color: #4338ca; }
+.dossier-step.fact > span { background: #fee2e2; color: var(--danger); }
+.dossier-step b {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.dossier-step p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+.dossier-step em {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  font-style: normal;
+  word-break: break-word;
+}
+.evidence-dossier-proof {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.evidence-dossier-proof span {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(248,250,252,.9);
+  border: 1px solid rgba(226,232,240,.8);
+}
+.evidence-dossier-proof em {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: .04em;
+}
+.evidence-dossier-proof strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
 }
