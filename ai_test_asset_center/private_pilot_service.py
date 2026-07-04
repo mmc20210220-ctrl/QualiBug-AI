@@ -1411,12 +1411,25 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         p0 = sum(1 for item in risks if str(item.get("severity") or "").upper() in {"P0", "CRITICAL"})
         p1 = sum(1 for item in risks if str(item.get("severity") or "").upper() in {"P1", "HIGH"})
         ai_points = int(report.get("raw_total") or report.get("total_findings") or total)
+        scan_counter = self._scan_counter(project_id, root)
+        scan_meta = {
+            "scan_id": str(report.get("scan_id") or ""),
+            "run_count": int(scan_counter.get("count") or 0),
+            "first_scan_at": str(scan_counter.get("first_scan_at") or ""),
+            "last_scan_at": str(scan_counter.get("last_scan_at") or report.get("generated_at_utc") or ""),
+            "total_ms": int(report.get("total_ms") or 0),
+            "total_findings": int(report.get("total_findings") or total),
+            "grade": str(report.get("grade") or report.get("system_grade") or ""),
+            "score": float(report.get("score") or report.get("overall_score") or 0),
+            "report_path": str(report.get("report_path") or ""),
+        }
         data = {
             "project_id": project_id,
             "project_name": project_id,
             "industry": "multi_layer",
-            "updated_at": str(report.get("generated_at_utc") or ""),
+            "updated_at": scan_meta["last_scan_at"] or str(report.get("generated_at_utc") or ""),
             "live_map": {"status": "completed" if report else "idle"},
+            "scan_meta": scan_meta,
             "risks": risks,
             "value_metrics": {"evidence_trust_score": 0.8 if total else 0, "ai_equivalent_test_points": ai_points},
             "business_flow_summary": {"total": ai_points},
@@ -1438,7 +1451,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["continuous_discovery_metrics"] = {
                 key: value
                 for key, value in discovery_payload["metrics"].items()
-                if str(key).startswith("continuous_discovery_")
+                if str(key).startswith("continuous_discovery_") or str(key) == "doc_completeness"
             }
         spectrum = self._load_spectrum_status_payload(root, project_id)
         if spectrum:
@@ -1700,9 +1713,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             states = len(kc.get("state_machines") or [])
             roles = len(kc.get("roles") or [])
             interfaces = len(kc.get("interfaces") or [])
-            score = min(100, sources * 15 + rules * 8 + len(states) * 5 + roles * 3 + interfaces * 3)
+            score = min(100, sources * 15 + rules * 8 + states * 5 + roles * 3 + interfaces * 3)
             return max(0, score)
-        except Exception:
+        except Exception as e:
+            print(f"ERROR in _doc_completeness_score: {e}")
             return 0
 
     def _handle_db_test(self, body: dict[str, Any]) -> None:

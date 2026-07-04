@@ -205,7 +205,7 @@ def _augment_command_center_snapshot(project_id: str, envelope: Mapping[str, Any
             updated_data["continuous_discovery_metrics"] = {
                 str(key): value
                 for key, value in continuous_discovery_metrics.items()
-                if str(key).startswith("continuous_discovery_")
+                if str(key).startswith("continuous_discovery_") or str(key) == "doc_completeness"
             }
     if updated_data == dict(data):
         return dict(envelope)

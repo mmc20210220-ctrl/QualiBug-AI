@@ -21,6 +21,10 @@ type TopbarProps = {
   onToggleNav?: () => void;
 };
 
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const [params] = useSearchParams();
   const location = useLocation();
@@ -110,24 +114,34 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
               onClick={async () => {
                 setScanLoad(true); setScanRes(null); setShowResult(false);
                 try {
+                  const before = await getFindings(project).catch(() => null);
+                  const beforeRun = Number(before?.scanMeta?.runCount || 0);
+                  const beforeUpdatedAt = String(before?.scanMeta?.lastScanAt || before?.updatedAt || '');
                   const r = await runV12Scan(project);
                   setScanRes(r);
                   setShowResult(true);
                   if (r.ok) {
-                    emitScanCompleted(project);
-                    getFindings(project)
-                      .then((raw) => {
-                        const es = (raw?.executiveSummary || {}) as Record<string, unknown>;
-                        setScanRes((prev) => prev
-                          ? {
-                              ...prev,
-                              total_findings: Number(es['totalFindings'] || es['totalBugsFound'] || prev.total_findings || 0),
-                              grade: String(es['systemGrade'] || prev.grade || ''),
-                              score: Number(es['overallScore'] ?? prev.score ?? 0),
-                            }
-                          : prev);
-                      })
-                      .catch(() => {});
+                    for (let attempt = 0; attempt < 8; attempt += 1) {
+                      await wait(attempt === 0 ? 250 : 1000);
+                      const raw = await getFindings(project).catch(() => null);
+                      if (!raw) continue;
+                      const es = (raw.executiveSummary || {}) as Record<string, unknown>;
+                      const meta = raw.scanMeta || {};
+                      const nextRun = Number(meta.runCount || 0);
+                      const nextUpdatedAt = String(meta.lastScanAt || raw.updatedAt || '');
+                      setScanRes((prev) => prev
+                        ? {
+                            ...prev,
+                            scan_id: String(meta.scanId || prev.scan_id || ''),
+                            total_findings: Number(es['totalFindings'] || es['totalBugsFound'] || meta.totalFindings || prev.total_findings || 0),
+                            grade: String(meta.grade || es['systemGrade'] || prev.grade || ''),
+                            score: Number(meta.score || es['overallScore'] || prev.score || 0),
+                            total_ms: Number(meta.totalMs || prev.total_ms || 0),
+                          }
+                        : prev);
+                      emitScanCompleted(project);
+                      if ((nextRun && nextRun > beforeRun) || (nextUpdatedAt && nextUpdatedAt !== beforeUpdatedAt)) break;
+                    }
                   }
                 }
                 catch (error: unknown) {

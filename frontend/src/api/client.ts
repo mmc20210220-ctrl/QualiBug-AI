@@ -274,6 +274,17 @@ export type FindingsSnapshot = {
     confirmed: number;
     hitRate: number;
   };
+  scanMeta: {
+    scanId: string;
+    runCount: number;
+    firstScanAt: string;
+    lastScanAt: string;
+    totalMs: number;
+    totalFindings: number;
+    grade: string;
+    score: number;
+    reportPath: string;
+  };
   valueMetrics: JsonRecord;
   businessFlowSummary: JsonRecord;
   discoveryFunnel: JsonRecord;
@@ -373,6 +384,7 @@ async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapsho
 
     const snapshot = asRecord(asRecord(snapshotEnvelope).data);
     const liveMap = asRecord(snapshot.live_map);
+    const scanMeta = asRecord(snapshot.scan_meta);
     const valueMetrics = asRecord(snapshot.value_metrics);
     const businessFlowSummary = asRecord(snapshot.business_flow_summary);
     const knowledgeSummary = asRecord(snapshot.knowledge_summary);
@@ -418,6 +430,17 @@ async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapsho
         total: findings.length,
         confirmed: findings.filter((item) => item.defect_family === 'data_integrity').length,
         hitRate: evidenceTrustScore ? Math.round(evidenceTrustScore * 100) : 0,
+      },
+      scanMeta: {
+        scanId: asString(scanMeta.scan_id),
+        runCount: asNumber(scanMeta.run_count, 0),
+        firstScanAt: asString(scanMeta.first_scan_at),
+        lastScanAt: asString(scanMeta.last_scan_at) || asString(snapshot.updated_at),
+        totalMs: asNumber(scanMeta.total_ms, 0),
+        totalFindings: asNumber(scanMeta.total_findings, findings.length),
+        grade: asString(scanMeta.grade),
+        score: asNumber(scanMeta.score, 0),
+        reportPath: asString(scanMeta.report_path),
       },
       valueMetrics,
       businessFlowSummary,
@@ -472,6 +495,17 @@ function emptyFindingsSnapshot(projectId: string): FindingsSnapshot {
       total: 0,
       confirmed: 0,
       hitRate: 0,
+    },
+    scanMeta: {
+      scanId: '',
+      runCount: 0,
+      firstScanAt: '',
+      lastScanAt: '',
+      totalMs: 0,
+      totalFindings: 0,
+      grade: '',
+      score: 0,
+      reportPath: '',
     },
     valueMetrics: {},
     businessFlowSummary: {},

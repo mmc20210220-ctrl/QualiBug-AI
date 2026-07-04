@@ -380,7 +380,8 @@ function computeBEI(findings: Finding[]): number {
   const totalWeight = findings.reduce((sum, finding) => {
     return sum + (finding.severity === 'P0' ? p0Weight : finding.severity === 'P1' ? p1Weight : p2Weight);
   }, 0);
-  return Math.max(5, Math.min(95, base + (totalWeight / maxWeight) * 45));
+  const rawScore = Math.max(5, Math.min(95, base + (totalWeight / maxWeight) * 45));
+  return Number(rawScore.toFixed(1));
 }
 
 function computeBDS(findings: Finding[], raw: any): string {
@@ -394,7 +395,8 @@ function computeBDS(findings: Finding[], raw: any): string {
 function computeBCS(findings: Finding[], raw: any): number {
   if (findings.length === 0) return 0;
   const dbHitRate = raw?.dbVerification?.hitRate || 0;
-  return Math.min(98, 60 + dbHitRate + findings.length * 1.5);
+  const rawScore = Math.min(98, 60 + dbHitRate + findings.length * 1.5);
+  return Number(rawScore.toFixed(1));
 }
 
 function computeCommercialValue(findings: Finding[], raw: any) {
@@ -594,9 +596,22 @@ function parsePipelineSummary(raw: any) {
   const exec = raw?.executiveSummary || {};
   const runtime = raw?.runtimeVerification || {};
   const db = raw?.dbVerification || {};
+  const scanMeta = raw?.scanMeta || {};
   return {
     projectName: raw?.projectName || raw?.projectId || '',
     industry: raw?.industry || '',
+    updatedAt: raw?.updatedAt || '',
+    scanMeta: {
+      scanId: String(scanMeta.scanId || ''),
+      runCount: Number(scanMeta.runCount || 0),
+      firstScanAt: String(scanMeta.firstScanAt || ''),
+      lastScanAt: String(scanMeta.lastScanAt || raw?.updatedAt || ''),
+      totalMs: Number(scanMeta.totalMs || 0),
+      totalFindings: Number(scanMeta.totalFindings || exec.totalFindings || findings.length || 0),
+      grade: String(scanMeta.grade || exec.systemGrade || ''),
+      score: Number(scanMeta.score || exec.overallScore || 0),
+      reportPath: String(scanMeta.reportPath || ''),
+    },
     totalBugs: exec.totalBugsFound || exec.totalFindings || findings.length,
     criticalBugs: exec.criticalBugs || findings.filter((finding) => finding.severity === 'P0').length,
     highPriorityBugs: exec.highPriorityBugs || findings.filter((finding) => finding.severity === 'P1').length,

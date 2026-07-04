@@ -137,6 +137,22 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 }
 
+function formatScanTime(value: string) {
+  if (!value) return '暂无';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatDuration(ms: number) {
+  const value = Number(ms) || 0;
+  if (value <= 0) return '暂无';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  const seconds = value / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+
 function ContinuousDiscoveryPanel({ value }: { value: NonNullable<ContinuousDiscovery> }) {
   const progress = clampPercent(
     value.coveragePercent || (value.totalPaths > 0 ? (value.totalDiscovered / Math.max(1, value.totalPaths)) * 100 : 0),
@@ -423,6 +439,7 @@ export function Dashboard() {
   const commercialValue = data?.commercialValue;
   const continuousDiscovery = data?.continuousDiscovery;
   const spectrum = data?.spectrum;
+  const scanMeta = data?.scanMeta;
 
   const coverage = {
     modeled_paths: data?.continuousDiscovery?.totalPaths || Math.max(findings.length, 0),
@@ -493,6 +510,7 @@ export function Dashboard() {
             <span className="summary-pill strong">已识别 {findings.length.toLocaleString()} 个风险发现</span>
             <span className="summary-pill">高优先级风险 {highPriorityCount}</span>
             <span className="summary-pill">证据完备度 {coverage.evidence_completeness}%</span>
+            {scanMeta?.runCount ? <span className="summary-pill">最近运行 第 {scanMeta.runCount} 轮</span> : null}
           </div>
           <div className="dashboard-hero-actions">
             <button className="btn btn-secondary" onClick={handleExport}>导出评级报告</button>
@@ -511,6 +529,21 @@ export function Dashboard() {
           ))}
         </div>
       </section>
+
+      {scanMeta?.runCount ? (
+        <section className="scan-meta-panel mb-4">
+          <div>
+            <span className="scan-meta-kicker">最近一次检测</span>
+            <strong>第 {scanMeta.runCount} 轮 · {formatScanTime(scanMeta.lastScanAt)}</strong>
+          </div>
+          <div className="scan-meta-grid">
+            <span><em>本次返回</em><b>{scanMeta.totalFindings || findings.length}</b></span>
+            <span><em>耗时</em><b>{formatDuration(scanMeta.totalMs)}</b></span>
+            <span><em>评级</em><b>{scanMeta.grade || '暂无'}</b></span>
+            <span><em>Scan ID</em><b>{scanMeta.scanId || '暂无'}</b></span>
+          </div>
+        </section>
+      ) : null}
 
       {/* Big Score Row */}
       <div className="score-row">

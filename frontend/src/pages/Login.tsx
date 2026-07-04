@@ -242,9 +242,6 @@ export function Login() {
             </>
           )}
         </div>
-        <div className="login-footnote">
-          当前路径：<code>{location.pathname}{location.search}</code>
-        </div>
       </section>
       <aside className="login-proof">
         <div className="login-proof-item">
