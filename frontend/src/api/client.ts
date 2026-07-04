@@ -1,64 +1,471 @@
-const API_BASE = '/api';
+export const API_BASE = '/api';
+import { resolveFindingTaxonomy } from '../lib/finding-taxonomy';
 
-async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
+const API_V1_BASE = '/api/v1';
+const TOKEN_KEY = 'qualibug_token';
+type JsonRecord = Record<string, unknown>;
+
+async function ensureAuth(): Promise<void> {
+  if (localStorage.getItem(TOKEN_KEY)) return;
+
+  // Development mode: allow auto-login via qualibug_dev_token in localStorage
+  const devToken = localStorage.getItem('qualibug_dev_token');
+  if (devToken) {
+    localStorage.setItem(TOKEN_KEY, devToken);
+    return;
   }
-  return res.json();
+
+  // Production: must have a token. Throw a clear error so the UI can show
+  // a login prompt instead of silently guessing credentials.
+  throw new Error(
+    '未登录。请在浏览器控制台设置登录令牌，或联系管理员配置认证。\n' +
+    '示例: localStorage.setItem("qualibug_dev_token", "<your-jwt-token>")'
+  );
+}
+
+export async function login(username: string, password: string): Promise<boolean> {
+  const resp = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await resp.json() as Record<string, unknown>;
+  if (data.token) {
+    localStorage.setItem(TOKEN_KEY, data.token as string);
+    return true;
+  }
+  return false;
+}
+
+export function logout(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+export function isAuthenticated(): boolean {
+  return Boolean(localStorage.getItem(TOKEN_KEY));
+}
+
+async function fetchWithTenant(url: string, init?: RequestInit): Promise<unknown> {
+  await ensureAuth();
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> || {}) };
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(url, { ...init, headers });
+  if (!resp.ok) throw new Error(parseApiErrorMessage(resp.status, await resp.text()));
+  return resp.json();
+}
+
+function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  return fetchWithTenant(url, init) as Promise<T>;
+}
+type ProjectSummary = {
+  project_id?: string;
+  customer_name?: string;
+  project_name?: string;
+  system_name?: string;
+  industry?: string;
+};
+export type CustomerWorkspace = ProjectSummary;
+export type ConnectorRecord = {
+  connector_id: string;
+  kind: string;
+  display_name: string;
+  enabled: boolean;
+  system_name?: string;
+  module_name?: string;
+  endpoint_ref?: string;
+  credential_ref?: string;
+  external_ref?: string;
+  created_at_utc?: string;
+  last_sync_at_utc?: string;
+  last_sync_status?: string;
+};
+let projectsCache: Promise<ProjectSummary[]> | null = null;
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' ? (value as JsonRecord) : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function asBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+  return false;
+}
+
+function parseApiErrorMessage(status: number, text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return `API ${status}`;
+  try {
+    const payload = asRecord(JSON.parse(trimmed));
+    const message = asString(payload.message) || asString(payload.error);
+    if (message) return `API ${status}: ${message}`;
+  } catch {
+    // fall back to raw text
+  }
+  return `API ${status}: ${trimmed.slice(0, 200)}`;
+}
+
+async function listProjects() {
+  if (!projectsCache) {
+    projectsCache = fetchJSON<unknown>(`${API_V1_BASE}/projects`)
+      .then((payload) => {
+        const data = asRecord(payload).data;
+        return asArray(data).map((item) => asRecord(item) as ProjectSummary);
+      })
+      .catch((error) => {
+        projectsCache = null;
+        throw error;
+      });
+  }
+  return projectsCache;
+}
+
+export async function getProjects(options?: { force?: boolean }) {
+  if (options?.force) projectsCache = null;
+  return listProjects();
+}
+
+async function resolveProjectId(projectId: string) {
+  const normalized = String(projectId || '').trim();
+  if (!normalized) return '';
+  try {
+    const projects = await listProjects();
+    return projects.some((item) => item.project_id === normalized) ? normalized : normalized;
+  } catch {
+    return normalized; // Trust URL param on failure
+  }
+}
+
+export type FindingsSnapshot = {
+  resolvedProjectId: string;
+  projectId: string;
+  projectName: string;
+  status: string;
+  updatedAt: string;
+  industry: string;
+  knowledgeSummary: {
+    activeSourceCount: number;
+    ruleCount: number;
+    riskDomainCount: number;
+    oracleCount: number;
+    businessObjectCount: number;
+    stateMachineCount: number;
+    knowledgeReady: boolean;
+  };
+  findings: ReturnType<typeof toLegacyFinding>[];
+  executiveSummary: {
+    totalFindings: number;
+    totalBugsFound: number;
+    criticalBugs: number;
+    highPriorityBugs: number;
+    llmPoweredAnalyses: number;
+    systemGrade: string;
+    overallScore: number;
+  };
+  runtimeVerification: {
+    totalProbes: number;
+    confirmed: number;
+  };
+  dbVerification: {
+    total: number;
+    confirmed: number;
+    hitRate: number;
+  };
+  valueMetrics: JsonRecord;
+  businessFlowSummary: JsonRecord;
+  discoveryFunnel: JsonRecord;
+  fullSpectrumCapabilityMatrix: JsonRecord;
+  bugFamilyCoverage: JsonRecord;
+  continuousDiscoveryCampaign: JsonRecord;
+  continuousDiscoveryMetrics: JsonRecord;
+  spectrum: JsonRecord;
+};
+
+function normalizeSeverity(input: string | undefined) {
+  const value = String(input || '').toLowerCase();
+  if (value === 'critical' || value === 'p0') return 'P0';
+  if (value === 'high' || value === 'p1') return 'P1';
+  if (value === 'medium' || value === 'p2') return 'P2';
+  return 'P2';
+}
+
+function toLegacyFinding(risk: JsonRecord) {
+  const businessFlow = asRecord(risk.affected_business_flow);
+  const flow = asString(businessFlow.name) || asString(businessFlow.business_flow_id);
+  const technicalTitle = asString(risk.technical_title);
+  const methodMatch = technicalTitle.match(/\b(GET|POST|PUT|PATCH|DELETE)\b/i);
+  const pathMatch = technicalTitle.match(/(\/api\/[^\s]+)/i);
+  const title = asString(risk.title) || '未命名缺陷';
+  const status = asString(risk.status);
+  const riskType = asString(risk.risk_type) || 'unknown';
+  const businessImpact = asString(risk.business_impact);
+  const summary = asString(risk.summary);
+  const suggestedAction = asString(risk.suggested_action);
+  const confidenceScore = asNumber(risk.confidence_score, asNumber(risk.evidence_score, 0.5));
+  const reproducibilityScore = asNumber(risk.reproducibility_score, 0);
+  const firstSeenAt = asString(risk.first_seen_at);
+  const lastVerifiedAt = asString(risk.last_verified_at);
+  const riskId = asString(risk.risk_id) || title || 'risk';
+  const affectedModules = asArray(risk.affected_modules).filter((item): item is string => typeof item === 'string');
+  const affectedRoles = asArray(risk.affected_roles).filter((item): item is string => typeof item === 'string');
+  const taxonomy = resolveFindingTaxonomy({
+    title,
+    risk_type: riskType,
+    defect_family: asString(risk.defect_family),
+    reporting_bucket: asString(risk.reporting_bucket),
+    repro_path: pathMatch?.[1] || '',
+    quality_assurance_gap: asBoolean(risk.quality_assurance_gap),
+  });
+
+  return {
+    bug_title: title,
+    title,
+    severity: normalizeSeverity(asString(risk.severity)),
+    defect_family: taxonomy.defect_family,
+    defect_family_label: taxonomy.defect_family_label,
+    verdict: status === 'confirmed' ? 'confirmed' : 'pending',
+    bug_confirmation: status === 'confirmed' ? 'confirmed' : 'unconfirmed_candidate',
+    confidence_score: confidenceScore,
+    actual_behavior: businessImpact || summary,
+    expected_behavior: suggestedAction,
+    description: businessImpact,
+    source: 'phase104_command_center',
+    impact_area: flow,
+    source_entity: affectedModules.join(' / '),
+    source_value: affectedRoles.join(', '),
+    risk_type: riskType,
+    reporting_bucket: taxonomy.reporting_bucket,
+    reporting_bucket_label: taxonomy.reporting_bucket_label,
+    quality_assurance_gap: taxonomy.quality_assurance_gap,
+    timestamp: lastVerifiedAt || firstSeenAt || new Date().toISOString(),
+    validation_task_id: riskId,
+    reproduction_steps: [
+      `进入业务流 ${flow || '核心链路'} 触发相关场景`,
+      '按证据链回放请求与状态推进',
+      `观察是否出现：${title || '风险现象'}`,
+    ],
+    reproducibility: {
+      reproducible: reproducibilityScore >= 0.75,
+      reproduction_confidence: reproducibilityScore,
+    },
+    evidence: {
+      hash: riskId,
+      path: pathMatch?.[1] || '',
+      method: methodMatch?.[1]?.toUpperCase() || '',
+      summary: technicalTitle || summary,
+    },
+    path: pathMatch?.[1] || '',
+    method: methodMatch?.[1]?.toUpperCase() || '',
+  };
+}
+
+async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapshot> {
+  const resolvedProjectId = await resolveProjectId(projectId);
+  if (!resolvedProjectId) return emptyFindingsSnapshot('');
+
+  try {
+    const snapshotEnvelope = await fetchJSON<unknown>(
+      `${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/command-center`
+    );
+
+    const snapshot = asRecord(asRecord(snapshotEnvelope).data);
+    const liveMap = asRecord(snapshot.live_map);
+    const valueMetrics = asRecord(snapshot.value_metrics);
+    const businessFlowSummary = asRecord(snapshot.business_flow_summary);
+    const knowledgeSummary = asRecord(snapshot.knowledge_summary);
+    const risks = asArray(snapshot.risks).map(asRecord);
+    const findings = risks.map(toLegacyFinding);
+    const p0 = findings.filter((item) => item.severity === 'P0').length;
+    const p1 = findings.filter((item) => item.severity === 'P1').length;
+    const evidenceTrustScore = asNumber(valueMetrics.evidence_trust_score, 0);
+    const aiEquivalentTestPoints = asNumber(valueMetrics.ai_equivalent_test_points, 0);
+    const totalBusinessFlows = asNumber(businessFlowSummary.total, 0);
+
+    return {
+      resolvedProjectId,
+      projectId: resolvedProjectId,
+      projectName: asString(snapshot.project_name) || resolvedProjectId,
+      status: asString(liveMap.status) === 'running' ? 'running' : 'completed',
+      updatedAt: asString(snapshot.updated_at) || '',
+      industry: asString(snapshot.industry),
+      knowledgeSummary: {
+        activeSourceCount: asNumber(knowledgeSummary.active_source_count, 0),
+        ruleCount: asNumber(knowledgeSummary.rule_count, 0),
+        riskDomainCount: asNumber(knowledgeSummary.risk_domain_count, 0),
+        oracleCount: asNumber(knowledgeSummary.oracle_count, 0),
+        businessObjectCount: asNumber(knowledgeSummary.business_object_count, 0),
+        stateMachineCount: asNumber(knowledgeSummary.state_machine_count, 0),
+        knowledgeReady: asBoolean(knowledgeSummary.knowledge_ready),
+      },
+      findings,
+      executiveSummary: {
+        totalFindings: findings.length,
+        totalBugsFound: findings.length,
+        criticalBugs: p0,
+        highPriorityBugs: p1,
+        llmPoweredAnalyses: aiEquivalentTestPoints,
+        systemGrade: asString(asRecord(snapshot.executive_summary).system_grade),
+        overallScore: asNumber(asRecord(snapshot.executive_summary).overall_score, 0),
+      },
+      runtimeVerification: {
+        totalProbes: totalBusinessFlows,
+        confirmed: findings.filter((item) => item.verdict === 'confirmed').length,
+      },
+      dbVerification: {
+        total: findings.length,
+        confirmed: findings.filter((item) => item.defect_family === 'data_integrity').length,
+        hitRate: evidenceTrustScore ? Math.round(evidenceTrustScore * 100) : 0,
+      },
+      valueMetrics,
+      businessFlowSummary,
+      discoveryFunnel: asRecord(snapshot.discovery_funnel),
+      fullSpectrumCapabilityMatrix: asRecord(snapshot.full_spectrum_capability_matrix),
+      bugFamilyCoverage: asRecord(snapshot.bug_family_coverage),
+      continuousDiscoveryCampaign: asRecord(snapshot.continuous_discovery_campaign),
+      continuousDiscoveryMetrics: asRecord(snapshot.continuous_discovery_metrics),
+      spectrum: asRecord(snapshot.spectrum),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('404')) {
+      return emptyFindingsSnapshot(resolvedProjectId);
+    }
+    throw error;
+  }
+}
+
+function emptyFindingsSnapshot(projectId: string): FindingsSnapshot {
+  return {
+    resolvedProjectId: projectId,
+    projectId,
+    projectName: projectId,
+    status: 'idle',
+    updatedAt: '',
+    industry: '',
+    knowledgeSummary: {
+      activeSourceCount: 0,
+      ruleCount: 0,
+      riskDomainCount: 0,
+      oracleCount: 0,
+      businessObjectCount: 0,
+      stateMachineCount: 0,
+      knowledgeReady: false,
+    },
+    findings: [],
+    executiveSummary: {
+      totalFindings: 0,
+      totalBugsFound: 0,
+      criticalBugs: 0,
+      highPriorityBugs: 0,
+      llmPoweredAnalyses: 0,
+      systemGrade: '',
+      overallScore: 0,
+    },
+    runtimeVerification: {
+      totalProbes: 0,
+      confirmed: 0,
+    },
+    dbVerification: {
+      total: 0,
+      confirmed: 0,
+      hitRate: 0,
+    },
+    valueMetrics: {},
+    businessFlowSummary: {},
+    discoveryFunnel: {},
+    fullSpectrumCapabilityMatrix: {},
+    bugFamilyCoverage: {},
+    continuousDiscoveryCampaign: {},
+    continuousDiscoveryMetrics: {},
+    spectrum: {},
+  };
 }
 
 export async function getFindings(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/findings?project=${encodeURIComponent(projectId)}`);
-}
-export async function getOverview(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/pilot/overview?project=${encodeURIComponent(projectId)}`);
-}
-export async function getKnowledge(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/knowledge/asset?project=${encodeURIComponent(projectId)}`);
-}
-export async function getControlPlane(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/control-plane/overview?project=${encodeURIComponent(projectId)}`);
-}
-export async function getReleaseDashboard(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/release/dashboard?project=${encodeURIComponent(projectId)}`);
+  return buildFindingsSnapshot(projectId);
 }
 
-export async function runScan(projectId: string) {
-  return fetchJSON<any>(`${API_BASE}/scan/run`, {
-    method: 'POST',
-    body: JSON.stringify({ project_id: projectId }),
-  });
+export async function getKnowledgeAsset(projectId: string) {
+  const resolvedProjectId = await resolveProjectId(projectId);
+  if (!resolvedProjectId) return { knowledge_asset: { project_id: '', sources: [] } };
+  return fetchJSON<unknown>(`${API_BASE}/knowledge/asset?project=${encodeURIComponent(resolvedProjectId)}`);
 }
 
-export async function saveSettings(body: Record<string, any>) {
-  return fetchJSON<any>(`${API_BASE}/settings/save`, {
+export async function getKnowledgePreview(sourceId: string) {
+  return fetchJSON<unknown>(`${API_BASE}/knowledge/preview?sourceId=${encodeURIComponent(sourceId)}`);
+}
+
+export async function saveSettings(body: Record<string, unknown>) {
+  return fetchJSON<unknown>(`${API_BASE}/settings/save`, {
     method: 'POST',
     body: JSON.stringify(body),
   });
 }
 
-export async function saveEnvConfig(body: Record<string, any>) {
-  return fetchJSON<any>(`${API_BASE}/environment/config`, {
+export async function getHealth() {
+  return fetchJSON<unknown>(`${API_BASE}/health`);
+}
+
+export async function listConnectors(projectId: string): Promise<ConnectorRecord[]> {
+  const project = String(projectId || '').trim();
+  if (!project) return [];
+  const payload = await fetchJSON<unknown>(`${API_BASE}/connectors/list?project=${encodeURIComponent(project)}`);
+  const connectors = asArray(asRecord(payload).connectors).map((item) => asRecord(item));
+  return connectors
+    .filter((item) => Boolean(asString(item.connector_id)))
+    .map((item) => ({
+      connector_id: asString(item.connector_id),
+      kind: asString(item.kind),
+      display_name: asString(item.display_name),
+      enabled: Boolean(item.enabled),
+      system_name: asString(item.system_name) || undefined,
+      module_name: asString(item.module_name) || undefined,
+      endpoint_ref: asString(item.endpoint_ref) || undefined,
+      credential_ref: asString(item.credential_ref) || undefined,
+      external_ref: asString(item.external_ref) || undefined,
+      created_at_utc: asString(item.created_at_utc) || undefined,
+      last_sync_at_utc: asString(item.last_sync_at_utc) || undefined,
+      last_sync_status: asString(item.last_sync_status) || undefined,
+    }));
+}
+
+export async function registerConnector(body: Record<string, unknown>) {
+  return fetchJSON<unknown>(`${API_BASE}/connectors/register`, {
     method: 'POST',
     body: JSON.stringify(body),
   });
 }
 
 export async function ingestKnowledge(projectId: string, file: File, type: string) {
-  return new Promise<any>((resolve, reject) => {
+  return new Promise<unknown>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
+        const resolvedProjectId = await resolveProjectId(projectId);
+        if (!resolvedProjectId) {
+          throw new Error('未选择有效项目，无法导入资料');
+        }
         const b64 = (reader.result as string).split(',')[1];
-        const result = await fetchJSON<any>(`${API_BASE}/knowledge/ingest`, {
+        const result = await fetchJSON<unknown>(`${API_BASE}/knowledge/ingest`, {
           method: 'POST',
           body: JSON.stringify({
-            project_id: projectId,
+            project_id: resolvedProjectId,
             type,
             filename: file.name,
             content: b64,
@@ -75,8 +482,54 @@ export async function ingestKnowledge(projectId: string, file: File, type: strin
 }
 
 export async function deleteKnowledge(projectId: string, sourceId: string) {
-  return fetchJSON<any>(`${API_BASE}/knowledge/delete`, {
+  return fetchJSON<unknown>(`${API_BASE}/knowledge/delete`, {
     method: 'POST',
     body: JSON.stringify({ project_id: projectId, source_id: sourceId }),
+  });
+}
+
+// V12 Unified Scan
+export type V12ScanResult = {
+  ok: boolean;
+  scan_id?: string;
+  grade?: string;
+  score?: number;
+  coverage?: number;
+  total_findings?: number;
+  total_ms?: number;
+  layers?: Record<string, { findings: number; ms: number; tool?: string }>;
+  spectrum?: { capabilities_run: number; total_findings: number };
+  auto_har?: Record<string, unknown>;
+  report_path?: string;
+  error?: string;
+  message?: string;
+};
+
+export async function runV12Scan(projectId: string, options?: { api_doc?: string; base_url?: string }): Promise<V12ScanResult> {
+  return fetchJSON<V12ScanResult>(`${API_BASE}/v1/scan`, {
+    method: 'POST',
+    body: JSON.stringify({
+      project_id: projectId,
+      api_doc: options?.api_doc || undefined,
+      base_url: options?.base_url || undefined,
+    }),
+  });
+}
+
+export async function testDbConnection(dsn: string): Promise<{ ok: boolean; message?: string; error?: string; db_type?: string; host?: string; port?: number }> {
+  return fetchJSON(`${API_BASE}/v1/db-test`, {
+    method: 'POST',
+    body: JSON.stringify({ dsn }),
+  });
+}
+
+export async function getServiceCredentials(projectId: string) {
+  return fetchJSON(`${API_BASE}/v1/services/credentials?project=${encodeURIComponent(projectId)}`);
+}
+
+export async function saveServiceCredentials(body: Record<string, unknown>) {
+  return fetchJSON(`${API_BASE}/v1/services/credentials`, {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }

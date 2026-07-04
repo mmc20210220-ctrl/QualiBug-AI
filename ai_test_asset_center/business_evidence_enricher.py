@@ -48,6 +48,33 @@ class BusinessEvidenceEnricher:
         payload = json.dumps(data, sort_keys=True, default=str)
         return "snap:" + hashlib.sha256(payload.encode()).hexdigest()[:12]
 
+    @staticmethod
+    def _extract_path_from_calls(calls: list[dict]) -> str:
+        """Extract the primary API path from a list of verification calls."""
+        for call in calls:
+            call_str = call.get("call", "")
+            # "POST /api/v1/orders" → "/api/v1/orders"
+            parts = call_str.split()
+            if len(parts) >= 2:
+                return parts[1]
+        return ""
+
+    @staticmethod
+    def _entity_from_path(path: str) -> str:
+        """Derive entity name from API path as a fallback heuristic."""
+        # Strip common prefixes, take the first meaningful segment
+        path = path.strip("/")
+        parts = [p for p in path.split("/") if p and not p.startswith("{")]
+        # Skip common prefixes: api, v1, v2, v3
+        for prefix in ("api", "v1", "v2", "v3", "rest", "public"):
+            if parts and parts[0].lower() == prefix:
+                parts = parts[1:]
+        # Return the first remaining segment as the entity name
+        if parts:
+            return parts[0].replace("-", "_").replace(".", "_")
+        return ""
+        return "snap:" + hashlib.sha256(payload.encode()).hexdigest()[:12]
+
     def _compute_business_evidence_status(self, draft: BusinessEvidenceDraft, semantic_verdict: str) -> str:
         """Compute business_evidence_status from missing requirements.
 
@@ -144,8 +171,22 @@ class BusinessEvidenceEnricher:
                 "binding_confidence": 0.0,
                 "source": "unavailable",
             }
-            draft.missing_requirements.append("ENTITY_BINDING_MISSING")
-            draft.enrichment_trace.append("entity_binding: missing — recorded as PENDING")
+            # Fallback: derive entity from API path (when regex patterns don't match)
+            path = self._extract_path_from_calls(calls)
+            if path:
+                entity_from_path = self._entity_from_path(path)
+                if entity_from_path:
+                    draft.entity_binding = {
+                        "entity_id": "",
+                        "entity_type": entity_from_path,
+                        "entity_alias": entity_from_path,
+                        "binding_confidence": 0.3,
+                        "source": "path_heuristic",
+                    }
+                    draft.enrichment_trace.append(f"entity_binding: path heuristic → {entity_from_path}")
+            if not draft.entity_binding.get("entity_alias"):
+                draft.missing_requirements.append("ENTITY_BINDING_MISSING")
+                draft.enrichment_trace.append("entity_binding: missing — recorded as PENDING")
 
         # ── Tenant binding (single-tenant guard) ──
         draft.tenant_binding = {
@@ -162,12 +203,14 @@ class BusinessEvidenceEnricher:
             if isinstance(before_body, dict) and before_body:
                 before_snap = before_body
                 draft.before_snapshot_ref = self._snapshot_digest(before_body)
+                draft.before_snapshot_data = before_body  # store actual data for audit
                 draft.enrichment_trace.append("before_snapshot: from calls[0]")
         if len(calls) >= 3:
             after_body = calls[-1].get("results", {}).get("admin", {}).get("body", {})
             if isinstance(after_body, dict) and after_body:
                 after_snap = after_body
                 draft.after_snapshot_ref = self._snapshot_digest(after_body)
+                draft.after_snapshot_data = after_body  # store actual data for audit
                 draft.enrichment_trace.append("after_snapshot: from calls[-1]")
             action_call = calls[1].get("call", "")
             draft.action_evidence_ref = f"action:{action_call}" if action_call else ""
@@ -176,6 +219,7 @@ class BusinessEvidenceEnricher:
             if isinstance(after_body, dict) and after_body:
                 after_snap = after_body
                 draft.after_snapshot_ref = self._snapshot_digest(after_body)
+                draft.after_snapshot_data = after_body  # store actual data for audit
                 draft.enrichment_trace.append("after_snapshot: from calls[-1]")
 
         if not draft.before_snapshot_ref:

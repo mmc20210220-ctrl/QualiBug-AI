@@ -33,7 +33,6 @@ def test_dynamic_frontend_adapters_surface_ui_and_compatibility_issues(monkeypat
             }
         ),
     )
-    monkeypatch.setattr(runtime_adapter, "validate_frontend_execution_runtime", lambda *_, **__: _FakeReport({"checks": [], "artifacts": {}}))
     monkeypatch.setattr(
         ux_adapter,
         "run_frontend_interaction_acceptance",

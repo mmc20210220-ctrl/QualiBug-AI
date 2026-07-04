@@ -79,8 +79,45 @@ def test_real_project_discovery_returns_stable_summary_contract(tmp_path: Path) 
     assert result["browser_ui_health"]["reason_code"] == "E_BROWSER_UI_DISABLED"
     assert result["metrics"]["browser_ui_reason_code"] == "E_BROWSER_UI_DISABLED"
     assert result["metrics"]["browser_ui_blocked_probe_count"] >= 1
+    assert result["metrics"]["candidate_issue_count"] >= 1
+    assert result["metrics"]["pending_finding_count"] >= 0
+    assert result["metrics"]["validated_bug_count"] == 0
+    assert result["metrics"]["reporting_basis"] == "validated_bug"
+    assert result["metrics"]["validated_bug_discovery_rate"] == 0.0
+    assert result["metrics"]["repro_success_rate"] == 0.0
+    assert result["metrics"]["evidence_complete_rate"] == 0.0
+    assert result["summary"]["validated_bug_count"] == result["metrics"]["validated_bug_count"]
+    assert result["summary"]["reporting_basis"] == "validated_bug"
+    assert result["summary"]["validated_bug_discovery_rate"] == 0.0
+    assert result["summary"]["repro_success_rate"] == 0.0
+    assert result["summary"]["evidence_complete_rate"] == 0.0
+    assert "discovery_funnel" in result
+    assert result["discovery_funnel"]["probe_selection"]["output_count"] <= result["probe_count"]
+    assert result["discovery_funnel"]["execution"]["input_count"] == result["discovery_funnel"]["probe_selection"]["output_count"]
+    assert result["discovery_blocker_summary"]["candidate_issue_count"] == result["metrics"]["candidate_issue_count"]
+    diagnosis = result["discovery_blocker_summary"]["low_discovery_diagnosis"]
+    assert diagnosis["reporting_basis"] == "validated_bug"
+    assert diagnosis["validated_bug_discovery_rate"] == 0.0
+    assert diagnosis["primary_category"] in {
+        "no_candidate",
+        "not_selected",
+        "execution_failed",
+        "verification_failed",
+        "evidence_insufficient",
+    }
+    assert {row["category"] for row in diagnosis["category_rows"]} == {
+        "no_candidate",
+        "not_selected",
+        "execution_failed",
+        "verification_failed",
+        "evidence_insufficient",
+    }
     assert result["bug_family_coverage"]["missing_family_reasons"]["ui"]["reason_code"] == "E_BROWSER_UI_DISABLED"
     planner_summary = result["risk_based_plan_summary"]
     assert planner_summary["browser_ui_budget_constrained"] is True
     assert planner_summary["browser_ui_reason_code"] == "E_BROWSER_UI_DISABLED"
     assert planner_summary["browser_ui_blocked_probe_count"] >= 1
+    campaign = result["continuous_discovery_campaign"]
+    assert campaign["summary"]["reporting_basis"] == "validated_bug"
+    assert campaign["dashboard"]["strict_reporting"]["reporting_basis"] == "validated_bug"
+    assert result["metrics"]["continuous_discovery_reporting_basis"] == "validated_bug"

@@ -43,24 +43,16 @@ from .product_ui import _icon, callout, detail_list, empty_state, h, metric_card
 
 PHASE = "phase58_enterprise_knowledge_unified_ingestion"
 SOURCE_TYPES = {
-    "prd",
-    "mrd",
-    "openapi",
-    "markdown_api",
-    "postman",
-    "database_schema",
-    "db_field_dictionary",
-    "permission_matrix",
-    "historical_bug",
-    "ticket",
-    "uiux_spec",
-    "uiux_svg",
-    "feishu_document",
-    "confluence_document",
-    "collaboration_document",
-    "other_document",
+    "prd", "mrd", "openapi", "markdown_api", "postman", "har",
+    "application_log", "database_schema", "db_field_dictionary",
+    "permission_matrix", "historical_bug", "ticket",
+    "uiux_spec", "uiux_svg",
+    "db_design", "business_rules", "ui_design", "test_data",
+    "config", "deploy",
+    "feishu_document", "confluence_document",
+    "collaboration_document", "other_document", "other",
 }
-TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml", ".svg"}
+TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml", ".svg", ".har", ".log"}
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -465,12 +457,14 @@ def _doc_bool(value: Any) -> bool:
 
 def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
     explicit = str(explicit or "").strip().lower()
-    if explicit in SOURCE_TYPES:
-        return explicit
     name_low = _norm(name)
     low = _norm(f"{name} {text[:5000]}")
     data = _json_or_none(text)
     suffix = Path(name).suffix.lower()
+    if suffix == ".har" or (suffix == ".json" and isinstance(data, dict) and "log" in data):
+        return "har"
+    if suffix == ".log" or (suffix == ".txt" and any(token in name_low for token in ("log", "日志", "access", "error"))):
+        return "application_log"
     if suffix == ".svg" or "<svg" in str(text or "").lower():
         return "uiux_svg"
     if any(token in name_low for token in ("permission", "permissions", "matrix", "权限矩阵", "rbac", "acl")):
@@ -516,6 +510,9 @@ def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
         return "confluence_document"
     if any(token in low for token in ["飞书", "feishu", "lark"]):
         return "feishu_document"
+    # Fall back to explicit type when auto-detection cannot determine a specific type
+    if explicit in SOURCE_TYPES:
+        return explicit
     return "collaboration_document"
 
 
@@ -1069,6 +1066,64 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     else:
         text = blob.decode("utf-8", errors="replace")
     payload = _json_or_none(text) if suffix == ".json" or source_type in {"openapi", "postman", "permission_matrix", "historical_bug", "ticket"} else None
+    # HAR: parse JSON and extract operations
+    har_errors: list[dict[str, Any]] = []
+    if source_type == "har":
+        try:
+            from .har_importer import import_har_endpoints, extract_har_error_patterns
+            har_file = Path(filename)
+            if suffix == ".har":
+                # Write blob to temp file for HAR parser
+                import tempfile as _tmp
+                with _tmp.NamedTemporaryFile(suffix=".har", delete=False) as tf:
+                    tf.write(blob)
+                    tf.flush()
+                    har_endpoints = import_har_endpoints(tf.name)
+                    har_errors_raw = extract_har_error_patterns(tf.name)
+                try:
+                    Path(tf.name).unlink()
+                except OSError:
+                    pass
+                operations.extend([
+                    {"path": ep["path"], "method": ep["method"], "capability": ep["capability_code"],
+                     "source": "har_traffic", "summary": ep["summary"]}
+                    for ep in har_endpoints
+                ])
+                har_errors = [
+                    {"endpoint": e.endpoint, "method": e.method, "status": e.status,
+                     "message": e.error_message, "count": e.count}
+                    for e in har_errors_raw
+                ]
+        except Exception as har_err:
+            print(f"  [WARN] HAR parsing failed for {filename}: {har_err}", flush=True, file=sys.stderr)
+    # Application logs: run log analysis
+    log_errors: list[dict[str, Any]] = []
+    if source_type == "application_log":
+        try:
+            from .log_analyzer import analyze_logs
+            import tempfile as _tmp2
+            with _tmp2.NamedTemporaryFile(suffix=".log", delete=False) as tf:
+                tf.write(blob)
+                tf.flush()
+                log_result = analyze_logs(tf.name)
+            try:
+                Path(tf.name).unlink()
+            except OSError:
+                pass
+            log_errors = [
+                {"error_type": c.error_type, "count": c.count,
+                 "message": c.message_pattern, "severity": c.severity}
+                for c in log_result.get("error_clusters", [])
+            ]
+            # Also add slow endpoints as operations
+            for s in log_result.get("slow_endpoints", []):
+                operations.append({
+                    "path": s.path, "method": s.method,
+                    "capability": "read", "source": "access_log",
+                    "summary": f"P95={s.p95_ms:.0f}ms, err_rate={s.error_rate:.1%}",
+                })
+        except Exception as log_err:
+            print(f"  [WARN] Log analysis failed for {filename}: {log_err}", flush=True, file=sys.stderr)
     openapi = payload if source_type == "openapi" and isinstance(payload, dict) else {}
     postman = payload if source_type == "postman" and isinstance(payload, dict) else {}
     operations = _openapi_operations(openapi, source_id) + _postman_operations(postman, source_id)
@@ -1092,6 +1147,8 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "ui_specs": ui_specs,
         "permissions": permissions,
         "tickets": tickets,
+        "har_errors": har_errors,
+        "log_errors": log_errors,
         "rules": _rules_from_text(text, source_id, source_type),
         "roles": _roles_from_text(text, source_id),
         "state_machines": _state_machines_from_text(text, source_id),
@@ -1105,7 +1162,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
 def _record_parse(record: dict[str, Any], root: Path) -> dict[str, Any]:
     stored = root / str(record.get("stored_path") or "")
     if not stored.exists():
-        return {"text": "", "payload": None, "openapi": {}, "operations": [], "tables": [], "field_dictionary": [], "ui_specs": [], "permissions": [], "tickets": [], "rules": [], "roles": [], "state_machines": [], "parse_status": "missing_source", "parser": "none", "text_hash": "", "text_length": 0}
+        return {"text": "", "payload": None, "openapi": {}, "operations": [], "tables": [], "field_dictionary": [], "ui_specs": [], "permissions": [], "tickets": [], "har_errors": [], "log_errors": [], "rules": [], "roles": [], "state_machines": [], "parse_status": "missing_source", "parser": "none", "text_hash": "", "text_length": 0}
     return _parse_source(stored.read_bytes(), str(record.get("original_name") or stored.name), str(record.get("source_type") or "other_document"), str(record.get("source_id") or ""))
 
 
@@ -1244,21 +1301,49 @@ def delete_enterprise_knowledge_source(project_id: str, source_id: str, root: Pa
     project = _safe_project_id(project_id)
     clean_actor = _require_manage_actor(actor)
     registry = _load_registry(project, root)
-    record = next((row for row in registry["sources"] if row.get("source_id") == source_id and row.get("status") == "active"), None)
+    record_index = next((index for index, row in enumerate(registry["sources"]) if row.get("source_id") == source_id and row.get("status") == "active"), None)
+    record = registry["sources"][record_index] if record_index is not None else None
     if not record:
         raise KeyError(f"active source not found: {source_id}")
-    record["status"] = "deleted"
-    record["deleted_at_utc"] = _now()
-    record["deleted_by"] = clean_actor
-    purged = False
-    if purge_bytes:
-        stored = root / str(record.get("stored_path") or "")
-        if stored.exists():
-            stored.unlink()
-            purged = True
-    registry["audit_events"].append({"event": "delete", "at_utc": _now(), "actor": clean_actor, "source_id": source_id, "purge_bytes": purged})
+    removed_paths: list[str] = []
+    original_name = str(record.get("original_name") or "")
+    candidate_paths: list[Path] = []
+    stored_path = str(record.get("stored_path") or "")
+    if stored_path:
+        candidate_paths.append(root / stored_path)
+    if original_name:
+        candidate_paths.append(root / "platform_workspace" / project / "input" / original_name)
+    seen_paths: set[str] = set()
+    for candidate in candidate_paths:
+        resolved = str(candidate.resolve())
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
+        try:
+            if candidate.exists() and candidate.is_file():
+                candidate.unlink()
+                removed_paths.append(str(candidate.relative_to(root)).replace("\\", "/"))
+        except Exception:
+            continue
+    registry["sources"].pop(record_index)
+    registry["audit_events"].append({
+        "event": "delete",
+        "at_utc": _now(),
+        "actor": clean_actor,
+        "source_id": source_id,
+        "original_name": original_name,
+        "removed_paths": removed_paths,
+        "physical_delete": True,
+    })
     _save_registry(project, root, registry)
-    return {"ok": True, "source_id": source_id, "purged_bytes": purged, "rebuild_recommended": True}
+    return {
+        "ok": True,
+        "source_id": source_id,
+        "original_name": original_name,
+        "purged_bytes": bool(removed_paths),
+        "removed_paths": removed_paths,
+        "rebuild_recommended": True,
+    }
 
 
 def operate_enterprise_knowledge_center(

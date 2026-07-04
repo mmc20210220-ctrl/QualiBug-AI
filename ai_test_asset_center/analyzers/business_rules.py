@@ -196,19 +196,31 @@ class BusinessRulesAnalyzer:
             "金额", "库存", "积分", "额度", "守恒", "一致", "不变",
             "balance", "inventory", "points", "quota", "conservation"
         ]
+        # 只有同时包含"不得/禁止/必须"等强制词才标记为 CRITICAL
+        strict_keywords = ["不得", "禁止", "严禁", "必须", "must not", "forbidden", "prohibited"]
 
         lines = prd_text.split('\n')
         rule_id = len(rules)
+        seen_descriptions = set()
 
         for i, line in enumerate(lines):
             for keyword in conservation_keywords:
                 if keyword in line:
+                    desc = line.strip()
+                    # 去重：相同描述不重复创建
+                    if desc in seen_descriptions:
+                        break
+                    seen_descriptions.add(desc)
+
+                    has_strict = any(sk in line for sk in strict_keywords)
+                    priority = RulePriority.CRITICAL if has_strict else RulePriority.HIGH
+
                     rule = BusinessRule(
                         id=f"BR_{rule_id:03d}",
                         name=f"守恒规则_{rule_id}",
-                        description=line.strip(),
+                        description=desc,
                         rule_type=RuleType.CONSERVATION,
-                        priority=RulePriority.CRITICAL,
+                        priority=priority,
                         conditions=[],
                         expected_actions=[],
                         source_document="PRD",
@@ -304,15 +316,21 @@ class BusinessRulesAnalyzer:
         return matches >= 2
 
     def _extract_keywords(self, text: str) -> List[str]:
-        """从文本中提取关键词"""
-        # 简单实现：移除停用词，取剩余词
+        """从文本中提取关键词 — 支持中英文混合"""
         stop_words = {
             "的", "是", "在", "了", "和", "与", "或", "但", "这", "那",
             "a", "an", "the", "and", "or", "but", "in", "on", "at"
         }
 
-        words = re.findall(r'[\w]+', text.lower())
-        return [w for w in words if w not in stop_words and len(w) > 1]
+        # 英文单词
+        en_words = re.findall(r'[a-zA-Z]{2,}', text.lower())
+
+        # 中文：用2-gram提取（因为没有分词器，bigram是最简单的近似）
+        cn_text = re.sub(r'[a-zA-Z0-9\s\W]', '', text)
+        cn_bigrams = [cn_text[i:i+2] for i in range(len(cn_text) - 1)]
+
+        all_words = en_words + cn_bigrams
+        return [w for w in all_words if w not in stop_words and len(w) >= 2]
 
     def generate_edge_cases(self, rule: BusinessRule) -> List[Dict[str, Any]]:
         """

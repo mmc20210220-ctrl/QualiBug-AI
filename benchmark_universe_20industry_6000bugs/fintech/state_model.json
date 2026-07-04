@@ -1,0 +1,10 @@
+{
+  "industry": "fintech",
+  "states": [
+    "init",
+    "pending",
+    "success",
+    "failed",
+    "reversed"
+  ]
+}

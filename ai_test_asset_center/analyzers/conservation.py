@@ -291,28 +291,38 @@ class ConservationAnalyzer:
         return None
 
     def _check_concurrency_safety(self, flow: ValueFlow, bug_id: int) -> Optional[ConservationBug]:
-        """检查并发安全问题"""
-        # 简化实现
+        """检查并发安全问题 — 仅对涉及数值扣减的流程标记为待验证假设"""
+        high_value_indicators = [
+            "deduct", "subtract", "debit", "pay", "charge", "transfer",
+            "withdraw", "扣", "减", "付", "转"
+        ]
+        is_high_value = any(
+            kw in flow.source_endpoint.lower() for kw in high_value_indicators
+        )
+        if not is_high_value:
+            return None
+
         return ConservationBug(
             bug_id=f"CV_{bug_id:03d}",
             category="C08",
-            severity="P0",
-            title=f"数值操作可能存在并发问题: {flow.source_endpoint}",
-            description=f"并发调用 {flow.source_endpoint} 可能导致数值不一致",
+            severity="P1",
+            title=f"数值扣减操作需验证并发安全: {flow.source_endpoint}",
+            description=f"扣减操作 {flow.source_endpoint} 涉及数值变更，需验证是否有并发控制机制",
             conservation_type=flow.quantity_field,
             affected_endpoints=[flow.source_endpoint, flow.target_endpoint],
             evidence={
                 "source_endpoint": flow.source_endpoint,
-                "target_endpoint": flow.target_endpoint
+                "target_endpoint": flow.target_endpoint,
+                "indicator": "deduct_like_operation"
             },
             reproduction_steps=[
-                "1. 准备测试数据",
-                f"2. 并发调用 {flow.source_endpoint}",
-                "3. 观察最终数值是否正确",
-                "4. 检查是否有超扣或少扣"
+                "1. 准备测试数据，记录初始数值",
+                f"2. 并发调用 {flow.source_endpoint} (建议10-20并发)",
+                "3. 检查最终数值是否 = 初始值 - sum(每次扣减)",
+                "4. 验证是否有超扣或少扣"
             ],
             expected_behavior="并发操作应该保证数值正确，使用锁或乐观锁机制",
-            actual_behavior="可能没有并发控制，导致数值不一致"
+            actual_behavior="需验证是否缺少并发控制"
         )
 
     def _check_precision_issues(
@@ -320,11 +330,17 @@ class ConservationAnalyzer:
         rules: List[ConservationRule],
         bug_id: int
     ) -> List[ConservationBug]:
-        """检查精度问题"""
+        """检查精度问题 — 仅对明确涉及小数/精度的规则标记"""
         bugs = []
+        precision_indicators = ["小数", "decimal", "精度", "precision", "浮点", "float", "round", "四舍五入"]
 
         for rule in rules:
             if rule.conservation_type in [ConservationType.BALANCE, ConservationType.INVENTORY]:
+                # 只在规则描述中明确提到精度相关概念时才标记
+                has_precision_hint = any(kw in rule.description.lower() for kw in precision_indicators)
+                if not has_precision_hint:
+                    continue
+
                 bug = ConservationBug(
                     bug_id=f"CV_{bug_id:03d}",
                     category="C08",
@@ -333,7 +349,7 @@ class ConservationAnalyzer:
                     description=f"涉及金额或库存的计算可能存在浮点数精度问题",
                     conservation_type=rule.conservation_type.value,
                     affected_endpoints=rule.debit_endpoints + rule.credit_endpoints,
-                    evidence={"rule": rule.description},
+                    evidence={"rule": rule.description, "indicator": "precision_keyword_match"},
                     reproduction_steps=[
                         "1. 输入含有小数的金额",
                         "2. 执行多次计算操作",

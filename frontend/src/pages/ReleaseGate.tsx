@@ -1,94 +1,130 @@
 import { useSearchParams } from 'react-router-dom';
-import { useFindingsData } from '../api/data';
+import { useReleaseData } from '../api/data';
+import { usePageTitle } from '../lib/page-title';
 
 export function ReleaseGate() {
+  usePageTitle('发布门禁');
   const [params] = useSearchParams();
-  const project = params.get('project') || 'real_project_demo';
-  const { findings, loading } = useFindingsData(project);
+  const project = params.get('project')?.trim() || '';
+  const { data, loading } = useReleaseData(project);
 
-  // Generate release gate checks from real findings
-  const p0 = findings.filter(f => f.severity === 'P0');
-  const p1 = findings.filter(f => f.severity === 'P1');
-  const confirmed = findings.filter(f => f.verdict === 'confirmed');
-
-  const checks = [
-    {
-      name: 'P0 阻塞级缺陷',
-      status: p0.length === 0 ? 'pass' as const : 'fail' as const,
-      detail: p0.length === 0 ? '无 P0 级别缺陷' : `发现 ${p0.length} 个 P0 缺陷，阻塞发布`,
-    },
-    {
-      name: 'P1 高风险缺陷',
-      status: p1.length <= 3 ? 'pass' as const : 'warning' as const,
-      detail: p1.length === 0 ? '无 P1 级别缺陷' : p1.length <= 3 ? `${p1.length} 个 P1 缺陷，建议修复后发布` : `${p1.length} 个 P1 缺陷，建议暂缓发布`,
-    },
-    {
-      name: '风险确认率',
-      status: findings.length === 0 ? 'pending' as const : confirmed.length / findings.length >= 0.5 ? 'pass' as const : 'warning' as const,
-      detail: findings.length === 0 ? '暂无风险数据' : `${confirmed.length}/${findings.length} 已确认 (${Math.round(confirmed.length / findings.length * 100)}%)`,
-    },
-    {
-      name: '证据链完整度',
-      status: findings.length === 0 ? 'pending' as const
-        : findings.filter(f => f.evidence_chain.length >= 3).length / findings.length >= 0.7 ? 'pass' as const : 'warning' as const,
-      detail: `${findings.filter(f => f.evidence_chain.length >= 3).length}/${findings.length} 具备完整证据链`,
-    },
-    {
-      name: '服务可用性',
-      status: 'pass' as const,
-      detail: '后端引擎正常响应',
-    },
-  ];
-
-  const failCount = checks.filter(c => c.status === 'fail').length;
-  const warnCount = checks.filter(c => c.status === 'warning').length;
+  const checks = data?.checks || [];
+  const overall = data?.overall || 'pass';
   const passCount = checks.filter(c => c.status === 'pass').length;
-  const overall = failCount > 0 ? 'fail' : 'pass';
+  const failCount = checks.filter(c => c.status === 'fail').length;
+  const pendingCount = checks.filter(c => c.status === 'pending').length;
+  const hasGateData = checks.length > 0;
+  const gateMode: 'missing_project' | 'no_data' | 'data' = !project ? 'missing_project' : hasGateData ? 'data' : 'no_data';
+  const gateTitle = gateMode === 'data' ? (overall === 'pass' ? '通过' : '阻塞') : gateMode === 'missing_project' ? '未选择项目' : '暂无数据';
+  const gateSub = gateMode === 'data'
+    ? `${passCount}/${checks.length} 检查通过`
+    : gateMode === 'missing_project'
+      ? '请选择项目后生成门禁结果'
+      : '运行一次完整扫描以生成发布门禁检查结果';
+  const gateClass = gateMode === 'data' ? overall : 'pending';
+  const summaryCards = [
+    { label: '通过', value: gateMode === 'data' ? passCount : '--', tone: 'success' },
+    { label: '阻塞', value: gateMode === 'data' ? failCount : '--', tone: 'danger' },
+    { label: '待处理', value: gateMode === 'data' ? pendingCount : '--', tone: 'warning' },
+  ];
 
   return (
     <div>
       <div className="page-header">
         <div>
+          <span className="panel-kicker">发布评审</span>
           <h1>发布门禁</h1>
-          <p>基于 {findings.length} 条真实行为风险的自动化发布决策</p>
-        </div>
-        <div className={`gate-result ${overall}`}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <h2>{overall === 'pass' ? '通过' : '阻塞'}</h2>
-            <p>{passCount}/{checks.length} 检查通过</p>
+          <p>把检测结果沉淀为可执行的发布结论，先看是否可发，再看阻塞项与待闭环项。</p>
+          <div className="page-summary-strip">
+            <span className="summary-pill strong">当前结论 {gateTitle}</span>
+            <span className="summary-pill">通过 {gateMode === 'data' ? passCount : '--'}</span>
+            <span className="summary-pill">阻塞 {gateMode === 'data' ? failCount : '--'}</span>
+            <span className="summary-pill">待处理 {gateMode === 'data' ? pendingCount : '--'}</span>
           </div>
         </div>
       </div>
 
+      <section className={`release-hero release-hero-${gateClass} mb-4`}>
+        <div className="release-hero-main">
+          <span className="release-hero-kicker">门禁结论</span>
+          <h2>{gateTitle}</h2>
+          <p>{gateSub}</p>
+        </div>
+        <div className="release-hero-side">
+          <div className={`gate-result ${gateClass}`}>
+            <div className="gate-result-copy">
+              <h2>{gateTitle}</h2>
+              <p>{gateSub}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {loading && (
-        <div style={{ textAlign: 'center', padding: 48 }}>
-          <div className="spinner" style={{ margin: '0 auto 16px' }} />
-          <p style={{ color: 'var(--muted)', fontSize: 13 }}>评估发布就绪状态...</p>
+        <div className="findings-empty-state compact">
+          <div className="spinner spinner-centered" />
+          <p>评估发布就绪状态...</p>
         </div>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-3 gap-4 mb-4">
-        {[
-          { label: '通过', val: passCount, color: 'var(--success)' },
-          { label: '阻塞', val: failCount, color: 'var(--danger)' },
-          { label: '警告', val: warnCount, color: 'var(--warning)' },
-        ].map(m => (
-          <div key={m.label} className="stat-card" style={{ '--accent': m.color } as React.CSSProperties}>
-            <div className="cov-value" style={{ color: m.color }}>{m.val}</div>
-            <div className="cov-label">{m.label}</div>
-          </div>
+      <div className="release-stat-grid mb-4">
+        {summaryCards.map((item) => (
+          <article key={item.label} className={`release-stat-card tone-${item.tone}`}>
+            <strong>{item.value}</strong>
+            <span>{item.label}</span>
+          </article>
         ))}
       </div>
 
+      <section className="release-summary-panel mb-4">
+        <div className="release-summary-head">
+          <div>
+            <span className="panel-kicker">决策说明</span>
+            <h2>当前发布判断</h2>
+          </div>
+        </div>
+        <div className="release-summary-grid">
+          <div className="release-summary-card">
+            <strong>是否可发布</strong>
+            <p>
+              {gateMode === 'data'
+                ? overall === 'pass'
+                  ? '当前门禁检查未发现阻断项，可以进入正式发布评审。'
+                  : '当前仍存在阻断项，不建议直接进入正式发布。'
+                : gateMode === 'missing_project'
+                  ? '尚未选择客户项目，暂时无法形成发布结论。'
+                  : '当前还没有生成门禁检查结果，需先完成一次真实扫描。'}
+            </p>
+          </div>
+          <div className="release-summary-card">
+            <strong>优先关注</strong>
+            <p>
+              {failCount > 0
+                ? `当前有 ${failCount} 个阻塞检查项需要优先闭环。`
+                : pendingCount > 0
+                  ? `当前无显式阻断项，但仍有 ${pendingCount} 个待处理检查项需要确认。`
+                  : '当前没有阻断项，可进入后续发布确认。'}
+            </p>
+          </div>
+          <div className="release-summary-card">
+            <strong>结果来源</strong>
+            <p>所有门禁结论均基于当前项目的真实检测结果生成，不混入样例或演示数据。</p>
+          </div>
+        </div>
+      </section>
+
       {/* Check list */}
-      <div className="check-list">
-        {findings.length === 0 && !loading && (
+      <div className="check-list release-check-list">
+        <div className="release-check-head">
+          <span className="panel-kicker">检查明细</span>
+          <h2>发布门禁项</h2>
+        </div>
+        {checks.length === 0 && !loading && (
           <div className="check-item">
             <span className="check-icon warning">!</span>
-            <div className="flex-1">
-              <strong style={{ fontSize: 13 }}>暂无风险数据</strong>
-              <p style={{ fontSize: 11, color: 'var(--subtle)', marginTop: 2 }}>运行一次扫描以生成发布门禁检查结果</p>
+            <div className="check-copy flex-1">
+              <strong>暂无门禁数据</strong>
+              <p>运行一次完整扫描以生成发布门禁检查结果</p>
             </div>
           </div>
         )}
@@ -97,12 +133,12 @@ export function ReleaseGate() {
             <span className={`check-icon ${c.status}`}>
               {c.status === 'pass' ? '✓' : c.status === 'fail' ? '✗' : '!'}
             </span>
-            <div className="flex-1">
-              <strong style={{ fontSize: 13 }}>{c.name}</strong>
-              <p style={{ fontSize: 11, color: 'var(--subtle)', marginTop: 2 }}>{c.detail}</p>
+            <div className="check-copy flex-1">
+              <strong>{c.name}</strong>
+              <p>{c.detail}</p>
             </div>
             <span className={`status status-${c.status === 'pass' ? 'success' : c.status === 'fail' ? 'danger' : 'warning'}`}>
-              {c.status === 'pass' ? '通过' : c.status === 'fail' ? '阻塞' : '待检'}
+              {c.status.toUpperCase()}
             </span>
           </div>
         ))}
@@ -110,3 +146,5 @@ export function ReleaseGate() {
     </div>
   );
 }
+
+export default ReleaseGate;

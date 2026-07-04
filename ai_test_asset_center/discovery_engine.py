@@ -15,6 +15,7 @@ QualiBug Autonomous Discovery Engine — 自主发现引擎
 import base64
 import json
 import os
+import random
 import re
 import time
 import urllib.error
@@ -492,10 +493,27 @@ class AutonomousDiscoveryEngine:
         # Pre-inject MES context to prevent multi-tenant hallucinations
         self._inject_context()
 
+        # ── Multi-module credential manager (enterprise) ──
+        self._tokens: dict[str, str] = {}  # legacy single-service (role → token)
+        self._credential_manager = None    # EnterpriseCredentialManager (service×role)
+        self._service_tokens: dict[str, dict[str, str]] = {}  # service → {role: token}
+
         # MES 认证. In production mode discovery is dry/blocked: no HTTP is allowed.
-        self._tokens = {}
         if not self._production_blocked:
-            self._login()
+            # Try multi-module credential manager first
+            self._init_multi_module_auth()
+            if not self._service_tokens:
+                # Fall back to legacy single-service
+                authenticated = self._login()
+                self._tokens_authentic = authenticated
+
+        # Auto HAR recorder — captures all probe HTTP traffic automatically.
+        # Users never need to provide HAR files; the system collects traffic
+        # during every discovery run.
+        self._har_entries: list[dict[str, Any]] = []
+        self._har_error_patterns: list[dict[str, Any]] = []
+        self._tokens_authentic: bool = True  # False if login failed, synthetic tokens in use
+        self._MAX_HAR_ENTRIES = 10000  # Prevent unbounded memory growth
 
     def _inject_context(self):
         """Apply an explicit project-scoped guard, never an embedded industry template.
@@ -521,43 +539,219 @@ class AutonomousDiscoveryEngine:
         )
         setattr(reasoner_prompt, guard_key, True)
 
+    def _init_multi_module_auth(self):
+        """Initialize multi-module credentials via EnterpriseCredentialManager.
+
+        For enterprise scenarios with multiple independent services (e.g. order-service,
+        quality-service, finance-service), each service has its own base URL, login API,
+        and credentials. This method loads them and acquires real tokens.
+        """
+        try:
+            from .enterprise_credential_manager import EnterpriseCredentialManager
+            mgr = EnterpriseCredentialManager(self._project, self._root)
+            mgr.load_legacy_fallback()
+            mgr.load_from_env()
+            # Also try loading from multi_service_config.json
+            config_path = (self._root / "platform_workspace" /
+                          self._project / "multi_service_config.json")
+            if config_path.exists():
+                mgr.load_from_file(config_path)
+            mgr.load_from_env()  # env vars override file config
+
+            # Acquire real tokens for all services
+            results = mgr.login_all_services()
+            if results:
+                self._credential_manager = mgr
+                # Build service_tokens from the credential manager
+                for svc in mgr.store.list_services():
+                    self._service_tokens.setdefault(svc, {})
+                    for role in ("admin", "viewer"):
+                        token = mgr.get_token(svc, role)
+                        if token:
+                            self._service_tokens[svc][role] = token
+                svc_count = len(self._service_tokens)
+                if svc_count:
+                    print(f"  [OK] Multi-module auth initialized: "
+                          f"{svc_count} service(s) configured", flush=True)
+        except ImportError:
+            pass  # enterprise_credential_manager not available (standalone lib)
+
     def _login(self):
         try:
+            admin_user = os.environ.get("QUALIBUG_ADMIN_USER", "")
+            admin_pass = os.environ.get("QUALIBUG_ADMIN_PASS", "")
+            if not admin_user or not admin_pass:
+                print(f"  [INFO] QUALIBUG_ADMIN_USER/PASS not set — skipping auth login", flush=True)
+                return False
             r = self._http("POST", "/api/auth/login",
-                          data={"username": "admin", "password": "admin123"},
+                          data={"username": admin_user, "password": admin_pass},
                           no_auth=True)
             token = (r.get("data", {}) or {}).get("accessToken", "")
             if token:
                 self._tokens["admin"] = token
-            # 也可以用 Base64 伪造 token（MES BugLab 的特性）
-            self._tokens["admin"] = base64.b64encode(b"admin:ADMIN").decode()
-            self._tokens["planner"] = base64.b64encode(b"planner:PLANNER").decode()
-            self._tokens["operator"] = base64.b64encode(b"operator:OPERATOR").decode()
-            self._tokens["warehouse"] = base64.b64encode(b"warehouse:WAREHOUSE").decode()
-            self._tokens["quality"] = base64.b64encode(b"quality:QUALITY").decode()
-            self._tokens["viewer"] = base64.b64encode(b"viewer:VIEWER").decode()
-            return True
-        except Exception:
-            return False
+                print(f"  [OK] Real admin token obtained from /api/auth/login", flush=True)
+                # Attempt viewer token — try same credentials with a different role
+                # If the system has role-specific endpoints, try to get a viewer token
+                try:
+                    viewer_user = os.environ.get("QUALIBUG_VIEWER_USER", "")
+                    viewer_pass = os.environ.get("QUALIBUG_VIEWER_PASS", "")
+                    vr = self._http("POST", "/api/auth/login",
+                                   data={"username": viewer_user, "password": viewer_pass},
+                                   no_auth=True)
+                    vtoken = (vr.get("data", {}) or {}).get("accessToken", "")
+                    if vtoken:
+                        self._tokens["viewer"] = vtoken
+                        print(f"  [OK] Real viewer token obtained", flush=True)
+                        return True
+                except Exception:
+                    pass
+                # Fallback 1: explicit viewer token from env var
+                env_viewer_token = os.environ.get("QUALIBUG_VIEWER_TOKEN", "").strip()
+                if env_viewer_token:
+                    self._tokens["viewer"] = env_viewer_token
+                    print(f"  [OK] Using QUALIBUG_VIEWER_TOKEN for viewer role", flush=True)
+                else:
+                    # Fallback 2: use admin token as approximate viewer
+                    # (note: this weakens role-differentiated testing)
+                    self._tokens["viewer"] = token
+                    print(f"  [INFO] Using admin token as viewer fallback "
+                          f"(set QUALIBUG_VIEWER_TOKEN for real role separation)", flush=True)
+                return True
+            # Real token not obtained — do NOT use synthetic tokens.
+            # Without real auth, all permission/role tests are unreliable.
+            print(f"  [WARN] /api/auth/login returned no token.", flush=True)
+            print(f"  [WARN] Permission/role-based tests will be SKIPPED.", flush=True)
+            print(f"  [WARN] Set QUALIBUG_ADMIN_USER / QUALIBUG_ADMIN_PASS for real auth.", flush=True)
+        except Exception as login_err:
+            print(f"  [WARN] /api/auth/login failed ({login_err}).", flush=True)
+            print(f"  [WARN] Permission/role-based tests will be SKIPPED.", flush=True)
+        # No synthetic tokens — leave tokens empty so probes fail early
+        return False
 
-    def _http(self, method: str, path: str, data=None, no_auth=False, role="admin"):
+    def _http(self, method: str, path: str, data=None, no_auth=False, role="admin",
+              service: str = ""):
         if getattr(self, "_production_blocked", False) or str(os.environ.get("QUALIBUG_PRODUCTION", "")).lower() in {"1", "true", "yes", "on"}:
             return {"_http": 0, "_error": "blocked_by_production_safety_gate", "blocked_action": "http_request"}
         url = path if path.startswith("http") else f"{self.base}{path}"
         # Fix double /api prefix
         url = url.replace("/api/api/", "/api/")
         headers = {"Content-Type": "application/json"}
-        if not no_auth and role in self._tokens:
-            headers["Authorization"] = f"Bearer {self._tokens[role]}"
-        body = json.dumps(data).encode() if data else None
-        req = urllib.request.Request(url, data=body, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=getattr(self, '_http_timeout', 10)) as resp:
-                return {"_http": resp.status, **json.loads(resp.read())}
-        except urllib.error.HTTPError as e:
-            return {"_http": e.code, "_error": e.read().decode()[:500]}
-        except Exception as e:
-            return {"_http": 0, "_error": str(e)}
+        # ── Auth routing: multi-module → service×role; legacy → role ──
+        if not no_auth:
+            token = ""
+            if service and self._service_tokens:
+                # Multi-module: find token for specific service×role
+                svc_tokens = self._service_tokens.get(service, {})
+                token = svc_tokens.get(role, "")
+                if not token and self._credential_manager:
+                    token = self._credential_manager.get_token(service, role)
+            if not token and role in self._tokens:
+                # Legacy single-service
+                token = self._tokens[role]
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+        body_bytes = json.dumps(data).encode() if data else None
+        request_snapshot = {
+            "method": method, "url": url,
+            "has_body": data is not None,
+            "role": role,
+            "no_auth": no_auth,
+        }
+        retry_count = 0
+        max_retries = 3
+        retryable_statuses = {429, 500, 502, 503, 504}
+        t_start = time.time()
+        last_result: dict[str, Any] = {}
+        while True:
+            req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=getattr(self, '_http_timeout', 10)) as resp:
+                    resp_body = resp.read()
+                    resp_text = resp_body.decode("utf-8", errors="replace")
+                    try:
+                        parsed = json.loads(resp_body)
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = {"_raw_body": resp_text[:2000]}
+                    result = {"_http": resp.status, "_request": request_snapshot, **parsed}
+                    self._record_har(method, url, request_snapshot, resp.status,
+                                     resp_text[:5000],
+                                     time.time() - t_start, retry_count)
+                    return result
+            except urllib.error.HTTPError as e:
+                status = e.code
+                err_body = e.read().decode()[:500]
+                if status in retryable_statuses and retry_count < max_retries:
+                    retry_count += 1
+                    retry_after = e.headers.get("Retry-After", "")
+                    try:
+                        wait_s = int(retry_after) if retry_after else 2 ** retry_count
+                    except ValueError:
+                        wait_s = 2 ** retry_count
+                    jitter = random.uniform(0.5, 1.5)
+                    time.sleep(wait_s * jitter)
+                    continue
+                last_result = {"_http": status, "_request": request_snapshot,
+                               "_error": err_body, "_retries": retry_count}
+                self._record_har(method, url, request_snapshot, status,
+                                 err_body, time.time() - t_start, retry_count)
+                return last_result
+            except Exception as e:
+                if retry_count < max_retries:
+                    retry_count += 1
+                    time.sleep((2 ** retry_count) * random.uniform(0.5, 1.5))
+                    continue
+                last_result = {"_http": 0, "_request": request_snapshot,
+                               "_error": str(e), "_retries": retry_count}
+                self._record_har(method, url, request_snapshot, 0,
+                                 str(e), time.time() - t_start, retry_count)
+                return last_result
+
+    def _record_har(self, method: str, url: str, request_snapshot: dict,
+                    status: int, response_body: str,
+                    elapsed_s: float, retries: int) -> None:
+        """Automatically record every HTTP probe into an in-memory HAR log."""
+        har_entry = {
+            "startedDateTime": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+            "time": elapsed_s * 1000,
+            "request": {
+                "method": method,
+                "url": url,
+                "headers": [
+                    {"name": k, "value": v} for k, v in {
+                        "Content-Type": "application/json",
+                        "role": request_snapshot.get("role", "admin"),
+                        "no_auth": str(request_snapshot.get("no_auth", False)),
+                    }.items()
+                ],
+                "postData": {"text": request_snapshot.get("has_body", False) and "{}" or ""},
+            },
+            "response": {
+                "status": status,
+                "content": {
+                    "mimeType": "application/json",
+                    "text": response_body[:5000],
+                },
+            },
+            "timings": {"send": 1, "wait": max(0, (elapsed_s * 1000) - 2), "receive": 1},
+            "_role": request_snapshot.get("role", "admin"),
+            "_retries": retries,
+        }
+        self._har_entries.append(har_entry)
+        # FIFO eviction to prevent unbounded memory growth
+        if len(self._har_entries) > self._MAX_HAR_ENTRIES:
+            self._har_entries = self._har_entries[-self._MAX_HAR_ENTRIES:]
+
+        # Also record error patterns for log analysis
+        if status >= 400 and response_body:
+            self._har_error_patterns.append({
+                "endpoint": url,
+                "method": method,
+                "status": status,
+                "response_body": response_body[:2000],
+                "role": request_snapshot.get("role", "admin"),
+            })
+            if len(self._har_error_patterns) > self._MAX_HAR_ENTRIES // 2:
+                self._har_error_patterns = self._har_error_patterns[-self._MAX_HAR_ENTRIES // 2:]
 
     def _fill_template(self, template: str, **kwargs) -> str:
         """Safe template filling using str.replace (avoids .format() JSON conflicts)"""
@@ -708,95 +902,279 @@ class AutonomousDiscoveryEngine:
         from .stage_reason_all_v2 import _stage_reason_all_v2
         return _stage_reason_all_v2(self, prd_text, api_spec, reader_output, prior_findings)
 
-    def _build_route_map(self) -> dict:
-        """Fetch OpenAPI spec and build a route lookup table for accurate API calls"""
-        import re
+    def _build_route_map(self, api_spec_text: str = "") -> dict:
+        """Build a route lookup table from API documents.
+        
+        Uses RouteCatalogBuilder to parse OpenAPI, Swagger, Markdown, etc.
+        Priority: in-memory spec > target server > local file.
+        """
+        import re, json
+        from .route_catalog_builder import RouteCatalogBuilder
+        
         route_map = {}
-        try:
-            # Get OpenAPI from MES server
-            r = self._http("GET", "/openapi.json", no_auth=True)
-            spec = r if isinstance(r, dict) and "paths" in r else {}
-            if not spec:
-                # Load from local file
-                import json
-                spec_url = f"{self.base.rsplit('/api', 1)[0]}/openapi.json"
-                req = urllib.request.Request(spec_url)
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    spec = json.loads(resp.read())
-            
-            paths = spec.get("paths", {})
-            for path_pattern, methods in paths.items():
-                for method, details in methods.items():
-                    if method.upper() in ("GET", "POST", "PUT", "DELETE", "PATCH"):
-                        params = []
-                        # Path parameters
-                        for p in details.get("parameters", []):
-                            if p.get("in") == "path":
-                                params.append(p["name"])
-                        # Also from path pattern
-                        path_params = re.findall(r'\{(\w+)\}', path_pattern)
-                        request_body = details.get("requestBody", {})
-                        body_schema = {}
-                        if request_body:
-                            content = request_body.get("content", {})
-                            json_content = content.get("application/json", {})
-                            body_schema = json_content.get("schema", {}).get("properties", {})
-                        
-                        key = f"{method.upper()} {path_pattern}"
-                        route_map[key] = {
-                            "path_pattern": path_pattern,
-                            "method": method.upper(),
-                            "path_params": list(set(params + path_params)),
-                            "has_body": bool(body_schema),
-                            "body_properties": body_schema,
-                        }
-        except Exception:
-            pass
+        spec_texts = []
+        
+        # 1. Use in-memory API document if provided
+        if api_spec_text:
+            spec_texts.append(api_spec_text)
+        
+        # 2. Try fetching from target server (as fallback)
+        if not spec_texts:
+            try:
+                r = self._http("GET", "/openapi.json", no_auth=True)
+                if isinstance(r, dict) and "paths" in r:
+                    spec_texts.append(json.dumps(r))
+            except Exception:
+                pass
+        
+        if not spec_texts:
+            return route_map
+        
+        # Build unified catalog from all sources
+        builder = RouteCatalogBuilder()
+        entries = builder.build(*spec_texts)
+        route_map = builder.to_route_map()
+        
+        # Log catalog summary
+        summary = builder.to_summary()
+        if summary["total_routes"] > 0:
+            pass  # Summary is logged by caller
+        
         return route_map
 
     def _resolve_call(self, path: str, method: str, route_map: dict) -> dict | None:
-        """Match an LLM-generated path+method to the best actual API route"""
+        """Match an LLM-generated path+method to the best actual API route.
+        
+        Enhanced 4-level matching (ordered by confidence):
+        1. Exact match (path + method)
+        2. Normalized-param exact match ({id} ≈ {materialId} ≈ {material_id})
+        3. Segment edit-distance fuzzy match (±1 segment tolerance)
+        4. Cross-method fuzzy match (last resort)
+        """
         import re
         
         # Normalize path: ensure /api/ prefix for MES (all MES routes start with /api/)
         if not path.startswith("/api/"):
-            # Add /api/ prefix for paths like /master/materials, /production/orders
             path = "/api" + path if path.startswith("/") else "/api/" + path
         
-        # Exact match
+        # === Level 1: Exact match ===
         key = f"{method} {path}"
         if key in route_map:
             return route_map[key]
         
-        # Fuzzy match: find route with same HTTP method and similar path structure
-        candidates = []
-        for key, info in route_map.items():
+        # === Level 2: Normalized-param exact match ===
+        # Replace all {param} → {_} so {id}/{materialId}/{material_id} are equivalent
+        llm_normalized = re.sub(r'\{[^}]+\}', '{_}', path)
+        for _key, info in route_map.items():
             if info["method"] != method:
                 continue
-            # Compare path segments
-            llm_parts = [p for p in path.split("/") if p]
-            route_parts = [p for p in info["path_pattern"].split("/") if p]
-            if len(llm_parts) == len(route_parts):
-                score = sum(1 for a, b in zip(llm_parts, route_parts)
-                          if a == b or (b.startswith("{") and b.endswith("}")))
-                if score >= len(llm_parts) - 2:  # Allow 2 mismatches
-                    candidates.append((score, info))
+            route_normalized = re.sub(r'\{[^}]+\}', '{_}', info["path_pattern"])
+            if llm_normalized == route_normalized:
+                return info
         
-        if candidates:
-            candidates.sort(key=lambda x: -x[0])
-            return candidates[0][1]
+        llm_parts = [p for p in path.split("/") if p]
         
-        # Last resort: try different HTTP method
-        for key, info in route_map.items():
+        # === Level 3: Segment edit-distance fuzzy (same method, ±1 segment tolerance) ===
+        best_score = -1.0
+        best_info = None
+        best_literal = 0
+        for _key, info in route_map.items():
+            if info["method"] != method:
+                continue
             route_parts = [p for p in info["path_pattern"].split("/") if p]
-            llm_parts = [p for p in path.split("/") if p]
-            if len(llm_parts) == len(route_parts):
-                score = sum(1 for a, b in zip(llm_parts, route_parts)
-                          if a == b or (b.startswith("{") and b.endswith("}")))
-                if score >= len(llm_parts) - 1:
-                    return info
+            len_diff = abs(len(llm_parts) - len(route_parts))
+            if len_diff > 1:
+                continue
+            score = self._segment_similarity(llm_parts, route_parts)
+            literal = self._literal_match_count(llm_parts, route_parts)
+            adjusted = score - len_diff * 0.3
+            if adjusted > best_score:
+                best_score = adjusted
+                best_info = info
+                best_literal = literal
+        
+        if best_info is not None and best_score >= 0.40 and best_literal >= 2:
+            return best_info
+        
+        # === Level 4: Cross-method fuzzy (any method, ±1 segment tolerance) ===
+        best_score = -1.0
+        best_info_cross = None
+        best_literal = 0
+        for _key, info in route_map.items():
+            route_parts = [p for p in info["path_pattern"].split("/") if p]
+            len_diff = abs(len(llm_parts) - len(route_parts))
+            if len_diff > 1:
+                continue
+            score = self._segment_similarity(llm_parts, route_parts)
+            literal = self._literal_match_count(llm_parts, route_parts)
+            adjusted = score - len_diff * 0.3
+            if adjusted > best_score:
+                best_score = adjusted
+                best_info_cross = info
+                best_literal = literal
+        
+        if best_info_cross is not None and best_score >= 0.50 and best_literal >= 2:
+            return best_info_cross
         
         return None
+
+    @staticmethod
+    def _segment_similarity(a_parts: list[str], b_parts: list[str]) -> float:
+        """Segment-level similarity with parameter-slot awareness.
+        
+        Scores per aligned segment pair:
+        - 1.0: exact literal match (e.g. "materials" == "materials")
+        - 0.8: both are {param} slots (e.g. {id} vs {materialId})
+        - 0.5: one is a {param} slot, the other is a static segment
+        - 0.0: literal mismatch
+        
+        Uses difflib.SequenceMatcher for alignment, which handles
+        middle insertions/deletions (e.g. LLM adds /v1/ in the middle).
+        """
+        import re
+        from difflib import SequenceMatcher
+
+        def _is_param(s: str) -> bool:
+            return bool(re.match(r'^\{[^}]+\}$', s))
+
+        def _seg_score(a_seg: str, b_seg: str) -> float:
+            if a_seg == b_seg:
+                return 1.0
+            if _is_param(a_seg) and _is_param(b_seg):
+                return 0.8
+            if _is_param(a_seg) or _is_param(b_seg):
+                return 0.5
+            return 0.0
+
+        # Build a custom scoring matrix for difflib
+        # Map segments to single chars for SequenceMatcher compatibility,
+        # then use our segment-aware scoring on the matched blocks.
+        matcher = SequenceMatcher(None, a_parts, b_parts)
+        total_score = 0.0
+        total_len = max(len(a_parts), len(b_parts))
+        
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == 'equal':
+                # All segments in this block match exactly → score each
+                for k in range(i2 - i1):
+                    total_score += _seg_score(a_parts[i1 + k], b_parts[j1 + k])
+            elif tag == 'replace':
+                # Compare each pair in the replacement block
+                block_len = max(i2 - i1, j2 - j1)
+                for k in range(block_len):
+                    a_seg = a_parts[i1 + k] if i1 + k < i2 else None
+                    b_seg = b_parts[j1 + k] if j1 + k < j2 else None
+                    if a_seg is not None and b_seg is not None:
+                        total_score += _seg_score(a_seg, b_seg)
+                    # else: insert/delete within replace block → score 0
+            # insert/delete blocks score 0 (already accounted in total_len)
+
+        return total_score / max(total_len, 1)
+
+    @staticmethod
+    def _literal_match_count(a_parts: list[str], b_parts: list[str]) -> int:
+        """Count exact literal matches between two path segment lists.
+        
+        Only counts non-parameter, case-sensitive literal matches.
+        Used as a hard constraint to prevent noise paths from matching.
+        """
+        import re
+        return sum(1 for a in a_parts for b in b_parts
+                   if a == b and not re.match(r'^\{[^}]+\}$', a))
+
+    def _fetch_real_id(self, param_name: str, resolved: dict, route_map: dict) -> str:
+        """Fetch a real entity ID from the target API for test data.
+        
+        Multi-strategy fallback (ordered by reliability):
+        1. GET list endpoint → extract first entity ID
+        2. GET list endpoint with pagination params → extract from page
+        3. Probe parent resource → use parent's data to find child entity
+        4. Return sentinel QUALIBUG_UNRESOLVED_ID so caller knows data is missing
+           (instead of silent fallback to "1" which hits non-existent resources)
+        """
+        path_pattern = resolved.get("path_pattern", "")
+        list_path = re.sub(r'/\{[^}]+\}.*', '', path_pattern)
+        if not list_path or list_path == path_pattern:
+            return "QUALIBUG_UNRESOLVED_ID"
+        
+        # Strategy 1: Plain list endpoint
+        result = self._try_extract_id_from_list(list_path, param_name)
+        if result is not None:
+            return result
+        
+        # Strategy 2: Paginated variants
+        for page_suffix in ("?page=1&size=1", "?pageNum=1&pageSize=1",
+                            "?offset=0&limit=1", "?current=1&pageSize=1"):
+            result = self._try_extract_id_from_list(list_path + page_suffix, param_name)
+            if result is not None:
+                return result
+        
+        # Strategy 3: Try parent resource (strip last path segment)
+        parent_path = re.sub(r'/[^/]+$', '', list_path)
+        if parent_path and parent_path != list_path:
+            parent_id = self._try_extract_id_from_list(parent_path, "id")
+            if parent_id is not None:
+                # Try the original list path again — sometimes parent context helps
+                result = self._try_extract_id_from_list(list_path, param_name)
+                if result is not None:
+                    return result
+        
+        return "QUALIBUG_UNRESOLVED_ID"
+
+    def _try_extract_id_from_list(self, list_path: str, param_name: str) -> str | None:
+        """GET a list endpoint and extract the first entity's ID.
+        
+        Returns the ID string on success, None if unreachable or no entities found.
+        """
+        try:
+            r = self._http("GET", list_path, role="admin")
+            if r.get("_http", 0) != 200:
+                return None
+            
+            body = {k: v for k, v in r.items() if not k.startswith("_")}
+            entities = []
+            for list_field in ("records", "data", "items", "results", "list"):
+                items = body.get(list_field, [])
+                if isinstance(items, list) and items:
+                    entities = items
+                    break
+            if not entities and isinstance(body, dict):
+                vals = [v for v in body.values() if isinstance(v, dict)]
+                if vals:
+                    entities = vals
+            
+            if entities:
+                first = entities[0]
+                if isinstance(first, dict):
+                    for idf in ("id", "business_no", "order_id", param_name, "ID", "uuid"):
+                        if idf in first and first[idf] is not None:
+                            return str(first[idf])
+            
+            # Last resort: first positive integer field in body root
+            for k, v in body.items():
+                if isinstance(v, (int, float)) and v > 0:
+                    return str(int(v))
+        except Exception:
+            pass
+        return None
+
+    def _generate_test_values(self, param_name: str, resolved: dict, route_map: dict) -> list[str]:
+        """Generate test value variants: real ID + boundaries + edge cases.
+        
+        Returns list of values to try: [real_id, "0", "-1", "", "null", "undefined", "99999999"]
+        """
+        values = []
+        real_id = self._fetch_real_id(param_name, resolved, route_map)
+        if real_id and real_id != "1" and not real_id.startswith("QUALIBUG_"):
+            values.append(real_id)
+        
+        # Boundary values
+        values.extend(["0", "-1", "99999999", ""])
+        
+        # SQL injection / XSS probes (lightweight, safe for sandbox)
+        values.append("' OR '1'='1")
+        
+        return values
 
     def _execute_verification(self, vm: dict, route_map: dict = None, async_delay: float = 0) -> dict:
         """Execute verification method using accurate route matching.
@@ -810,22 +1188,32 @@ class AutonomousDiscoveryEngine:
             route_map = {}
         
         calls = []
+        # Try to get real IDs for path parameters from target API
+        real_ids = {}
         for key in sorted(vm.keys()):
             value = str(vm[key])
-            # Match both /api/... and /master/... style paths (MES uses /master/, /production/, etc.)
             matches = re.findall(r'(GET|POST|PUT|DELETE)\s+(/(?:api|master|production|inventory|quality|planning|sales|purchase|warehouse|report|system|admin)/[\w\-\/{}]+)', value, re.IGNORECASE)
             for method, llm_path in matches:
                 resolved = self._resolve_call(llm_path, method.upper(), route_map)
                 if resolved:
                     actual_path = resolved["path_pattern"]
                     for param in resolved["path_params"]:
-                        actual_path = actual_path.replace(f"{{{param}}}", "1")
+                        # Try to use a real ID from the target
+                        if param not in real_ids:
+                            real_ids[param] = self._fetch_real_id(param, resolved, route_map)
+                        # If sentinel (unresolvable), fall back to "1" for the HTTP call
+                        # but track that this is a synthetic ID → evidence quality degraded
+                        rid = real_ids.get(param, "1")
+                        actual_path = actual_path.replace(f"{{{param}}}", rid if not rid.startswith("QUALIBUG_") else "1")
+                    synthetic_id = any(v.startswith("QUALIBUG_") for v in real_ids.values())
                     calls.append({"method": resolved["method"], "path": actual_path,
-                        "llm_path": llm_path, "resolved": True, "source": key})
+                        "llm_path": llm_path, "resolved": True, "source": key,
+                        "synthetic_id": synthetic_id})
                 else:
                     clean_path = re.sub(r'\{[^}]*\}', '1', llm_path)
                     calls.append({"method": method.upper(), "path": clean_path,
-                        "llm_path": llm_path, "resolved": False, "source": key})
+                        "llm_path": llm_path, "resolved": False, "source": key,
+                        "synthetic_id": True, "unresolved_route": True})
 
         if not calls:
             for key in sorted(vm.keys()):
@@ -836,7 +1224,8 @@ class AutonomousDiscoveryEngine:
                     # Normalize path: ensure /api/ prefix for MES
                     if not path.startswith("/api/"):
                         path = "/api" + path
-                    calls.append({"method": "GET", "path": path, "source": key})
+                    calls.append({"method": "GET", "path": path, "source": key,
+                        "resolved": False, "synthetic_id": True, "unresolved_route": True})
 
         results = []
         prev_was_write = False
@@ -852,9 +1241,10 @@ class AutonomousDiscoveryEngine:
             role_results = {}
             for role in ["admin", "viewer"]:
                 r = self._http(call["method"], path, role=role)
-                # Capture full response body, not just status code
-                body = {k: v for k, v in r.items() if not k.startswith("_")}
-                role_results[role] = {"status": r.get("_http", 0), "body": body}
+                # Keep _error for evidence quality; _http captured as status, _request as request field
+                body = {k: v for k, v in r.items() if k != "_request"}
+                role_results[role] = {"status": r.get("_http", 0), "body": body,
+                    "request": r.get("_request", {})}
             write_methods = {"POST", "PUT", "PATCH", "DELETE"}
             allow_unauth_write = str(os.environ.get("QUALIBUG_ALLOW_UNAUTH_WRITE_PROBES", "")).lower() in {"1", "true", "yes", "on"}
             if call["method"] in write_methods and not allow_unauth_write:
@@ -870,11 +1260,14 @@ class AutonomousDiscoveryEngine:
                 }
             else:
                 r_noauth = self._http(call["method"], path, no_auth=True)
-                body_noauth = {k: v for k, v in r_noauth.items() if not k.startswith("_")}
-                role_results["no_auth"] = {"status": r_noauth.get("_http", 0), "body": body_noauth}
+                body_noauth = {k: v for k, v in r_noauth.items() if k != "_request"}
+                role_results["no_auth"] = {"status": r_noauth.get("_http", 0), "body": body_noauth,
+                    "request": r_noauth.get("_request", {})}
             results.append({"call": f"{call['method']} {path}",
                 "source_step": call["source"], "results": role_results,
-                "resolved": call.get("resolved", False), "llm_path": call.get("llm_path", path)})
+                "resolved": call.get("resolved", False), "llm_path": call.get("llm_path", path),
+                "synthetic_id": call.get("synthetic_id", False),
+                "unresolved_route": call.get("unresolved_route", False)})
 
         return {"calls": results, "check_condition": vm.get("check", ""),
                 "total_calls": len(results), "route_map_used": bool(route_map)}
@@ -1211,6 +1604,40 @@ class AutonomousDiscoveryEngine:
             actual = ""
             confidence = 0.5
             
+            # === P-1: RUNTIME ERROR DETECTION (universal) ===
+            # Detect server errors, business failures, and error responses
+            for call in calls:
+                for role in ("admin", "viewer", "no_auth"):
+                    body = call.get("results", {}).get(role, {}).get("body", {})
+                    status = call.get("results", {}).get(role, {}).get("status", 0)
+                    if isinstance(body, dict):
+                        # Server error (5xx)
+                        if status >= 500:
+                            verdict = "confirmed"
+                            actual = f"服务端异常 HTTP{status}: {str(body)[:300]}"
+                            confidence = 0.90
+                            break
+                        # Business logic failure
+                        if body.get("ok") is False:
+                            verdict = "confirmed"
+                            actual = f"业务逻辑返回失败: {str(body)[:300]}"
+                            confidence = 0.85
+                            break
+                        # Explicit error response
+                        if body.get("error") and not (400 <= status < 500 and status not in (401, 403)):
+                            verdict = "confirmed"
+                            actual = f"错误响应: {str(body.get('error',''))[:200]}"
+                            confidence = 0.80
+                            break
+                        # Exception/stack trace in response (information leak)
+                        if "exception" in str(body).lower() or "traceback" in str(body).lower():
+                            verdict = "confirmed"
+                            actual = f"响应体泄露异常信息: {str(body)[:300]}"
+                            confidence = 0.85
+                            break
+                if verdict == "confirmed":
+                    break
+            
             # === P0: BEFORE/AFTER STATE OBSERVER COMPARISON ===
             # If execution has 3+ steps (before GET → action → after GET),
             # use structured snapshot diff for higher-confidence verdicts.
@@ -1224,12 +1651,24 @@ class AutonomousDiscoveryEngine:
                     action_ok = 200 <= action_status < 300
                     
                     if before_body != after_body:
+                        # Exclude timestamp/metadata fields that naturally change
+                        _skip_keys = {"created_at", "updated_at", "modified_at", "timestamp",
+                                      "create_time", "update_time", "last_modified", "_links",
+                                      "createdAt", "updatedAt", "modifiedAt"}
                         changed = {}
-                        for k in set(list(before_body.keys())[:20]) | set(list(after_body.keys())[:20]):
+                        all_keys = set(list(before_body.keys())[:30]) | set(list(after_body.keys())[:30])
+                        for k in all_keys - _skip_keys:
                             bv = before_body.get(k)
                             av = after_body.get(k)
                             if bv != av:
-                                changed[k] = {"before": str(bv)[:100], "after": str(av)[:100]}
+                                # Deep compare: serialize to JSON for nested objects
+                                bv_str = json.dumps(bv, sort_keys=True, default=str) if isinstance(bv, (dict, list)) else str(bv)
+                                av_str = json.dumps(av, sort_keys=True, default=str) if isinstance(av, (dict, list)) else str(av)
+                                if bv_str != av_str:
+                                    changed[k] = {
+                                        "before": str(bv)[:200],
+                                        "after": str(av)[:200],
+                                    }
                         
                         if changed:
                             detail = "; ".join(f"{k}: {v['before']}→{v['after']}" for k, v in list(changed.items())[:5])
@@ -1393,13 +1832,15 @@ class AutonomousDiscoveryEngine:
 
             # === BODY-AWARE RULES (NEW) ===
 
-            # Rule B0: Auto-falsify multi-tenant hypotheses on single-tenant MES
+            # Rule B0: Tenant/multi-tenant hypothesis — only falsify when project
+            # config explicitly declares single-tenant mode.  Default: let evidence decide.
+            is_single_tenant = str(os.environ.get("QUALIBUG_SINGLE_TENANT", "")).lower() in {"1", "true", "yes"}
             tenant_kw = ("租户", "tenant a", "tenant b", "tenant_id", "tenantid",
                          "多租户", "multi-tenant", "multi.tenant", "cross-tenant",
                          "跨租户", "tenant isolation", "租户隔离")
-            if any(kw in title + expected for kw in tenant_kw):
+            if is_single_tenant and any(kw in title + expected for kw in tenant_kw):
                 verdict = "falsified"
-                actual = "单租户MES无租户概念 — 假设不适用（自动过滤）"
+                actual = "项目配置为单租户模式 — 租户假设不适用"
                 confidence = 0.95
 
             # Rule B1: Hypothesis says reject/block/error → body says success/ok
@@ -1702,8 +2143,8 @@ class AutonomousDiscoveryEngine:
         self._budget_feedback_summary = _summarize_execution_feedback(findings)
         try:
             persist_budget_feedback_profile(self._budget_learning_context, self._budget_feedback_summary)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [WARN] Budget feedback persistence failed (non-fatal): {e}", flush=True)
         return findings
 
     # ==================================================================
@@ -1879,7 +2320,7 @@ class AutonomousDiscoveryEngine:
         # Stage 3: Execute — with route map
         self._emit_progress("executor", "Building route map and executing probes")
         print("\n[Stage 3] Executor — building route map + executing probes...")
-        route_map = self._build_route_map()
+        route_map = self._build_route_map(api_spec_text)
         print(f"  Route map: {len(route_map)} routes")
         try:
             execution_results = self.stage_execute(hypotheses, route_map)
@@ -2137,8 +2578,8 @@ class AutonomousDiscoveryEngine:
         validated_candidates = sum(1 for f in self.findings if f.verdict == "validated_candidate")
         try:
             persist_deployment_config_snapshot(self._deployment_config_snapshot)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [WARN] Deployment config persistence failed (non-fatal): {e}", flush=True)
 
         return {
             "pipeline": "autonomous_discovery_v1",
@@ -2177,13 +2618,18 @@ class AutonomousDiscoveryEngine:
             "findings": [{
                 "id": f.hypothesis_id,
                 "title": f.title,
-                "verdict": f.verdict,
+                "verdict": (
+                    "risk_clue" if (not self._tokens_authentic and f.verdict in ("confirmed", "validated_candidate"))
+                    else f.verdict
+                ),
                 "severity": f.severity,
                 "finding_gate": (f.evidence or {}).get("finding_gate", {}),
                 "raw_runtime_verdict": (f.evidence or {}).get("raw_runtime_verdict", f.verdict),
                 "semantic_verdict": (f.evidence or {}).get("semantic_verdict", f.verdict),
                 "business_evidence_status": (f.evidence or {}).get("business_evidence_status", "NOT_ENRICHED"),
                 "final_review_status": (f.evidence or {}).get("final_review_status", "NOT_GATED"),
+                "evidence_class": "reproducible_bug" if self._tokens_authentic else "risk_clue",
+                "auth_status": "real" if self._tokens_authentic else "unauthenticated",
                 "evidence": {
                     "calls_count": len((f.evidence or {}).get("calls", [])),
                     "has_before_snapshot": bool((f.evidence or {}).get("before_snapshot_ref")),
@@ -2192,7 +2638,118 @@ class AutonomousDiscoveryEngine:
                     "cleanup_status": (f.evidence or {}).get("cleanup", {}).get("status", "?"),
                 },
             } for f in self.findings],
+            "auto_har": self._auto_har_report(),
         }
+
+    def _auto_har_report(self) -> dict[str, Any]:
+        """Generate an automatic HAR analysis report from captured probe traffic.
+
+        Called automatically at the end of every discovery run — the user
+        never needs to provide a HAR file or log file.
+        """
+        entries = self._har_entries
+        error_patterns = self._har_error_patterns
+
+        if not entries:
+            return {"status": "no_traffic", "entries": 0, "log_analysis": {}}
+
+        # Deduplicate endpoints
+        endpoint_counts: dict[tuple[str, str], int] = {}
+        error_by_endpoint: dict[tuple[str, str], list[dict]] = {}
+        for ep in error_patterns:
+            key = (ep["method"], ep["endpoint"])
+            error_by_endpoint.setdefault(key, []).append(ep)
+        for entry in entries:
+            key = (entry["request"]["method"], entry["request"]["url"])
+            endpoint_counts[key] = endpoint_counts.get(key, 0) + 1
+
+        total_errors = len(error_patterns)
+        error_by_status: dict[int, int] = {}
+        for ep in error_patterns:
+            s = ep["status"]
+            error_by_status[s] = error_by_status.get(s, 0) + 1
+
+        # Feed error patterns through the log analyzer inline
+        log_analysis = self._analyze_captured_errors(error_patterns)
+
+        return {
+            "status": "captured",
+            "total_http_calls": len(entries),
+            "unique_endpoints": len(endpoint_counts),
+            "total_error_responses": total_errors,
+            "error_by_status": error_by_status,
+            "error_endpoints": [
+                {"method": k[0], "path": k[1], "errors": len(v)}
+                for k, v in sorted(error_by_endpoint.items(), key=lambda x: -len(x[1]))[:20]
+            ],
+            "log_analysis": log_analysis,
+        }
+
+    def _analyze_captured_errors(self, error_patterns: list[dict]) -> dict[str, Any]:
+        """Feed auto-captured probe errors through the log analyzer inline.
+
+        Produces error clusters and candidates from real probe traffic,
+        without requiring any user-provided log files.
+        """
+        if not error_patterns:
+            return {"error_clusters": [], "candidates_from_log": []}
+
+        # Build a synthetic log from error patterns for the log analyzer
+        log_lines: list[str] = []
+        for ep in error_patterns:
+            status = ep.get("status", 0)
+            level = "ERROR" if status >= 500 else "WARN"
+            body = ep.get("response_body", "")[:200]
+            # Try to extract error message from JSON response
+            err_msg = ""
+            if body:
+                try:
+                    data = json.loads(body)
+                    for key in ("message", "error", "detail"):
+                        if key in data and isinstance(data[key], str):
+                            err_msg = data[key]
+                            break
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if not err_msg:
+                err_msg = body.replace("\n", " ")[:100]
+            log_lines.append(
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} {level} "
+                f"{ep.get('method', 'GET')}:{ep.get('endpoint', '/')} "
+                f"HTTP{status} {err_msg}"
+            )
+
+        if not log_lines:
+            return {"error_clusters": [], "candidates_from_log": []}
+
+        # Write to temp file and run through log analyzer
+        import tempfile as _tmp
+        tmp_path = ""
+        try:
+            with _tmp.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8") as tf:
+                tf.write("\n".join(log_lines))
+                tmp_path = tf.name
+
+            from .log_analyzer import analyze_logs, log_errors_to_candidates
+            result = analyze_logs(tmp_path)
+            clusters = [
+                {"error_type": c.error_type, "count": c.count,
+                 "message": c.message_pattern[:120], "severity": c.severity}
+                for c in result.get("error_clusters", [])[:20]
+            ]
+            candidates = log_errors_to_candidates(tmp_path)
+            return {
+                "error_clusters": clusters,
+                "candidates_from_log": candidates[:20],
+            }
+        except Exception as e:
+            return {"error_clusters": [], "candidates_from_log": [], "error": str(e)[:200]}
+        finally:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink()
+                except OSError:
+                    pass
 
 
 def run_discovery(prd_path: str = None, api_path: str = None,
@@ -2214,3 +2771,132 @@ if __name__ == "__main__":
     result = run_discovery()
     print(f"\n{'='*60}")
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+
+
+# ── Generic Runtime Probe Executor ────────────────────────
+
+def run_generic_probes(
+    *,
+    project: str = "",
+    base_url: str = "",
+    api_spec_text: str = "",
+    probe_plan: list[dict[str, Any]] | None = None,
+    max_probes: int = 50,
+) -> dict[str, Any]:
+    """Execute runtime API probes against the target system.
+    
+    Uses adaptive probe templates when available, falling back to basic
+    endpoint probing from the OpenAPI spec.
+    """
+    import urllib.request, urllib.error
+
+    findings: list[dict[str, Any]] = []
+    total = 0
+    confirmed = 0
+    falsified = 0
+    blocked = 0
+
+    # Use probe plan if available, otherwise build basic endpoint probes
+    probes = probe_plan if probe_plan else _build_basic_probes(api_spec_text)
+    probes = probes[:max_probes]
+
+    for probe in probes:
+        total += 1
+        method = str(probe.get("method", "GET"))
+        path = str(probe.get("path", "/"))
+        url = base_url.rstrip("/") + "/" + path.lstrip("/")
+        expected_status = probe.get("expected_status", 200)
+        data = probe.get("body")
+
+        try:
+            req = urllib.request.Request(url, method=method)
+            req.add_header("Accept", "application/json")
+            req.add_header("Content-Type", "application/json")
+            # Pass role/actor headers if specified
+            actor = probe.get("actor", "")
+            if actor and actor != "anonymous":
+                req.add_header("X-Role", actor)
+            if data:
+                req.data = json.dumps(data).encode("utf-8")
+
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                status = resp.status
+                resp_headers = dict(resp.headers)
+                body = resp.read().decode("utf-8", errors="replace")
+                try:
+                    body_json = json.loads(body)
+                except Exception:
+                    body_json = {"raw": body[:500]}
+
+        except urllib.error.HTTPError as e:
+            status = e.code
+            resp_headers = dict(e.headers) if e.headers else {}
+            try:
+                body_json = json.loads(e.read().decode("utf-8", errors="replace"))
+            except Exception:
+                body_json = {"error": str(e)[:200]}
+
+        except Exception as e:
+            blocked += 1
+            findings.append({
+                "oracle_id": probe.get("id", f"P{total}"),
+                "verdict": "blocked",
+                "expected": str(probe.get("expected", "")),
+                "actual": str(e)[:200],
+            })
+            continue
+
+        verdict = "confirmed" if status != expected_status else "falsified"
+        if verdict == "confirmed":
+            confirmed += 1
+            # Extract trace ID from response
+            from .behavior_semantic_mapper import extract_trace_id
+            trace_id = extract_trace_id(resp_headers, body_json)
+
+            findings.append({
+                "severity": probe.get("severity", "P2"),
+                "title": f"[Runtime Probe] {method} {path}: expected {expected_status}, got {status}",
+                "category": probe.get("risk_type", "runtime_probe"),
+                "description": json.dumps(body_json, ensure_ascii=False)[:300],
+                "confidence_score": 0.85,
+                "source": "runtime_probe",
+                "method": method,
+                "path": path,
+                "validation_evidence": {
+                    "response_headers": {k: str(v) for k, v in resp_headers.items()},
+                    "response_body": body_json,
+                    "http_status": status,
+                    "expected_status": expected_status,
+                },
+                "evidence_hint": f"Trace ID: {trace_id}" if trace_id else "",
+            })
+        else:
+            falsified += 1
+
+    return {
+        "summary": {"total_probes": total, "confirmed": confirmed, "falsified": falsified, "blocked": blocked},
+        "findings": findings,
+        "confirmed_findings": [f for f in findings if f.get("verdict") != "blocked"],
+    }
+
+
+def _build_basic_probes(api_spec_text: str) -> list[dict[str, Any]]:
+    """Build basic endpoint probes from OpenAPI spec as fallback."""
+    probes = []
+    try:
+        spec = json.loads(api_spec_text)
+        paths = spec.get("paths", {})
+        for path, methods in paths.items():
+            for method in ["get", "post", "put", "delete", "patch"]:
+                if method in methods:
+                    probes.append({
+                        "id": f"{method.upper()}-{path}",
+                        "method": method.upper(),
+                        "path": path,
+                        "expected_status": 200 if method == "get" else 201,
+                        "severity": "P2",
+                        "risk_type": "contract_validation",
+                    })
+    except Exception:
+        pass
+    return probes

@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "FINTECH_0",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_1",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_2",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_3",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_4",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_5",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_6",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_7",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_8",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_9",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "high",
+    "description": "Simulated permission bug for fintech scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_10",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_11",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_12",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_13",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_14",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_15",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_16",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_17",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_18",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_19",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_20",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_21",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_22",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_23",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_24",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_25",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_26",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_27",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_28",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_29",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_30",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_31",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_32",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_33",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_34",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_35",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_36",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_37",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_38",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_39",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_40",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_41",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_42",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_43",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for fintech scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_44",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_45",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_46",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for fintech scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_47",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_48",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_49",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_50",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_51",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_52",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_53",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_54",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_55",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_56",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_57",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_58",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_59",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_60",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_61",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_62",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_63",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_64",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_65",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_66",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_67",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_68",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for fintech scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_69",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_70",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_71",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_72",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_73",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_74",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_75",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_76",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_77",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_78",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_79",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_80",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_81",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_82",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_83",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "high",
+    "description": "Simulated permission bug for fintech scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_84",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_85",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_86",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_87",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_88",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_89",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_90",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_91",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_92",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_93",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_94",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_95",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_96",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "high",
+    "description": "Simulated permission bug for fintech scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_97",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_98",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_99",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_100",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_101",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_102",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_103",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_104",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_105",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_106",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_107",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_108",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_109",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_110",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_111",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_112",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_113",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_114",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_115",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_116",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_117",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_118",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_119",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_120",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_121",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_122",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_123",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_124",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_125",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_126",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_127",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_128",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_129",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_130",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_131",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_132",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_133",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_134",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_135",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_136",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_137",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for fintech scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_138",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_139",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_140",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_141",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_142",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for fintech scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_143",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_144",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_145",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_146",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_147",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_148",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_149",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_150",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_151",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_152",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_153",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_154",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_155",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_156",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_157",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_158",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_159",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_160",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_161",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_162",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_163",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_164",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for fintech scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_165",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_166",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_167",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_168",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_169",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_170",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_171",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_172",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "high",
+    "description": "Simulated permission bug for fintech scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_173",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_174",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_175",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_176",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_177",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_178",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_179",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_180",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_181",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_182",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_183",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_184",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_185",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_186",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_187",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_188",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_189",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_190",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_191",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_192",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_193",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_194",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_195",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_196",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_197",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_198",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_199",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_200",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_201",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_202",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_203",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_204",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_205",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_206",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_207",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_208",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_209",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_210",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_211",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_212",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_213",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "high",
+    "description": "Simulated permission bug for fintech scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_214",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_215",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_216",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_217",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_218",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_219",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_220",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_221",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_222",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_223",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_224",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_225",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_226",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_227",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_228",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_229",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "low",
+    "description": "Simulated permission bug for fintech scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_230",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_231",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_232",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_233",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_234",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_235",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_236",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_237",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_238",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_239",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_240",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_241",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_242",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for fintech scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_243",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_244",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "low",
+    "description": "Simulated money bug for fintech scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_245",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_246",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_247",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_248",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "high",
+    "description": "Simulated permission bug for fintech scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_249",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_250",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_251",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_252",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_253",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_254",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_255",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_256",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_257",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_258",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for fintech scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_259",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_260",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_261",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_262",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_263",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_264",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_265",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_266",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for fintech scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_267",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_268",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for fintech scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_269",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for fintech scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_270",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for fintech scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_271",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for fintech scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_272",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_273",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_274",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for fintech scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_275",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for fintech scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_276",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_277",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_278",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_279",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for fintech scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_280",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_281",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "critical",
+    "description": "Simulated permission bug for fintech scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_282",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_283",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_284",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_285",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "medium",
+    "description": "Simulated permission bug for fintech scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_286",
+    "type": "permission",
+    "title": "permission issue in fintech",
+    "severity": "high",
+    "description": "Simulated permission bug for fintech scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_287",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "critical",
+    "description": "Simulated money bug for fintech scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_288",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_289",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_290",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_291",
+    "type": "concurrency",
+    "title": "concurrency issue in fintech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for fintech scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_292",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for fintech scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_293",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "low",
+    "description": "Simulated state_break bug for fintech scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_294",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for fintech scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_295",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_296",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "high",
+    "description": "Simulated money bug for fintech scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_297",
+    "type": "money",
+    "title": "money issue in fintech",
+    "severity": "medium",
+    "description": "Simulated money bug for fintech scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_298",
+    "type": "state_break",
+    "title": "state_break issue in fintech",
+    "severity": "high",
+    "description": "Simulated state_break bug for fintech scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "FINTECH_299",
+    "type": "idempotency",
+    "title": "idempotency issue in fintech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for fintech scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

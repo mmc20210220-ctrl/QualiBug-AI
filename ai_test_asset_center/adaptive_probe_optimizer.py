@@ -145,3 +145,84 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def build_adaptive_probe_plan(
+    findings: list[dict[str, Any]],
+    *,
+    base_url: str = "",
+    max_probes: int = 50,
+) -> list[dict[str, Any]]:
+    """Build a prioritized probe execution plan from findings + adaptive templates.
+    
+    Matches findings to adaptive probe templates by risk_type/category,
+    prioritizes by severity × confidence, returns top N probes ready to execute.
+    """
+    import urllib.parse
+    
+    # Build template index by risk type
+    template_index: dict[str, list[dict[str, Any]]] = {}
+    for tid, tmpl in ADAPTIVE_TEMPLATE_LIBRARY.items():
+        risk = tmpl.get("risk_type", "")
+        if risk not in template_index:
+            template_index[risk] = []
+        template_index[risk].append(tmpl)
+
+    # Match findings to templates and build probe plan
+    probes: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    # Risk type mapping between finding categories and template risk types
+    risk_map = {
+        "error_contract": ["permission_bypass", "auth_bypass"],
+        "permission_boundary": ["permission_bypass", "auth_bypass", "idor"],
+        "idempotency_gap": ["idempotency", "state_consistency"],
+        "idempotent_side_effect": ["idempotency", "stock_consistency"],
+        "spec_structure": ["state_consistency"],
+        "conservation": ["stock_consistency", "money_consistency"],
+        "causality_coverage": ["state_flow", "state_consistency"],
+        "unreachable": ["auth_bypass"],
+        "async_observability_gap": ["state_flow"],
+    }
+
+    for finding in findings:
+        risk_type = str(finding.get("risk_type", finding.get("category", "")))
+        severity = str(finding.get("severity", "P2"))
+        confidence = float(finding.get("confidence_score", 0.7))
+        path = str(finding.get("path", ""))
+        method = str(finding.get("method", ""))
+
+        # Score: P0=3, P1=2, P2=1, P3=0.5
+        sev_weight = {"P0": 3.0, "P1": 2.0, "P2": 1.0, "P3": 0.5}.get(severity, 1.0)
+        priority = sev_weight * confidence
+
+        # Look up mapped risk types, then find matching templates
+        mapped = risk_map.get(risk_type, [risk_type])
+        for mtype in mapped:
+            templates = template_index.get(mtype, [])
+            for tmpl in templates:
+                probe_path = tmpl.get("path", path)
+                if probe_path in seen_paths:
+                    continue
+                actual_path = path or probe_path
+                if not actual_path:
+                    continue
+                probes.append({
+                    "id": f"ADAPT-{len(probes)}",
+                    "method": method or tmpl.get("method", "GET"),
+                    "path": actual_path,
+                    "expected_status": tmpl.get("expected_status", 200),
+                    "actor": tmpl.get("actor", ""),
+                    "severity": tmpl.get("severity", "P1"),
+                    "risk_type": tmpl.get("risk_type", risk_type),
+                    "strategy": tmpl.get("strategy", ""),
+                    "priority": priority,
+                })
+                seen_paths.add(probe_path)
+                break
+            if templates:
+                break  # matched one template group, move on
+
+    # Sort by priority descending
+    probes.sort(key=lambda p: p.get("priority", 0), reverse=True)
+    return probes[:max_probes]

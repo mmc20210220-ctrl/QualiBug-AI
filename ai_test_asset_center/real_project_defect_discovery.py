@@ -5,6 +5,7 @@ import os
 import time
 import urllib.request
 import urllib.error
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ from .business_event_chain_reasoning import build_business_event_chain_profile, 
 from .business_saga_compensation_reasoning import build_business_saga_compensation_profile, generate_business_saga_compensation_probes, load_business_saga_compensation_profile, run_business_saga_compensation_reasoning
 from .agent_discovery_loop import build_agent_discovery_loop
 from .confirmed_bug_flywheel import build_confirmed_bug_flywheel, annotate_probes_with_confirmed_learning
+from .continuous_discovery_campaign import record_continuous_discovery_campaign_run
 from .business_assurance_coverage import build_business_assurance_coverage_profile, generate_business_assurance_coverage_probes, load_business_assurance_coverage_profile, run_business_assurance_coverage
 from .multi_industry_business_reasoning import build_multi_industry_business_profile, generate_multi_industry_business_probes, load_multi_industry_business_profile
 from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset, build_enterprise_knowledge_evidence_bundle, generate_enterprise_business_knowledge_probes, load_enterprise_business_knowledge_asset
@@ -56,6 +58,7 @@ from .browser_ui_replay_discovery_adapter import (
 from .bug_family_coverage_report import build_bug_family_coverage_report
 from .compatibility_discovery_adapter import collect_compatibility_issues, generate_compatibility_probes
 from .defect_family_registry import resolve_defect_family
+from .discovery_accounting import classify_issue_accounting, enrich_issue_accounting
 from .document_contract_fuzzing_discovery_adapter import generate_document_contract_fuzzing_probes
 from .full_spectrum_capability_matrix import build_full_spectrum_capability_matrix
 from .frontend_runtime_discovery_adapter import collect_frontend_runtime_issues, generate_frontend_runtime_probes
@@ -431,6 +434,271 @@ def _append_adapter_issue(
     )
 
 
+def _top_reason_rows(values: list[str], *, limit: int = 5) -> list[dict[str, Any]]:
+    counter = Counter(str(value).strip() for value in values if str(value).strip())
+    return [
+        {"reason_code": reason_code, "count": count}
+        for reason_code, count in counter.most_common(limit)
+    ]
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 3)
+
+
+def _build_low_discovery_diagnosis(
+    funnel: dict[str, Any],
+    blocker_summary: dict[str, Any],
+    *,
+    probe_count: int,
+    issue_count: int,
+) -> dict[str, Any]:
+    candidate_count = int(((funnel.get("candidate_generation") or {}).get("output_count")) or 0)
+    selected_count = int(((funnel.get("probe_selection") or {}).get("output_count")) or 0)
+    executed_count = int(((funnel.get("execution") or {}).get("output_count")) or 0)
+    verifier_passed_count = int(((funnel.get("verification") or {}).get("output_count")) or 0)
+    validated_bug_count = int(((funnel.get("formal_accounting") or {}).get("output_count")) or 0)
+
+    category_rows = [
+        {
+            "category": "no_candidate",
+            "label": "无候选",
+            "count": 1 if candidate_count <= 0 else 0,
+            "stage": "candidate_generation",
+            "top_blockers": list((funnel.get("candidate_generation") or {}).get("top_blockers") or []),
+            "next_action": "补充知识资产、输入桥接或候选生成召回。",
+        },
+        {
+            "category": "not_selected",
+            "label": "未入选",
+            "count": max(0, candidate_count - selected_count),
+            "stage": "probe_selection",
+            "top_blockers": list((funnel.get("probe_selection") or {}).get("top_blockers") or []),
+            "next_action": "复盘 probe 预算、validated yield 权重和关键路径优先级。",
+        },
+        {
+            "category": "execution_failed",
+            "label": "执行失败",
+            "count": max(0, selected_count - executed_count),
+            "stage": "execution",
+            "top_blockers": list((funnel.get("execution") or {}).get("top_blockers") or []),
+            "next_action": "优先排查环境接入、路径对齐、权限与安全门禁。",
+        },
+        {
+            "category": "verification_failed",
+            "label": "验证失败",
+            "count": max(0, issue_count - verifier_passed_count),
+            "stage": "verification",
+            "top_blockers": list((funnel.get("verification") or {}).get("top_blockers") or []),
+            "next_action": "收紧 verifier 前先补路径命中、响应判定和拒绝原因归因。",
+        },
+        {
+            "category": "evidence_insufficient",
+            "label": "证据不足",
+            "count": max(0, verifier_passed_count - validated_bug_count),
+            "stage": "formal_accounting",
+            "top_blockers": list((funnel.get("formal_accounting") or {}).get("top_blockers") or []),
+            "next_action": "补复现步骤、证据引用和可交付 reproduction pack。",
+        },
+    ]
+
+    validated_bug_discovery_rate = _safe_rate(validated_bug_count, probe_count)
+    is_zero_validated_bug = validated_bug_count <= 0
+    is_low_discovery = is_zero_validated_bug or (
+        probe_count > 0 and validated_bug_discovery_rate < 0.1
+    )
+
+    if candidate_count <= 0:
+        primary_row = category_rows[0]
+    elif selected_count <= 0:
+        primary_row = category_rows[1]
+    elif executed_count <= 0:
+        primary_row = category_rows[2]
+    elif verifier_passed_count <= 0:
+        primary_row = category_rows[3]
+    elif validated_bug_count <= 0:
+        primary_row = category_rows[4]
+    else:
+        ranked_rows = sorted(
+            (row for row in category_rows if int(row.get("count") or 0) > 0),
+            key=lambda row: int(row.get("count") or 0),
+            reverse=True,
+        )
+        primary_row = ranked_rows[0] if ranked_rows else {
+            "category": "validated",
+            "label": "已形成 validated bug",
+            "count": validated_bug_count,
+            "stage": "formal_accounting",
+            "top_blockers": [],
+            "next_action": "继续围绕高价值路径扩面，稳定 validated yield。",
+        }
+
+    primary_blockers = list(primary_row.get("top_blockers") or [])
+    primary_reason_code = str((primary_blockers[0] or {}).get("reason_code") or "") if primary_blockers else ""
+
+    return {
+        "reporting_basis": "validated_bug",
+        "probe_count": probe_count,
+        "issue_count": issue_count,
+        "candidate_count": candidate_count,
+        "selected_count": selected_count,
+        "executed_count": executed_count,
+        "verifier_passed_count": verifier_passed_count,
+        "validated_bug_count": validated_bug_count,
+        "validated_bug_discovery_rate": validated_bug_discovery_rate,
+        "is_zero_validated_bug": is_zero_validated_bug,
+        "is_low_discovery": is_low_discovery,
+        "primary_category": str(primary_row.get("category") or ""),
+        "primary_label": str(primary_row.get("label") or ""),
+        "primary_stage": str(primary_row.get("stage") or ""),
+        "primary_reason_code": primary_reason_code,
+        "recommended_action": str(primary_row.get("next_action") or ""),
+        "category_rows": category_rows,
+        "top_blockers": list(blocker_summary.get("top_blockers") or []),
+    }
+
+
+def _execution_attempted(execution: dict[str, Any]) -> bool:
+    error = str(execution.get("error") or "")
+    if error in {
+        "candidate_only_or_missing_base_url",
+        "destructive_probe_blocked",
+        "write_probe_blocked_by_safety_gate",
+        "delegated_to_business_assurance_coverage",
+        "delegated_to_enterprise_business_knowledge_asset",
+        "non_http_audit_source",
+    }:
+        return False
+    return execution.get("response_status") is not None or execution.get("duration_seconds") is not None or bool(error)
+
+
+def _build_discovery_funnel(
+    probes: list[dict[str, Any]],
+    executions: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
+    risk_plan: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    plan_summary = (risk_plan or {}).get("summary") if isinstance(risk_plan, dict) else {}
+    skipped_probes = (risk_plan or {}).get("skipped_probes") if isinstance(risk_plan, dict) else []
+    candidate_probe_count = int(plan_summary.get("candidate_probe_count") or len(probes))
+    selected_probe_count = int(plan_summary.get("selected_probe_count") or len(probes))
+    skipped_probe_count = int(plan_summary.get("skipped_probe_count") or max(0, candidate_probe_count - selected_probe_count))
+    selection_reasons = [
+        str(item.get("reason") or "")
+        for item in skipped_probes
+        if isinstance(item, dict)
+    ]
+
+    executed_items = [item for item in executions if isinstance(item, dict) and _execution_attempted(item)]
+    execution_reasons = [
+        str(item.get("error") or "")
+        for item in executions
+        if isinstance(item, dict) and not _execution_attempted(item) and str(item.get("error") or "").strip()
+    ]
+    execution_failure_reasons = [
+        f"request_{str(item.get('error') or '').strip()}"
+        for item in executed_items
+        if str(item.get("error") or "").strip()
+    ]
+
+    accounting_rows = [classify_issue_accounting(item) for item in issues if isinstance(item, dict)]
+    verifier_passed_count = sum(1 for item in accounting_rows if item.get("verifier_passed"))
+    validated_bug_count = sum(1 for item in accounting_rows if item.get("strict_validated_bug"))
+    candidate_issue_count = sum(1 for item in accounting_rows if item.get("accounting_state") == "candidate")
+    pending_finding_count = sum(1 for item in accounting_rows if item.get("accounting_state") == "pending")
+    saleable_count = sum(1 for item in accounting_rows if item.get("saleable"))
+    coverage_gap_count = sum(1 for item in accounting_rows if item.get("quality_tier") == "coverage_gap")
+    unexecuted_count = sum(1 for item in accounting_rows if item.get("quality_tier") == "unexecuted")
+
+    # Tag issues with quality tier for reporting
+    for i, issue in enumerate(issues):
+        if i < len(accounting_rows):
+            issue["_saleable"] = accounting_rows[i].get("saleable", False)
+            issue["_quality_tier"] = accounting_rows[i].get("quality_tier", "unknown")
+    verification_reasons = [
+        reason
+        for item in accounting_rows
+        for reason in item.get("blocker_reason_codes") or []
+        if str(reason).startswith("missing_strict_verifier") or str(reason).startswith("verifier_")
+    ]
+    accounting_reasons = [
+        reason
+        for item in accounting_rows
+        for reason in item.get("blocker_reason_codes") or []
+        if str(reason) in {"missing_reproduction", "missing_evidence_refs", "quality_assurance_gap"}
+    ]
+
+    funnel = {
+        "candidate_generation": {
+            "stage": "candidate_generation",
+            "input_count": candidate_probe_count,
+            "output_count": candidate_probe_count,
+            "drop_count": 0,
+            "conversion_rate": 1.0 if candidate_probe_count else 0.0,
+            "top_blockers": [],
+        },
+        "probe_selection": {
+            "stage": "probe_selection",
+            "input_count": candidate_probe_count,
+            "output_count": selected_probe_count,
+            "drop_count": skipped_probe_count,
+            "conversion_rate": round(selected_probe_count / max(1, candidate_probe_count), 3),
+            "top_blockers": _top_reason_rows(selection_reasons),
+        },
+        "execution": {
+            "stage": "execution",
+            "input_count": selected_probe_count,
+            "output_count": len(executed_items),
+            "drop_count": max(0, selected_probe_count - len(executed_items)),
+            "conversion_rate": round(len(executed_items) / max(1, selected_probe_count), 3),
+            "top_blockers": _top_reason_rows([*execution_reasons, *execution_failure_reasons]),
+        },
+        "verification": {
+            "stage": "verification",
+            "input_count": len(issues),
+            "output_count": verifier_passed_count,
+            "drop_count": max(0, len(issues) - verifier_passed_count),
+            "conversion_rate": round(verifier_passed_count / max(1, len(issues)), 3),
+            "top_blockers": _top_reason_rows(verification_reasons),
+        },
+        "formal_accounting": {
+            "stage": "formal_accounting",
+            "input_count": verifier_passed_count,
+            "output_count": validated_bug_count,
+            "drop_count": max(0, verifier_passed_count - validated_bug_count),
+            "conversion_rate": round(validated_bug_count / max(1, verifier_passed_count), 3),
+            "top_blockers": _top_reason_rows(accounting_reasons),
+        },
+    }
+    blocker_summary = {
+        "selection": funnel["probe_selection"]["top_blockers"],
+        "execution": funnel["execution"]["top_blockers"],
+        "verification": funnel["verification"]["top_blockers"],
+        "formal_accounting": funnel["formal_accounting"]["top_blockers"],
+        "top_blockers": _top_reason_rows(
+            [
+                *selection_reasons,
+                *execution_reasons,
+                *execution_failure_reasons,
+                *verification_reasons,
+                *accounting_reasons,
+            ]
+        ),
+        "candidate_issue_count": candidate_issue_count,
+        "pending_finding_count": pending_finding_count,
+        "validated_bug_count": validated_bug_count,
+    }
+    blocker_summary["low_discovery_diagnosis"] = _build_low_discovery_diagnosis(
+        funnel,
+        blocker_summary,
+        probe_count=len(probes),
+        issue_count=len(issues),
+    )
+    return funnel, blocker_summary
+
+
 def run_real_project_discovery(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:
     root = root or ROOT
     project = _safe_project_id(project_id)
@@ -655,7 +923,13 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         ]:
             family = resolve_defect_family(probe)
             probe = {**probe, "defect_family": probe.get("defect_family") or family.get("family_id")}
-            key = (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")))
+            # Include actor/expected/scenario/context to avoid merging distinct
+            # verification scenarios on the same endpoint (e.g. admin vs viewer vs anonymous).
+            actor = str(probe.get("actor") or probe.get("actors", [""])[0] if isinstance(probe.get("actors"), list) else "")
+            expected = str(probe.get("expected_behavior") or probe.get("expected") or "")[:80]
+            scenario = str(probe.get("mutation_scenario") or probe.get("access_context") or "")
+            key = (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")),
+                   actor, expected, scenario)
             if key in seen_probe_keys:
                 continue
             seen_probe_keys.add(key)
@@ -673,17 +947,26 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         *compatibility_probes,
         *performance_stability_probes,
     ]
-    seen_probe_keys: set[tuple[str, str, str, str]] = {
-        (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")))
-        for probe in probes
-        if isinstance(probe, dict)
-    }
+    seen_probe_keys: set[tuple[str, str, str, str, str, str, str]] = set()
+    for probe in probes:
+        if isinstance(probe, dict):
+            actor = str(probe.get("actor") or (probe.get("actors", [""])[0] if isinstance(probe.get("actors"), list) else ""))
+            expected = str(probe.get("expected_behavior") or probe.get("expected") or "")[:80]
+            scenario = str(probe.get("mutation_scenario") or probe.get("access_context") or "")
+            seen_probe_keys.add((
+                str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")),
+                str(probe.get("source")), actor, expected, scenario,
+            ))
     for probe in supplemental_probes:
         if not isinstance(probe, dict):
             continue
         family = resolve_defect_family(probe)
         probe = {**probe, "defect_family": probe.get("defect_family") or family.get("family_id")}
-        key = (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")))
+        actor = str(probe.get("actor") or (probe.get("actors", [""])[0] if isinstance(probe.get("actors"), list) else ""))
+        expected = str(probe.get("expected_behavior") or probe.get("expected") or "")[:80]
+        scenario = str(probe.get("mutation_scenario") or probe.get("access_context") or "")
+        key = (str(probe.get("risk_type")), str(probe.get("method")), str(probe.get("path")), str(probe.get("source")),
+               actor, expected, scenario)
         if key in seen_probe_keys:
             continue
         seen_probe_keys.add(key)
@@ -702,6 +985,29 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     admin_login = _login(cfg, admin, timeout) if admin and live_execution_allowed else {"token": None, "response": {"skipped": True, "reason": "safety_boundary_blocked" if admin else "no_test_account"}}
     token_by_actor = {"normal_user": normal_login.get("token"), "admin": admin_login.get("token")}
 
+    # ── Multi-module credential routing (enterprise) ──
+    service_credential_manager = None
+    service_token_by_actor: dict[str, dict[str, str | None]] = {}
+    try:
+        from .enterprise_credential_manager import EnterpriseCredentialManager
+        svc_mgr = EnterpriseCredentialManager(str(project), root)
+        svc_mgr.load_legacy_fallback()
+        svc_mgr.load_from_env()
+        config_path = root / "platform_workspace" / str(project) / "multi_service_config.json"
+        if config_path.exists():
+            svc_mgr.load_from_file(config_path)
+        svc_mgr.load_from_env()
+        svc_mgr.login_all_services()
+        for s in svc_mgr.store.list_services():
+            service_token_by_actor[s] = {
+                "admin": svc_mgr.get_token(s, "admin"),
+                "normal_user": svc_mgr.get_token(s, "viewer"),
+            }
+        if service_token_by_actor:
+            service_credential_manager = svc_mgr
+    except (ImportError, Exception):
+        pass  # Multi-module not configured, use legacy single-service
+
     issues: list[dict[str, Any]] = []
     evidence_items: list[dict[str, Any]] = []
     executions: list[dict[str, Any]] = []
@@ -711,6 +1017,21 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     read_only_base_url = base_url  # always available for GET probes
     write_base_url = base_url if live_execution_allowed else ""
     for probe in probes:
+        # ── Multi-module: resolve target URL and token by service ──
+        probe_service = str(probe.get("service") or probe.get("service_name") or "")
+        probe_actor = str(probe.get("actor") or "admin")
+        target_url = base_url
+
+        # Resolve service-specific URL and token
+        if probe_service and service_token_by_actor:
+            svc_tokens = service_token_by_actor.get(probe_service, {})
+            svc_token = svc_tokens.get(probe_actor) or svc_tokens.get("admin")
+            if svc_token:
+                token_by_actor[probe_actor] = svc_token
+            if service_credential_manager:
+                svc_base = service_credential_manager.get_base_url(probe_service)
+                if svc_base:
+                    target_url = svc_base
         # P1 fix: Route delegated probes through unified execution bus instead of short-circuiting.
         # GET-only probes from all sources should execute against the test environment.
         # Only truly non-HTTP audit sources (assurance coverage, knowledge lineage) remain delegated.
@@ -1144,13 +1465,48 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     except Exception as exc:
         business_assurance_coverage_run = {"error": str(exc)}
 
-    issues = [{**issue, "defect_family": issue.get("defect_family") or resolve_defect_family(issue).get("family_id")} for issue in issues if isinstance(issue, dict)]
+    issues = [
+        enrich_issue_accounting(
+            {**issue, "defect_family": issue.get("defect_family") or resolve_defect_family(issue).get("family_id")}
+        )
+        for issue in issues
+        if isinstance(issue, dict)
+    ]
+    accounting_rows = [
+        _accounting
+        for _accounting in (
+            issue.get("validated_bug_accounting")
+            for issue in issues
+            if isinstance(issue.get("validated_bug_accounting"), dict)
+        )
+        if isinstance(_accounting, dict)
+    ]
+    candidate_findings = [issue for issue in issues if (issue.get("validated_bug_accounting") or {}).get("accounting_state") == "candidate"]
+    pending_findings = [issue for issue in issues if (issue.get("validated_bug_accounting") or {}).get("accounting_state") == "pending"]
+    validated_bugs = [issue for issue in issues if bool((issue.get("validated_bug_accounting") or {}).get("strict_validated_bug"))]
+    validated_bug_count = len(validated_bugs)
+    saleable_count = sum(1 for item in accounting_rows if item.get("saleable"))
+    coverage_gap_count = sum(1 for item in accounting_rows if item.get("quality_tier") == "coverage_gap")
+    unexecuted_count = sum(1 for item in accounting_rows if item.get("quality_tier") == "unexecuted")
+    heuristic_or_pending_count = max(
+        0,
+        len(issues) - validated_bug_count - coverage_gap_count - unexecuted_count,
+    )
+    verifier_passed_issue_count = sum(1 for item in accounting_rows if item.get("verifier_passed"))
+    reproduction_ready_issue_count = sum(1 for item in accounting_rows if item.get("has_reproduction"))
+    evidence_ref_ready_issue_count = sum(1 for item in accounting_rows if item.get("has_evidence_refs"))
     high = [i for i in issues if float(i.get("confidence") or 0) >= 0.75]
     medium = [i for i in issues if 0.5 <= float(i.get("confidence") or 0) < 0.75]
-    blockers = [i for i in issues if i.get("severity") in {"P0", "P1"} and float(i.get("confidence") or 0) >= 0.75]
+    blockers = [
+        i
+        for i in issues
+        if i.get("severity") in {"P0", "P1"}
+        and str(((i.get("validated_bug_accounting") or {}).get("accounting_state") or "")) in {"pending", "validated"}
+    ]
     risk_dist: dict[str, int] = {}
     for i in issues:
         risk_dist[str(i.get("risk_type") or "unknown")] = risk_dist.get(str(i.get("risk_type") or "unknown"), 0) + 1
+    discovery_funnel, discovery_blocker_summary = _build_discovery_funnel(probes, executions, issues, risk_plan)
     data = {
         "project_id": project,
         "project_name": cfg.get("project_name") or project,
@@ -1163,6 +1519,24 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             "high_confidence_issues": len(high),
             "medium_confidence_issues": len(medium),
             "needs_human_review": len(issues),
+            "candidate_issue_count": len(candidate_findings),
+            "pending_finding_count": len(pending_findings),
+            "validated_bug_count": validated_bug_count,
+            "strict_validated_bug_count": validated_bug_count,
+            "saleable_bug_count": saleable_count,
+            "quality_tiers": {
+                "confirmed_bug": validated_bug_count,
+                "coverage_gap": coverage_gap_count,
+                "unexecuted": unexecuted_count,
+                "heuristic_or_pending": heuristic_or_pending_count,
+            },
+            "reporting_basis": "saleable_bug",
+            "verifier_passed_issue_count": verifier_passed_issue_count,
+            "reproduction_ready_issue_count": reproduction_ready_issue_count,
+            "evidence_ref_ready_issue_count": evidence_ref_ready_issue_count,
+            "validated_bug_discovery_rate": _safe_rate(len(validated_bugs), len(probes)),
+            "repro_success_rate": _safe_rate(reproduction_ready_issue_count, verifier_passed_issue_count),
+            "evidence_complete_rate": _safe_rate(evidence_ref_ready_issue_count, verifier_passed_issue_count),
             "evidence_completeness": round(sum(1 for e in evidence_items if e.get("request") and e.get("response")) / max(1, len(evidence_items)), 3),
             "suggested_release_blockers": len(blockers),
             "estimated_hours_saved": round(len(probes) * 0.08 + len(issues) * 0.25, 2),
@@ -1290,6 +1664,8 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         "replay_evidence_enhanced_issue_count": len((replay_evidence_sandbox or {}).get("candidate_issues_enhanced") or []) if isinstance(replay_evidence_sandbox, dict) else 0,
         "risk_based_planner_enabled": use_risk_plan,
         "risk_based_plan_summary": (risk_plan or {}).get("summary", {}) if isinstance(risk_plan, dict) else {},
+        "discovery_funnel": discovery_funnel,
+        "discovery_blocker_summary": discovery_blocker_summary,
         "probe_execution_result": executions,
         "issues": issues,
         "suggested_release_blockers": blockers,
@@ -1362,7 +1738,12 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             "api_contract_probe_count": len([p for p in probes if p.get("source") == "api_contract_acceptance"]),
             "browser_ui_replay_probe_count": len([p for p in probes if p.get("source") == "browser_ui_replay"]),
             "frontend_task_journey_probe_count": len([p for p in probes if p.get("source") == "frontend_task_journey"]),
-            "frontend_runtime_probe_count": len([p for p in probes if p.get("source") == "frontend_execution_runtime"]),
+            "frontend_runtime_probe_count": len([
+                p
+                for p in probes
+                if p.get("source") == "frontend_runtime_smoke"
+                or p.get("risk_type") == "frontend_execution_runtime"
+            ]),
             "frontend_ux_probe_count": len([p for p in probes if p.get("source") == "frontend_ux_adapter"]),
             "compatibility_probe_count": len([p for p in probes if p.get("source") == "compatibility_adapter"]),
             "performance_stability_probe_count": len([p for p in probes if p.get("source") == "performance_stability_adapter"]),
@@ -1405,6 +1786,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             "browser_ui_blocked_probe_count": len([p for p in probes if str(p.get("capability_gate") or "") == "browser_ui_unavailable"]),
             "covered_bug_family_count": int(family_coverage_report.get("covered_family_count", 0) or 0),
             "validated_bug_family_count": int(family_coverage_report.get("validated_family_count", 0) or 0),
+            "pending_bug_family_count": int(family_coverage_report.get("pending_family_count", 0) or 0),
             "candidate_only_bug_family_count": int(family_coverage_report.get("candidate_only_family_count", 0) or 0),
         }
     )
@@ -1507,6 +1889,49 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         coverage_summary = {"error": str(exc)[:300]}
     data["business_risk_coverage_map"] = coverage_summary
     data["metrics"]["business_risk_coverage_entries"] = int(coverage_summary.get("entry_count", 0) or 0) if isinstance(coverage_summary, dict) else 0
+    try:
+        campaign_report = record_continuous_discovery_campaign_run(
+            project,
+            root,
+            probes,
+            issues,
+            trigger="scheduled_round",
+            run_context={
+                "mode": mode,
+                "validated_bug_count": len(validated_bugs),
+                "pending_finding_count": len(pending_findings),
+                "candidate_issue_count": len(candidate_findings),
+            },
+        )
+    except Exception as exc:
+        campaign_report = {"status": "unavailable", "error": str(exc)}
+    data["continuous_discovery_campaign"] = {
+        "campaign": (campaign_report or {}).get("campaign", {}),
+        "summary": (campaign_report or {}).get("summary", {}),
+        "current_run": (campaign_report or {}).get("current_run", {}),
+        "dashboard": (campaign_report or {}).get("dashboard", {}),
+        "recommended_frontier": (campaign_report or {}).get("recommended_frontier", []),
+        "next_run_plan": (campaign_report or {}).get("next_run_plan", {}),
+        "automation": (campaign_report or {}).get("automation", {}),
+        "coverage_ledger": (campaign_report or {}).get("coverage_ledger", {}),
+        "status": (campaign_report or {}).get("status", "ready"),
+    }
+    data["metrics"].update(
+        {
+            "continuous_discovery_campaign_state": ((campaign_report or {}).get("summary") or {}).get("campaign_state", "unknown"),
+            "continuous_discovery_coverage_entries": int((((campaign_report or {}).get("summary") or {}).get("coverage_ledger_entry_count")) or 0),
+            "continuous_discovery_remaining_frontier_count": int((((campaign_report or {}).get("summary") or {}).get("remaining_actionable_frontier_count")) or 0),
+            "continuous_discovery_revalidate_due_count": int((((campaign_report or {}).get("summary") or {}).get("revalidate_due_count")) or 0),
+            "continuous_discovery_recommended_frontier_count": int((((campaign_report or {}).get("summary") or {}).get("recommended_frontier_count")) or 0),
+            "continuous_discovery_auto_schedule_status": str((((campaign_report or {}).get("automation")) or {}).get("status") or "idle"),
+            "continuous_discovery_new_validated_bug_count": int((((campaign_report or {}).get("summary") or {}).get("this_run_new_validated_bug_count")) or 0),
+            "continuous_discovery_cumulative_validated_bug_count": int((((campaign_report or {}).get("summary") or {}).get("cumulative_validated_bug_count")) or 0),
+            "continuous_discovery_pending_to_validated_conversion_rate": float((((campaign_report or {}).get("summary") or {}).get("pending_to_validated_conversion_rate")) or 0.0),
+            "continuous_discovery_remaining_high_value_frontier_count": int((((campaign_report or {}).get("summary") or {}).get("remaining_high_value_uncovered_behavior_count")) or 0),
+            "continuous_discovery_revalidation_queue_size": int((((campaign_report or {}).get("summary") or {}).get("revalidation_queue_size")) or 0),
+            "continuous_discovery_reporting_basis": str((((campaign_report or {}).get("summary")) or {}).get("reporting_basis") or "validated_bug"),
+        }
+    )
 
     probe_items = probes if isinstance(probes, list) else []
     issue_items = issues if isinstance(issues, list) else []
@@ -1523,6 +1948,11 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     data.update({
         "status": "succeeded",
         "issue_count": len(issue_items),
+        "executed_issue_count": len(issue_items) - candidate_only_count,
+        "candidate_only_issue_count": candidate_only_count,
+        "candidate_issue_count": len(candidate_findings),
+        "pending_finding_count": len(pending_findings),
+        "validated_bug_count": len(validated_bugs),
         "probe_count": len(probe_items),
         "network_requests": executed_request_count,
         "http_request_count": executed_request_count,
@@ -1536,17 +1966,40 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
             "mode": mode,
             "status": "succeeded",
             "issue_count": len(issue_items),
+            "candidate_issue_count": len(candidate_findings),
+            "pending_finding_count": len(pending_findings),
+            "validated_bug_count": len(validated_bugs),
+            "reporting_basis": "validated_bug",
+            "validated_bug_discovery_rate": _safe_rate(len(validated_bugs), len(probe_items)),
+            "repro_success_rate": _safe_rate(reproduction_ready_issue_count, verifier_passed_issue_count),
+            "evidence_complete_rate": _safe_rate(evidence_ref_ready_issue_count, verifier_passed_issue_count),
             "probe_count": len(probe_items),
             "network_requests": executed_request_count,
             "http_blocked_count": blocked_request_count,
             "candidate_only_issue_count": candidate_only_count,
             "high_confidence_issue_count": high_confidence_count,
+            "verifier_passed_issue_count": verifier_passed_issue_count,
+            "reproduction_ready_issue_count": reproduction_ready_issue_count,
+            "evidence_ref_ready_issue_count": evidence_ref_ready_issue_count,
+            "low_discovery_diagnosis": (discovery_blocker_summary or {}).get("low_discovery_diagnosis", {}),
             "risk_distribution": risk_dist,
             "output_dir": str(paths["output_dir"]),
         },
     })
     data["metrics"].update({
         "issue_count": len(issue_items),
+        "executed_issue_count": len(issue_items) - candidate_only_count,
+        "candidate_only_issue_count": candidate_only_count,
+        "candidate_issue_count": len(candidate_findings),
+        "pending_finding_count": len(pending_findings),
+        "validated_bug_count": len(validated_bugs),
+        "reporting_basis": "validated_bug",
+        "verifier_passed_issue_count": verifier_passed_issue_count,
+        "reproduction_ready_issue_count": reproduction_ready_issue_count,
+        "evidence_ref_ready_issue_count": evidence_ref_ready_issue_count,
+        "validated_bug_discovery_rate": _safe_rate(len(validated_bugs), len(probe_items)),
+        "repro_success_rate": _safe_rate(reproduction_ready_issue_count, verifier_passed_issue_count),
+        "evidence_complete_rate": _safe_rate(evidence_ref_ready_issue_count, verifier_passed_issue_count),
         "probe_count": len(probe_items),
         "network_requests": executed_request_count,
         "http_blocked_count": blocked_request_count,

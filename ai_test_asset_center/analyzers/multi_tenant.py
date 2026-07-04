@@ -143,43 +143,43 @@ class MultiTenantAnalyzer:
         bugs = []
         bug_id = len(self.bugs)
 
-        # 检查1: 读操作是否缺少租户隔离
+        # 检查1: 读操作是否缺少租户隔离（降为P1，因为多数系统通过JWT隐式隔离）
         if endpoint.method in ["GET", "LIST"]:
-            # 查询类接口应该有租户隔离
             if not endpoint.has_isolation_param and not self._is_public_endpoint(endpoint.path):
                 bug = TenantIsolationBug(
                     bug_id=f"MT_{bug_id:03d}",
                     category="C05",
-                    severity="P0",
-                    title=f"查询端点缺少租户隔离: {endpoint.path}",
-                    description=f"读操作 {endpoint.method} {endpoint.path} 可能缺少租户隔离参数",
+                    severity="P1",
+                    title=f"查询端点需验证租户隔离: {endpoint.path}",
+                    description=f"读操作 {endpoint.method} {endpoint.path} 路径中未发现租户隔离参数，需验证是否通过认证上下文隐式隔离",
                     affected_endpoints=[endpoint.path],
                     affected_caches=[],
                     evidence={
                         "path": endpoint.path,
                         "method": endpoint.method,
-                        "parameters": endpoint.parameters
+                        "parameters": endpoint.parameters,
+                        "note": "租户隔离可能由JWT/Session上下文隐式实现"
                     },
                     reproduction_steps=[
                         f"1. 使用租户A的账号调用 {endpoint.path}",
                         f"2. 尝试修改参数访问租户B的数据",
                         "3. 观察是否成功访问到其他租户数据"
                     ],
-                    expected_behavior="查询接口应该包含租户隔离参数，防止数据串读",
-                    actual_behavior="可能缺少租户隔离参数"
+                    expected_behavior="查询接口应该确保租户数据隔离",
+                    actual_behavior="路径中未发现显式隔离参数，需验证"
                 )
                 bugs.append(bug)
                 bug_id += 1
 
-        # 检查2: 写操作是否有租户隔离
+        # 检查2: 写操作是否有租户隔离（保持P0，写操作风险更高）
         if endpoint.method in ["POST", "PUT", "PATCH", "DELETE"]:
             if not endpoint.has_isolation_param and not self._is_public_endpoint(endpoint.path):
                 bug = TenantIsolationBug(
                     bug_id=f"MT_{bug_id:03d}",
                     category="C05",
                     severity="P0",
-                    title=f"修改端点缺少租户隔离: {endpoint.path}",
-                    description=f"写操作 {endpoint.method} {endpoint.path} 可能缺少租户隔离参数",
+                    title=f"写操作需验证租户隔离: {endpoint.path}",
+                    description=f"写操作 {endpoint.method} {endpoint.path} 路径中未发现租户隔离参数，需验证是否有跨租户写入风险",
                     affected_endpoints=[endpoint.path],
                     affected_caches=[],
                     evidence={
@@ -192,8 +192,8 @@ class MultiTenantAnalyzer:
                         f"2. 尝试修改租户B的数据",
                         "3. 观察是否成功修改其他租户数据"
                     ],
-                    expected_behavior="写操作应该包含租户隔离参数，防止数据串改",
-                    actual_behavior="可能缺少租户隔离参数"
+                    expected_behavior="写操作应该确保租户数据隔离",
+                    actual_behavior="路径中未发现显式隔离参数"
                 )
                 bugs.append(bug)
                 bug_id += 1
@@ -204,7 +204,8 @@ class MultiTenantAnalyzer:
         """判断是否是公开端点"""
         public_keywords = [
             "public", "auth", "login", "register", "health", "metrics",
-            "公开", "登录", "注册", "健康", "指标"
+            "docs", "swagger", "openapi", "config", "static", "favicon",
+            "公开", "登录", "注册", "健康", "指标", "文档", "配置"
         ]
         return any(kw in path.lower() for kw in public_keywords)
 

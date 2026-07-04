@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "SOCIAL_0",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_1",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_2",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "high",
+    "description": "Simulated money bug for social scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_3",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_4",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_5",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_6",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_7",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_8",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "high",
+    "description": "Simulated money bug for social scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_9",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_10",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_11",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_12",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for social scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_13",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_14",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_15",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_16",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_17",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_18",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_19",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_20",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_21",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_22",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_23",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_24",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_25",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_26",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_27",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_28",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_29",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_30",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_31",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_32",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_33",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_34",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_35",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_36",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_37",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_38",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_39",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_40",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_41",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_42",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_43",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_44",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_45",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_46",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_47",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_48",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_49",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_50",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_51",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_52",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_53",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_54",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for social scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_55",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_56",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_57",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_58",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_59",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_60",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_61",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_62",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_63",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_64",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_65",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_66",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for social scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_67",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_68",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_69",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_70",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_71",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_72",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_73",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_74",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_75",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_76",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_77",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_78",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_79",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_80",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_81",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_82",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_83",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_84",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_85",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_86",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_87",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_88",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_89",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_90",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_91",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_92",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_93",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_94",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_95",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_96",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_97",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_98",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_99",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_100",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_101",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_102",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_103",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_104",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_105",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_106",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_107",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_108",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_109",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_110",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_111",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_112",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_113",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_114",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_115",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_116",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_117",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_118",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_119",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_120",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_121",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_122",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_123",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_124",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_125",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_126",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_127",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_128",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_129",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_130",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_131",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for social scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_132",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_133",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "high",
+    "description": "Simulated money bug for social scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_134",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "high",
+    "description": "Simulated money bug for social scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_135",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_136",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_137",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_138",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_139",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_140",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_141",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_142",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_143",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "high",
+    "description": "Simulated money bug for social scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_144",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_145",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_146",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_147",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_148",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_149",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_150",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_151",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_152",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_153",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_154",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_155",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_156",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_157",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_158",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_159",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "high",
+    "description": "Simulated money bug for social scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_160",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_161",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_162",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_163",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_164",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_165",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_166",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_167",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_168",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_169",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_170",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_171",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_172",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_173",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_174",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_175",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_176",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_177",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_178",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_179",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_180",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_181",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_182",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_183",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_184",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_185",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_186",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_187",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_188",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_189",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_190",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_191",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_192",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_193",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_194",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_195",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_196",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_197",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_198",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_199",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_200",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_201",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_202",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_203",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_204",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_205",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_206",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_207",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_208",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_209",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_210",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "high",
+    "description": "Simulated money bug for social scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_211",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_212",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_213",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_214",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_215",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_216",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_217",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_218",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_219",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_220",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_221",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_222",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_223",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_224",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_225",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_226",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_227",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_228",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_229",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_230",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_231",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_232",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_233",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_234",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_235",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_236",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_237",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_238",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_239",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_240",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_241",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_242",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "low",
+    "description": "Simulated money bug for social scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_243",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_244",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "low",
+    "description": "Simulated idempotency bug for social scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_245",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_246",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_247",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_248",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_249",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_250",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_251",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_252",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "high",
+    "description": "Simulated concurrency bug for social scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_253",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_254",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for social scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_255",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_256",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_257",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for social scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_258",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_259",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "medium",
+    "description": "Simulated permission bug for social scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_260",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for social scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_261",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_262",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_263",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_264",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_265",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_266",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_267",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_268",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_269",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for social scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_270",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_271",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_272",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_273",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_274",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for social scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_275",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_276",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_277",
+    "type": "concurrency",
+    "title": "concurrency issue in social",
+    "severity": "low",
+    "description": "Simulated concurrency bug for social scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_278",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "high",
+    "description": "Simulated permission bug for social scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_279",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_280",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for social scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_281",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_282",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "high",
+    "description": "Simulated idempotency bug for social scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_283",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_284",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "low",
+    "description": "Simulated permission bug for social scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_285",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_286",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "high",
+    "description": "Simulated state_break bug for social scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_287",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "medium",
+    "description": "Simulated money bug for social scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_288",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for social scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_289",
+    "type": "money",
+    "title": "money issue in social",
+    "severity": "critical",
+    "description": "Simulated money bug for social scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_290",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "low",
+    "description": "Simulated state_break bug for social scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_291",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "critical",
+    "description": "Simulated state_break bug for social scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_292",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_293",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in social",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for social scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_294",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_295",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_296",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_297",
+    "type": "idempotency",
+    "title": "idempotency issue in social",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for social scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_298",
+    "type": "permission",
+    "title": "permission issue in social",
+    "severity": "critical",
+    "description": "Simulated permission bug for social scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SOCIAL_299",
+    "type": "state_break",
+    "title": "state_break issue in social",
+    "severity": "medium",
+    "description": "Simulated state_break bug for social scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

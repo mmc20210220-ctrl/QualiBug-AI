@@ -1,0 +1,17 @@
+{
+  "industry": "adtech",
+  "endpoints": [
+    {
+      "path": "/create",
+      "method": "POST"
+    },
+    {
+      "path": "/update",
+      "method": "POST"
+    },
+    {
+      "path": "/query",
+      "method": "GET"
+    }
+  ]
+}

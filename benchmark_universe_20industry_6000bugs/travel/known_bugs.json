@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "TRAVEL_0",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_1",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "critical",
+    "description": "Simulated permission bug for travel scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_2",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_3",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_4",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_5",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_6",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_7",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_8",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_9",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_10",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_11",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_12",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_13",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_14",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_15",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_16",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_17",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_18",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_19",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_20",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_21",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_22",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_23",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_24",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_25",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_26",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_27",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_28",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_29",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_30",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_31",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_32",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_33",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_34",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_35",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_36",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_37",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_38",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_39",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_40",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_41",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_42",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_43",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_44",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_45",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_46",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_47",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_48",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_49",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_50",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_51",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_52",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_53",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_54",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_55",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_56",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_57",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_58",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_59",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_60",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_61",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_62",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_63",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_64",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_65",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_66",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_67",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_68",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_69",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_70",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_71",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_72",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_73",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_74",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_75",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_76",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_77",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_78",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_79",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_80",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_81",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_82",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_83",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_84",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_85",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_86",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_87",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_88",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_89",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_90",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_91",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_92",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "critical",
+    "description": "Simulated permission bug for travel scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_93",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_94",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_95",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_96",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_97",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_98",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_99",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_100",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_101",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_102",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_103",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_104",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_105",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_106",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_107",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_108",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_109",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_110",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_111",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_112",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_113",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_114",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_115",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_116",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_117",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_118",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_119",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_120",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_121",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_122",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_123",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_124",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_125",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_126",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_127",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_128",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_129",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_130",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_131",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_132",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_133",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_134",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_135",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_136",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_137",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_138",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_139",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_140",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_141",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "critical",
+    "description": "Simulated permission bug for travel scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_142",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_143",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_144",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_145",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "critical",
+    "description": "Simulated permission bug for travel scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_146",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_147",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_148",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_149",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_150",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_151",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_152",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_153",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_154",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_155",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_156",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_157",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_158",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_159",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_160",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_161",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_162",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_163",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_164",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_165",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_166",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_167",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_168",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_169",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_170",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_171",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_172",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_173",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_174",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_175",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_176",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_177",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_178",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_179",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_180",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_181",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_182",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_183",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_184",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_185",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_186",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_187",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_188",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_189",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_190",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_191",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_192",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_193",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_194",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "critical",
+    "description": "Simulated permission bug for travel scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_195",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_196",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_197",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_198",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_199",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_200",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_201",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_202",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_203",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_204",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_205",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_206",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_207",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_208",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_209",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_210",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_211",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_212",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_213",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_214",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_215",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_216",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_217",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_218",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_219",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_220",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_221",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_222",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_223",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_224",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_225",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_226",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_227",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_228",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_229",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_230",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_231",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_232",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_233",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_234",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_235",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_236",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_237",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "critical",
+    "description": "Simulated permission bug for travel scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_238",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_239",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_240",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_241",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_242",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for travel scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_243",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_244",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_245",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_246",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_247",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_248",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_249",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_250",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_251",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_252",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for travel scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_253",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_254",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_255",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_256",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_257",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_258",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "high",
+    "description": "Simulated state_break bug for travel scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_259",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_260",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_261",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_262",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_263",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_264",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_265",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_266",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "critical",
+    "description": "Simulated state_break bug for travel scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_267",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "critical",
+    "description": "Simulated money bug for travel scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_268",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "low",
+    "description": "Simulated state_break bug for travel scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_269",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_270",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_271",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_272",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_273",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_274",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for travel scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_275",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "high",
+    "description": "Simulated concurrency bug for travel scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_276",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "high",
+    "description": "Simulated idempotency bug for travel scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_277",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "medium",
+    "description": "Simulated money bug for travel scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_278",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_279",
+    "type": "state_break",
+    "title": "state_break issue in travel",
+    "severity": "medium",
+    "description": "Simulated state_break bug for travel scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_280",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_281",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "low",
+    "description": "Simulated money bug for travel scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_282",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "low",
+    "description": "Simulated concurrency bug for travel scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_283",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "medium",
+    "description": "Simulated permission bug for travel scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_284",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_285",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_286",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for travel scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_287",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_288",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "high",
+    "description": "Simulated permission bug for travel scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_289",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "low",
+    "description": "Simulated idempotency bug for travel scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_290",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for travel scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_291",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_292",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_293",
+    "type": "money",
+    "title": "money issue in travel",
+    "severity": "high",
+    "description": "Simulated money bug for travel scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_294",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_295",
+    "type": "concurrency",
+    "title": "concurrency issue in travel",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for travel scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_296",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_297",
+    "type": "idempotency",
+    "title": "idempotency issue in travel",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for travel scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_298",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in travel",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for travel scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "TRAVEL_299",
+    "type": "permission",
+    "title": "permission issue in travel",
+    "severity": "low",
+    "description": "Simulated permission bug for travel scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

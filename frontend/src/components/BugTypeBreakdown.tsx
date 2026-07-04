@@ -2,7 +2,7 @@ import type { Finding } from '../types';
 
 interface LayerStat {
   layer: string;
-  icon: string;
+  token: string;
   color: string;
   count: number;
   pct: number;
@@ -19,7 +19,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
   const layers: LayerStat[] = [
     {
       layer: 'API 接口',
-      icon: '🔌',
+      token: 'API',
       color: '#5865f2',
       count: 0,
       pct: 0,
@@ -27,7 +27,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '数据库',
-      icon: '🗄️',
+      token: 'DB',
       color: '#0ea571',
       count: 0,
       pct: 0,
@@ -35,7 +35,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '业务流程',
-      icon: '🔄',
+      token: 'FLOW',
       color: '#d97706',
       count: 0,
       pct: 0,
@@ -43,7 +43,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '业务规则',
-      icon: '📋',
+      token: 'RULE',
       color: '#8b5cf6',
       count: 0,
       pct: 0,
@@ -51,7 +51,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '规范结构',
-      icon: '📐',
+      token: 'SPEC',
       color: '#64748b',
       count: 0,
       pct: 0,
@@ -59,7 +59,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '服务可用性',
-      icon: '🟢',
+      token: 'SVC',
       color: '#ef4444',
       count: 0,
       pct: 0,
@@ -67,7 +67,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: 'UI 界面',
-      icon: '🖥️',
+      token: 'UI',
       color: '#0891b2',
       count: 0,
       pct: 0,
@@ -75,7 +75,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '认证授权',
-      icon: '🔐',
+      token: 'AUTH',
       color: '#dc2626',
       count: 0,
       pct: 0,
@@ -83,7 +83,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '数据安全',
-      icon: '🛡️',
+      token: 'DATA',
       color: '#be123c',
       count: 0,
       pct: 0,
@@ -91,7 +91,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '日志审计',
-      icon: '📝',
+      token: 'AUDIT',
       color: '#4b5563',
       count: 0,
       pct: 0,
@@ -99,7 +99,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '配置管理',
-      icon: '⚙️',
+      token: 'CONF',
       color: '#6b7280',
       count: 0,
       pct: 0,
@@ -107,7 +107,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '集成对接',
-      icon: '🔗',
+      token: 'INTG',
       color: '#7c3aed',
       count: 0,
       pct: 0,
@@ -115,7 +115,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '并发安全',
-      icon: '⚡',
+      token: 'SYNC',
       color: '#ea580c',
       count: 0,
       pct: 0,
@@ -123,7 +123,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '安全防护',
-      icon: '🚨',
+      token: 'SAFE',
       color: '#b91c1c',
       count: 0,
       pct: 0,
@@ -131,7 +131,7 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
     },
     {
       layer: '性能',
-      icon: '⏱️',
+      token: 'PERF',
       color: '#0284c7',
       count: 0,
       pct: 0,
@@ -178,28 +178,37 @@ export function BugTypeBreakdown({ findings }: BugTypeBreakdownProps) {
 
   // Compute percentages
   layers.forEach(l => { l.pct = Math.round((l.count / total) * 100); });
+  const activeLayers = layers.filter(l => l.count > 0);
+  const displayLayers = activeLayers.length > 0 ? activeLayers : layers.slice(0, 4);
+  const hasCollapsedZero = activeLayers.length > 0 && activeLayers.length < layers.length;
 
   return (
     <div className="coverage-panel">
       <div className="coverage-header">
-        <h2>缺陷层级分布</h2>
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>覆盖 {layers.filter(l => l.count > 0).length}/{layers.length} 个系统层级</span>
+        <div>
+          <span className="panel-kicker">Distribution</span>
+          <h2>缺陷层级分布</h2>
+        </div>
+        <span className="coverage-header-meta">覆盖 {activeLayers.length}/{layers.length} 个系统层级</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-        {layers.map(l => (
-          <div key={l.layer} className="stat-card" style={{ '--accent': l.color, textAlign: 'left', padding: '16px 18px' } as React.CSSProperties}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 20 }}>{l.icon}</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{l.layer}</span>
+      {hasCollapsedZero && (
+        <div className="coverage-inline-tip">当前默认仅展示命中的系统层级，未命中层级已折叠以减少阅读噪音。</div>
+      )}
+      <div className="layer-breakdown-grid">
+        {displayLayers.map(l => (
+          <div key={l.layer} className="layer-breakdown-card" style={{ '--accent': l.color } as React.CSSProperties}>
+            <div className="layer-breakdown-head">
+              <span className="layer-breakdown-token">{l.token}</span>
+              <span className="layer-breakdown-title">{l.layer}</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 }}>
-              <span style={{ fontSize: 28, fontWeight: 900, color: l.color }}>{l.count}</span>
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>个缺陷 · {l.pct}%</span>
+            <div className="layer-breakdown-metric">
+              <span className="layer-breakdown-value" style={{ color: l.color }}>{l.count}</span>
+              <span className="layer-breakdown-meta">个缺陷 · {l.pct}%</span>
             </div>
-            <div style={{ height: 4, background: '#f1f5f9', borderRadius: 2, marginBottom: 8 }}>
-              <div style={{ height: '100%', width: `${Math.max(2, l.pct)}%`, background: l.color, borderRadius: 2, transition: 'width 1s ease' }} />
+            <div className="layer-breakdown-track">
+              <div className="layer-breakdown-bar" style={{ width: `${Math.max(2, l.pct)}%`, background: l.color }} />
             </div>
-            <p style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.4 }}>{l.description}</p>
+            <p className="layer-breakdown-desc">{l.description}</p>
           </div>
         ))}
       </div>

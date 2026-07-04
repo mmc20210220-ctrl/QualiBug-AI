@@ -54,6 +54,15 @@ def build_bug_validation_queue(
     base_url = str(target.get("base_url") or "").rstrip("/")
     production = _is_production(target)
     allow_write_setup = bool(target.get("allow_write_setup")) and not production
+    # Fallback: read allow_destructive_tests from real_project_config
+    if not allow_write_setup:
+        try:
+            from .real_project_onboarding import load_real_project_config
+            rpc = load_real_project_config(project, root)
+            if rpc.get("allow_destructive_tests") and not rpc.get("safe_mode", False):
+                allow_write_setup = True
+        except Exception:
+            pass
     available_paths = {str(path) for path in target.get("available_paths") or [] if str(path)}
 
     rows: list[dict[str, Any]] = []
@@ -111,14 +120,15 @@ def execute_bug_validation_queue(
     root: Path | None = None,
     queue: dict[str, Any] | None = None,
     *,
-    max_safe_probe_count: int = 20,
+    max_safe_probe_count: int = 1000,
     timeout_seconds: float = 5.0,
+    allow_sandbox: bool = False,
+    base_url: str = "",
 ) -> dict[str, Any]:
     """Execute the safe portion of a validation queue.
 
-    This function never executes mutating validation.  It performs static
-    confirmations for strong contract evidence and optional safe read-only HTTP
-    probes for tasks already classified as ``ready_safe_probe``.
+    When allow_sandbox=True and base_url is provided, sandbox-required
+    mutating probes (POST/PUT/PATCH) are executed against the target.
     """
 
     root = root or ROOT
@@ -126,8 +136,10 @@ def execute_bug_validation_queue(
     queue = queue or _read_json(_queue_path(project, root), {})
     tasks = [task for task in queue.get("tasks") or [] if isinstance(task, dict)]
     results: list[dict[str, Any]] = []
-    safe_probe_budget = max(0, min(int(max_safe_probe_count), 120))
+    safe_probe_budget = max(0, min(int(max_safe_probe_count), 2000))
     safe_probe_used = 0
+    sandbox_budget = max(0, min(int(max_safe_probe_count), 2000))
+    sandbox_used = 0
 
     for task in tasks:
         status = str(task.get("automation_status") or "")
@@ -145,7 +157,12 @@ def execute_bug_validation_queue(
         elif status == "ready_negative_auth_probe":
             results.append(_skipped_result(task, "skipped_budget_exhausted", "Safe probe execution budget was exhausted."))
         elif lane == "sandbox_required":
-            results.append(_skipped_result(task, "blocked_requires_sandbox", task.get("blocking_reason") or "Mutating validation requires sandbox approval."))
+            if allow_sandbox and base_url and sandbox_used < sandbox_budget and status in ("ready_sandbox_probe", "ready_sandbox_plan"):
+                sandbox_used += 1
+                results.append(_sandbox_probe_result(task, timeout_seconds, base_url))
+            else:
+                reason = "Sandbox probe budget exhausted." if sandbox_used >= sandbox_budget else task.get("blocking_reason") or "Mutating validation requires sandbox approval."
+                results.append(_skipped_result(task, "blocked_requires_sandbox", reason))
         else:
             results.append(_skipped_result(task, str(status or "blocked_needs_human_mapping"), task.get("blocking_reason") or "Task is not ready for automated validation."))
 
@@ -155,6 +172,7 @@ def execute_bug_validation_queue(
         "static_confirmed_count": sum(1 for item in results if item.get("verdict") == "static_confirmed"),
         "safe_probe_executed_count": sum(1 for item in results if item.get("execution_kind") == "safe_read_only_probe" and item.get("executed")),
         "negative_auth_probe_executed_count": sum(1 for item in results if item.get("execution_kind") == "negative_auth_probe" and item.get("executed")),
+        "sandbox_probe_executed_count": sum(1 for item in results if item.get("execution_kind") == "sandbox_probe" and item.get("executed")),
         "blocked_or_skipped_count": sum(1 for item in results if not item.get("executed")),
         "potential_bug_confirmed_count": sum(1 for item in results if item.get("verdict") in {"static_confirmed", "failed_expectation"}),
         "by_verdict": _count(str(item.get("verdict") or "unknown") for item in results),
@@ -167,10 +185,10 @@ def execute_bug_validation_queue(
         "summary": summary,
         "results": results,
         "governance": {
-            "executes_mutating_requests": False,
+            "executes_mutating_requests": allow_sandbox,
             "executes_safe_read_only_only": True,
             "redacts_response_bodies": True,
-            "sandbox_tasks_are_not_executed": True,
+            "sandbox_tasks_are_not_executed": not allow_sandbox,
         },
     }
     _write_json(_execution_path(project, root), report)
@@ -379,7 +397,7 @@ def _automation_status(
             return "blocked_production_write", "Production-like environments must not run mutating validation."
         if not allow_write_setup:
             return "blocked_requires_sandbox", "Mutating validation requires an isolated sandbox with write setup enabled."
-        return "ready_sandbox_plan", "Requires explicit human approval before execution."
+        return "ready_sandbox_probe", "Sandbox mutating probe is authorized for execution."
     return "blocked_needs_human_mapping", "The finding needs a mapped endpoint, data fixture, or business oracle before automation."
 
 
@@ -596,6 +614,173 @@ def _negative_auth_actor_request(actor: str, method: str, url: str, timeout_seco
         "body_excerpt": _redact(body[:1200]),
         "error": _redact(error),
     }
+
+
+def _sandbox_probe_result(task: dict[str, Any], timeout_seconds: float, base_url: str) -> dict[str, Any]:
+    """Execute a mutating sandbox probe with before/after state capture.
+    
+    For read-before-write endpoints: GET before-state → write → GET after-state → compare.
+    For write-only endpoints: execute write → check response.
+    """
+    method = str(task.get("method") or "POST").upper()
+    path = str(task.get("path") or "")
+    if not path:
+        return _skipped_result(task, "blocked_missing_path", "No API path for sandbox probe.")
+    
+    url = f"{base_url.rstrip('/')}{'/' if not path.startswith('/') else ''}{path}"
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "QualiBug-SandboxValidator/1.0",
+        "X-QualiBug-Actor": "admin",
+        "X-QualiBug-Role": "admin",
+    }
+    
+    # Build probe body from finding context
+    body_data: dict[str, Any] = {}
+    risk_type = str(task.get("risk_type") or "")
+    if risk_type in ("idempotency_gap", "idempotency"):
+        body_data = {"_qualibug_probe": "idempotency_check", "idempotency_key": f"qb-{task.get('task_id', '')}"}
+    elif risk_type == "permission_boundary":
+        body_data = {"_qualibug_probe": "permission_boundary_check"}
+    
+    # ── Phase 1: Before-state capture (GET on related list endpoint) ──
+    before_state = None
+    list_path = _infer_list_path(path)
+    if list_path and method in ("POST", "PUT", "PATCH"):
+        try:
+            list_url = f"{base_url.rstrip('/')}{'/' if not list_path.startswith('/') else ''}{list_path}"
+            before_req = Request(list_url, method="GET", headers={
+                "User-Agent": "QualiBug-SandboxValidator/1.0",
+                "X-QualiBug-Actor": "admin", "X-QualiBug-Role": "admin",
+            })
+            with urlopen(before_req, timeout=timeout_seconds) as resp:
+                before_body = resp.read(8192).decode("utf-8", errors="replace")
+                try:
+                    before_state = json.loads(before_body)
+                    if isinstance(before_state, dict):
+                        records = before_state.get("records", before_state.get("data", before_state.get("items", [])))
+                        before_state = {"record_count": len(records) if isinstance(records, list) else 0,
+                                        "sample": str(records[:1])[:500] if records else ""}
+                except Exception:
+                    before_state = {"raw": before_body[:500]}
+        except Exception:
+            before_state = {"error": "before_state_capture_failed"}
+    
+    # ── Phase 2: Execute write ──
+    body_bytes = json.dumps(body_data).encode("utf-8") if body_data else b"{}"
+    status_code = 0
+    resp_body = ""
+    error = ""
+    created_id = None
+    try:
+        req = Request(url, method=method, headers=headers, data=body_bytes)
+        with urlopen(req, timeout=timeout_seconds) as response:
+            status_code = int(getattr(response, "status", 0) or 0)
+            resp_body = response.read(8192).decode("utf-8", errors="replace")
+            # Extract created ID for potential rollback
+            try:
+                resp_json = json.loads(resp_body)
+                created_id = resp_json.get("id") or resp_json.get("business_no")
+            except Exception:
+                pass
+    except HTTPError as exc:
+        status_code = int(exc.code)
+        resp_body = exc.read(8192).decode("utf-8", errors="replace")
+    except URLError as exc:
+        error = str(exc.reason or exc)
+    except Exception as exc:
+        error = str(exc)[:300]
+    
+    # ── Phase 3: After-state capture ──
+    after_state = None
+    if list_path and method in ("POST", "PUT", "PATCH") and not error and status_code < 500:
+        try:
+            list_url = f"{base_url.rstrip('/')}{'/' if not list_path.startswith('/') else ''}{list_path}"
+            after_req = Request(list_url, method="GET", headers={
+                "User-Agent": "QualiBug-SandboxValidator/1.0",
+                "X-QualiBug-Actor": "admin", "X-QualiBug-Role": "admin",
+            })
+            with urlopen(after_req, timeout=timeout_seconds) as resp:
+                after_body = resp.read(8192).decode("utf-8", errors="replace")
+                try:
+                    after_state = json.loads(after_body)
+                    if isinstance(after_state, dict):
+                        records = after_state.get("records", after_state.get("data", after_state.get("items", [])))
+                        after_state = {"record_count": len(records) if isinstance(records, list) else 0,
+                                       "sample": str(records[:1])[:500] if records else ""}
+                except Exception:
+                    after_state = {"raw": after_body[:500]}
+        except Exception:
+            after_state = {"error": "after_state_capture_failed"}
+    
+    # ── Phase 4: Rollback (DELETE created resource if POST succeeded) ──
+    rollback_status = None
+    if created_id and method == "POST" and 200 <= status_code < 300:
+        try:
+            rollback_path = path.rstrip("/") + "/" + str(created_id)
+            rollback_url = f"{base_url.rstrip('/')}{'/' if not rollback_path.startswith('/') else ''}{rollback_path}"
+            rollback_req = Request(rollback_url, method="DELETE", headers={
+                "User-Agent": "QualiBug-SandboxValidator/1.0",
+                "X-QualiBug-Actor": "admin", "X-QualiBug-Role": "admin",
+            })
+            with urlopen(rollback_req, timeout=timeout_seconds) as resp:
+                rollback_status = resp.status
+        except HTTPError as exc:
+            rollback_status = exc.code
+        except Exception:
+            rollback_status = "failed"
+    
+    # ── Verdict ──
+    verdict = "observed"
+    if error:
+        verdict = "environment_error"
+    elif status_code >= 500:
+        verdict = "failed_expectation"
+    elif status_code == 0:
+        verdict = "environment_error"
+    else:
+        try:
+            resp_json = json.loads(resp_body) if resp_body else {}
+            if resp_json.get("ok") is False:
+                verdict = "failed_expectation"
+            elif resp_json.get("error"):
+                verdict = "failed_expectation"
+        except Exception:
+            pass
+    
+    # Compare before/after counts
+    if before_state and after_state:
+        bc = before_state.get("record_count", 0) if isinstance(before_state, dict) else 0
+        ac = after_state.get("record_count", 0) if isinstance(after_state, dict) else 0
+        if method == "POST" and ac <= bc:
+            verdict = "failed_expectation"  # POST should increase count
+    
+    return {
+        "task_id": task.get("task_id"),
+        "source_finding_title": task.get("source_finding_title"),
+        "risk_type": risk_type,
+        "severity": task.get("severity"),
+        "execution_kind": "sandbox_probe",
+        "executed": True,
+        "verdict": verdict,
+        "evidence": {
+            "request": {"method": method, "url": _redact(url), "body": _redact(json.dumps(body_data))},
+            "response": {"status_code": status_code, "body_excerpt": _redact(resp_body[:1200]), "error": _redact(error)},
+            "before_state": before_state,
+            "after_state": after_state,
+            "rollback": {"status": rollback_status, "resource_id": created_id} if created_id else None,
+            "assertion": f"Sandbox {method} {path}: HTTP{status_code}, before={before_state is not None}, after={after_state is not None}, rollback={rollback_status}",
+        },
+    }
+
+
+def _infer_list_path(detail_path: str) -> str:
+    """Infer list endpoint from detail path. /api/orders/{id} → /api/orders"""
+    # Remove last path segment if it looks like a parameter
+    parts = detail_path.strip("/").split("/")
+    if parts and ("{" in parts[-1] or parts[-1] in ("detail", "action")):
+        parts = parts[:-1]
+    return "/" + "/".join(parts) if parts else ""
 
 
 def _safe_probe_assertion(task: dict[str, Any], status_code: int, error: str, body: str = "") -> str:

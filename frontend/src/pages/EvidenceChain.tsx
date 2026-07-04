@@ -1,70 +1,101 @@
-import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { getKnowledgeAsset, getKnowledgePreview } from '../api/client';
 import { useFindingsData } from '../api/data';
-import type { Finding } from '../types';
+import { getEvidenceLocatorText, getEvidenceLogHint, getEvidenceSqlHint, getEvidenceSummaryText } from '../lib/evidence';
+import { usePageTitle } from '../lib/page-title';
+import { formatBeijingDateTime } from '../lib/time';
+import { buildProjectPath } from '../lib/project-navigation';
 
 type EvidenceFilter = 'all' | 'API' | 'DB' | '文档';
+type PersonaView = 'business' | 'test' | 'dev';
+type KnowledgeDocument = {
+  source_id?: string;
+  id?: string;
+  display_name?: string;
+  filename?: string;
+  original_name?: string;
+  type?: string;
+  source_type?: string;
+  stored_path?: string;
+};
+type KnowledgeAssetPayload = {
+  knowledge_asset?: {
+    sources?: unknown;
+  };
+  source_inventory?: unknown;
+};
+type KnowledgePreviewPayload = {
+  content?: unknown;
+};
+
+function businessUrgencyLabel(urgency: string | undefined, severity: string) {
+  const normalized = String(urgency || '').trim();
+  if (normalized) return normalized;
+  return severity === 'P0' ? '高' : severity === 'P1' ? '中高' : '中';
+}
 
 export function EvidenceChain() {
+  usePageTitle('证据链');
   const [params] = useSearchParams();
-  const project = params.get('project') || 'real_project_demo';
+  const project = params.get('project')?.trim() || '';
   const { findings, loading } = useFindingsData(project);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [activePersona, setActivePersona] = useState<Record<string, PersonaView>>({});
   const [filter, setFilter] = useState<EvidenceFilter>('all');
 
-  const withEvidence = findings.filter(f => f.evidence_chain.length >= 2);
-
-  const apiEvidence = findings.filter(f => f.repro_path || f.title.toLowerCase().includes('api 接口') || f.title.toLowerCase().includes('接口')).length;
-  const dbEvidence = findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('数据库') || f.title.includes('DB')).length;
-  const docEvidence = Math.max(0, findings.length - apiEvidence - dbEvidence);
-
+  const withEvidence = findings.filter(f => f.evidence_chain.length >= 1);
+  const apiEvidence = findings.filter(f => f.repro_path).length;
+  const dbEvidence = findings.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM')).length;
+  const docEvidence = findings.filter(f => !f.repro_path && !f.title.includes('DB Verified')).length;
   const displayData = (() => {
     if (filter === 'all') return withEvidence;
-    if (filter === 'API') return withEvidence.filter(f => f.repro_path || f.title.toLowerCase().includes('api') || f.title.includes('接口'));
-    if (filter === 'DB') return withEvidence.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM') || f.title.includes('数据库'));
-    if (filter === '文档') return withEvidence.filter(f => !f.repro_path && !f.title.includes('DB Verified') && !f.title.includes('库存') && !f.title.includes('BOM') && !f.title.includes('数据库'));
+    if (filter === 'API') return withEvidence.filter(f => f.repro_path);
+    if (filter === 'DB') return withEvidence.filter(f => f.title.includes('DB Verified') || f.title.includes('库存') || f.title.includes('BOM'));
+    if (filter === '文档') return withEvidence.filter(f => !f.repro_path && !f.title.includes('DB Verified'));
     return withEvidence;
   })();
 
-  function getEvidenceSources(f: Finding): string[] {
-    const sources: string[] = [];
-    const t = f.title.toLowerCase();
-    const chain = f.evidence_chain.map(s => s.detail).join(' ');
-    if (f.repro_path) sources.push('OpenAPI 规范');
-    if (t.includes('db verified') || t.includes('库存') || chain.includes('db_verified')) sources.push('数据库 Schema');
-    if (t.includes('prd') || chain.includes('PRD') || chain.includes('prd')) sources.push('PRD 文档');
-    if (f.source_entity) sources.push('业务模型');
-    if (sources.length === 0) sources.push('规范分析');
-    return sources;
-  }
+  const persona = (fid: string): PersonaView => activePersona[fid] || 'business';
+
+  const personaTabs: { key: PersonaView; label: string; desc: string }[] = [
+    { key: 'business', label: '业务视角', desc: '产品与业务负责人' },
+    { key: 'test', label: '测试视角', desc: '测试与验收复核' },
+    { key: 'dev', label: '研发视角', desc: '研发定位与复盘' },
+  ];
 
   return (
     <div>
       <div className="page-header">
         <div>
+          <span className="panel-kicker">证据工作台</span>
           <h1>证据链</h1>
-          <p>每条风险发现都关联到企业资料中的具体证据来源，确保可追溯、可验证</p>
+          <p>把每条风险结论拆成业务语义、复现动作与技术溯源，确保可追溯、可复现、可审计。</p>
+          <div className="page-summary-strip">
+            <span className="summary-pill strong">证据链 {withEvidence.length}</span>
+            <span className="summary-pill">API 证据 {apiEvidence}</span>
+            <span className="summary-pill">数据证据 {dbEvidence}</span>
+            <span className="summary-pill">已确认 {findings.filter(f => f.verdict === 'confirmed').length}</span>
+          </div>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-5 gap-4 mb-4">
+      <div className="evidence-stat-grid mb-4">
         {[
-          { label: '证据链总数', val: withEvidence.length },
-          { label: 'API 证据', val: apiEvidence, color: 'var(--primary)' },
-          { label: 'DB 证据', val: dbEvidence, color: dbEvidence > 0 ? 'var(--danger)' : 'var(--success)' },
-          { label: '文档证据', val: docEvidence, color: 'var(--warning)' },
-          { label: '已确认', val: findings.filter(f => f.verdict === 'confirmed').length, color: 'var(--success)' },
+          { label: '证据链总数', val: withEvidence.length, tone: '' },
+          { label: 'API 证据', val: apiEvidence, tone: 'tone-primary' },
+          { label: 'DB 证据', val: dbEvidence, tone: dbEvidence > 0 ? 'tone-danger' : 'tone-success' },
+          { label: '文档证据', val: docEvidence, tone: 'tone-warning' },
+          { label: '已确认', val: findings.filter(f => f.verdict === 'confirmed').length, tone: 'tone-success' },
         ].map(m => (
-          <div key={m.label} className="stat-card" style={m.color ? { '--accent': m.color } as React.CSSProperties : {}}>
-            <div className="cov-value" style={m.color ? { color: m.color } : {}}>{m.val}</div>
-            <div className="cov-label">{m.label}</div>
-          </div>
+          <article key={m.label} className={`evidence-stat-card${m.tone ? ` ${m.tone}` : ''}`}>
+            <strong>{m.val}</strong>
+            <span>{m.label}</span>
+          </article>
         ))}
       </div>
 
-      {/* Filter */}
-      <div className="filters mb-4">
+      <div className="filters behavior-filters mb-4">
         {([
           { label: `全部 (${withEvidence.length})`, value: 'all' as EvidenceFilter },
           { label: `API (${apiEvidence})`, value: 'API' as EvidenceFilter },
@@ -76,29 +107,21 @@ export function EvidenceChain() {
         ))}
       </div>
 
-      {loading && (
-        <div style={{ textAlign: 'center', padding: 48 }}>
-          <div className="spinner" style={{ margin: '0 auto 16px' }} />
-          <p style={{ color: 'var(--muted)', fontSize: 13 }}>加载证据链...</p>
-        </div>
+      {loading && <section className="findings-empty-state compact"><div className="spinner spinner-centered" /><p>正在整理证据链...</p></section>}
+      {!loading && displayData.length === 0 && (
+        <section className="findings-empty-state">
+          <span className="findings-empty-kicker">当前空态</span>
+          <h3>{filter !== 'all' ? `无 ${filter} 类型证据链` : '暂无证据链'}</h3>
+          <p>运行扫描发现行为风险后，证据链将自动生成并在这里按视角展开。</p>
+        </section>
       )}
 
-      {!loading && displayData.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 60, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius)' }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🔗</div>
-          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
-            {filter !== 'all' ? `无 ${filter} 类型证据链` : '暂无证据链'}
-          </h3>
-          <p style={{ color: 'var(--muted)', fontSize: 13 }}>运行扫描发现行为风险后，证据链将自动生成</p>
-          {filter !== 'all' && (
-            <button className="btn btn-secondary mt-3" onClick={() => setFilter('all')} style={{ fontSize: 12 }}>← 查看全部</button>
-          )}
-        </div>
-      )}
+      {/* ── Enterprise Documents Panel ── */}
+      <EnterpriseDocuments project={project} />
 
       {displayData.map(f => {
         const isOpen = expandedId === f.id;
-        const sources = getEvidenceSources(f);
+        const pv = persona(f.id);
 
         return (
           <div key={f.id} className={`evidence-item ${f.severity.toLowerCase()}${isOpen ? ' open' : ''}`}>
@@ -106,81 +129,129 @@ export function EvidenceChain() {
               <span className={`severity ${f.severity.toLowerCase()}`}>{f.severity}</span>
               <span className="evidence-title">{f.title}</span>
               <span className="evidence-meta">
-                {sources.map(s => (
-                  <span key={s} style={{
-                    padding: '1px 7px', borderRadius: 3, fontSize: 9, fontWeight: 700,
-                    background: s === 'OpenAPI 规范' ? 'var(--primary-muted)' : s === '数据库 Schema' ? 'var(--success-muted)' : s === 'PRD 文档' ? 'var(--warning-muted)' : '#f1f5f9',
-                    color: s === 'OpenAPI 规范' ? 'var(--primary)' : s === '数据库 Schema' ? 'var(--success)' : s === 'PRD 文档' ? 'var(--warning)' : 'var(--muted)',
-                  }}>{s}</span>
-                ))}
-                <time>{f.timestamp}</time>
+                {f.source_entity && <span className="evidence-source-chip">{f.source_entity}</span>}
+                <time>{formatBeijingDateTime(f.timestamp)}</time>
               </span>
               <span className="evidence-expand">{isOpen ? '▲' : '▼'}</span>
             </div>
-            <div className="evidence-body" style={{ display: isOpen ? 'block' : 'none' }}>
-              {/* Evidence timeline */}
-              {f.evidence_chain.length > 0 && (
-                <div style={{ padding: '18px 0 8px' }}>
-                  {f.evidence_chain.map((step, i) => (
-                    <div key={i} style={{
-                      display: 'flex', gap: 0, alignItems: 'flex-start',
-                      position: 'relative', paddingBottom: i < f.evidence_chain.length - 1 ? 20 : 0,
-                    }}>
-                      {/* Timeline dot + line */}
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 24, flexShrink: 0 }}>
-                        <div style={{
-                          width: 10, height: 10, borderRadius: '50%',
-                          background: step.tag === 'fact' ? 'var(--danger)' : step.tag === 'api' ? 'var(--primary)' : 'var(--warning)',
-                          border: '2px solid #fff',
-                          boxShadow: '0 0 0 2px ' + (step.tag === 'fact' ? 'var(--danger-muted)' : step.tag === 'api' ? 'var(--primary-muted)' : 'var(--warning-muted)'),
-                        }} />
-                        {i < f.evidence_chain.length - 1 && (
-                          <div style={{ width: 2, flex: 1, background: 'var(--line)', marginTop: 4 }} />
-                        )}
-                      </div>
-                      {/* Step content */}
-                      <div style={{ flex: 1, paddingBottom: 4 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          <span className={`step-tag ${step.tag}`}>{step.label}</span>
-                        </div>
-                        <strong style={{ display: 'block', fontSize: 13, marginBottom: 3 }}>{step.content}</strong>
-                        {step.detail && (
-                          <code style={{ fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>{step.detail}</code>
-                        )}
-                      </div>
+            <div className="evidence-body">
+              {/* Persona tabs */}
+              <div className="persona-tabs">
+                {personaTabs.map(t => (
+                  <button key={t.key}
+                    onClick={(e) => { e.stopPropagation(); setActivePersona(p => ({ ...p, [f.id]: t.key })); }}
+                    className={`persona-tab${pv === t.key ? ' active' : ''}`}>
+                    {t.label}
+                    <span>{t.desc}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* === BUSINESS VIEW === */}
+              {pv === 'business' && (
+                <div className="persona-panel">
+                  <div className="persona-section hero">
+                    <div className="persona-kicker">业务影响</div>
+                    <p className="persona-summary">{f.business_impact?.summary || f.actual || '该缺陷可能导致业务流程异常，影响用户体验和业务数据一致性。'}</p>
+                    <div className="persona-inline-meta">
+                      <span><em>影响模块</em><strong>{f.business_impact?.module || f.source_entity || '核心业务'}</strong></span>
+                      <span><em>紧急程度</em><strong>{businessUrgencyLabel(f.business_impact?.urgency, f.severity)}</strong></span>
                     </div>
-                  ))}
+                  </div>
+                  <div className="persona-section neutral">
+                    <div className="persona-kicker">业务描述</div>
+                    <p>{f.expected || '系统在特定操作序列下未按预期业务规则响应，存在状态不一致风险。'}</p>
+                  </div>
+                  <div className="persona-section warning">
+                    <div className="persona-kicker">需求来源</div>
+                    {f.docRefs?.length ? (
+                      f.docRefs.slice(0, 3).map((doc: { display_name?: string; excerpt?: string }, i: number) => (
+                        <div key={i} className="persona-doc-card">
+                          <span>{doc.display_name || '文档'}</span>
+                          {doc.excerpt && <div className="persona-doc-excerpt">{doc.excerpt}</div>}
+                        </div>
+                      ))
+                    ) : (
+                      <p>请在企业资料页面上传 PRD / API 规范文档，缺陷将自动关联到对应文档出处。</p>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {/* Evidence sources summary */}
-              <div style={{ marginTop: 8, padding: 14, background: '#f8fafc', borderRadius: 8, border: '1px solid var(--line)' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
-                  📎 证据来源
+              {/* === TEST VIEW === */}
+              {pv === 'test' && (
+                <div className="persona-panel">
+                  <div className="persona-section success">
+                    <div className="persona-kicker">复现步骤</div>
+                    <ol className="persona-step-list">
+                      {(f.repro_steps?.length ? f.repro_steps : f.reproduce_steps_business?.length ? f.reproduce_steps_business : [
+                        `向 ${f.repro_path || '目标接口'} 发起 ${f.repro_method || 'POST'} 请求`,
+                        f.actual || `观察返回状态码和响应体内容`,
+                        `验证业务状态是否符合预期 — 当前存在异常行为`,
+                      ]).map((step: string, i: number) => (
+                        <li key={i}><code>{step}</code></li>
+                      ))}
+                    </ol>
+                  </div>
+                  <div className="persona-compare-grid">
+                    <div className="persona-compare-card danger">
+                      <span>实际行为</span>
+                      <code>{f.actual || '服务器接受并处理了本应被拒绝的请求'}</code>
+                    </div>
+                    <div className="persona-compare-card success">
+                      <span>预期行为</span>
+                      <code>{f.expected || '服务器应返回 4xx 错误码并拒绝该操作'}</code>
+                    </div>
+                  </div>
+                  <div className="persona-section warning">
+                    <div className="persona-kicker">文档出处</div>
+                    {f.docRefs?.length ? (
+                      <div className="persona-doc-chip-row">
+                        {f.docRefs.slice(0,3).map((d: { display_name?: string }, i: number) => (
+                          <span key={i} className="persona-doc-chip">{d.display_name}</span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="persona-empty-note">
+                        暂无关联文档，前往 <Link to={buildProjectPath('/materials', project)}>企业资料</Link> 上传业务资料后会自动关联。
+                      </div>
+                    )}
+                  </div>
+                  <div className="persona-footnote">以上证据均可追溯到原始资料与验证动作，支持验收与复盘。</div>
                 </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {sources.map(s => (
-                    <span key={s} style={{
-                      padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-                      background: s === 'OpenAPI 规范' ? 'var(--primary-muted)' : s === '数据库 Schema' ? 'var(--success-muted)' : s === 'PRD 文档' ? 'var(--warning-muted)' : '#f1f5f9',
-                      color: s === 'OpenAPI 规范' ? 'var(--primary)' : s === '数据库 Schema' ? 'var(--success)' : s === 'PRD 文档' ? 'var(--warning)' : 'var(--muted)',
-                    }}>{s}</span>
-                  ))}
-                </div>
-                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
-                  该证据链由以上企业资料交叉验证得出，可追溯到原始文档条目
-                </div>
-              </div>
+              )}
 
-              {/* Proof */}
-              <div className="evidence-proof">
-                <svg viewBox="0 0 24 24" width="16" height="16"><path d="M20 6 9 17l-5-5" /></svg>
-                <div>
-                  <strong>证据标识: {f.proof.hash}</strong>
-                  <code>复现率: {f.proof.repro_rate}%</code>
-                  {f.repro_path && <code style={{ marginTop: 2 }}>路径: {f.repro_method} {f.repro_path}</code>}
+              {/* === DEV VIEW === */}
+              {pv === 'dev' && (
+                <div className="persona-panel">
+                  <div className="dev-debug-panel">
+                    <div className="persona-kicker dark">调试信息</div>
+                    {[
+                      { label: '定位线索', tone: 'tone-info', code: getEvidenceLocatorText(f) },
+                      { label: 'cURL 复现命令', tone: 'tone-cyan', code: `curl -X ${f.repro_method || 'GET'} '${f.repro_path ? '${BASE_URL}' + f.repro_path : '(请配置测试地址)'}' -H 'Content-Type: application/json' -v` },
+                      { label: 'SQL 核验建议', tone: 'tone-success', code: getEvidenceSqlHint(f) },
+                      { label: '日志排查建议', tone: 'tone-warning', code: getEvidenceLogHint(f) },
+                    ].map((item, idx) => (
+                      <div key={idx} className="dev-debug-item">
+                        <div className="dev-debug-head">
+                          <span>{item.label}</span>
+                          <CopyButton text={item.code} />
+                        </div>
+                        <code className={item.tone}>
+                          {item.code}
+                        </code>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="persona-section neutral">
+                    <div className="persona-kicker">证据概览</div>
+                    <div className="dev-evidence-meta">
+                      <span>{getEvidenceSummaryText(f)}</span>
+                      <span>复现率: {f.proof?.repro_rate || 100}%</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         );
@@ -188,3 +259,116 @@ export function EvidenceChain() {
     </div>
   );
 }
+
+// ── Enterprise Documents Panel ──
+function EnterpriseDocuments({ project }: { project: string }) {
+  const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewContent, setPreviewContent] = useState('');
+
+  const normalizeDocLabel = (doc: KnowledgeDocument) =>
+    doc.display_name || doc.filename || doc.original_name || doc.source_id || doc.id || '未命名文档';
+
+  const normalizeDocType = (doc: KnowledgeDocument) => doc.type || doc.source_type || '文档';
+
+  const normalizeDocKey = (doc: KnowledgeDocument) => {
+    const label = (doc.filename || doc.original_name || doc.display_name || '').trim();
+    if (label) return label.toLowerCase();
+    const id = (doc.source_id || doc.id || '').trim();
+    return id || 'unknown';
+  };
+
+  const normalizeDocId = (doc: KnowledgeDocument) => doc.source_id || doc.id || '';
+
+  useEffect(() => {
+    if (!project) return;
+    setLoading(true);
+    getKnowledgeAsset(project).then((data: unknown) => {
+      const payload = (data && typeof data === 'object' ? data : {}) as KnowledgeAssetPayload;
+      const sources = payload.knowledge_asset?.sources || payload.source_inventory || [];
+      const rawDocs = Array.isArray(sources)
+        ? sources.filter((item): item is KnowledgeDocument => Boolean(item) && typeof item === 'object')
+        : [];
+      const merged: Record<string, KnowledgeDocument> = {};
+      const orderedKeys: string[] = [];
+      for (const doc of rawDocs) {
+        const key = normalizeDocKey(doc);
+        const existing = merged[key];
+        if (!existing) {
+          merged[key] = doc;
+          orderedKeys.push(key);
+          continue;
+        }
+        const existingId = normalizeDocId(existing);
+        const incomingId = normalizeDocId(doc);
+        const existingHasPreview = Boolean(existing.stored_path) || existingId.startsWith('src_');
+        const incomingHasPreview = Boolean(doc.stored_path) || incomingId.startsWith('src_');
+        const existingIsInput = existingId.startsWith('input-');
+        const incomingIsInput = incomingId.startsWith('input-');
+        if ((incomingHasPreview && !existingHasPreview) || (!incomingIsInput && existingIsInput)) {
+          merged[key] = doc;
+        }
+      }
+      setDocs(orderedKeys.map((key) => merged[key]).filter(Boolean));
+    }).catch(() => setDocs([])).finally(() => setLoading(false));
+  }, [project]);
+
+  const loadPreview = async (sourceId: string) => {
+    if (previewId === sourceId) { setPreviewId(null); setPreviewContent(''); return; }
+    setPreviewId(sourceId);
+    try {
+      const data = (await getKnowledgePreview(sourceId)) as KnowledgePreviewPayload;
+      setPreviewContent(typeof data.content === 'string' ? data.content : '无法加载文档内容');
+    } catch { setPreviewContent('加载失败'); }
+  };
+
+  if (!project || (docs.length === 0 && !loading)) return null;
+
+  return (
+    <div className="evidence-docs-panel">
+      <div className="evidence-docs-head">
+        <span>企业资料 ({docs.length})</span>
+        <Link to={buildProjectPath('/materials', project)}>前往管理</Link>
+      </div>
+      {loading ? <div className="evidence-docs-loading">加载中...</div> : (
+        <div className="evidence-docs-list">
+          {docs.map((doc) => {
+            const docId = normalizeDocId(doc);
+            return (
+            <div key={docId || doc.filename || doc.display_name}>
+              <div
+                onClick={() => { if (docId) void loadPreview(docId); }}
+                className={`evidence-doc-row${previewId === docId ? ' active' : ''}${docId ? ' clickable' : ''}`}
+              >
+                <span>{normalizeDocLabel(doc)}</span>
+                <span className="evidence-doc-type">{normalizeDocType(doc)}</span>
+              </div>
+              {previewId === docId && (
+                <div className="evidence-doc-preview">
+                  {previewContent || '加载中...'}
+                </div>
+              )}
+            </div>
+          );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Copy button for dev view ──
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className={`copy-button${copied ? ' copied' : ''}`}
+      onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+    >
+      {copied ? '已复制' : '复制'}
+    </button>
+  );
+}
+
+export default EvidenceChain;

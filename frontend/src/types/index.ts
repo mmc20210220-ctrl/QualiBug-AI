@@ -18,6 +18,12 @@ export interface Finding {
   id: string;
   title: string;
   severity: 'P0' | 'P1' | 'P2';
+  defect_family: string;
+  defect_family_label: string;
+  risk_type: string;
+  reporting_bucket: string;
+  reporting_bucket_label: string;
+  quality_assurance_gap: boolean;
   verdict: string;
   reproducibility_count: number;
   timestamp: string;
@@ -34,6 +40,18 @@ export interface Finding {
   repro_path: string;
   source_entity: string;
   source_value: string;
+  docRefs?: Array<{ source_id?: string; display_name?: string; excerpt?: string; type?: string }>;
+  evidence_hint: string;
+  business_impact: { summary: string; urgency: string; module: string };
+  investigation_guidance: {
+    primary_area: string;
+    relevant_apis: string[];
+    relevant_tables: string[];
+    log_search: string;
+    sql_verify: string;
+    trace_id: string;
+  };
+  reproduce_steps_business: string[];
 }
 
 export interface EvidenceStep {
@@ -78,7 +96,7 @@ export interface ReleaseGateStatus {
 
 export interface ReleaseCheck {
   name: string;
-  status: 'pass' | 'fail' | 'pending' | 'warning';
+  status: 'pass' | 'fail' | 'pending';
   detail: string;
 }
 

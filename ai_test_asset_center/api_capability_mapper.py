@@ -472,19 +472,42 @@ def _resolve_ref(
     schema: dict[str, Any] | None,
     openapi_spec: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Resolve a ``$ref`` pointer one level deep in the OpenAPI spec.
+    """Resolve a ``$ref`` pointer recursively (max 5 levels).
 
-    Only processes top-level ``$ref`` on the schema dict itself; does not
-    recursively walk nested subschemas (keeps the mapper fast).
+    Follows nested refs to handle patterns like
+    ``$ref: '#/components/schemas/A'`` where A itself has
+    ``$ref: '#/components/schemas/Base'``.
     """
     if not isinstance(schema, dict):
         return schema
     ref = schema.get("$ref")
     if not isinstance(ref, str):
         return schema
-    # #/components/schemas/Foo → components → schemas → Foo
-    resolved = _safe_get(openapi_spec, *ref.lstrip("#/").split("/"))
-    if isinstance(resolved, dict):
+    max_depth = 5
+    seen: set[str] = set()
+    current = ref
+    node: Any = schema
+    for _ in range(max_depth):
+        if current in seen:
+            break
+        seen.add(current)
+        if not current.startswith("#/"):
+            break
+        parts = [p.replace("~1", "/").replace("~0", "~") for p in current[2:].split("/")]
+        resolved = openapi_spec
+        for part in parts:
+            if isinstance(resolved, dict):
+                resolved = resolved.get(part)
+            else:
+                resolved = None
+                break
+        if not isinstance(resolved, dict):
+            break
+        next_ref = resolved.get("$ref")
+        if isinstance(next_ref, str):
+            current = next_ref
+            node = resolved
+            continue
         return resolved
     return schema
 

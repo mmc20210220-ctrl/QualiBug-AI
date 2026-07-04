@@ -104,6 +104,39 @@ def test_bug_family_coverage_report_marks_browser_blocked_families() -> None:
     assert coverage["missing_family_reasons"]["ui"]["reason_code"] == "E_BROWSER_CACHE_MISSING"
 
 
+def test_bug_family_coverage_report_uses_strict_validated_accounting_instead_of_confidence() -> None:
+    issues = [
+        {
+            "issue_id": "ISSUE_UI_PENDING",
+            "defect_family": "ui",
+            "confidence": 0.99,
+            "evidence": {
+                "request": {"method": "GET", "url": "/ui/orders"},
+                "response": {"status_code": 200},
+            },
+        },
+        {
+            "issue_id": "ISSUE_UI_VALIDATED",
+            "defect_family": "ui",
+            "confidence": 0.12,
+            "verification": {"verdict": "validated_candidate"},
+            "reproduction_steps": ["open orders page", "observe stale state"],
+            "evidence": {
+                "request": {"method": "GET", "url": "/ui/orders"},
+                "response": {"status_code": 200},
+            },
+        },
+    ]
+
+    coverage = build_bug_family_coverage_report([], issues)
+    row = next(item for item in coverage["rows"] if item["family_id"] == "ui")
+
+    assert row["validated_count"] == 1
+    assert row["pending_count"] == 1
+    assert row["candidate_only_count"] == 0
+    assert row["coverage_status"] == "validated"
+
+
 def test_full_spectrum_coverage_tracks_declared_vs_materialized_sources() -> None:
     openapi = {
         "openapi": "3.0.0",

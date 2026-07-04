@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "ECOMMERCE_0",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_1",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_2",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_3",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_4",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_5",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_6",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_7",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated state_break bug for ecommerce scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_8",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_9",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_10",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_11",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_12",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_13",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_14",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_15",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_16",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_17",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_18",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_19",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_20",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_21",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_22",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_23",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_24",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_25",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_26",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_27",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_28",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_29",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_30",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_31",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_32",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_33",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_34",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_35",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_36",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_37",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_38",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_39",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_40",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_41",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_42",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_43",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_44",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_45",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_46",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_47",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_48",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_49",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_50",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_51",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_52",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_53",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_54",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_55",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_56",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_57",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_58",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_59",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_60",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_61",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_62",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_63",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_64",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_65",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_66",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_67",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_68",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_69",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_70",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_71",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_72",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_73",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_74",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_75",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_76",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_77",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_78",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_79",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_80",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_81",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_82",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_83",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_84",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_85",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_86",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_87",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_88",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_89",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_90",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_91",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_92",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_93",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_94",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_95",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_96",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_97",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_98",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_99",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_100",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_101",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_102",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_103",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_104",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_105",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_106",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_107",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_108",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_109",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_110",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_111",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_112",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_113",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_114",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_115",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_116",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_117",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_118",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_119",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_120",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_121",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_122",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_123",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_124",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_125",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_126",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_127",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_128",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_129",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_130",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_131",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_132",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_133",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_134",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_135",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_136",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_137",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_138",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_139",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_140",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_141",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_142",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_143",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_144",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_145",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_146",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_147",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_148",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_149",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_150",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_151",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_152",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_153",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_154",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_155",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_156",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_157",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_158",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_159",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_160",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_161",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_162",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated state_break bug for ecommerce scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_163",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_164",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_165",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_166",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_167",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_168",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_169",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_170",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_171",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_172",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_173",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_174",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_175",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_176",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_177",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_178",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_179",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_180",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_181",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_182",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_183",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_184",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_185",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_186",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_187",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_188",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_189",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_190",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_191",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_192",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_193",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_194",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_195",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_196",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_197",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_198",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_199",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_200",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_201",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_202",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_203",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_204",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_205",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_206",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_207",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_208",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_209",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_210",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_211",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_212",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_213",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_214",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_215",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_216",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_217",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_218",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_219",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_220",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_221",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_222",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_223",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_224",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_225",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_226",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_227",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_228",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_229",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_230",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_231",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_232",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_233",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_234",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_235",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_236",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_237",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_238",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_239",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_240",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_241",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ecommerce scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_242",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated state_break bug for ecommerce scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_243",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_244",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_245",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_246",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ecommerce scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_247",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_248",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_249",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_250",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_251",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_252",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_253",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_254",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_255",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_256",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_257",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_258",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_259",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated permission bug for ecommerce scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_260",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_261",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_262",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_263",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_264",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_265",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_266",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_267",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ecommerce scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_268",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_269",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_270",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ecommerce scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_271",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_272",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated state_break bug for ecommerce scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_273",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ecommerce scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_274",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_275",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ecommerce scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_276",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_277",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_278",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_279",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated money bug for ecommerce scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_280",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_281",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_282",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_283",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated money bug for ecommerce scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_284",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ecommerce scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_285",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ecommerce scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_286",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated money bug for ecommerce scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_287",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_288",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_289",
+    "type": "money",
+    "title": "money issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated money bug for ecommerce scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_290",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_291",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_292",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ecommerce scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_293",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_294",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated permission bug for ecommerce scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_295",
+    "type": "idempotency",
+    "title": "idempotency issue in ecommerce",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ecommerce scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_296",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "high",
+    "description": "Simulated permission bug for ecommerce scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_297",
+    "type": "state_break",
+    "title": "state_break issue in ecommerce",
+    "severity": "low",
+    "description": "Simulated state_break bug for ecommerce scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_298",
+    "type": "permission",
+    "title": "permission issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated permission bug for ecommerce scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "ECOMMERCE_299",
+    "type": "concurrency",
+    "title": "concurrency issue in ecommerce",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ecommerce scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

@@ -248,6 +248,13 @@ def test_phase104a_command_center_includes_full_spectrum_snapshot(monkeypatch, t
                         }
                     ],
                 },
+                "discovery_funnel": {
+                    "probe_selection": {"output_count": 12},
+                    "formal_accounting": {"output_count": 1},
+                },
+                "discovery_blocker_summary": {
+                    "top_blockers": [{"reason_code": "missing_strict_verifier", "count": 3}],
+                },
             },
             ensure_ascii=False,
         ),
@@ -259,3 +266,5 @@ def test_phase104a_command_center_includes_full_spectrum_snapshot(monkeypatch, t
     assert dashboard["ui_design_oracle_governance"]["ui_design_oracle_issue_count"] == 2
     assert dashboard["bug_family_coverage"]["missing_source_count"] == 6
     assert dashboard["full_spectrum_capability_matrix"]["source_row_count"] == 10
+    assert dashboard["discovery_funnel"]["probe_selection"]["output_count"] == 12
+    assert dashboard["discovery_blocker_summary"]["top_blockers"][0]["reason_code"] == "missing_strict_verifier"

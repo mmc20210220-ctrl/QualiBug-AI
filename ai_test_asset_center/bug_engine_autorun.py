@@ -61,6 +61,7 @@ def ensure_local_buglab(*, host: str = "127.0.0.1", port: int = 8000, wait_secon
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    log.close()  # File descriptor transferred to subprocess, safe to close
     pid_path.write_text(str(proc.pid), encoding="utf-8")
 
     deadline = time.time() + wait_seconds
@@ -184,9 +185,10 @@ def start_bug_engine_daemon(
     env = os.environ.copy()
     env.setdefault("PYTHONPATH", str(ROOT))
     env.setdefault("QUALIBUG_ALLOW_UNAUTH_WRITE_PROBES", "0")
+    log_fh = open(log_path, "ab", buffering=0)
     kwargs: dict[str, Any] = {
         "cwd": str(ROOT),
-        "stdout": open(log_path, "ab", buffering=0),
+        "stdout": log_fh,
         "stderr": subprocess.STDOUT,
         "env": env,
     }
@@ -195,6 +197,7 @@ def start_bug_engine_daemon(
     else:
         kwargs["start_new_session"] = True
     proc = subprocess.Popen(cmd, **kwargs)
+    log_fh.close()  # Transferred to subprocess, safe to close our handle
     payload = {
         "pid": proc.pid,
         "project_id": project_id,

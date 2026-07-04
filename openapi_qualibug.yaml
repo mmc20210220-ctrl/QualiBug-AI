@@ -110,14 +110,36 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: Knowledge asset with sources, rules, oracles
+          description: Knowledge asset with sources, source inventory, rules, and oracles
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  knowledge_asset: { type: object }
+                  knowledge_asset:
+                    type: object
+                    properties:
+                      project_id: { type: string }
+                      summary: { type: object }
+                      source_inventory:
+                        type: array
+                        items: { type: object }
+                      sources:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            source_id: { type: string }
+                            filename: { type: string }
+                            source_type: { type: string }
+                            status: { type: string }
+                            size_bytes: { type: integer }
+                            uploaded_at: { type: string }
+                            version: { type: integer }
+                            parse_status: { type: string }
+        "404":
+          description: `PROJECT_NOT_FOUND` when the requested project does not exist
 
   /api/knowledge/ingest:
     post:
@@ -159,9 +181,13 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
+                  source_id: { type: string }
                   filename: { type: string }
                   doc_type: { type: string }
                   size_bytes: { type: integer }
+                  ingest_status:
+                    type: string
+                    enum: [created, duplicate]
                   storage_mode:
                     type: string
                     example: verbatim_bytes
@@ -174,7 +200,11 @@ paths:
                   knowledge_updated: { type: boolean }
                   message: { type: string }
         "400":
-          description: Missing content or decode failure
+          description: Missing content, unsupported source type, or decode failure
+        "404":
+          description: `PROJECT_NOT_FOUND` when the requested project does not exist
+        "500":
+          description: `INGEST_FAILED` when the file was stored but the knowledge center rejected ingestion
 
   /api/knowledge/delete:
     post:

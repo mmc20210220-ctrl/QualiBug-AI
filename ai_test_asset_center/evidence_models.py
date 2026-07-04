@@ -238,8 +238,10 @@ class BusinessEvidenceDraft:
     owner_binding: dict[str, Any] = field(default_factory=dict)
     correlation_binding: dict[str, Any] = field(default_factory=dict)
     before_snapshot_ref: str = ""
+    before_snapshot_data: dict[str, Any] = field(default_factory=dict)
     action_evidence_ref: str = ""
     after_snapshot_ref: str = ""
+    after_snapshot_data: dict[str, Any] = field(default_factory=dict)
     observer_refs: list[str] = field(default_factory=list)
     invariant_ref: str = ""
     impact_assessment: str = ""
@@ -265,8 +267,10 @@ class BusinessEvidenceDraft:
             "owner_binding": self.owner_binding,
             "correlation_binding": self.correlation_binding,
             "before_snapshot_ref": self.before_snapshot_ref,
+            "before_snapshot_data": self.before_snapshot_data,
             "action_evidence_ref": self.action_evidence_ref,
             "after_snapshot_ref": self.after_snapshot_ref,
+            "after_snapshot_data": self.after_snapshot_data,
             "observer_refs": self.observer_refs,
             "invariant_ref": self.invariant_ref,
             "impact_assessment": self.impact_assessment,
@@ -354,8 +358,10 @@ class BusinessFindingContract:
             "root_cause_candidate": self.root_cause_candidate,
             "entity_binding": self.entity_binding,
             "before_snapshot_ref": self.before_snapshot_ref,
+            "before_snapshot_data": self.before_snapshot_data,
             "action_evidence_ref": self.action_evidence_ref,
             "after_snapshot_ref": self.after_snapshot_ref,
+            "after_snapshot_data": self.after_snapshot_data,
             "observer_refs": self.observer_refs,
             "violated_invariant": self.violated_invariant,
             "cleanup": self.cleanup,
@@ -408,6 +414,7 @@ MISSING_REQUIREMENTS = {
 RUNTIME_GATE_STATUS = {
     "PASSED", "FAILED_UNTRACEABLE", "FAILED_CROSS_PROJECT",
     "FAILED_MISSING_CALLS", "FAILED_TIMING_ERROR", "NOT_RUN",
+    "FAILED_LOW_EVIDENCE_QUALITY",
 }
 
 BUSINESS_GATE_STATUS = {

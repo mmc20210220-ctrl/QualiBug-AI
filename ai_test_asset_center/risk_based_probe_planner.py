@@ -357,6 +357,189 @@ def _replay_evidence_boost(probe: dict[str, Any], replay_sandbox: dict[str, Any]
     return min(0.3, boost), reasons[:3]
 
 
+def _avg_score(rows: list[dict[str, Any]], field: str) -> float:
+    if not rows:
+        return 0.0
+    total = sum(float(row.get(field) or 0.0) for row in rows)
+    return round(total / len(rows), 6)
+
+
+def _validated_yield_signal_level(score: float) -> str:
+    if score >= 0.16:
+        return "strong"
+    if score >= 0.04:
+        return "moderate"
+    return "weak"
+
+
+def _validated_yield_priority(
+    probe: dict[str, Any],
+    *,
+    flow_exec_boost: float,
+    replay_boost: float,
+) -> tuple[float, list[str], dict[str, Any]]:
+    risk = _risk_from_probe(probe)
+    source = str(probe.get("source") or "unknown")
+    execution_policy = str(probe.get("execution_policy") or "direct")
+    confirmed_learning_bonus = max(0.0, min(0.25, float(probe.get("learning_bonus") or 0.0)))
+    strict_validation_ready = execution_policy != "candidate_only" and not risk.endswith("contract_gap")
+    repro_ready_signal = execution_policy != "candidate_only" or flow_exec_boost >= 0.08
+    evidence_ready_signal = replay_boost >= 0.1 or confirmed_learning_bonus >= 0.08
+    score = 0.0
+    reasons: list[str] = []
+
+    source_prior = {
+        "business_assurance_coverage": 0.06,
+        "business_world_model": 0.06,
+        "enterprise_business_knowledge_asset": 0.06,
+        "multi_industry_business_reasoning": 0.05,
+        "business_saga_compensation_reasoning": 0.05,
+        "business_event_chain_reasoning": 0.05,
+        "business_population_constraints": 0.05,
+        "business_causality_conservation": 0.05,
+        "temporal_data_regression_reasoning": 0.04,
+        "metamorphic_differential_reasoning": 0.04,
+        "consistency_isolation_reasoning": 0.04,
+        "business_lifecycle_reasoning": 0.04,
+        "multi_source_business_reasoning": 0.04,
+        "business_invariant_mining": 0.03,
+        "business_reconciliation": 0.03,
+        "business_outcome_validation": 0.03,
+    }.get(source, 0.0)
+    if source_prior > 0:
+        score += source_prior
+        reasons.append(f"来源 validated-yield 先验 {source_prior:.2f}")
+
+    if strict_validation_ready:
+        score += 0.08
+        reasons.append("可直接进入严格验证")
+    elif execution_policy == "candidate_only":
+        score -= 0.14
+        reasons.append("仅候选信号，严格验证产出弱")
+    else:
+        score += 0.02
+        reasons.append("需要沙箱/补充步骤后验证")
+
+    if flow_exec_boost > 0:
+        delta = min(0.08, flow_exec_boost * 0.4)
+        score += delta
+        reasons.append("已有失败断言/复现线索")
+    if replay_boost > 0:
+        delta = min(0.1, replay_boost * 0.45)
+        score += delta
+        reasons.append("已有证据包可收敛验证")
+    if confirmed_learning_bonus > 0:
+        delta = min(0.08, confirmed_learning_bonus * 0.35)
+        score += delta
+        reasons.append("确认缺陷记忆支持更快闭环")
+    if risk.endswith("contract_gap"):
+        score -= 0.1
+        reasons.append("合同缺口类信号更难形成严格验证闭环")
+    if _is_destructive(probe) and execution_policy == "candidate_only":
+        score -= 0.05
+        reasons.append("高副作用且仅候选，预算性价比低")
+
+    bounded_score = round(max(-0.25, min(0.3, score)), 6)
+    return (
+        bounded_score,
+        reasons[:6],
+        {
+            "strict_validation_ready": strict_validation_ready,
+            "repro_ready_signal": repro_ready_signal,
+            "evidence_ready_signal": evidence_ready_signal,
+            "signal_level": _validated_yield_signal_level(bounded_score),
+            "execution_policy": execution_policy,
+        },
+    )
+
+
+def _summarize_validated_yield_priority(candidates: list[dict[str, Any]], selected: list[dict[str, Any]]) -> dict[str, Any]:
+    def _count(rows: list[dict[str, Any]], predicate: Any) -> int:
+        return sum(1 for row in rows if predicate(row))
+
+    candidate_signal_distribution = _counter([str(row.get("validated_yield_signal_level") or "weak") for row in candidates])
+    selected_signal_distribution = _counter([str(row.get("validated_yield_signal_level") or "weak") for row in selected])
+    strong_candidate_count = _count(candidates, lambda row: row.get("validated_yield_signal_level") == "strong")
+    moderate_candidate_count = _count(candidates, lambda row: row.get("validated_yield_signal_level") == "moderate")
+    weak_candidate_count = _count(candidates, lambda row: row.get("validated_yield_signal_level") == "weak")
+    strong_selected_count = _count(selected, lambda row: row.get("validated_yield_signal_level") == "strong")
+    moderate_selected_count = _count(selected, lambda row: row.get("validated_yield_signal_level") == "moderate")
+    weak_selected_count = _count(selected, lambda row: row.get("validated_yield_signal_level") == "weak")
+    candidate_only_candidate_count = _count(candidates, lambda row: row.get("execution_policy") == "candidate_only")
+    candidate_only_selected_count = _count(selected, lambda row: row.get("execution_policy") == "candidate_only")
+    strict_candidate_count = _count(candidates, lambda row: bool(row.get("strict_validation_ready")))
+    strict_selected_count = _count(selected, lambda row: bool(row.get("strict_validation_ready")))
+    evidence_ready_candidate_count = _count(candidates, lambda row: bool(row.get("evidence_ready_signal")))
+    evidence_ready_selected_count = _count(selected, lambda row: bool(row.get("evidence_ready_signal")))
+    candidate_avg = _avg_score(candidates, "validated_yield_priority_score")
+    selected_avg = _avg_score(selected, "validated_yield_priority_score")
+    strong_selection_rate = round(strong_selected_count / strong_candidate_count, 3) if strong_candidate_count else 0.0
+    moderate_selection_rate = round(moderate_selected_count / moderate_candidate_count, 3) if moderate_candidate_count else 0.0
+    weak_selection_rate = round(weak_selected_count / weak_candidate_count, 3) if weak_candidate_count else 0.0
+    candidate_only_selection_rate = round(candidate_only_selected_count / candidate_only_candidate_count, 3) if candidate_only_candidate_count else 0.0
+    strict_selection_rate = round(strict_selected_count / strict_candidate_count, 3) if strict_candidate_count else 0.0
+    evidence_ready_selection_rate = round(evidence_ready_selected_count / evidence_ready_candidate_count, 3) if evidence_ready_candidate_count else 0.0
+    preference_proven = (
+        selected_avg >= candidate_avg
+        and strong_selection_rate >= weak_selection_rate
+        and strict_selection_rate >= candidate_only_selection_rate
+    )
+    return {
+        "reporting_basis": "validated_bug",
+        "preference_target": "validated_yield",
+        "deprioritized_proxy": "candidate_scale",
+        "candidate_average_score": candidate_avg,
+        "selected_average_score": selected_avg,
+        "selection_gain": round(selected_avg - candidate_avg, 6),
+        "candidate_signal_distribution": candidate_signal_distribution,
+        "selected_signal_distribution": selected_signal_distribution,
+        "signal_level_selection_rate": {
+            "strong": strong_selection_rate,
+            "moderate": moderate_selection_rate,
+            "weak": weak_selection_rate,
+        },
+        "strict_validation_ready_candidate_count": strict_candidate_count,
+        "strict_validation_ready_selected_count": strict_selected_count,
+        "strict_validation_ready_selection_rate": strict_selection_rate,
+        "candidate_only_candidate_count": candidate_only_candidate_count,
+        "candidate_only_selected_count": candidate_only_selected_count,
+        "candidate_only_selection_rate": candidate_only_selection_rate,
+        "evidence_ready_candidate_count": evidence_ready_candidate_count,
+        "evidence_ready_selected_count": evidence_ready_selected_count,
+        "evidence_ready_selection_rate": evidence_ready_selection_rate,
+        "selection_prefers_strictly_verifiable_output": preference_proven,
+    }
+
+
+def _select_probes_by_budget(
+    combined: list[dict[str, Any]],
+    *,
+    mode: str,
+    allow_destructive: bool,
+    budget: dict[str, Any],
+    max_count: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    per_risk_used: dict[str, int] = {}
+    selected: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for probe in sorted(combined, key=lambda p: (-float(p.get("priority_score") or 0), -float(p.get("validated_yield_priority_score") or 0), str(p.get("risk_type")), str(p.get("path")))):
+        risk = _risk_from_probe(probe)
+        candidate_only_flow = mode != "safe" and probe.get("execution_policy") == "candidate_only" and probe.get("source") == "enterprise_business_flow_graph"
+        sandbox_reasoning_candidate = probe.get("source") in {"multi_source_business_reasoning", "business_lifecycle_reasoning", "consistency_isolation_reasoning", "business_causality_conservation", "business_population_constraints", "business_event_chain_reasoning", "business_saga_compensation_reasoning", "business_assurance_coverage", "multi_industry_business_reasoning", "enterprise_business_knowledge_asset", "enterprise_testops_journey", "enterprise_testops_permission", "enterprise_testops_system_state", "enterprise_testops_data"} and probe.get("execution_policy") == "sandbox_required"
+        if _is_destructive(probe) and (mode == "safe" or not allow_destructive) and not candidate_only_flow and not sandbox_reasoning_candidate:
+            skipped.append({"probe_id": probe.get("probe_id"), "reason": "destructive_blocked_by_mode", "risk_type": risk})
+            continue
+        risk_limit = (budget.get("risk_budget") or {}).get(risk)
+        if risk_limit is not None and per_risk_used.get(risk, 0) >= int(risk_limit):
+            skipped.append({"probe_id": probe.get("probe_id"), "reason": "risk_budget_exceeded", "risk_type": risk})
+            continue
+        selected.append({**probe, "plan_rank": len(selected) + 1, "selected_by": "risk_based_probe_planner"})
+        per_risk_used[risk] = per_risk_used.get(risk, 0) + 1
+        if len(selected) >= max_count:
+            break
+    return selected, skipped
+
+
 def _score_probe(probe: dict[str, Any], risk_profile: dict[str, Any], patterns: list[dict[str, Any]], strategy: dict[str, Any] | None = None, flow_execution: dict[str, Any] | None = None, replay_sandbox: dict[str, Any] | None = None) -> dict[str, Any]:
     risk = _risk_from_probe(probe)
     severity = str(probe.get("severity") or "P2")
@@ -369,11 +552,30 @@ def _score_probe(probe: dict[str, Any], risk_profile: dict[str, Any], patterns: 
     replay_boost, replay_reasons = _replay_evidence_boost(probe, replay_sandbox)
     confirmed_learning_bonus = max(0.0, min(0.25, float(probe.get("learning_bonus") or 0.0)))
     confirmed_learning_reasons = [f"确认缺陷记忆加分 {confirmed_learning_bonus:.2f}"] if confirmed_learning_bonus >= 0.01 else []
+    validated_yield_boost, validated_yield_reasons, validated_yield_flags = _validated_yield_priority(
+        probe,
+        flow_exec_boost=flow_exec_boost,
+        replay_boost=replay_boost,
+    )
     destructive_penalty = 0.12 if _is_destructive(probe) else 0.0
     candidate_penalty = 0.08 if probe.get("execution_policy") == "candidate_only" else 0.0
-    score = max(0.05, min(1.0, base + source_bonus + boost + learning_boost + flow_exec_boost + replay_boost + confirmed_learning_bonus - destructive_penalty - candidate_penalty))
-    reason_list = [*reasons, *learning_reasons, *flow_exec_reasons, *replay_reasons, *confirmed_learning_reasons] or ["OpenAPI 风险语义匹配"]
-    return {"priority_score": round(score, 6), "priority_reasons": reason_list[:8], "strategy_learning_boost": round(learning_boost, 6), "business_flow_execution_boost": round(flow_exec_boost, 6), "replay_evidence_boost": round(replay_boost, 6), "confirmed_bug_learning_bonus": round(confirmed_learning_bonus, 6), "destructive": _is_destructive(probe)}
+    score = max(0.05, min(1.0, base + source_bonus + boost + learning_boost + flow_exec_boost + replay_boost + confirmed_learning_bonus + validated_yield_boost - destructive_penalty - candidate_penalty))
+    reason_list = [*validated_yield_reasons, *reasons, *learning_reasons, *flow_exec_reasons, *replay_reasons, *confirmed_learning_reasons] or ["OpenAPI 风险语义匹配"]
+    return {
+        "priority_score": round(score, 6),
+        "priority_reasons": reason_list[:8],
+        "strategy_learning_boost": round(learning_boost, 6),
+        "business_flow_execution_boost": round(flow_exec_boost, 6),
+        "replay_evidence_boost": round(replay_boost, 6),
+        "confirmed_bug_learning_bonus": round(confirmed_learning_bonus, 6),
+        "validated_yield_priority_score": validated_yield_boost,
+        "validated_yield_priority_reasons": validated_yield_reasons,
+        "validated_yield_signal_level": validated_yield_flags["signal_level"],
+        "strict_validation_ready": validated_yield_flags["strict_validation_ready"],
+        "repro_ready_signal": validated_yield_flags["repro_ready_signal"],
+        "evidence_ready_signal": validated_yield_flags["evidence_ready_signal"],
+        "destructive": _is_destructive(probe),
+    }
 
 
 def build_risk_based_probe_plan(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:
@@ -456,24 +658,13 @@ def build_risk_based_probe_plan(project_id: str = "real_project_demo", root: Pat
     budget = dict(MODE_BUDGETS[mode])
     max_count = int(cfg.get("max_probe_count") or budget["max_probe_count"])
     max_count = min(max_count, int(budget["max_probe_count"])) if mode == "safe" else max_count
-    per_risk_used: dict[str, int] = {}
-    selected: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    for probe in sorted(combined, key=lambda p: (-float(p.get("priority_score") or 0), str(p.get("risk_type")), str(p.get("path")))):
-        risk = _risk_from_probe(probe)
-        candidate_only_flow = mode != "safe" and probe.get("execution_policy") == "candidate_only" and probe.get("source") == "enterprise_business_flow_graph"
-        sandbox_reasoning_candidate = probe.get("source") in {"multi_source_business_reasoning", "business_lifecycle_reasoning", "consistency_isolation_reasoning", "business_causality_conservation", "business_population_constraints", "business_event_chain_reasoning", "business_saga_compensation_reasoning", "business_assurance_coverage", "multi_industry_business_reasoning", "enterprise_business_knowledge_asset", "enterprise_testops_journey", "enterprise_testops_permission", "enterprise_testops_system_state", "enterprise_testops_data"} and probe.get("execution_policy") == "sandbox_required"
-        if _is_destructive(probe) and (mode == "safe" or not allow_destructive) and not candidate_only_flow and not sandbox_reasoning_candidate:
-            skipped.append({"probe_id": probe.get("probe_id"), "reason": "destructive_blocked_by_mode", "risk_type": risk})
-            continue
-        risk_limit = (budget.get("risk_budget") or {}).get(risk)
-        if risk_limit is not None and per_risk_used.get(risk, 0) >= int(risk_limit):
-            skipped.append({"probe_id": probe.get("probe_id"), "reason": "risk_budget_exceeded", "risk_type": risk})
-            continue
-        selected.append({**probe, "plan_rank": len(selected) + 1, "selected_by": "risk_based_probe_planner"})
-        per_risk_used[risk] = per_risk_used.get(risk, 0) + 1
-        if len(selected) >= max_count:
-            break
+    selected, skipped = _select_probes_by_budget(
+        combined,
+        mode=mode,
+        allow_destructive=allow_destructive,
+        budget=budget,
+        max_count=max_count,
+    )
     # Phase90: coverage memory biases the next run toward unexplored business
     # surfaces and evidence gaps, while suppressing already-confirmed/rejected
     # duplicates. It changes ranking only; existing safety/risk budgets remain
@@ -486,6 +677,7 @@ def build_risk_based_probe_plan(project_id: str = "real_project_demo", root: Pat
             probe["plan_rank"] = index
     except Exception as exc:
         coverage_summary = {"error": str(exc)[:300]}
+    validated_yield_summary = _summarize_validated_yield_priority(combined, selected)
 
     summary = {
         "project_id": project,
@@ -619,6 +811,17 @@ def build_risk_based_probe_plan(project_id: str = "real_project_demo", root: Pat
         "strategy_learning_weight_count": len((strategy_learning or {}).get("risk_type_weights") or []) + len((strategy_learning or {}).get("endpoint_weights") or []),
         "risk_budget": budget.get("risk_budget") or {},
         "allow_destructive_effective": allow_destructive,
+        "validated_yield_priority_signal_summary": validated_yield_summary,
+        "budget_selection_bias_summary": {
+            "preferred_target": "validated_yield",
+            "deprioritized_proxy": "candidate_scale",
+            "selection_prefers_strictly_verifiable_output": validated_yield_summary.get("selection_prefers_strictly_verifiable_output"),
+            "selection_gain": validated_yield_summary.get("selection_gain"),
+            "strict_validation_ready_selection_rate": validated_yield_summary.get("strict_validation_ready_selection_rate"),
+            "candidate_only_selection_rate": validated_yield_summary.get("candidate_only_selection_rate"),
+            "strong_signal_selection_rate": ((validated_yield_summary.get("signal_level_selection_rate") or {}).get("strong")),
+            "weak_signal_selection_rate": ((validated_yield_summary.get("signal_level_selection_rate") or {}).get("weak")),
+        },
     }
     plan = {
         "phase": "phase26_risk_based_probe_planner",
@@ -700,8 +903,17 @@ def load_risk_based_probe_plan(project_id: str = "real_project_demo", root: Path
 
 def render_risk_based_probe_plan_report(plan: dict[str, Any]) -> str:
     summary = plan.get("summary") or {}
-    cards = "".join(f"<div class='card'><span>{_html_escape(k)}</span><b>{_html_escape(v)}</b></div>" for k, v in summary.items() if k not in {"risk_budget", "risk_distribution", "source_distribution", "severity_distribution"})
+    cards = "".join(f"<div class='card'><span>{_html_escape(k)}</span><b>{_html_escape(v)}</b></div>" for k, v in summary.items() if k not in {"risk_budget", "risk_distribution", "source_distribution", "severity_distribution", "validated_yield_priority_signal_summary", "budget_selection_bias_summary"})
     risk_rows = "".join(f"<tr><td>{_html_escape(k)}</td><td>{_html_escape(v)}</td></tr>" for k, v in (summary.get("risk_distribution") or {}).items())
+    validated_yield_rows = "".join(
+        f"<tr><td>{_html_escape(k)}</td><td>{_html_escape(v)}</td></tr>"
+        for k, v in (summary.get("validated_yield_priority_signal_summary") or {}).items()
+        if k not in {"candidate_signal_distribution", "selected_signal_distribution", "signal_level_selection_rate"}
+    )
+    validated_yield_candidate_rows = "".join(f"<tr><td>{_html_escape(k)}</td><td>{_html_escape(v)}</td></tr>" for k, v in ((summary.get("validated_yield_priority_signal_summary") or {}).get("candidate_signal_distribution") or {}).items())
+    validated_yield_selected_rows = "".join(f"<tr><td>{_html_escape(k)}</td><td>{_html_escape(v)}</td></tr>" for k, v in ((summary.get("validated_yield_priority_signal_summary") or {}).get("selected_signal_distribution") or {}).items())
+    validated_yield_rate_rows = "".join(f"<tr><td>{_html_escape(k)}</td><td>{_html_escape(v)}</td></tr>" for k, v in ((summary.get("validated_yield_priority_signal_summary") or {}).get("signal_level_selection_rate") or {}).items())
+    bias_rows = "".join(f"<tr><td>{_html_escape(k)}</td><td>{_html_escape(v)}</td></tr>" for k, v in (summary.get("budget_selection_bias_summary") or {}).items())
     rows = []
     for p in (plan.get("selected_probes") or [])[:100]:
         rows.append(f"<tr><td>{_html_escape(p.get('plan_rank'))}</td><td>{_html_escape(p.get('priority_score'))}</td><td>{_html_escape(p.get('severity'))}</td><td>{_html_escape(p.get('risk_type'))}</td><td>{_html_escape(p.get('method'))} {_html_escape(p.get('path'))}</td><td>{_html_escape(p.get('source'))}</td><td>{_html_escape('; '.join(p.get('priority_reasons') or []))}</td></tr>")
@@ -711,6 +923,8 @@ def render_risk_based_probe_plan_report(plan: dict[str, Any]) -> str:
 <section class='hero'><span class='badge'>Phase26</span><h1>真实项目 Risk-based Probe Planner</h1><p>根据企业历史 Bug、风险画像、OpenAPI 和发现模式，为真实项目生成高价值探针优先级计划。</p><p>私有数据泄露检查：<b>{_html_escape('passed' if leak.get('passed') else 'failed')}</b></p></section>
 <section class='panel'><h2>规划概览</h2><div class='grid'>{cards}</div></section>
 <section class='panel'><h2>风险分布</h2><table><tbody>{risk_rows or '<tr><td>暂无</td><td>0</td></tr>'}</tbody></table></section>
+<section class='panel'><h2>Validated Yield 优先信号</h2><table><tbody>{validated_yield_rows or '<tr><td>暂无</td><td>0</td></tr>'}</tbody></table><h3>候选信号分布</h3><table><tbody>{validated_yield_candidate_rows or '<tr><td>暂无</td><td>0</td></tr>'}</tbody></table><h3>入选信号分布</h3><table><tbody>{validated_yield_selected_rows or '<tr><td>暂无</td><td>0</td></tr>'}</tbody></table><h3>各信号层级入选率</h3><table><tbody>{validated_yield_rate_rows or '<tr><td>暂无</td><td>0</td></tr>'}</tbody></table></section>
+<section class='panel'><h2>预算偏好证据</h2><table><tbody>{bias_rows or '<tr><td>暂无</td><td>0</td></tr>'}</tbody></table></section>
 <section class='panel'><h2>Top 探针计划</h2><table><thead><tr><th>#</th><th>Score</th><th>等级</th><th>风险</th><th>接口</th><th>来源</th><th>原因</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="7">暂无探针</td></tr>'}</tbody></table></section>
 </body></html>"""
 

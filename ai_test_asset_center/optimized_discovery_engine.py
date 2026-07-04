@@ -543,8 +543,15 @@ class AuditLogger:
 # =========================================================================
 
 class OptimizedDiscoveryEngineV2(OptimizedDiscoveryEngine):
-    """Enhanced discovery engine with Week 2 optimizations
-    
+    """[DEPRECATED] Enhanced discovery engine with Week 2 optimizations
+
+    .. deprecated::
+        V2's ``_execute_single_hypothesis`` is a stub that returns
+        ``verdict="inconclusive"`` for every hypothesis.  It bypasses the
+        real execution logic in ``AutonomousDiscoveryEngine.stage_execute``.
+        Use ``OptimizedDiscoveryEngine`` (V1) or ``AutonomousDiscoveryEngine``
+        directly for production workloads.
+
     Week 2 Optimizations:
     - Parallel hypothesis execution
     - Configuration management
@@ -630,6 +637,8 @@ class OptimizedDiscoveryEngineV2(OptimizedDiscoveryEngine):
         
         # Execute in parallel
         start_time = time.time()
+        if not hypotheses:
+            return []
         max_workers = min(self._config.max_workers, len(hypotheses))
         
         logger.info(f"[OptimizedEngineV2] Executing {len(hypotheses)} hypotheses with {max_workers} workers")
@@ -785,8 +794,12 @@ def create_enhanced_engine(
 # =========================================================================
 
 class OptimizedDiscoveryEngineV3(OptimizedDiscoveryEngineV2):
-    """Complete optimization engine with Week 3 features
-    
+    """[DEPRECATED] Complete optimization engine with Week 3 features
+
+    .. deprecated::
+        V3's ``export_findings`` returns hardcoded mock data instead of real
+        findings.  Use ``OptimizedDiscoveryEngine`` (V1) for production.
+
     Week 3 Optimizations:
     - Report exporting (JSON, CSV, Markdown, HTML)
     - External issue tracker integration
@@ -806,23 +819,27 @@ class OptimizedDiscoveryEngineV3(OptimizedDiscoveryEngineV2):
         """
         from .report_exporter import ReportExporter, create_exporter_from_results
         
-        # TODO: In a real implementation, this would use the actual findings
-        # For this demo, we'll create simulated findings from saved checkpoints
+        # Load real findings from checkpoints (never simulate)
+        findings = []
+        verify_cp = self._checkpoints.get("stage_verify")
+        if verify_cp and verify_cp.state.get("findings"):
+            findings = verify_cp.state["findings"]
+        else:
+            # Try loading from disk
+            cp_file = self._checkpoint_dir / "stage_verify.json"
+            if cp_file.exists():
+                try:
+                    import json
+                    data = json.loads(cp_file.read_text(encoding="utf-8"))
+                    findings = data.get("state", {}).get("findings", [])
+                except Exception:
+                    pass
         
-        simulated_findings = [
-            {
-                "hypothesis_id": "hypothesis_001",
-                "title": "Example Finding 1",
-                "description": "This is a simulated finding",
-                "severity": "P1",
-                "verdict": "confirmed",
-                "confidence": 0.95,
-                "reproduction_steps": ["Step 1", "Step 2"]
-            }
-        ]
+        if not findings:
+            print(f"  [WARN] No verified findings available — export returned empty", flush=True)
+            return {}
         
-        exporter = create_exporter_from_results(simulated_findings, self._current_run_id)
-        
+        exporter = create_exporter_from_results(findings, self._current_run_id)
         return exporter.export_all(output_dir, formats)
     
     def sync_to_tracker(self, findings: List[Dict[str, Any]], 

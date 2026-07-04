@@ -1,7 +1,7 @@
 interface BEIRingProps { score: number; size?: number }
 
 export function BEIRing({ score, size = 140 }: BEIRingProps) {
-  const strokeWidth = 10;
+  const strokeWidth = 12;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (score / 100) * circumference;
@@ -14,6 +14,7 @@ export function BEIRing({ score, size = 140 }: BEIRingProps) {
   };
   const [c1, c2] = getColor();
   const gradId = `beiGrad-${score}`;
+  const bandLabel = score >= 80 ? '稳健' : score >= 60 ? '关注' : '优先治理';
 
   return (
     <div className="bei-ring" style={{ width: size, height: size }}>
@@ -36,7 +37,8 @@ export function BEIRing({ score, size = 140 }: BEIRingProps) {
       </svg>
       <div className="bei-value">
         <strong>{score}</strong>
-        <label>BEI</label>
+        <label>风险评级</label>
+        <span>{bandLabel}</span>
       </div>
     </div>
   );

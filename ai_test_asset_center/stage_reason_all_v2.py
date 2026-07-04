@@ -27,12 +27,13 @@ OUTPUT_HARD_LIMITS = (
     "- If evidence is insufficient, return fewer hypotheses rather than verbose explanations.\n"
 )
 
-MAX_HYPOTHESES = 15
+MAX_HYPOTHESES = 300
 MAX_HYPOTHESIS_CHARS = 500
 MAX_REASONER_WORKERS = 4
 MIN_REASONER_TIMEOUT_SECONDS = 300
 MIN_REASONER_MAX_TOKENS = 32768
 MAX_REASONER_MAX_TOKENS = 100000
+MAX_HYPOTHESES_HARD_LIMIT = 500
 
 SIDE_PATH_REASONER_ENGINES = (
     ("business_outcome", "outcome"),
@@ -373,6 +374,50 @@ def _hypothesis_identity(hypothesis: dict[str, Any]) -> tuple[str, str, str, str
     return title[:180], risk_type[:120], expected[:180], entity[:120]
 
 
+def _extract_entity_from_hypothesis(hypothesis: dict[str, Any]) -> str:
+    """Extract an entity hint from title/description for cross-source dedup."""
+    title = str(hypothesis.get("title", "") or "")
+    vm = hypothesis.get("verification_method", {})
+    if isinstance(vm, dict):
+        path = str(vm.get("path", "") or vm.get("step1", "") or "")
+    else:
+        path = ""
+    # Try to extract resource name from API path (e.g., /api/v1/orders/{id} -> orders)
+    if path:
+        parts = [p for p in path.split("/") if p and not p.startswith("{") and p.lower() not in ("api", "v1", "v2", "v3")]
+        if parts:
+            return parts[0].lower()
+    # Fallback: first significant word from title
+    words = [w for w in title.split() if len(w) > 2]
+    return words[0].lower() if words else ""
+
+
+def _filter_low_quality_hypotheses(hypotheses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter out hypotheses with no executable content and no evidence."""
+    filtered = []
+    dropped = 0
+    for h in hypotheses:
+        if not isinstance(h, dict):
+            continue
+        vm = h.get("verification_method", {})
+        has_vm = isinstance(vm, dict) and any(
+            str(vm.get(k, "") or "").strip() for k in ("path", "step1", "step2", "step3")
+        )
+        evidence = h.get("evidence", "")
+        has_evidence = bool(evidence) and (not isinstance(evidence, (dict, list)) or len(str(evidence)) > 10)
+        title = str(h.get("title", "") or "").strip()
+        has_title = len(title) > 3
+
+        # Keep if it has a title AND (verification_method OR evidence)
+        if has_title and (has_vm or has_evidence):
+            filtered.append(h)
+        else:
+            dropped += 1
+    if dropped:
+        print(f"  [OK] 质量门控过滤了 {dropped} 条低质量假设", flush=True)
+    return filtered
+
+
 def _hypothesis_quality_score(hypothesis: dict[str, Any]) -> tuple[int, int, int, int]:
     """Prefer hypotheses with executable bindings and richer local context."""
     vm = hypothesis.get("verification_method", {})
@@ -610,7 +655,13 @@ def _run_reasoner_engine(
 
             if hypotheses is not None:
                 normalized = []
-                for hypothesis in hypotheses[:max(1, min(int(max_hypotheses or 1), MAX_HYPOTHESES))]:
+                # Sort by quality before truncating to avoid dropping good hypotheses
+                sorted_hypotheses = sorted(
+                    hypotheses,
+                    key=lambda h: _hypothesis_quality_score(h) if isinstance(h, dict) else (0, 0, 0, 0),
+                    reverse=True,
+                )
+                for hypothesis in sorted_hypotheses[:max(1, min(int(max_hypotheses or 1), MAX_HYPOTHESES))]:
                     if not isinstance(hypothesis, dict):
                         continue
                     item = dict(hypothesis)
@@ -618,6 +669,11 @@ def _run_reasoner_engine(
                         if isinstance(value, str) and len(value) > max_hypothesis_chars:
                             item[key] = value[:max_hypothesis_chars - 3] + "..."
                     item.setdefault("_reasoner_engine", engine_name)
+                    # Extract entity from title/description for cross-source dedup
+                    if not item.get("entity") and not item.get("source_entity"):
+                        extracted_entity = _extract_entity_from_hypothesis(item)
+                        if extracted_entity:
+                            item["entity"] = extracted_entity
                     normalized.append(item)
                 result["hypotheses"] = normalized
                 result["status"] = status
@@ -656,7 +712,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
                          reader_output: dict, prior_findings=None) -> list[dict]:
     """11 engines + 8 analyzers, max 4 parallel workers, independent clients, 2 attempts max."""
 
-    from .reasoner_prompt import REASONER_PROMPTS, REASONER_SYSTEM_PROMPT
+    from .reasoner_prompt import REASONER_PROMPTS, REASONER_SYSTEM_PROMPT, REAL_BUG_EXAMPLES, REASONER_PRE_PROMPT
     from ai_test_asset_center.llm_reasoning import ReasoningClient
 
     all_hypotheses: list[dict] = []
@@ -671,14 +727,33 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         ("population", REASONER_PROMPTS["population"]),
         ("outcome", REASONER_PROMPTS["outcome"]),
         ("temporal", REASONER_PROMPTS["temporal"]),
-        ("saga", REASONER_PROMPTS.get("saga", REASONER_PROMPTS["causality"])),
-        ("event_chain", REASONER_PROMPTS.get("event_chain", REASONER_PROMPTS["causality"])),
-        ("metamorphic", REASONER_PROMPTS.get("metamorphic", REASONER_PROMPTS["consistency"])),
+        ("saga", REASONER_PROMPTS["saga"]),
+        ("event_chain", REASONER_PROMPTS["event_chain"]),
+        ("metamorphic", REASONER_PROMPTS["metamorphic"]),
         *[
             (name, REASONER_PROMPTS.get(prompt_key, REASONER_PROMPTS["consistency"]))
             for name, prompt_key in SIDE_PATH_REASONER_ENGINES
         ],
     ]
+    # Deduplicate engines that share identical prompt templates (same prompt =
+    # same output = wasted API cost).  Keep the first occurrence of each
+    # canonical prompt.
+    _seen_templates: dict[str, bool] = {}
+    _deduped_engines: list[tuple[str, str]] = []
+    _dedup_count = 0
+    for ename, etemplate in engines:
+        # Use the template text as the identity key (template object may differ
+        # but content is what matters)
+        template_key = etemplate.strip() if isinstance(etemplate, str) else str(etemplate)
+        if template_key in _seen_templates:
+            _dedup_count += 1
+            continue
+        _seen_templates[template_key] = True
+        _deduped_engines.append((ename, etemplate))
+    if _dedup_count:
+        print(f"  [INFO] Deduplicated {_dedup_count} engines with identical prompt templates "
+              f"({len(engines)} -> {len(_deduped_engines)})", flush=True)
+    engines = _deduped_engines
 
     # ── Concurrency (Policy Registry + env var fallback) ──
     from .policy_wiring import get_policy_value
@@ -697,8 +772,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     max_tokens = _effective_max_tokens(raw_max_tokens)
     retry_delay = get_policy_value("reasoner", "retry_delay_seconds", 2.0)
     truncation_map = get_policy_value("reasoner", "prompt_truncation_chars",
-        {"prd_text": 2000, "api_schema": 3000, "observed_data": 2000,
-         "heuristic_findings": 2000, "reader_json": 3000, "lifecycle_definition": 2000})
+        {"prd_text": 45000, "api_schema": 50000, "observed_data": 12000,
+         "heuristic_findings": 12000, "reader_json": 20000, "lifecycle_definition": 12000,
+         "requirement_context": 45000, "api_context": 50000,
+         "database_context": 25000, "bug_history_context": 25000})
     enabled_engines = get_policy_value("reasoner", "enabled_engines", [name for name, _ in engines])
     engine_weights = get_policy_value("reasoner", "engine_weights", {})
     enabled_set = {str(name) for name in (enabled_engines or [])}
@@ -839,6 +916,11 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             constraints=reader_json[:_limit("reader_json", 1000)], business_process=reader_json[:_limit("reader_json", 1000)],
             expected_outcomes="{}", observed_results="{}",
             snapshot_t1="{}", snapshot_t2="{}",
+            event_chain=reader_json[:_limit("lifecycle_definition", 2000)],
+            events=prompt_api[:_limit("api_schema", 2000)],
+            relations=reader_json[:_limit("reader_json", 2000)],
+            test_data=observed_json[:_limit("observed_data", 2000)],
+            REAL_BUG_EXAMPLES=REAL_BUG_EXAMPLES,
         )
         # Not every legacy reasoner template references every placeholder.
         # Append the same bounded evidence pack explicitly in active mode so all
@@ -873,7 +955,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             executor.submit(
                 _run_reasoner_engine,
                 engine_name, template, engine_prompts[engine_name],
-                REASONER_SYSTEM_PROMPT, original_config,
+                REASONER_SYSTEM_PROMPT + "\n\n" + REASONER_PRE_PROMPT, original_config,
                 retry_count=retry_count,
                 retry_delay_seconds=retry_delay,
                 max_hypotheses=max_hypotheses_per_engine,
@@ -946,7 +1028,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     engine_names_for_report = [name for name, _ in engines] + (["local_bootstrap"] if "local_bootstrap" in results_by_engine else [])
 
     # ── 新增：运行分析器（可选，通过环境变量控制）──
-    use_analyzers = str(os.environ.get("QUALIBUG_USE_ANALYZERS", "0")).lower() in {"1", "true", "yes"}
+    use_analyzers = str(os.environ.get("QUALIBUG_USE_ANALYZERS", "1")).lower() in {"1", "true", "yes"}
     if use_analyzers:
         try:
             from .analyzers_adapter import build_analyzer_hypotheses, get_analyzer_engine_names
@@ -986,6 +1068,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
 
         except Exception as e:
             print(f"  [WARN] 分析器集成失败: {e}", flush=True)
+
+    # ── Quality gate: filter out low-quality hypotheses ──
+    pre_filter_total = len(all_hypotheses)
+    all_hypotheses = _filter_low_quality_hypotheses(all_hypotheses)
 
     # ── Dedupe hypotheses across LLM and local analyzers ──
     pre_dedupe_total = len(all_hypotheses)

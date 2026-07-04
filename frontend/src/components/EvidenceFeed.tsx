@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { Finding } from '../types';
+import { getEvidenceSummaryText } from '../lib/evidence';
+import { formatBeijingDateTime } from '../lib/time';
 
 interface EvidenceFeedProps { findings: Finding[] }
 
@@ -20,7 +22,7 @@ export function EvidenceFeed({ findings }: EvidenceFeedProps) {
   return (
     <div>
       <div className="feed-header">
-        <h2>行为裂隙 · 证据链</h2>
+        <h2>行为验证 · 证据线索</h2>
         <div className="filters">
           {filters.map(f => (
             <button key={f.value} onClick={() => setFilter(f.value)}
@@ -30,10 +32,11 @@ export function EvidenceFeed({ findings }: EvidenceFeedProps) {
       </div>
 
       {displayFindings.length === 0 && (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: 48, textAlign: 'center' }}>
-          <p className="text-muted">暂无风险记录</p>
-          <p className="text-muted mt-1" style={{ fontSize: 11 }}>运行扫描以发现系统中的行为风险</p>
-        </div>
+        <section className="findings-empty-state compact">
+          <span className="findings-empty-kicker">当前空态</span>
+          <h3>暂无风险记录</h3>
+          <p>运行扫描后，这里会自动沉淀为按严重级别可筛选的证据线索。</p>
+        </section>
       )}
 
       {displayFindings.map(finding => (
@@ -43,11 +46,11 @@ export function EvidenceFeed({ findings }: EvidenceFeedProps) {
             <span className="evidence-title">{finding.title}</span>
             <span className="evidence-meta">
               <span>复现 {finding.reproducibility_count} 次</span>
-              <time>{finding.timestamp}</time>
+              <time>{formatBeijingDateTime(finding.timestamp)}</time>
             </span>
             <span className="evidence-expand">▼</span>
           </div>
-          <div className="evidence-body" style={{ display: isOpen(finding.id) ? 'block' : 'none' }}>
+          <div className="evidence-body">
             <div className="evidence-chain">
               {finding.evidence_chain.map((step, i) => (
                 <div className="chain-step" key={i}>
@@ -61,8 +64,7 @@ export function EvidenceFeed({ findings }: EvidenceFeedProps) {
               <svg viewBox="0 0 24 24" width="16" height="16"><path d="M20 6 9 17l-5-5" /></svg>
               <div>
                 <strong>证据验证通过 · 复现率 {finding.proof.repro_rate}%</strong>
-                <code>{finding.proof.hash}</code>
-                <code>{finding.proof.script_path}</code>
+                <p>{getEvidenceSummaryText(finding)}</p>
               </div>
             </div>
           </div>

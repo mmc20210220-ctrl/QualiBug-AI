@@ -1,87 +1,695 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { saveSettings, saveEnvConfig } from '../api/client';
+import { getHealth, getServiceCredentials, listConnectors, login, registerConnector, saveSettings, saveServiceCredentials, testDbConnection, type ConnectorRecord } from '../api/client';
+import { useLiveStatus, useWorkspaceDirectory } from '../api/data';
+import { usePageTitle } from '../lib/page-title';
+import { useProjectNavigation } from '../lib/project-navigation';
+import { SettingsCustomerSection } from '../components/settings/SettingsCustomerSection';
+import { SettingsTopologySection } from '../components/settings/SettingsTopologySection';
+import { SettingsLlmSection } from '../components/settings/SettingsLlmSection';
+import { SettingsInfoSection } from '../components/settings/SettingsInfoSection';
+import { SettingsServiceForm } from '../components/settings/SettingsServiceForm';
+import type { DbOption } from '../components/settings/DbCredentialPanel';
+import { buildSettingsTopologyViewModel } from '../lib/settings-topology';
+
+const DB_OPTIONS: DbOption[] = [
+  { v:'postgresql', l:'PostgreSQL', p:5432, c:'relational' },
+  { v:'mysql', l:'MySQL', p:3306, c:'relational' },
+  { v:'mariadb', l:'MariaDB', p:3306, c:'relational' },
+  { v:'sqlserver', l:'SQL Server', p:1433, c:'relational' },
+  { v:'oracle', l:'Oracle', p:1521, c:'relational' },
+  { v:'db2', l:'IBM DB2', p:50000, c:'relational' },
+  { v:'mongodb', l:'MongoDB', p:27017, c:'nosql' },
+  { v:'redis', l:'Redis', p:6379, c:'nosql' },
+  { v:'elasticsearch', l:'Elasticsearch', p:9200, c:'nosql' },
+  { v:'cassandra', l:'Cassandra', p:9042, c:'nosql' },
+  { v:'neo4j', l:'Neo4j', p:7687, c:'nosql' },
+  { v:'clickhouse', l:'ClickHouse', p:8123, c:'nosql' },
+];
+
+type TenantCreateResponse = {
+  ok?: boolean;
+  error?: string;
+  tenant_id?: string;
+  username?: string;
+};
+
+type RoleAccount = {
+  role: string;
+  username: string;
+  password: string;
+};
+
+type SavedServiceConfig = {
+  name?: string;
+  base_url?: string;
+  enabled?: boolean;
+  auth?: Record<string, unknown>;
+  db?: Record<string, unknown>;
+  admin_user?: string;
+  admin_pass?: string;
+  bearer_token?: string;
+  api_key?: string;
+  login_api?: string;
+  auth_type?: 'password_login' | 'bearer_token' | 'api_key';
+};
+
+const AUTH_METADATA_KEYS = new Set(['type', 'auth_type', 'login_api', 'bearer_token', 'api_key']);
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function buildTenantId(name: string) {
+  return name.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_').toLowerCase().slice(0, 32) || `client_${Date.now()}`;
+}
+
+function getDbDefaultPort(type: string) {
+  return String(DB_OPTIONS.find((item) => item.v === type)?.p || '');
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function normalizeKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function normalizeRoleAccounts(accounts: RoleAccount[]) {
+  const cleaned = accounts
+    .map((account) => ({
+      role: account.role.trim(),
+      username: account.username.trim(),
+      password: account.password,
+    }))
+    .filter((account) => account.role || account.username || account.password);
+
+  const admin = cleaned.find((account) => account.role.toLowerCase() === 'admin');
+  const extras = cleaned.filter((account) => account.role.toLowerCase() !== 'admin');
+  return admin ? [{ ...admin, role: admin.role || 'admin' }, ...extras] : extras;
+}
+
+function extractRoleAccounts(config?: SavedServiceConfig | null): RoleAccount[] {
+  const auth = asRecord(config?.auth);
+  const accounts = Object.entries(auth)
+    .filter(([key, value]) => !AUTH_METADATA_KEYS.has(key) && value && typeof value === 'object')
+    .map(([role, value]) => {
+      const entry = asRecord(value);
+      return {
+        role,
+        username: asString(entry.username),
+        password: asString(entry.password),
+      };
+    })
+    .filter((account) => account.role && (account.username || account.password));
+
+  if (!accounts.length && (config?.admin_user || config?.admin_pass)) {
+    accounts.push({
+      role: 'admin',
+      username: asString(config.admin_user),
+      password: asString(config.admin_pass),
+    });
+  }
+
+  const normalized = normalizeRoleAccounts(accounts);
+  return normalized.length ? normalized : [{ role: 'admin', username: '', password: '' }];
+}
+
+function extractAuthType(config?: SavedServiceConfig | null): 'password_login' | 'bearer_token' | 'api_key' {
+  const auth = asRecord(config?.auth);
+  const authType = asString(auth.type || auth.auth_type || config?.auth_type);
+  if (authType === 'bearer_token' || authType === 'api_key') return authType;
+  return 'password_login';
+}
+
+function extractLoginApi(config?: SavedServiceConfig | null) {
+  const auth = asRecord(config?.auth);
+  return asString(auth.login_api || config?.login_api) || '/auth/login';
+}
+
+function extractBearerToken(config?: SavedServiceConfig | null) {
+  const auth = asRecord(config?.auth);
+  return asString(auth.bearer_token || config?.bearer_token);
+}
+
+function extractApiKey(config?: SavedServiceConfig | null) {
+  const auth = asRecord(config?.auth);
+  return asString(auth.api_key || config?.api_key);
+}
+
+function extractDbConfig(config?: SavedServiceConfig | null) {
+  const db = asRecord(config?.db);
+  return {
+    type: asString(db.type) || 'postgresql',
+    host: asString(db.host),
+    port: asString(db.port),
+    name: asString(db.name),
+    user: asString(db.user),
+    password: asString(db.password),
+  };
+}
+
+function findMatchingServiceConfig(connector: ConnectorRecord, services: SavedServiceConfig[]) {
+  const endpoint = normalizeKey(connector.endpoint_ref || '');
+  const displayName = normalizeKey(connector.display_name || '');
+  const systemName = normalizeKey(connector.system_name || '');
+  const moduleName = normalizeKey(connector.module_name || '');
+
+  return services.find((service) => normalizeKey(asString(service.base_url)) === endpoint)
+    || services.find((service) => normalizeKey(asString(service.name)) === displayName)
+    || services.find((service) => normalizeKey(asString(service.name)) === `${systemName}-${moduleName}`)
+    || services.find((service) => normalizeKey(asString(service.name)) === systemName)
+    || null;
+}
 
 export function Settings() {
+  usePageTitle('设置');
   const [params] = useSearchParams();
-  const project = params.get('project') || 'real_project_demo';
-  const [llmUrl, setLlmUrl] = useState('https://api.deepseek.com/v1');
-  const [llmModel, setLlmModel] = useState('deepseek-chat');
-  const [llmKey, setLlmKey] = useState('');
-  const [llmStatus, setLlmStatus] = useState('');
-  const [envName, setEnvName] = useState('MES-BugLab Test');
-  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:8000');
-  const [timeout, setTimeout_] = useState('30');
-  const [envStatus, setEnvStatus] = useState('');
-  const [backendStatus, setBackendStatus] = useState<Record<string, any> | null>(null);
+  const project = params.get('project')?.trim() || '';
+  const { switchProject } = useProjectNavigation();
+  const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15000);
+  const { workspaces, workspaceOptions, loadError: workspaceLoadError, refresh: refreshWorkspaces } = useWorkspaceDirectory();
+  const [wsStatus, setWsStatus] = useState('');
+  const [importId, setImportId] = useState('');
+  const [llmUrl, setLlmUrl] = useState(''); const [llmModel, setLlmModel] = useState(''); const [llmKey, setLlmKey] = useState(''); const [llmStatus, setLlmStatus] = useState(''); const [llmError, setLlmError] = useState('');
+  const [health, setHealth] = useState<Record<string, unknown> | null>(null);
+  const [connectors, setConnectors] = useState<ConnectorRecord[]>([]);
+  const [serviceConfigs, setServiceConfigs] = useState<SavedServiceConfig[]>([]);
+  const [cStatus, setCStatus] = useState('');
+  const [formOpen, setFormOpen] = useState(false); const [editId, setEditId] = useState('');
+  const [cSys, setCSys] = useState(''); const [cMod, setCMod] = useState(''); const [cName, setCName] = useState('');
+  const [cEp, setCEp] = useState(''); const [cCred, setCCred] = useState(''); const [cEn, setCEn] = useState(true);
+  const [editingServiceConfigName, setEditingServiceConfigName] = useState('');
+  const [hlId, setHlId] = useState('');
+  // API Auth
+  const [cAuthType, setCAuthType] = useState<'password_login'|'bearer_token'|'api_key'>('password_login');
+  const [cLoginApi, setCLoginApi] = useState('/auth/login');
+  const [cRoleAccounts, setCRoleAccounts] = useState<Array<{role:string;username:string;password:string}>>([
+    { role: 'admin', username: '', password: '' },
+  ]);
+  const [cBearerToken, setCBearerToken] = useState(''); const [cApiKey, setCApiKey] = useState('');
+  // DB form
+  const [dbOpen, setDbOpen] = useState(false);
+  const [dbType, setDbType] = useState('postgresql');
+  const [dbHost, setDbHost] = useState(''); const [dbPort, setDbPort] = useState('5432');
+  const [dbUser, setDbUser] = useState(''); const [dbPass, setDbPass] = useState(''); const [dbName, setDbName] = useState('');
+  const [dbTestMsg, setDbTestMsg] = useState(''); const [dbTestOk, setDbTestOk] = useState(false); const [dbTestLoad, setDbTestLoad] = useState(false);
+  const [expSys, setExpSys] = useState<Set<string>>(new Set());
 
+  useEffect(() => { let c=false; getHealth().then(d=>{ if(!c) setHealth(d&&typeof d==='object'?d as Record<string,unknown>:null); }).catch(()=>{ if(!c) setHealth(null); }); return ()=>{c=true}; }, []);
   useEffect(() => {
-    fetch('/api/findings?project_id=' + encodeURIComponent(project))
-      .then(r => r.json())
-      .then(d => {
-        const exec = d?.report?.executive_summary || {};
-        const discovery = d?.report?.stage2_discovery || {};
-        setBackendStatus({
-          totalFindings: discovery.total_findings || exec.total_bugs_found || 0,
-          llmPowered: discovery.llm_powered || exec.llm_powered_analyses || 0,
-          pipelineStatus: d?.report?.status || 'unknown',
-          scanTime: d?.report?.pipeline_completed_at_utc?.slice(0, 16) || '—',
-        });
+    setWsStatus('');
+    if (project || workspaceOptions.length !== 1) return;
+    switchProject(workspaceOptions[0].id);
+  }, [project, switchProject, workspaceOptions]);
+  useEffect(() => { if(!cStatus.startsWith('✓')) return; const t=window.setTimeout(()=>setCStatus(''),3000); return ()=>window.clearTimeout(t); }, [cStatus]);
+  useEffect(() => { if(!hlId) return; const t=window.setTimeout(()=>setHlId(''),4000); return ()=>window.clearTimeout(t); }, [hlId]);
+  useEffect(() => { let c=false; setCStatus(''); if(!project){ setConnectors([]); return ()=>{c=true}; }
+    listConnectors(project).then(r=>{ if(!c) setConnectors(r); }).catch(()=>{ if(!c) setConnectors([]); }); return ()=>{c=true}; }, [project]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!project) {
+      setServiceConfigs([]);
+      return () => { cancelled = true; };
+    }
+    getServiceCredentials(project)
+      .then((payload) => {
+        if (cancelled) return;
+        const data = asRecord(payload);
+        const services = Array.isArray(data.services) ? data.services : [];
+        setServiceConfigs(services.map((item) => asRecord(item) as SavedServiceConfig));
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setServiceConfigs([]);
+      });
+    return () => { cancelled = true; };
   }, [project]);
 
-  const saveLLM = async () => {
-    setLlmStatus('验证中...');
-    try { await saveSettings({ llm_base_url: llmUrl, llm_model: llmModel, llm_api_key: llmKey }); setLlmStatus('✓ LLM Online'); }
-    catch (e: any) { setLlmStatus(`✗ ${e.message}`); }
+  const reC = async () => { if(!project){ setConnectors([]); return []; } try{ setCStatus('加载中...'); const r=await listConnectors(project); setConnectors(r); setCStatus(''); return r; } catch(e:unknown){ setCStatus(`✗ ${e instanceof Error?e.message:'加载失败'}`); return []; } };
+  const refreshServiceConfigs = async () => {
+    if (!project) {
+      setServiceConfigs([]);
+      return [];
+    }
+    try {
+      const payload = await getServiceCredentials(project);
+      const data = asRecord(payload);
+      const services = Array.isArray(data.services) ? data.services : [];
+      const next = services.map((item) => asRecord(item) as SavedServiceConfig);
+      setServiceConfigs(next);
+      return next;
+    } catch {
+      setServiceConfigs([]);
+      return [];
+    }
   };
-  const saveEnv = async () => {
-    setEnvStatus('保存中...');
-    try { await saveEnvConfig({ project_id: project, target_environment: envName, base_url: baseUrl, request_timeout_seconds: parseInt(timeout) }); setEnvStatus('✓ 已保存'); }
-    catch (e: any) { setEnvStatus(`✗ ${e.message}`); }
+  const toSys = (s:string)=>{ setExpSys(p=>{ const n=new Set(p); if(n.has(s)) n.delete(s); else n.add(s); return n; }); };
+  const buildDsn = ()=>{ if(!dbHost.trim()) return ''; const port=dbPort.trim()||String(DB_OPTIONS.find(d=>d.v===dbType)?.p||''); const a=dbUser.trim()?`${dbUser.trim()}:${dbPass}@`:''; const db=dbName.trim()?`/${dbName.trim()}`:''; return `${dbType}://${a}${dbHost.trim()}:${port}${db}`; };
+  const refSlug = (value:string)=>value.trim().toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,64)||'DATABASE';
+  const defaultCredentialRef = ()=>`secret_ref:${refSlug([project,cSys,cMod,cName,dbType].filter(Boolean).join('_'))}`;
+  const credentialLabel = (value?:string)=>{ const ref=String(value||'').trim(); if(!ref)return ''; if(ref.includes('://')||ref.includes('@')) return '<凭证已隐藏>'; return ref; };
+  const resetDbDraft = (nextType = 'postgresql') => {
+    setDbOpen(false);
+    setDbType(nextType);
+    setDbHost('');
+    setDbPort(getDbDefaultPort(nextType));
+    setDbUser('');
+    setDbPass('');
+    setDbName('');
+    setDbTestMsg('');
+    setDbTestOk(false);
+    setDbTestLoad(false);
   };
+  const openCreateConnectorForm = (systemName = '', moduleName = '') => {
+    setEditId('');
+    setEditingServiceConfigName('');
+    setCSys(systemName);
+    setCMod(moduleName);
+    setCName('');
+    setCEp('');
+    setCCred('');
+    setCEn(true);
+    setCAuthType('password_login');
+    setCLoginApi('/auth/login');
+    setCRoleAccounts([{ role: 'admin', username: '', password: '' }]);
+    setCBearerToken(''); setCApiKey('');
+    resetDbDraft();
+    setFormOpen(true);
+  };
+  const openEditConnectorForm = (connector: ConnectorRecord) => {
+    const matchedConfig = findMatchingServiceConfig(connector, serviceConfigs);
+    const dbConfig = extractDbConfig(matchedConfig);
+    setEditId(connector.connector_id);
+    setCSys(connector.system_name || '');
+    setCMod(connector.module_name || '');
+    setCName(connector.display_name || asString(matchedConfig?.name) || '');
+    setCEp(connector.endpoint_ref || '');
+    setCCred(credentialLabel(connector.credential_ref));
+    setCEn(connector.enabled);
+    setEditingServiceConfigName(asString(matchedConfig?.name));
+    setCAuthType(extractAuthType(matchedConfig));
+    setCLoginApi(extractLoginApi(matchedConfig));
+    setCRoleAccounts(extractRoleAccounts(matchedConfig));
+    setCBearerToken(extractBearerToken(matchedConfig));
+    setCApiKey(extractApiKey(matchedConfig));
+    setDbOpen(false);
+    setDbType(dbConfig.type);
+    setDbHost(dbConfig.host);
+    setDbPort(dbConfig.port || getDbDefaultPort(dbConfig.type));
+    setDbUser(dbConfig.user);
+    setDbPass(dbConfig.password);
+    setDbName(dbConfig.name);
+    setDbTestMsg('');
+    setDbTestOk(false);
+    setDbTestLoad(false);
+    setFormOpen(true);
+  };
+  const closeConnectorForm = () => {
+    setFormOpen(false);
+    setEditingServiceConfigName('');
+    setDbTestMsg('');
+    setDbTestOk(false);
+    setDbTestLoad(false);
+  };
+  const handleWorkspaceRefresh = async () => {
+    setWsStatus('刷新中...');
+    await refreshWorkspaces(true);
+    setWsStatus('');
+  };
+  const handleWorkspaceChange = (value: string) => {
+    if (value) switchProject(value);
+  };
+  const handleCreateWorkspace = async () => {
+    const name = importId.trim();
+    if (!name) {
+      setWsStatus('✗ 请输入公司名称');
+      return;
+    }
+
+    setWsStatus('创建中...');
+    try {
+      const tenantId = buildTenantId(name);
+      const response = await fetch('/api/tenants/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          name,
+          username: tenantId,
+          password: `${tenantId}123`,
+        }),
+      });
+      const payload = (await response.json()) as TenantCreateResponse;
+
+      if (payload.ok) {
+        const loginOk = await login(tenantId, `${tenantId}123`);
+        const items = await refreshWorkspaces(true);
+        setImportId('');
+        const nextProjectId = items.find((item) => item.project_id === tenantId)?.project_id || tenantId;
+        switchProject(nextProjectId);
+        setWsStatus(loginOk ? '✓ 创建成功，已切换到新客户' : '✓ 创建成功，请重新登录后查看该客户数据');
+        return;
+      }
+
+      setWsStatus(`✗ ${payload.error || '创建失败'}`);
+    } catch (error: unknown) {
+      setWsStatus(`✗ ${getErrorMessage(error, '创建失败')}`);
+    }
+  };
+  const handleConnectorStatusChange = async (connector: ConnectorRecord, enabled: boolean) => {
+    setCStatus('处理中...');
+    try {
+      await registerConnector({
+        project_id: project,
+        connector_id: connector.connector_id,
+        display_name: connector.display_name,
+        kind: connector.kind || 'http_api',
+        enabled,
+        system_name: connector.system_name || connector.display_name || undefined,
+        module_name: connector.module_name || undefined,
+        endpoint_ref: connector.endpoint_ref || undefined,
+        credential_ref: connector.credential_ref || undefined,
+      });
+      await reC();
+      setCStatus(`✓ 已${enabled ? '启用' : '停用'}`);
+    } catch (error: unknown) {
+      setCStatus(`✗ ${getErrorMessage(error, '失败')}`);
+    }
+  };
+  const handleDbTypeChange = (value: string) => {
+    setDbType(value);
+    setDbPort(getDbDefaultPort(value));
+  };
+  const toggleDbPanel = () => {
+    setDbOpen((open) => !open);
+  };
+  const handleDbTest = async () => {
+    const dsn = buildDsn();
+    if (!dsn) {
+      setDbTestMsg('请填写主机地址');
+      return;
+    }
+
+    setDbTestLoad(true);
+    setDbTestMsg('');
+    setDbTestOk(false);
+    try {
+      const result = await testDbConnection(dsn);
+      setDbTestOk(result.ok);
+      setDbTestMsg(result.ok ? `✓ ${result.message || '连接成功'}` : `✗ ${result.error || '连接失败'}`);
+    } catch {
+      setDbTestMsg('✗ 请求失败');
+    } finally {
+      setDbTestLoad(false);
+    }
+  };
+  const handleApplyCredentialRef = () => {
+    setCCred(defaultCredentialRef());
+    setDbOpen(false);
+    setDbTestMsg('');
+  };
+  const handleSaveConnector = async () => {
+    if (!project) {
+      setCStatus('请选择客户');
+      return;
+    }
+
+    if (!cSys.trim()) {
+      setCStatus('请填写系统名称');
+      return;
+    }
+
+    const displayName = cName.trim() || [cSys.trim(), cMod.trim()].filter(Boolean).join(' / ') || '未命名服务';
+    const serviceConfigName = cName.trim() || cSys.trim().toLowerCase().replace(/\s+/g, '-') || editingServiceConfigName || 'service';
+    const roleAccounts = normalizeRoleAccounts(cRoleAccounts);
+    const persistedRoleAccounts = roleAccounts.filter((account) => account.role && (account.username.trim() || account.password));
+    const hasCredentialMaterial = persistedRoleAccounts.length > 0
+      || Boolean(cBearerToken.trim())
+      || Boolean(cApiKey.trim())
+      || Boolean(dbHost.trim() || dbName.trim() || dbUser.trim() || dbPass);
+    const shouldSaveCredentials = Boolean(editId || editingServiceConfigName || hasCredentialMaterial || cEp.trim());
+    setCStatus('保存中...');
+    try {
+      // 1. Save connector (existing)
+      await registerConnector({
+        project_id: project,
+        connector_id: editId || undefined,
+        display_name: displayName,
+        kind: 'http_api',
+        enabled: cEn,
+        system_name: cSys.trim(),
+        module_name: cMod.trim() || undefined,
+        endpoint_ref: cEp.trim() || undefined,
+      });
+
+      // 2. Save API credentials to multi_service_config.json (new)
+      let authStatusNote = '';
+      if (shouldSaveCredentials) {
+        const authResponse = await saveServiceCredentials({
+          project,
+          previous_name: editingServiceConfigName || undefined,
+          service: {
+            name: serviceConfigName,
+            base_url: cEp.trim(),
+            enabled: cEn,
+            login_api: cLoginApi === '__HIDE__' ? '/auth/login' : cLoginApi.trim() || '/auth/login',
+            auth_type: cAuthType,
+            role_accounts: persistedRoleAccounts.map((account) => ({
+              role: account.role,
+              username: account.username.trim(),
+              password: account.password,
+            })),
+            bearer_token: cBearerToken.trim(),
+            api_key: cApiKey.trim(),
+            db_host: dbHost.trim(),
+            db_port: dbPort,
+            db_name: dbName.trim(),
+            db_user: dbUser.trim(),
+            db_pass: dbPass,
+          },
+        });
+        const authCheck = asRecord(asRecord(authResponse).auth_check);
+        const roles = asRecord(authCheck.roles);
+        const failedRoles = Object.entries(roles)
+          .filter(([, ok]) => ok === false)
+          .map(([role]) => role);
+        if (failedRoles.length > 0) {
+          authStatusNote = `，但以下测试账号登录失败：${failedRoles.join('、')}`;
+        } else if (Object.keys(roles).length > 0) {
+          authStatusNote = '，测试账号已校验通过';
+        }
+        setEditingServiceConfigName(serviceConfigName);
+      }
+
+      await reC();
+      await refreshServiceConfigs();
+      closeConnectorForm();
+      setEditId('');
+      setCStatus(`✓ 已保存${authStatusNote}`);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (error: unknown) {
+      setCStatus(`✗ ${getErrorMessage(error, '保存失败')}`);
+    }
+  };
+  const handleSaveLlmSettings = async () => {
+    const payload: Record<string, unknown> = {};
+    if (llmUrl.trim()) payload.llm_base_url = llmUrl.trim();
+    if (llmModel.trim()) payload.llm_model = llmModel.trim();
+    if (llmKey.trim()) payload.llm_api_key = llmKey.trim();
+    if (!Object.keys(payload).length) {
+      setLlmStatus('未修改');
+      return;
+    }
+
+    setLlmStatus('verifying');
+    try {
+      const result = await saveSettings(payload);
+      const output = result && typeof result === 'object' ? (result as Record<string, unknown>) : {};
+      const available = output.llm_available;
+      const error = String(output.llm_error || '');
+      setLlmError(error);
+      setLlmStatus(error ? 'error' : available ? 'ok' : 'error');
+    } catch (error: unknown) {
+      setLlmStatus('error');
+      setLlmError(getErrorMessage(error, '请求失败'));
+    }
+  };
+
+  const topology = useMemo(
+    () => buildSettingsTopologyViewModel(connectors, expSys, hlId, credentialLabel),
+    [connectors, expSys, hlId],
+  );
+  const tS = topology.systemsCount;
+  const tM = topology.modulesCount;
+  const tV = topology.servicesCount;
+  const llmL = useMemo(()=>{ const s=health&&typeof health==='object'?(health as Record<string,unknown>).llm_status:null; return String((s&&typeof s==='object'?(s as Record<string,unknown>).label||(s as Record<string,unknown>).status:'')||'未验证'); },[health]);
+  const pv=useMemo(()=>String((health&&typeof health==='object'?(health as Record<string,unknown>).version:'')||'').trim()||'未知',[health]);
+  const ss=!project?'未选择客户':scanActive?'扫描运行中':hasMaterializedMetrics?'运行中':'已选择客户 · 暂无数据';
+  const as=!project?'未选择客户':hasMaterializedMetrics?'完整':'暂无记录';
+  const statusToneClass = hasMaterializedMetrics||scanActive ? 'is-positive' : 'is-neutral';
+  const workspaceLabel = workspaceOptions.find((item) => item.id === project)?.label || '未选择客户';
+  const enabledConnectors = topology.enabledConnectors;
+  const disabledConnectors = topology.disabledConnectors;
+  const llmHealthy = llmStatus === 'ok' || llmL.includes('online') || llmL.includes('OK');
+  const llmStateText = llmStatus==='verifying'
+    ? '检测中...'
+    : llmStatus==='error'
+      ? `连接失败${llmError?`: ${llmError.slice(0,60)}`:''}`
+      : llmHealthy
+        ? '已连接'
+        : llmStatus==='未修改'
+          ? '未修改'
+          : '待验证';
+  const llmStateTone = llmStatus==='verifying' ? 'warning' : llmStatus==='error' ? 'danger' : llmHealthy ? 'success' : 'neutral';
+  const dbTestHintText = !dbHost.trim()
+    ? '请填写主机地址和端口'
+    : (dbUser.trim() && dbPass ? '将验证 TCP 连通性和数据库认证' : '仅验证 TCP 端口连通性');
+
+  const serviceForm = (
+    <SettingsServiceForm
+      open={formOpen}
+      title={editId ? '编辑服务' : '新增服务'}
+      systemName={cSys}
+      moduleName={cMod}
+      serviceName={cName}
+      endpointRef={cEp}
+      enabled={cEn}
+      statusText={cStatus}
+      credentialSummary={credentialLabel(cCred)}
+      authType={cAuthType}
+      loginApi={cLoginApi}
+      roleAccounts={cRoleAccounts}
+      bearerToken={cBearerToken}
+      apiKey={cApiKey}
+      dbOpen={dbOpen}
+      dbType={dbType}
+      dbHost={dbHost}
+      dbPort={dbPort}
+      dbUser={dbUser}
+      dbPass={dbPass}
+      dbName={dbName}
+      dbTestLoad={dbTestLoad}
+      dbTestOk={dbTestOk}
+      dbTestMsg={dbTestMsg}
+      dbTestHintText={dbTestHintText}
+      dbOptions={DB_OPTIONS}
+      getDbDefaultPort={getDbDefaultPort}
+      onSystemNameChange={setCSys}
+      onModuleNameChange={setCMod}
+      onServiceNameChange={setCName}
+      onEndpointRefChange={setCEp}
+      onEnabledChange={setCEn}
+      onAuthTypeChange={setCAuthType}
+      onLoginApiChange={setCLoginApi}
+      onRoleAccountsChange={setCRoleAccounts}
+      onBearerTokenChange={setCBearerToken}
+      onApiKeyChange={setCApiKey}
+      onToggleDbPanel={toggleDbPanel}
+      onDbTypeChange={handleDbTypeChange}
+      onDbHostChange={setDbHost}
+      onDbPortChange={setDbPort}
+      onDbUserChange={setDbUser}
+      onDbPassChange={setDbPass}
+      onDbNameChange={setDbName}
+      onDbTest={handleDbTest}
+      onApplyCredentialRef={handleApplyCredentialRef}
+      onSave={handleSaveConnector}
+      onCancel={closeConnectorForm}
+    />
+  );
 
   return (
     <div>
-      <div className="page-header"><div><h1>设置</h1><p>LLM 引擎配置 · 目标环境管理 · 扫描策略</p></div></div>
-
-      <div style={{ maxWidth: 672 }}>
-        <div className="section-card">
-          <h2>LLM 引擎配置</h2>
-          <div className="form-group"><label className="form-label">API Base URL</label><input className="form-input form-input-mono" value={llmUrl} onChange={e => setLlmUrl(e.target.value)} /></div>
-          <div className="form-group"><label className="form-label">Model</label><input className="form-input" value={llmModel} onChange={e => setLlmModel(e.target.value)} /></div>
-          <div className="form-group"><label className="form-label">API Key</label><input className="form-input" type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)} placeholder="sk-..." /></div>
-          <button onClick={saveLLM} className="btn btn-primary">验证并保存</button>
-          {llmStatus && <p className="text-muted mt-2" style={{ fontSize: 12 }}>{llmStatus}</p>}
-        </div>
-
-        <div className="section-card">
-          <h2>目标环境</h2>
-          <div className="form-group"><label className="form-label">环境名称</label><input className="form-input" value={envName} onChange={e => setEnvName(e.target.value)} /></div>
-          <div className="form-group"><label className="form-label">Base URL</label><input className="form-input form-input-mono" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></div>
-          <div className="form-group"><label className="form-label">超时 (秒)</label><input className="form-input" type="number" value={timeout} onChange={e => setTimeout_(e.target.value)} style={{ width: 96 }} /></div>
-          <button onClick={saveEnv} className="btn btn-secondary">保存环境配置</button>
-          {envStatus && <p className="text-muted mt-2" style={{ fontSize: 12 }}>{envStatus}</p>}
-        </div>
-
-        <div className="section-card">
-          <h2>系统信息</h2>
-          <div style={{ fontSize: 12 }}>
-            {[
-              { k: '产品版本', v: 'QualiBug Enterprise v2' },
-              { k: '引擎状态', v: backendStatus ? `🟢 ${backendStatus.pipelineStatus === 'completed' ? '就绪' : '运行中'}` : '检测中...' },
-              { k: '最近扫描', v: backendStatus?.scanTime || '—' },
-              { k: '当前发现', v: backendStatus ? `${backendStatus.totalFindings} 条` : '—' },
-              { k: '审计链路', v: '完整 · 全部可追溯' },
-            ].map(r => (
-              <div key={r.k} className="flex items-center justify-between mb-1" style={{ padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
-                <span className="text-muted">{r.k}</span><span style={{ color: r.k === '审计链路' || r.k === '数据安全' ? 'var(--success)' : 'var(--ink)', fontWeight: 500 }}>{r.v}</span>
-              </div>
-            ))}
+      <div className="page-header">
+        <div>
+          <span className="panel-kicker">治理配置</span>
+          <h1>设置</h1>
+          <p>围绕客户、系统接入、引擎连接与运行状态，统一管理当前项目的基础配置。</p>
+          <div className="page-summary-strip">
+            <span className="summary-pill strong">当前客户 {workspaceLabel}</span>
+            <span className="summary-pill">已接入服务 {enabledConnectors}</span>
+            <span className="summary-pill">停用服务 {disabledConnectors}</span>
+            <span className="summary-pill">智能引擎 {llmHealthy ? '已连接' : '待验证'}</span>
           </div>
         </div>
+      </div>
+
+      <section className="settings-hero mb-4">
+        <div className="settings-hero-main">
+          <span className="settings-hero-kicker">当前概况</span>
+          <h2>{project ? `${workspaceLabel} · 配置治理台` : '等待选择客户'}</h2>
+          <p>
+            {project
+              ? `当前已纳管 ${tS} 个系统、${tM} 个模块和 ${tV} 个服务接入。这里的配置只承载真实项目数据，不混入演示信息。`
+              : '请选择客户后继续管理接入服务、引擎配置和系统运行状态。'}
+          </p>
+        </div>
+        <div className="settings-hero-stats">
+          {[
+            { label: '客户状态', value: project ? '已选择' : '待选择' },
+            { label: '服务接入', value: `${enabledConnectors}/${tV || 0}` },
+            { label: '智能引擎', value: llmHealthy ? '已连接' : '待验证' },
+            { label: '产品版本', value: pv },
+          ].map((item) => (
+            <div key={item.label} className="settings-hero-stat">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="settings-layout">
+        <SettingsCustomerSection
+          workspaceLabel={workspaceLabel}
+          workspacesCount={workspaces.length}
+          project={project}
+          workspaceOptions={workspaceOptions}
+          importId={importId}
+          wsStatus={wsStatus || workspaceLoadError}
+          workspaceLoadFailed={Boolean(workspaceLoadError) && workspaceOptions.length === 0}
+          onWorkspaceChange={handleWorkspaceChange}
+          onRefresh={handleWorkspaceRefresh}
+          onImportIdChange={setImportId}
+          onCreateWorkspace={handleCreateWorkspace}
+        />
+        <SettingsTopologySection
+          project={project}
+          topology={topology}
+          onToggleSystem={toSys}
+          onOpenCreateConnector={(systemName) => openCreateConnectorForm(systemName || '')}
+          onOpenEditConnector={openEditConnectorForm}
+          onToggleConnectorStatus={handleConnectorStatusChange}
+        >
+          {serviceForm}
+        </SettingsTopologySection>
+        <SettingsLlmSection
+          llmStateTone={llmStateTone}
+          llmHealthy={llmHealthy}
+          llmStateText={llmStateText}
+          llmError={llmError}
+          llmUrl={llmUrl}
+          llmModel={llmModel}
+          llmKey={llmKey}
+          onLlmUrlChange={setLlmUrl}
+          onLlmModelChange={setLlmModel}
+          onLlmKeyChange={setLlmKey}
+          onSaveAndVerify={handleSaveLlmSettings}
+        />
+        <SettingsInfoSection
+          productVersion={pv}
+          serviceStatus={ss}
+          auditStatus={as}
+          statusToneClass={statusToneClass}
+        />
       </div>
     </div>
   );
 }
+
+export default Settings;

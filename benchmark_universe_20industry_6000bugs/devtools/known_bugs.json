@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "DEVTOOLS_0",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_1",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_2",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_3",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_4",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_5",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_6",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_7",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_8",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_9",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_10",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_11",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_12",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_13",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_14",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_15",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_16",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_17",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_18",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_19",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_20",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_21",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_22",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for devtools scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_23",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_24",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_25",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_26",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_27",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_28",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_29",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_30",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_31",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_32",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_33",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_34",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_35",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_36",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_37",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_38",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_39",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_40",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_41",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_42",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_43",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for devtools scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_44",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_45",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_46",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_47",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_48",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_49",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_50",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_51",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_52",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_53",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_54",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_55",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for devtools scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_56",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_57",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_58",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_59",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_60",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_61",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_62",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_63",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_64",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_65",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_66",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_67",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_68",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_69",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_70",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_71",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_72",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_73",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_74",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_75",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_76",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_77",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_78",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_79",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_80",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_81",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_82",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_83",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_84",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_85",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_86",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_87",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_88",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_89",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_90",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_91",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_92",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_93",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_94",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_95",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_96",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_97",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_98",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_99",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_100",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_101",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_102",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_103",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_104",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_105",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_106",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_107",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_108",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_109",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_110",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_111",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_112",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_113",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_114",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_115",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_116",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_117",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_118",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_119",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_120",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_121",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_122",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_123",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_124",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_125",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_126",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_127",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_128",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_129",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_130",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_131",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_132",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_133",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_134",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_135",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_136",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_137",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_138",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_139",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_140",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_141",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_142",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_143",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_144",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_145",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_146",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_147",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_148",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_149",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_150",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_151",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_152",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_153",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_154",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_155",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_156",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_157",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_158",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_159",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_160",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_161",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_162",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_163",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_164",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_165",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_166",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_167",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_168",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_169",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_170",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_171",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_172",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for devtools scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_173",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_174",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_175",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_176",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_177",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_178",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_179",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_180",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_181",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_182",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_183",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_184",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_185",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_186",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_187",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_188",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_189",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_190",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_191",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_192",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_193",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_194",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_195",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for devtools scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_196",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_197",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_198",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_199",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_200",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_201",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_202",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_203",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_204",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_205",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_206",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_207",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_208",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_209",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_210",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_211",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_212",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for devtools scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_213",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_214",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_215",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_216",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_217",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_218",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_219",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_220",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_221",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_222",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_223",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_224",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_225",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_226",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_227",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_228",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_229",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_230",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_231",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_232",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_233",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_234",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "high",
+    "description": "Simulated idempotency bug for devtools scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_235",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_236",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_237",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for devtools scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_238",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_239",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_240",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_241",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_242",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_243",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_244",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_245",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_246",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_247",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_248",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for devtools scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_249",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_250",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_251",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_252",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_253",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_254",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_255",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_256",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_257",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_258",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_259",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_260",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_261",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "high",
+    "description": "Simulated permission bug for devtools scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_262",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_263",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_264",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_265",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "medium",
+    "description": "Simulated state_break bug for devtools scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_266",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_267",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_268",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "low",
+    "description": "Simulated state_break bug for devtools scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_269",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_270",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_271",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_272",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for devtools scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_273",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for devtools scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_274",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_275",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "critical",
+    "description": "Simulated permission bug for devtools scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_276",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for devtools scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_277",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for devtools scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_278",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "critical",
+    "description": "Simulated money bug for devtools scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_279",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_280",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_281",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "medium",
+    "description": "Simulated money bug for devtools scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_282",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_283",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "low",
+    "description": "Simulated money bug for devtools scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_284",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_285",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_286",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "high",
+    "description": "Simulated concurrency bug for devtools scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_287",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_288",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for devtools scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_289",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "high",
+    "description": "Simulated state_break bug for devtools scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_290",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_291",
+    "type": "money",
+    "title": "money issue in devtools",
+    "severity": "high",
+    "description": "Simulated money bug for devtools scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_292",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for devtools scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_293",
+    "type": "concurrency",
+    "title": "concurrency issue in devtools",
+    "severity": "low",
+    "description": "Simulated concurrency bug for devtools scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_294",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_295",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_296",
+    "type": "state_break",
+    "title": "state_break issue in devtools",
+    "severity": "critical",
+    "description": "Simulated state_break bug for devtools scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_297",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "low",
+    "description": "Simulated permission bug for devtools scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_298",
+    "type": "permission",
+    "title": "permission issue in devtools",
+    "severity": "medium",
+    "description": "Simulated permission bug for devtools scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "DEVTOOLS_299",
+    "type": "idempotency",
+    "title": "idempotency issue in devtools",
+    "severity": "low",
+    "description": "Simulated idempotency bug for devtools scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

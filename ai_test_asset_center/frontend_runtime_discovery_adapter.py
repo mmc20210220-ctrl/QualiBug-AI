@@ -7,7 +7,6 @@ from typing import Any
 
 from .defect_signal_schema import normalize_defect_signal
 from .phase104_frontend_runtime_smoke import run_frontend_runtime_smoke
-from .phase106_frontend_execution_runtime import validate_frontend_execution_runtime
 from .real_project_onboarding import ROOT, config_paths
 
 
@@ -26,17 +25,17 @@ def generate_frontend_runtime_probes(
                 "defect_family": "ui",
                 "risk_type": "frontend_execution_runtime",
                 "severity": "P1",
-                "source": "frontend_execution_runtime",
-                "route": "/execution-runtime",
-                "path": "/execution-runtime",
-                "expected": "前端运行态页面、事件流、风险信号和证据快照可被完整装配",
-                "actual": "待验证执行运行态产物、路由和事件服务完整性",
+                "source": "frontend_runtime_smoke",
+                "route": "/dashboard",
+                "path": "/dashboard",
+                "expected": "当前 Vite 前端主页面与关键读链路可被完整装配并连通后端契约",
+                "actual": "待验证 dashboard/readiness/report 等当前主链路完整性",
                 "status": "planned_probe",
                 "confidence": 0.4,
                 "evidence": {"scenario": scenario, "project_id": project_id},
             },
             signal_kind="probe",
-            default_source="frontend_execution_runtime",
+            default_source="frontend_runtime_smoke",
             default_status="planned_probe",
             default_confidence=0.4,
         ),
@@ -47,31 +46,20 @@ def generate_frontend_runtime_probes(
                 "defect_family": "uiux",
                 "risk_type": "frontend_ux",
                 "severity": "P2",
-                "source": "frontend_execution_runtime",
-                "route": "/execution-runtime",
-                "path": "/execution-runtime",
-                "expected": "风险信号、证据快照、跳转链路的用户反馈完整且可理解",
+                "source": "frontend_runtime_smoke",
+                "route": "/findings",
+                "path": "/findings",
+                "expected": "风险信号、证据跳转与用户反馈在当前前端主页面中完整且可理解",
                 "actual": "待验证 UX 反馈完整性与主任务可达性",
                 "status": "planned_probe",
                 "confidence": 0.35,
                 "evidence": {"scenario": scenario, "project_id": project_id},
             },
             signal_kind="probe",
-            default_source="frontend_execution_runtime",
+            default_source="frontend_runtime_smoke",
             default_status="planned_probe",
             default_confidence=0.35,
         ),
-    ]
-
-
-def _candidate_runtime_dirs(project_id: str, root: Path | None = None) -> list[Path]:
-    root = root or ROOT
-    paths = config_paths(project_id, root)
-    project_output_root = root / "platform_outputs" / project_id
-    return [
-        project_output_root / "phase106_frontend_execution_runtime",
-        paths["output_dir"] / "phase106_frontend_execution_runtime",
-        paths["workspace_dir"] / "phase106_frontend_execution_runtime",
     ]
 
 
@@ -151,57 +139,4 @@ def collect_frontend_runtime_issues(
                 default_source="frontend_runtime_smoke",
             )
         )
-    for runtime_dir in _candidate_runtime_dirs(project_id, root):
-        if not runtime_dir.exists():
-            continue
-        try:
-            report = validate_frontend_execution_runtime(runtime_dir, scenario=scenario, write_report=False).to_dict()
-        except Exception as exc:
-            issues.append(
-                normalize_defect_signal(
-                    {
-                        "issue_id": f"ISSUE_FRONTEND_RUNTIME_{len(issues)+1:04d}",
-                        "title": "前端执行运行态验收执行失败",
-                        "defect_family": "ui",
-                        "risk_type": "frontend_execution_runtime",
-                        "severity": "P2",
-                        "confidence": 0.45,
-                        "status": "needs_human_review",
-                        "source": "frontend_execution_runtime",
-                        "route": "/execution-runtime",
-                        "path": "/execution-runtime",
-                        "expected": "前端执行运行态验收应可完成",
-                        "actual": str(exc),
-                        "evidence": {"runtime_dir": str(runtime_dir)},
-                    },
-                    signal_kind="issue",
-                    default_source="frontend_execution_runtime",
-                )
-            )
-            continue
-        for check in report.get("checks") or []:
-            if not isinstance(check, dict) or check.get("passed"):
-                continue
-            defect_family = "uiux" if str(check.get("key") or "") in {"business_semantics", "runtime_hook"} else "ui"
-            issues.append(
-                normalize_defect_signal(
-                    {
-                        "issue_id": f"ISSUE_FRONTEND_RUNTIME_{len(issues)+1:04d}",
-                        "title": f"前端运行态验收失败：{check.get('key')}",
-                        "defect_family": defect_family,
-                        "risk_type": "frontend_ux" if defect_family == "uiux" else "frontend_execution_runtime",
-                        "severity": "P1" if str(check.get("severity") or "critical") == "critical" else "P2",
-                        "confidence": 0.78,
-                        "status": "needs_human_review",
-                        "source": "frontend_execution_runtime",
-                        "route": "/execution-runtime",
-                        "path": "/execution-runtime",
-                        "expected": "执行运行态页面、事件流与反馈链路应完整可用",
-                        "actual": check.get("detail") or "frontend runtime acceptance failed",
-                        "evidence": {"runtime_dir": str(runtime_dir), "check": check, "artifacts": report.get("artifacts") or {}},
-                    },
-                    signal_kind="issue",
-                    default_source="frontend_execution_runtime",
-                )
-            )
     return issues

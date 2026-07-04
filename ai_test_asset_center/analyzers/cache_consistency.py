@@ -184,11 +184,16 @@ class CacheConsistencyAnalyzer:
         return bugs
 
     def _paths_related(self, path1: str, path2: str) -> bool:
-        """判断两个路径是否相关"""
-        # 简单实现：检查是否有相同的路径片段
-        parts1 = set(p for p in path1.split('/') if p and not p.startswith('{'))
-        parts2 = set(p for p in path2.split('/') if p and not p.startswith('{'))
-        return len(parts1 & parts2) > 0
+        """判断两个路径是否相关 — 要求资源级别匹配，排除通用前缀"""
+        # 排除通用路径段（api版本号、通用前缀等）
+        generic_segments = {
+            "api", "v1", "v2", "v3", "app", "service", "internal",
+            "rest", "openapi"
+        }
+        parts1 = set(p for p in path1.split('/') if p and not p.startswith('{') and p.lower() not in generic_segments)
+        parts2 = set(p for p in path2.split('/') if p and not p.startswith('{') and p.lower() not in generic_segments)
+        # 要求至少一个资源级别段匹配
+        return len(parts1 & parts2) >= 1
 
     def verify_read_write_split(
         self,

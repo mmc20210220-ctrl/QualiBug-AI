@@ -3,44 +3,41 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint",
+    "dev": "vite --host",
+    "build": "vite build",
+    "start": "vite preview --host",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"vite.config.ts\" \"eslint.config.mjs\" --max-warnings=0",
     "openapi:export": "cd .. && python -m ai_test_asset_center.phase104_api_contract_exporter --output-dir frontend/openapi/phase104_api_contract",
     "openapi:gen": "node scripts/openapi/generate.mjs",
     "openapi:check": "node scripts/openapi/check.mjs",
     "typecheck": "tsc --noEmit",
-    "tests": "npm run openapi:check && node scripts/tests.mjs",
     "redaction:scan": "node scripts/security/redaction-scan.mjs",
     "audit:check": "node scripts/security/npm-audit-baseline.mjs",
-    "e2e": "playwright test",
-    "ci:gate": "node scripts/ci/gate.mjs",
     "dev:vite": "vite --host"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.4",
     "@react-three/fiber": "^9.4.0",
-    "@vitejs/plugin-react": "^6.0.3",
     "@xyflow/react": "^12.11.1",
     "elkjs": "^0.11.1",
-    "next": "16.2.9",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.18.1",
-    "three": "^0.181.1",
-    "vite": "^8.1.1"
+    "three": "^0.181.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.45.0",
-    "@tailwindcss/postcss": "^4",
+    "@eslint/js": "^9.30.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.3",
     "eslint": "^9",
-    "eslint-config-next": "16.2.9",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^15.15.0",
     "openapi-typescript": "7.13.0",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "typescript-eslint": "^8.35.1",
+    "vite": "^8.1.1"
   }
 }

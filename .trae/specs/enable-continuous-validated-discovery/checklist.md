@@ -1,0 +1,10 @@
+- [x] 系统引入 `campaign` 概念，单次 `run` 不再被当成“检测已完成”的充分证据
+- [x] 系统维护跨轮 coverage ledger，能追踪行为单元的 `untouched`、`candidate`、`pending`、`validated`、`blocked`、`revalidate_due` 状态
+- [x] 单轮结束后系统能输出下一轮推荐 frontier，而不是直接停止在“本轮已完成”
+- [x] frontier 选择逻辑优先处理高价值未闭环行为，而不是只扩大低价值 candidate 规模
+- [x] 预算明确拆分为 `explore`、`exploit`、`revalidate` 三类，并有清晰分配规则
+- [x] 已有 pending 且只差严格补证的 frontier 能稳定进入 exploit 预算
+- [x] 环境恢复、知识更新、数据就绪或阻断解除后，相关 frontier 能被自动重检
+- [x] campaign 级报表同时展示本轮新增 validated bug、累计 validated bug、pending 转 validated 转化率
+- [x] 报表展示 frontier burn-down、剩余高价值未覆盖行为数和重检队列规模
+- [x] benchmark 或回归结果能证明多轮 campaign 相比单轮 run 在累计 validated bug 或 frontier 收敛上更优

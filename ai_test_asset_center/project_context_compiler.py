@@ -237,6 +237,17 @@ _HEADING_PATTERN: re.Pattern = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
 _NOUN_PHRASE_PATTERN: re.Pattern = re.compile(
     r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b"
 )
+# Chinese entity extraction: matches 2-4 character compound nouns
+# e.g., 订单, 支付系统, 库存管理
+_CN_ENTITY_PATTERN: re.Pattern = re.compile(
+    r'[\u4e00-\u9fff]{2,6}(?:系统|管理|模块|服务|中心|平台|引擎)?'
+)
+# Common Chinese stopwords that are not entities
+_CN_STOP_WORDS = frozenset({
+    '系统', '管理', '模块', '服务', '中心', '平台', '引擎',
+    '包括', '如下', '所有', '每个', '一个', '这个', '那个',
+    '功能', '需求', '说明', '文档', '概述', '背景', '目标',
+})
 
 # Confidence weights by source strength
 _CONFIDENCE_BY_SOURCE: dict[str, float] = {
@@ -717,11 +728,12 @@ class ProjectContextCompiler:
             heading = match.group(1).strip()
             line_number = prd_text[: match.start()].count("\n") + 1
 
-            # Extract noun phrases from the heading
+            # Extract noun phrases from the heading (English + Chinese)
             phrases = _NOUN_PHRASE_PATTERN.findall(heading)
+            cn_phrases = [m.group(0) for m in _CN_ENTITY_PATTERN.finditer(heading)
+                          if m.group(0) not in _CN_STOP_WORDS]
             for phrase in phrases:
                 alias = phrase.lower().replace(" ", "_").replace("-", "_")
-                # Filter out common non-entity words
                 skip_words = {"overview", "introduction", "summary", "background", "appendix",
                               "requirements", "assumptions", "scope", "glossary", "setup",
                               "installation", "deployment", "conclusion", "references",
@@ -731,22 +743,27 @@ class ProjectContextCompiler:
                 if alias in seen:
                     continue
                 seen.add(alias)
-
                 entity_type = _classify_entity_type(phrase)
                 entities.append(EntityCandidate(
-                    entity_alias=alias,
-                    entity_type=entity_type,
+                    entity_alias=alias, entity_type=entity_type,
                     confidence=_CONFIDENCE_BY_SOURCE["explicit_heading"],
-                    evidence=[
-                        _make_evidence(
-                            source="prd",
-                            section=f"heading (line {line_number})",
-                            extracted=heading,
-                            line=line_number,
-                        )
-                    ],
-                    api_sources=[],
+                    source_documents=[SourceRef(source="prd", line=line_number, excerpt=heading[:200],
+                                              confidence=_CONFIDENCE_BY_SOURCE["explicit_heading"])],
                 ))
+            # Chinese entity extraction
+            for cn_phrase in cn_phrases:
+                alias = cn_phrase.lower().replace(" ", "_")
+                if alias in seen or len(alias) < 2:
+                    continue
+                seen.add(alias)
+                entity_type = _classify_entity_type(cn_phrase)
+                entities.append(EntityCandidate(
+                    entity_alias=alias, entity_type=entity_type,
+                    confidence=_CONFIDENCE_BY_SOURCE["explicit_heading"],
+                    source_documents=[SourceRef(source="prd_cn", line=line_number, excerpt=heading[:200],
+                                              confidence=0.80)],
+                ))
+
 
         return entities
 

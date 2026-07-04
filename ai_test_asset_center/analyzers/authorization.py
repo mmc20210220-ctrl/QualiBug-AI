@@ -155,29 +155,37 @@ class AuthorizationAnalyzer:
                     has_auth = any(kw in summary or kw in path_lower for kw in self.auth_keywords)
 
                     if not has_auth:
-                        bug = AuthBug(
-                            bug_id=f"AB_{bug_id:03d}",
-                            category="C03",
-                            severity="P0",
-                            title=f"敏感操作可能缺少认证: {method.upper()} {path}",
-                            description=f"该端点执行敏感操作，但可能缺少认证或权限检查",
-                            issue_type=AuthIssueType.MISSING_AUTH,
-                            affected_endpoints=[path],
-                            evidence={
-                                "path": path,
-                                "method": method.upper(),
-                                "summary": summary
-                            },
-                            reproduction_steps=[
-                                f"1. 直接请求端点: {method.upper()} {path}",
-                                "2. 不提供或提供无效的认证信息",
-                                "3. 观察是否仍然能够执行操作"
-                            ],
-                            expected_behavior="敏感操作应该有适当的认证和权限检查",
-                            actual_behavior="可能缺少认证或权限检查"
-                        )
-                        bugs.append(bug)
-                        bug_id += 1
+                        # 检查是否有 security 定义（OpenAPI 标准）
+                        security = config.get("security", None)
+                        has_security_def = security is not None or methods.get("security") is not None
+
+                        if not has_security_def:
+                            # 写操作（DELETE/PUT/PATCH）比读操作更严重
+                            is_write = method.upper() in ["DELETE", "PUT", "PATCH"]
+                            bug = AuthBug(
+                                bug_id=f"AB_{bug_id:03d}",
+                                category="C03",
+                                severity="P1" if is_write else "P2",
+                                title=f"敏感操作需验证认证: {method.upper()} {path}",
+                                description=f"该端点执行敏感操作，但 API 规格中未发现明确的认证要求",
+                                issue_type=AuthIssueType.MISSING_AUTH,
+                                affected_endpoints=[path],
+                                evidence={
+                                    "path": path,
+                                    "method": method.upper(),
+                                    "summary": summary,
+                                    "note": "认证可能由中间件统一处理，需实际验证"
+                                },
+                                reproduction_steps=[
+                                    f"1. 直接请求端点: {method.upper()} {path}",
+                                    "2. 不提供或提供无效的认证信息",
+                                    "3. 观察是否仍然能够执行操作"
+                                ],
+                                expected_behavior="敏感操作应该有适当的认证和权限检查",
+                                actual_behavior="API规格中未发现认证要求，需实际验证"
+                            )
+                            bugs.append(bug)
+                            bug_id += 1
 
         self.bugs.extend(bugs)
         logger.info(f"发现 {len(bugs)} 个认证授权问题")
@@ -203,18 +211,31 @@ class AuthorizationAnalyzer:
 
         paths = api_spec.get("paths", {})
 
-        # 检查路径中是否有ID参数
+        # 检查路径中是否有ID参数 — 仅对可能产生越权的操作标记
         for path in paths:
+            # 跳过创建类端点（POST 通常不需要 ID 越权检查）
+            path_methods = paths.get(path, {})
+            has_write_or_read = any(
+                m.upper() in ["GET", "PUT", "PATCH", "DELETE"] for m in path_methods
+            )
+            if not has_write_or_read:
+                continue
+
+            # 只对包含用户/资源 ID 的路径标记，排除公共端点
             if "{" in path and "}" in path and ("id" in path.lower() or "user" in path.lower()):
+                # 排除自身资源访问（如 /api/users/{id}/profile 是正常 RESTful）
+                if self._is_likely_self_resource(path):
+                    continue
+
                 bug = AuthBug(
                     bug_id=f"AB_{bug_id:03d}",
                     category="C03",
-                    severity="P0",
-                    title=f"可能存在IDOR问题: {path}",
-                    description=f"该端点可能存在不安全的直接对象引用问题",
+                    severity="P1",
+                    title=f"需验证对象级访问控制: {path}",
+                    description=f"该端点包含对象ID参数，需验证是否有所有权检查防止IDOR",
                     issue_type=AuthIssueType.IDOR,
                     affected_endpoints=[path],
-                    evidence={"path": path},
+                    evidence={"path": path, "note": "需验证是否存在所有权检查"},
                     reproduction_steps=[
                         f"1. 用普通用户账号登录",
                         f"2. 修改URL中的ID参数为其他用户的ID",
@@ -222,7 +243,7 @@ class AuthorizationAnalyzer:
                         "4. 观察是否能够访问或修改其他用户的数据"
                     ],
                     expected_behavior="应该验证用户是否有权限访问该资源",
-                    actual_behavior="可能存在权限提升问题"
+                    actual_behavior="需验证是否存在对象级访问控制"
                 )
                 bugs.append(bug)
                 bug_id += 1
@@ -252,25 +273,25 @@ class AuthorizationAnalyzer:
 
         for path in paths:
             if "tenant" in path.lower() or "organization" in path.lower():
-                # 检查路径中是否有租户ID
-                if "{tenant_id}" in path or "{organization_id}" in path:
+                # 路径中显式包含 {tenant_id} 是好的隔离设计，不标记为 bug
+                # 只有当路径含 tenant 关键词但没有参数化时才可疑
+                if "{tenant_id}" not in path and "{organization_id}" not in path:
                     bug = AuthBug(
                         bug_id=f"AB_{bug_id:03d}",
                         category="C04",
-                        severity="P0",
-                        title=f"多租户端点需要验证权限: {path}",
-                        description=f"该端点需要验证用户是否有权访问该租户的资源",
+                        severity="P1",
+                        title=f"多租户端点需验证权限: {path}",
+                        description=f"该端点涉及租户资源，需验证是否有严格的租户隔离检查",
                         issue_type=AuthIssueType.BROKEN_ACCESS_CONTROL,
                         affected_endpoints=[path],
-                        evidence={"path": path},
+                        evidence={"path": path, "note": "路径含租户关键词但未参数化"},
                         reproduction_steps=[
                             "1. 使用租户A的账号登录",
-                            f"2. 修改租户ID为租户B的ID",
-                            f"3. 调用端点: {path}",
-                            "4. 观察是否能够访问租户B的数据"
+                            f"2. 尝试访问租户B的资源: {path}",
+                            "3. 观察是否能够跨租户访问"
                         ],
                         expected_behavior="应该严格验证用户的租户和权限",
-                        actual_behavior="可能存在越权访问其他租户数据的风险"
+                        actual_behavior="需验证租户隔离是否到位"
                     )
                     bugs.append(bug)
                     bug_id += 1
@@ -298,6 +319,11 @@ class AuthorizationAnalyzer:
         bugs.extend(self.detect_privilege_escalation(api_spec))
         bugs.extend(self.check_multi_tenant_permissions(api_spec))
         return bugs
+
+    def _is_likely_self_resource(self, path: str) -> bool:
+        """判断路径是否是用户自身资源访问（如 /me, /profile, /self）"""
+        self_indicators = ["/me", "/profile", "/self", "/current", "/my"]
+        return any(ind in path.lower() for ind in self_indicators)
 
     def get_summary(self) -> Dict[str, Any]:
         """获取分析摘要"""

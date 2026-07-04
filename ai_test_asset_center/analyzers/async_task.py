@@ -94,25 +94,34 @@ class AsyncTaskAnalyzer:
         for path, methods in paths.items():
             for method, config in methods.items():
                 summary = str(config.get("summary", "")).lower()
+                description = str(config.get("description", "")).lower()
                 path_lower = path.lower()
+                combined = f"{summary} {description}"
 
                 # 检查是否是异步任务
                 if any(kw in summary or kw in path_lower for kw in self.async_keywords):
                     # 确定任务类型
                     task_type = AsyncTaskType.BACKGROUND_JOB
-                    if any(kw in summary or kw in path_lower for kw in ["queue", "message", "kafka", "rabbitmq"]):
+                    if any(kw in combined for kw in ["queue", "message", "kafka", "rabbitmq"]):
                         task_type = AsyncTaskType.MESSAGE_QUEUE
-                    elif any(kw in summary or kw in path_lower for kw in ["schedule", "cron", "timer"]):
+                    elif any(kw in combined for kw in ["schedule", "cron", "timer"]):
                         task_type = AsyncTaskType.SCHEDULED_TASK
-                    elif any(kw in summary or kw in path_lower for kw in ["event"]):
+                    elif any(kw in combined for kw in ["event"]):
                         task_type = AsyncTaskType.EVENT_HANDLER
+
+                    # 检查是否有重试配置线索
+                    retry_config = None
+                    retry_hits = [kw for kw in self.retry_keywords if kw in combined]
+                    if retry_hits:
+                        retry_config = {"detected_keywords": retry_hits}
 
                     task = AsyncTask(
                         name=f"AsyncTask_{task_id}",
                         task_type=task_type,
                         trigger=path,
                         description=summary,
-                        endpoints=[path]
+                        endpoints=[path],
+                        retry_config=retry_config
                     )
                     tasks.append(task)
                     task_id += 1
@@ -122,11 +131,17 @@ class AsyncTaskAnalyzer:
             lines = prd_text.split('\n')
             for line in lines:
                 if any(kw in line.lower() for kw in self.async_keywords):
+                    retry_config = None
+                    retry_hits = [kw for kw in self.retry_keywords if kw in line.lower()]
+                    if retry_hits:
+                        retry_config = {"detected_keywords": retry_hits}
+
                     task = AsyncTask(
                         name=f"PRD_Task_{task_id}",
                         task_type=AsyncTaskType.BACKGROUND_JOB,
                         trigger="PRD_defined",
-                        description=line.strip()
+                        description=line.strip(),
+                        retry_config=retry_config
                     )
                     tasks.append(task)
                     task_id += 1

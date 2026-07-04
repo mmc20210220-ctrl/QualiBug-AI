@@ -160,11 +160,13 @@ def seed_sample_strategy_feedback(project_id: str = "real_project_demo", root: P
         else:
             row["is_valid_bug"] = True
             row["is_false_positive"] = False
+        row["_seed"] = True
+        row["source"] = "seed_sample"
         rows.append(row)
     if not rows:
         # Fallback rows make the cockpit meaningful even before a live run.
         rows = [
-            {"feedback_id": "FB_SAMPLE_001", "feedback_type": "discovered_bug", "is_valid_bug": True, "is_false_positive": False, "is_missed_bug": False, "is_duplicate": False, "is_high_value": True, "human_severity": "P1", "risk_type": "permission_bypass", "business_domain": "ecommerce", "endpoint": "GET /admin/orders", "source": "sample_seeded_feedback", "reviewer": "sample_reviewer", "reviewed_at_utc": _now(), "feedback_notes": "普通用户访问管理员订单接口被 QA 确认为有效高价值缺陷。"},
+            {"feedback_id": "FB_SAMPLE_001", "_seed": True, "feedback_type": "discovered_bug", "is_valid_bug": True, "is_false_positive": False, "is_missed_bug": False, "is_duplicate": False, "is_high_value": True, "human_severity": "P1", "risk_type": "permission_bypass", "business_domain": "ecommerce", "endpoint": "GET /admin/orders", "source": "sample_seeded_feedback", "reviewer": "sample_reviewer", "reviewed_at_utc": _now(), "feedback_notes": "普通用户访问管理员订单接口被 QA 确认为有效高价值缺陷。"},
             {"feedback_id": "FB_SAMPLE_002", "feedback_type": "false_positive", "is_valid_bug": False, "is_false_positive": True, "is_missed_bug": False, "is_duplicate": False, "is_high_value": False, "human_severity": "P3", "risk_type": "audit_trace", "business_domain": "ecommerce", "endpoint": "GET /orders", "source": "sample_seeded_feedback", "reviewer": "sample_reviewer", "reviewed_at_utc": _now(), "feedback_notes": "审计留痕缺失在当前项目不是阻断风险，降低权重。"},
             {"feedback_id": "FB_SAMPLE_003", "feedback_type": "missed_bug", "is_valid_bug": None, "is_false_positive": False, "is_missed_bug": True, "is_duplicate": False, "is_high_value": True, "human_severity": "P0", "risk_type": "payment", "business_domain": "ecommerce", "endpoint": "POST /payments/callback", "source": "sample_seeded_feedback", "reviewer": "sample_reviewer", "reviewed_at_utc": _now(), "feedback_notes": "QA 反馈漏检支付回调幂等导致重复入账，需要提升 payment/idempotency。"},
         ]
@@ -295,6 +297,9 @@ def build_enterprise_strategy_learning(project_id: str = "real_project_demo", ro
     source_bucket: dict[str, dict[str, Any]] = {}
     module_bucket: dict[str, dict[str, Any]] = {}
     for row in feedback:
+        # Skip seed/demo feedback — only use real QA-verified feedback for learning
+        if row.get("source") in ("seed_sample", "demo_feedback") or row.get("_seed", False):
+            continue
         signal, reason = _row_signal(row)
         if signal == 0:
             continue

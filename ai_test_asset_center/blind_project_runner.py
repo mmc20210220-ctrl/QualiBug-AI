@@ -90,6 +90,17 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
+def _looks_like_api_doc(text: str) -> bool:
+    """Heuristic: does this text look like it contains API endpoint descriptions?"""
+    if not text:
+        return False
+    # Count HTTP methods mentioned in the text
+    method_count = sum(text.upper().count(m) for m in ("GET", "POST", "PUT", "PATCH", "DELETE"))
+    # Also check for URL-like paths with HTTP methods
+    path_count = len(re.findall(r'(?:GET|POST|PUT|PATCH|DELETE)\s+/[\w/\-_{}]+', text, re.I))
+    return method_count >= 3 or path_count >= 2
+
+
 def _load_openapi_yaml_or_json(input_dir: Path) -> tuple[dict[str, Any], str]:
     for name in ("openapi.json", "swagger.json"):
         p = input_dir / name
@@ -251,14 +262,31 @@ def _normalize_platform_inputs(project_id: str, source_input_dir: Path, root: Pa
         p = dest / name
         if p.exists():
             merged_docs.append(f"\n\n# Source: {name}\n" + _read(p))
-    # Include any other markdown input document except API.md, which stays as api docs.
+    # Include any other markdown input document except API docs, which stay as api docs.
     for p in sorted(dest.glob("*.md")):
-        if p.name in set(DOC_ORDER) | {"API.md", "api.md", "prd.md"}:
+        if p.name in set(DOC_ORDER) | {"prd.md"}:
             continue
-        merged_docs.append(f"\n\n# Source: {p.name}\n" + _read(p))
+        # Skip files that look like API docs (contain HTTP methods)
+        text = _read(p)
+        if _looks_like_api_doc(text):
+            continue
+        merged_docs.append(f"\n\n# Source: {p.name}\n" + text)
     (dest / "prd.md").write_text("\n".join(merged_docs), encoding="utf-8")
 
+    # Find API doc from any .md file containing API endpoints (not just API.md)
     api_docs = _read(dest / "API.md") or _read(dest / "api.md")
+    if not api_docs:
+        for p in sorted(dest.glob("*.md")):
+            text = _read(p)
+            if _looks_like_api_doc(text):
+                api_docs = text
+                break
+    if not api_docs:
+        for p in sorted(dest.glob("*.txt")):
+            text = _read(p)
+            if _looks_like_api_doc(text):
+                api_docs = text
+                break
     if api_docs:
         (dest / "api.md").write_text(api_docs, encoding="utf-8")
 

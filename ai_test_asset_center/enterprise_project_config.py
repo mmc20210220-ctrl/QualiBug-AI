@@ -38,6 +38,14 @@ EXAMPLE_MULTI_SERVICE_CONFIG = {
             "description": "订单管理：创建、查询、状态流转、取消",
             "depends_on": [],
             "exposes_to": ["payment-service", "logistics-service"],
+            "auth": {
+                "type": "password_login",
+                "login_api": "/auth/login",
+                "admin": {"username": "${QUALIBUG_SVC_ORDER_SERVICE_ADMIN_USER}", "password": "${QUALIBUG_SVC_ORDER_SERVICE_ADMIN_PASS}"},
+                "viewer": {"username": "${QUALIBUG_SVC_ORDER_SERVICE_VIEWER_USER}", "password": "${QUALIBUG_SVC_ORDER_SERVICE_VIEWER_PASS}"},
+            },
+            "db": {"host": "order-db.internal", "port": 3306,
+                   "name": "order_db", "user": "${QUALIBUG_SVC_ORDER_SERVICE_DB_USER}", "password": "${QUALIBUG_SVC_ORDER_SERVICE_DB_PASS}"},
         },
         {
             "name": "payment-service",
@@ -47,6 +55,14 @@ EXAMPLE_MULTI_SERVICE_CONFIG = {
             "description": "支付处理：收款、退款、对账",
             "depends_on": ["order-service"],
             "exposes_to": ["order-service"],
+            "auth": {
+                "type": "password_login",
+                "login_api": "/auth/login",
+                "admin": {"username": "${QUALIBUG_SVC_PAYMENT_SERVICE_ADMIN_USER}", "password": "${QUALIBUG_SVC_PAYMENT_SERVICE_ADMIN_PASS}"},
+                "viewer": {"username": "${QUALIBUG_SVC_PAYMENT_SERVICE_VIEWER_USER}", "password": "${QUALIBUG_SVC_PAYMENT_SERVICE_VIEWER_PASS}"},
+            },
+            "db": {"host": "payment-db.internal", "port": 5432,
+                   "name": "payment_db", "user": "${QUALIBUG_SVC_PAYMENT_SERVICE_DB_USER}", "password": "${QUALIBUG_SVC_PAYMENT_SERVICE_DB_PASS}"},
         },
         {
             "name": "inventory-service",
@@ -56,6 +72,14 @@ EXAMPLE_MULTI_SERVICE_CONFIG = {
             "description": "库存管理：扣减、回补、盘点",
             "depends_on": ["order-service"],
             "exposes_to": ["order-service", "logistics-service"],
+            "auth": {
+                "type": "password_login",
+                "login_api": "/auth/login",
+                "admin": {"username": "${QUALIBUG_SVC_INVENTORY_SERVICE_ADMIN_USER}", "password": "${QUALIBUG_SVC_INVENTORY_SERVICE_ADMIN_PASS}"},
+                "viewer": {"username": "${QUALIBUG_SVC_INVENTORY_SERVICE_VIEWER_USER}", "password": "${QUALIBUG_SVC_INVENTORY_SERVICE_VIEWER_PASS}"},
+            },
+            "db": {"host": "inventory-db.internal", "port": 3306,
+                   "name": "inventory_db", "user": "${QUALIBUG_SVC_INVENTORY_SERVICE_DB_USER}", "password": "${QUALIBUG_SVC_INVENTORY_SERVICE_DB_PASS}"},
         },
         {
             "name": "logistics-service",
@@ -66,6 +90,14 @@ EXAMPLE_MULTI_SERVICE_CONFIG = {
             "depends_on": ["order-service", "inventory-service"],
             "exposes_to": ["order-service"],
             "external_integrations": ["jt-express", "pinduoduo"],
+            "auth": {
+                "type": "bearer_token",
+                "login_api": "/auth/token",
+                "admin": {"username": "${QUALIBUG_SVC_LOGISTICS_SERVICE_ADMIN_USER}", "password": "${QUALIBUG_SVC_LOGISTICS_SERVICE_ADMIN_PASS}"},
+                "viewer": {"username": "${QUALIBUG_SVC_LOGISTICS_SERVICE_VIEWER_USER}", "password": "${QUALIBUG_SVC_LOGISTICS_SERVICE_VIEWER_PASS}"},
+            },
+            "db": {"host": "logistics-db.internal", "port": 3306,
+                   "name": "logistics_db", "user": "${QUALIBUG_SVC_LOGISTICS_SERVICE_DB_USER}", "password": "${QUALIBUG_SVC_LOGISTICS_SERVICE_DB_PASS}"},
         },
     ],
     "cross_service_contracts": [
@@ -148,12 +180,69 @@ EXAMPLE_MULTI_SERVICE_CONFIG = {
 # ---------------------------------------------------------------------------
 
 class MultiServiceProject:
-    """Manages a multi-service enterprise project."""
+    """Manages a multi-service enterprise project with credential routing.
+
+    Integration with EnterpriseCredentialManager:
+        project = MultiServiceProject("acme_ecommerce")
+        mgr = project.get_credential_manager()
+        mgr.login_all_services()
+        header = mgr.get_auth_header("order-service", "admin")
+    """
 
     def __init__(self, project_id: str, root: Path | None = None):
         self.project_id = _safe_project_id(project_id)
         self.root = root or ROOT
         self._config: dict[str, Any] | None = None
+        self._credential_manager: Any = None  # Lazy-loaded EnterpriseCredentialManager
+
+    def get_credential_manager(self):
+        """Get or create the EnterpriseCredentialManager for this project."""
+        if self._credential_manager is None:
+            from .enterprise_credential_manager import EnterpriseCredentialManager
+            self._credential_manager = EnterpriseCredentialManager(
+                self.project_id, self.root
+            )
+            # Load from multi_service_config.json if it exists
+            config_path = self._config_path()
+            if config_path.exists():
+                self._credential_manager.load_from_file(config_path)
+            # Load from environment variables
+            self._credential_manager.load_from_env(self.service_names())
+            # Fallback: legacy single-service
+            self._credential_manager.load_legacy_fallback()
+        return self._credential_manager
+
+    def save_credentials(self, service: str, role: str,
+                         username: str, password: str, login_api: str = "/auth/login") -> None:
+        """Save credentials for a specific service×role back to config."""
+        config = self.config
+        for svc in config.get("services", []):
+            if svc.get("name") == service:
+                svc.setdefault("auth", {}).setdefault(role, {})
+                svc["auth"][role]["username"] = username
+                svc["auth"][role]["password"] = password
+                if login_api:
+                    svc["auth"]["login_api"] = login_api
+                break
+        self._config = config
+        self._write_config()
+        # Reload credentials
+        if self._credential_manager:
+            self._credential_manager.load_from_dict(config)
+
+    def save_db_config(self, service: str, host: str, port: int,
+                       db_name: str, user: str, password: str) -> None:
+        """Save DB connection for a service."""
+        config = self.config
+        for svc in config.get("services", []):
+            if svc.get("name") == service:
+                svc["db"] = {
+                    "host": host, "port": port,
+                    "name": db_name, "user": user, "password": password,
+                }
+                break
+        self._config = config
+        self._write_config()
 
     @property
     def config(self) -> dict[str, Any]:
@@ -184,6 +273,11 @@ class MultiServiceProject:
                     "description": "Auto-migrated from legacy single-service config",
                     "depends_on": [],
                     "exposes_to": [],
+                    "auth": {
+                        "type": legacy.get("auth_type", "password_login"),
+                        "login_api": legacy.get("login_api", "/auth/login"),
+                    },
+                    "db": legacy.get("db", {}),
                 }],
                 "cross_service_contracts": [],
                 "external_integrations": [],
@@ -197,6 +291,12 @@ class MultiServiceProject:
         self._config_path().parent.mkdir(parents=True, exist_ok=True)
         _write_json(self._config_path(), self._config)
         return self._config
+
+    def _write_config(self) -> None:
+        """Persist current config back to disk."""
+        if self._config:
+            self._config_path().parent.mkdir(parents=True, exist_ok=True)
+            _write_json(self._config_path(), self._config)
 
     def services(self) -> list[dict[str, Any]]:
         return self.config.get("services", [])

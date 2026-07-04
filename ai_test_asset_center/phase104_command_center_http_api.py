@@ -185,12 +185,28 @@ def _augment_command_center_snapshot(project_id: str, envelope: Mapping[str, Any
         governance = _load_ui_design_oracle_governance(project_id)
         family_coverage = payload.get("bug_family_coverage") if isinstance(payload.get("bug_family_coverage"), dict) else None
         capability_matrix = payload.get("full_spectrum_capability_matrix") if isinstance(payload.get("full_spectrum_capability_matrix"), dict) else None
+        discovery_funnel = payload.get("discovery_funnel") if isinstance(payload.get("discovery_funnel"), dict) else None
+        discovery_blocker_summary = payload.get("discovery_blocker_summary") if isinstance(payload.get("discovery_blocker_summary"), dict) else None
+        continuous_discovery_campaign = payload.get("continuous_discovery_campaign") if isinstance(payload.get("continuous_discovery_campaign"), dict) else None
+        continuous_discovery_metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else None
         if governance:
             updated_data["ui_design_oracle_governance"] = governance
         if family_coverage:
             updated_data["bug_family_coverage"] = family_coverage
         if capability_matrix:
             updated_data["full_spectrum_capability_matrix"] = capability_matrix
+        if discovery_funnel:
+            updated_data["discovery_funnel"] = discovery_funnel
+        if discovery_blocker_summary:
+            updated_data["discovery_blocker_summary"] = discovery_blocker_summary
+        if continuous_discovery_campaign:
+            updated_data["continuous_discovery_campaign"] = continuous_discovery_campaign
+        if continuous_discovery_metrics:
+            updated_data["continuous_discovery_metrics"] = {
+                str(key): value
+                for key, value in continuous_discovery_metrics.items()
+                if str(key).startswith("continuous_discovery_")
+            }
     if updated_data == dict(data):
         return dict(envelope)
     updated = dict(envelope)

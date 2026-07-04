@@ -15,9 +15,13 @@ export function AnimatedCounter({ value, duration = 800, className, style, forma
 
   useEffect(() => {
     const target = typeof value === 'string' ? parseFloat(value) : value;
+    cancelAnimationFrame(raf.current);
     if (isNaN(target)) {
-      setDisplay(0);
-      return;
+      prevValue.current = 0;
+      raf.current = requestAnimationFrame(() => {
+        setDisplay(0);
+      });
+      return () => cancelAnimationFrame(raf.current);
     }
 
     const start = prevValue.current;
@@ -37,7 +41,6 @@ export function AnimatedCounter({ value, duration = 800, className, style, forma
       }
     };
 
-    cancelAnimationFrame(raf.current);
     raf.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf.current);
   }, [value, duration]);

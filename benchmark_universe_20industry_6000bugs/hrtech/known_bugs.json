@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "HRTECH_0",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "low",
+    "description": "Simulated money bug for hrtech scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_1",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_2",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_3",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_4",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_5",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_6",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_7",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_8",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_9",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_10",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_11",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_12",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_13",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_14",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_15",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_16",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_17",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_18",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_19",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "low",
+    "description": "Simulated money bug for hrtech scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_20",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_21",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_22",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_23",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_24",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_25",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_26",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_27",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_28",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for hrtech scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_29",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_30",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_31",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_32",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_33",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_34",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_35",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_36",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for hrtech scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_37",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_38",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_39",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_40",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_41",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_42",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_43",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_44",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_45",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_46",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_47",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_48",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_49",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_50",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_51",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_52",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_53",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_54",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_55",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_56",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_57",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_58",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_59",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_60",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_61",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_62",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_63",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_64",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_65",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_66",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_67",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_68",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_69",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_70",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_71",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_72",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_73",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_74",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for hrtech scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_75",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_76",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_77",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_78",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_79",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_80",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_81",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_82",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "high",
+    "description": "Simulated money bug for hrtech scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_83",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_84",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_85",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_86",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_87",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_88",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_89",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for hrtech scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_90",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_91",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_92",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_93",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_94",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_95",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_96",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "high",
+    "description": "Simulated money bug for hrtech scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_97",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_98",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_99",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_100",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_101",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_102",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_103",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_104",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_105",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_106",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_107",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_108",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_109",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_110",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_111",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_112",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_113",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_114",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_115",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_116",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_117",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_118",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_119",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_120",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_121",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_122",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_123",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_124",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_125",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_126",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_127",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_128",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_129",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_130",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_131",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_132",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_133",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_134",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_135",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_136",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_137",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_138",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_139",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "high",
+    "description": "Simulated money bug for hrtech scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_140",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_141",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_142",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_143",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_144",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_145",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_146",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_147",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_148",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_149",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_150",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_151",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_152",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_153",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_154",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_155",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_156",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_157",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_158",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_159",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_160",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_161",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_162",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_163",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_164",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_165",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_166",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_167",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_168",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "low",
+    "description": "Simulated money bug for hrtech scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_169",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_170",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_171",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_172",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_173",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_174",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_175",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_176",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_177",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_178",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_179",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_180",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_181",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_182",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_183",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_184",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_185",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_186",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_187",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_188",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_189",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_190",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_191",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_192",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_193",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_194",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_195",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_196",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_197",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_198",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_199",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_200",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_201",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_202",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_203",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_204",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_205",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_206",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_207",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "low",
+    "description": "Simulated money bug for hrtech scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_208",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_209",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_210",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_211",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "low",
+    "description": "Simulated money bug for hrtech scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_212",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_213",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_214",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_215",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_216",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_217",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_218",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_219",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_220",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_221",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_222",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_223",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_224",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_225",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for hrtech scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_226",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for hrtech scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_227",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_228",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_229",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_230",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "high",
+    "description": "Simulated money bug for hrtech scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_231",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_232",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_233",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_234",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_235",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_236",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "low",
+    "description": "Simulated money bug for hrtech scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_237",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_238",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_239",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_240",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_241",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "high",
+    "description": "Simulated money bug for hrtech scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_242",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_243",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_244",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_245",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_246",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_247",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_248",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_249",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_250",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_251",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_252",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_253",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_254",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_255",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated permission bug for hrtech scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_256",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_257",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_258",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_259",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_260",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated money bug for hrtech scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_261",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_262",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_263",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_264",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_265",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_266",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_267",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_268",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_269",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "high",
+    "description": "Simulated money bug for hrtech scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_270",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated idempotency bug for hrtech scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_271",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for hrtech scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_272",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_273",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "low",
+    "description": "Simulated money bug for hrtech scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_274",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_275",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated permission bug for hrtech scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_276",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_277",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "high",
+    "description": "Simulated permission bug for hrtech scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_278",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_279",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_280",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_281",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_282",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for hrtech scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_283",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_284",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_285",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_286",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated concurrency bug for hrtech scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_287",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated state_break bug for hrtech scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_288",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_289",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for hrtech scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_290",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_291",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for hrtech scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_292",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "high",
+    "description": "Simulated state_break bug for hrtech scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_293",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "low",
+    "description": "Simulated idempotency bug for hrtech scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_294",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated state_break bug for hrtech scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_295",
+    "type": "state_break",
+    "title": "state_break issue in hrtech",
+    "severity": "low",
+    "description": "Simulated state_break bug for hrtech scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_296",
+    "type": "permission",
+    "title": "permission issue in hrtech",
+    "severity": "low",
+    "description": "Simulated permission bug for hrtech scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_297",
+    "type": "concurrency",
+    "title": "concurrency issue in hrtech",
+    "severity": "high",
+    "description": "Simulated concurrency bug for hrtech scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_298",
+    "type": "money",
+    "title": "money issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated money bug for hrtech scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "HRTECH_299",
+    "type": "idempotency",
+    "title": "idempotency issue in hrtech",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for hrtech scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

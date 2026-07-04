@@ -34,9 +34,10 @@ class ReasonerPolicy:
     max_hypothesis_chars: int = 500
     retry_delay_seconds: float = 2.0
     prompt_truncation_chars: dict[str, int] = field(default_factory=lambda: {
-        "prd_text": 2000, "api_schema": 3000,
-        "observed_data": 2000, "heuristic_findings": 2000,
-        "reader_json": 3000, "lifecycle_definition": 2000,
+        "prd_text": 45000, "api_schema": 50000, "observed_data": 12000,
+        "heuristic_findings": 12000, "reader_json": 20000, "lifecycle_definition": 12000,
+        "requirement_context": 45000, "api_context": 50000,
+        "database_context": 25000, "bug_history_context": 25000,
     })
 
     def __post_init__(self):

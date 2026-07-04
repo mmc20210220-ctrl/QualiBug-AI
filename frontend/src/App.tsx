@@ -9,8 +9,7 @@ import { BehaviorSpace } from './pages/BehaviorSpace';
 import { EnterpriseMaterials } from './pages/EnterpriseMaterials';
 import { ReleaseGate } from './pages/ReleaseGate';
 import { Settings } from './pages/Settings';
-
-const defaultProject = 'real_project_demo';
+import { Products } from './pages/Products';
 
 export default function App() {
   return (
@@ -19,7 +18,7 @@ export default function App() {
         <ScrollToTop />
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Navigate to={`/dashboard?project=${defaultProject}`} replace />} />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/findings" element={<Findings />} />
             <Route path="/evidence" element={<EvidenceChain />} />
@@ -27,6 +26,7 @@ export default function App() {
             <Route path="/materials" element={<EnterpriseMaterials />} />
             <Route path="/release" element={<ReleaseGate />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/products" element={<Products />} />
           </Route>
         </Routes>
       </BrowserRouter>

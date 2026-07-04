@@ -401,7 +401,7 @@ API Schema：
 已有启发式发现（不要重复）：
 {heuristic_findings}
 
-""" + REAL_BUG_EXAMPLES + """
+{REAL_BUG_EXAMPLES}
 
 ## 推理任务
 
@@ -476,7 +476,7 @@ PRD/需求：{prd_text}
 观测数据：{observed_data}
 已有启发式发现：{heuristic_findings}
 
-""" + REAL_BUG_EXAMPLES + """
+{REAL_BUG_EXAMPLES}
 
 ## 推理任务
 
@@ -499,103 +499,705 @@ PRD/需求：{prd_text}
 - 实际数据中是否已经出现了违反？
 - 如果没有观测数据 → 基于 Schema 推断，confidence ≤ 0.7
 
-## 输出
-- hypothesis_id: INV-NNN
-- rule_type: uniqueness | constraint | temporal | referential | semantic | filter
-- invariant: "在任何情况下都应成立的条件"
-- negative_space_source: "这个不变量是从哪条缺失的信息推断的"
-- cascade_impact: "如果这个不变量被违反，哪些下游实体会受影响" """
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "INV-NNN",
+      "rule_type": "uniqueness | constraint | temporal | referential | semantic | filter",
+      "severity": "P0 | P1 | P2",
+      "invariant": "在任何情况下都应成立的完整条件描述",
+      "title": "简明标题",
+      "why_this_matters": "为什么不变量违反严重",
+      "source_entity": "不变量涉及的实体",
+      "target_entity": "受影响的下游实体",
+      "expected_behavior": "不变量成立时的行为",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "invariant_statement": "不变量描述",
+        "validation_query": "验证查询的方法",
+        "expected_result": "不变量成立时的期望结果"
+      }},
+      "negative_space_source": "这个不变量是从哪条缺失的信息推断的",
+      "cascade_check": "不变量违反 → 下游影响1 → 下游影响2",
+      "adversarial_angle": "攻击者如何利用不变量违反",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
 
 
 # ===========================================================================
 # RSN3-11: 其余引擎（精简模板，但均遵循 v3 结构）
 # ===========================================================================
 
-REASONER_RECONCILIATION_PROMPT = """跨视图一致性分析。
+REASONER_RECONCILIATION_PROMPT = """跨视图一致性分析 — 发现同一实体在不同视图中的数据矛盾。
 
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 主视图：{primary_view}
 辅助视图：{secondary_view}
 Schema：{schema_context}
 已有发现：{heuristic_findings}
 
-重点：
-- 数值字段精确对比（金额 ≥ 0.01 差异 = P0）
-- 状态字段值对比
-- 级联：不一致 → 下游报表错误 → 对账不平
-- 负面空间：文档是否声明了两个视图应该一致？"""
+## 分析步骤
 
-REASONER_COUNTEREXAMPLE_PROMPT = """反例发现。
+### 1. 字段对齐
+逐字段列出两个视图中含义相同的字段。例如：
+- 主视图 `order.total_amount` ↔ 辅助视图 `payment.amount`
+- 主视图 `order.status` ↔ 辅助视图 `order_state`
 
+### 2. 数值精确对比
+对每个对齐的数值字段：
+- 金额类字段：差异 ≥ 0.01 即为 P0 级别问题
+- 数量类字段：差异 ≥ 1 即为 P1 级别问题
+- 检查 NULL vs 非 NULL（主视图有值但辅助视图为 NULL 或反之）
+
+### 3. 状态字段对比
+- 列出两个视图中状态字段的所有可能值
+- 检查是否存在主视图状态无法映射到辅助视图状态的情况
+- 检查是否存在状态冲突（如主视图 "completed" 但辅助视图 "pending"）
+
+### 4. 对抗视角
+- 如果我在主视图修改数据，辅助视图会同步更新吗？如果不同步，我怎么利用这个时间窗口？
+- 如果两个视图访问的是不同的数据库/缓存，是否存在最终一致性的延迟漏洞？
+
+### 5. 级联追踪
+不一致 → 下游报表基于错误数据 → 对账不平 → 财务/库存错误决策
+对每个发现的不一致，追踪至少 2 级下游影响。
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "RECON-NNN",
+      "rule_type": "reconciliation",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么这个不一致是严重的",
+      "source_entity": "主视图实体名",
+      "target_entity": "辅助视图实体名",
+      "expected_behavior": "两个视图应该一致的具体描述",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "step1": "GET 主视图端点",
+        "step2": "GET 辅助视图端点",
+        "step3": "逐字段对比",
+        "diff_threshold": "金额差异阈值"
+      }},
+      "cascade_check": "不一致 → 下游影响1 → 下游影响2",
+      "adversarial_angle": "攻击者如何利用这个不一致",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_COUNTEREXAMPLE_PROMPT = """反例发现 — 通过变换输入参数找到系统行为的矛盾点。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 端点 A：{resource_a}
 端点 B：{resource_b}
 关系：{relationship_context}
 已有发现：{heuristic_findings}
 
-重点：
-- 对抗视角：换身份、换参数、换顺序 → 结果是否一致？
-- 级联：A 和 B 的矛盾 → 用户看到错误数据 → 错误决策"""
+## 分析步骤
 
-REASONER_SAGA_PROMPT = """Saga 补偿分析。
+### 1. 身份变换
+- 端点 A 用 admin 调用，端点 B 用 viewer 调用 → 结果是否产生矛盾？
+- 端点 A 用租户 X 调用，端点 B 用租户 Y 调用（尝试越权）
+- 端点 A 不提供认证 → 是否仍能访问？
 
+### 2. 参数变换
+列出端点 A 和端点 B 的所有参数，逐一尝试：
+- 空值 / null / undefined
+- 超长字符串（10000字符）
+- 特殊字符（SQL注入、XSS payload）
+- 负数（对于应为正数的字段）
+- 零值（对于金额/数量字段）
+- 超限值（超过数据库字段长度/范围）
+
+### 3. 顺序变换
+- A→B 的正常顺序 vs B→A 的反向顺序 → 结果一致吗？
+- 并发 A+B vs 串行 A+B → 结果一致吗？
+- A 的中间状态是否被 B 观察到？
+
+### 4. 对抗视角
+- 如果我是一个恶意用户，我怎么组合 A 和 B 来：
+  - 获得不应该有的权限？
+  - 修改不应该修改的数据？
+  - 绕过业务规则的限制？
+
+### 5. 级联追踪
+A 的异常输出 → 如何影响调用 B 的结果？追踪至少 2 级。
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "COUNTER-NNN",
+      "rule_type": "counterexample",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么这个矛盾是严重的",
+      "source_entity": "端点A涉及的实体",
+      "target_entity": "端点B涉及的实体",
+      "expected_behavior": "两个端点应该一致的具体描述",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "step1": "端点A的调用方式和参数",
+        "step2": "端点B的调用方式和参数",
+        "step3": "如何检测矛盾",
+        "counterexample_params": {{}}
+      }},
+      "cascade_check": "矛盾 → 下游影响1 → 下游影响2",
+      "adversarial_angle": "攻击者如何利用这个矛盾",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_SAGA_PROMPT = """Saga 补偿分析 — 发现分布式事务中缺失的补偿操作。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 事件链：{event_chain}
 上下文：{business_context}
 已有发现：{heuristic_findings}
 
-重点：
-- 负面空间：每个步骤是否有对应的补偿操作？没说 = 可能缺失
-- 级联：步骤3失败 → 步骤1,2 未回滚 → 数据不一致"""
+## 分析步骤
 
-REASONER_CONSISTENCY_PROMPT = """隔离一致性分析。
+### 1. 步骤矩阵
+列出事件链中每一个步骤：
+- 步骤名称、调用的API、修改的数据
+- 该步骤的成功结果和失败结果
+- 该步骤是否有幂等性保证
 
+### 2. 补偿操作推导
+对每个步骤，检查其逆向操作（补偿）是否定义：
+- 步骤1：创建订单 → 补偿：取消订单/回滚库存
+- 步骤2：扣减库存 → 补偿：恢复库存
+- 步骤3：创建支付 → 补偿：退款
+- 步骤4：发送通知 → 补偿：发送取消通知
+
+文档中没有提到补偿操作 = 潜在的 P0 问题。
+
+### 3. 失败传播分析
+对事件链中的每一步，模拟该步失败时的场景：
+- 步骤N 失败 → 步骤 N-1, N-2, ... 步骤 1 是否被回滚？
+- 哪些数据在失败后处于不一致状态？
+- 失败操作是否可以重试？重试是否安全（幂等）？
+
+### 4. 对抗视角
+- 在步骤 2 成功后、步骤 3 之前，如果我取消订单 → 库存是否恢复？
+- 在支付超时的情况下，我是否能多次点击导致重复扣款？
+- 补偿操作本身是否可能失败？补偿失败的处理是什么？
+
+### 5. 级联追踪
+步骤3失败 → 步骤1,2 的数据残留 → 这些残留数据如何影响后续业务流程
+追踪至少 3 级级联。
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "SAGA-NNN",
+      "rule_type": "saga_compensation",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么补偿缺失是严重的",
+      "source_entity": "saga起始实体",
+      "target_entity": "saga涉及的实体列表",
+      "expected_behavior": "正确的补偿行为描述",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "saga_steps": ["步骤1", "步骤2", "步骤3"],
+        "failure_point": "在第N步模拟失败",
+        "expected_compensation": ["应执行的补偿1", "应执行的补偿2"],
+        "check_after_failure": "检查哪些数据应被回滚"
+      }},
+      "cascade_check": "失败 → 数据残留 → 下游影响1 → 下游影响2",
+      "adversarial_angle": "攻击者如何在特定时间窗口利用补偿缺失",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_CONSISTENCY_PROMPT = """隔离一致性分析 — 发现多租户/多用户之间的数据隔离漏洞。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 租户：{tenant_context}
 模型：{model_comparison}
 已有发现：{heuristic_findings}
 
-重点：
-- 对抗视角：租户A尝试访问租户B的数据的所有可能方式
-- 级联：隔离失效 → 数据泄露 → 合规事故"""
+## 分析步骤
 
-REASONER_EVENT_CHAIN_PROMPT = """事件链分析。
+### 1. 租户隔离矩阵
+列出所有涉及租户/组织的 API 端点，标注：
+- 端点路径和 HTTP 方法
+- 是否包含 tenant_id 参数
+- 是否进行租户归属校验
+- 读操作还是写操作
 
+### 2. 常见隔离漏洞模式
+逐一检查以下攻击模式：
+- **URL 参数篡改**：修改 URL 中的 tenant_id / org_id / project_id
+- **Body 参数注入**：在请求体中注入其他租户的 ID
+- **JWT/Token 伪造**：修改 Token 中的租户声明
+- **缓存投毒**：利用共享缓存访问其他租户数据
+- **批量操作越权**：批量接口是否校验每一条记录的归属
+- **导出/下载越权**：报表导出是否限制租户范围
+- **Websocket/SSE 跨租户**：实时推送是否包含其他租户的数据
+
+### 3. 对抗视角
+- 我是租户 A 的管理员，我能以租户 B 的身份创建资源吗？
+- 我上传的文件是否会被租户 B 看到（通过预测文件 ID）？
+- 我能否通过修改查询参数获取其他租户的统计/聚合数据？
+
+### 4. 级联追踪
+隔离失效 → 数据泄露 → 合规事故（GDPR/等保）→ 客户信任崩溃
+对每个发现的隔离漏洞，列出至少 3 级级联影响。
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "CONSIS-NNN",
+      "rule_type": "tenant_isolation | data_isolation",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么隔离失效是严重的",
+      "source_entity": "源租户/用户",
+      "target_entity": "目标租户/用户的数据",
+      "expected_behavior": "正确的隔离行为描述",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "step1": "作为租户A调用端点（记录结果）",
+        "step2": "修改请求参数为租户B的ID",
+        "step3": "作为租户A再次调用（如看到租户B数据→BUG）",
+        "bypass_method": "URL篡改 | Body注入 | Token伪造 | 缓存投毒"
+      }},
+      "cascade_check": "隔离失效 → 数据泄露 → 合规事故 → 信任崩溃",
+      "adversarial_angle": "攻击者如何系统性地获取其他租户数据",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_EVENT_CHAIN_PROMPT = """事件链分析 — 发现异步事件处理中的丢失、重复、乱序。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 事件：{events}
 Schema：{schema_context}
 已有发现：{heuristic_findings}
 
-重点：重复、乱序、缺失、死信、毒丸 + 级联影响"""
+## 分析步骤
 
-REASONER_POPULATION_PROMPT = """容量约束分析。
+### 1. 事件溯源
+列出所有产生事件的端点（生产者）和消费事件的端点（消费者）：
+- 生产者端点 → 产生什么事件 → 事件包含哪些关键字段
+- 消费者端点 → 消费什么事件 → 消费后产生什么副作用
 
+### 2. 完整性检查
+逐一检查以下故障模式：
+- **事件丢失**：生产者成功但消费者从未收到（确认机制缺失？）
+- **事件重复**：同一事件被消费多次（幂等性缺失？去重键缺失？）
+- **事件乱序**：事件 B 在事件 A 之前被消费（顺序依赖？时间戳缺失？）
+- **死信**：消费失败的事件去了哪里？是否有死信队列和重试？
+- **毒丸**：格式错误的事件是否导致整个消费链路中断？
+
+### 3. 时间语义检查
+- 事件的时间戳来自生产者还是消费者？是否存在时钟偏差？
+- 事件的 TTL 是多少？超时后事件是否丢失？
+- 是否存在事件的因果依赖（事件 A 必须在事件 B 之前处理）？
+
+### 4. 对抗视角
+- 我能否发送格式错误的事件导致消费者崩溃？
+- 我能否发送超大量事件导致队列溢出（DoS）？
+- 我能否伪造事件的 source_id 冒充其他服务的事件？
+
+### 5. 级联追踪
+事件丢失 → 状态不同步 → 用户看到过期数据 → 错误操作 → 数据损坏
+对每个事件问题，追踪至少 3 级级联。
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "EVENT-NNN",
+      "rule_type": "event_loss | event_duplicate | event_order | dead_letter",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么事件问题严重",
+      "source_entity": "生产者实体/端点",
+      "target_entity": "消费者实体/端点",
+      "expected_behavior": "正确的事件处理行为",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "producer_endpoint": "产生事件的端点",
+        "consumer_check": "检查消费端状态的方法",
+        "idempotency_check": "如何验证去重是否生效",
+        "ordering_check": "如何验证顺序是否正确"
+      }},
+      "cascade_check": "事件异常 → 状态不同步 → 错误数据 → 级联影响",
+      "adversarial_angle": "攻击者如何利用事件机制弱点",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_POPULATION_PROMPT = """容量约束分析 — 发现资源超限、溢出、唯一性违反。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 约束：{constraints}
 数据：{observed_data}
 已有发现：{heuristic_findings}
 
-重点：容量溢出、唯一性、基数、范围、频率 + 负面空间"""
+## 分析步骤
 
-REASONER_OUTCOME_PROMPT = """结果验证分析。
+### 1. 约束清单
+从文档和 Schema 中提取所有显式和隐式约束：
+- **范围约束**：金额 ≥ 0、数量 ≤ MAX、年龄 0-150
+- **唯一性约束**：username 唯一、order_id 唯一、email + tenant 联合唯一
+- **基数约束**：一个订单最多 N 个商品、一个用户最多 M 个地址
+- **频率约束**：每分钟最多 N 次请求、每天最多 M 次操作
+- **外键约束**：order.user_id 必须在 users 表中存在
 
+### 2. 边界值测试
+对每个约束，生成边界值测试：
+- min - 1（负金额？）
+- max + 1（超限数量？）
+- 空集（空列表、NULL 外键）
+- 重复值（相同唯一键的第二次插入）
+
+### 3. 容量溢出检查
+- 整数字段：如果类型是 INT(11)，最大值 2,147,483,647 → 超限后溢出还是报错？
+- 字符串字段：VARCHAR(255) → 256 个字符插入是截断还是报错？
+- 列表字段：是否有最大元素数限制？没有限制 → 可被利用做 DoS
+- 文件上传：是否有大小限制？没有 → 可上传超大文件耗尽存储
+
+### 4. 对抗视角
+- 我能否通过并发请求绕过唯一性约束（竞态条件）？
+- 我能否传入极大值导致金额计算溢出（INT_MAX + 1）？
+- 我能否利用无上限的列表/数组导致 OOM？
+
+### 5. 级联追踪
+容量溢出 → 数据损坏 → 下游计算基于损坏数据 → 错误蔓延
+唯一性违反 → 重复记录 → 聚合计算错误 → 报表失真
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "POP-NNN",
+      "rule_type": "overflow | uniqueness_violation | cardinality | referential",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么这个约束违反严重",
+      "source_entity": "受约束的实体",
+      "target_entity": "受影响的下游实体",
+      "expected_behavior": "约束应有的行为",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "endpoint": "目标端点",
+        "boundary_value": "边界值",
+        "expected_response": "期望的响应",
+        "overflow_check": "超限后的行为验证"
+      }},
+      "cascade_check": "约束违反 → 数据异常 → 下游错误1 → 下游错误2",
+      "adversarial_angle": "攻击者如何利用约束缺失",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_OUTCOME_PROMPT = """结果验证分析 — 发现假成功、静默失败、部分执行。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 流程：{business_process}
 期望：{expected_outcomes}
 观测：{observed_results}
 已有发现：{heuristic_findings}
 
-重点：假成功、静默失败、部分执行、回滚缺失 + 级联"""
+## 分析步骤
 
-REASONER_METAMORPHIC_PROMPT = """变形关系分析。
+### 1. 结果对比矩阵
+对流程中的每个步骤：
+- 期望输出是什么？（从文档/PRD中提取）
+- 实际观测到的输出是什么？（从API响应中提取）
+- 差异点在哪里？
 
+### 2. 静默失败检测
+最危险的 Bug 类型——系统返回了 HTTP 200，但实际什么都没做：
+- API 返回 200 但数据未变更 → 检查前/后快照对比
+- API 返回 success=true 但实际数据与预期不符
+- API 返回了结果但缺少关键字段
+- 异步操作返回了任务 ID 但任务永远不完成
+
+### 3. 部分执行检测
+- 写操作声称成功，但只更新了部分字段
+- 批量操作声称全部成功，但部分记录未处理
+- 事务中某步骤静默跳过但不回滚前面的步骤
+
+### 4. 回滚检测
+- 某步骤失败后，前面步骤的副作用是否被撤销？
+- 回滚操作本身是否可能失败？失败后如何处理？
+
+### 5. 对抗视角
+- 如果我发送格式正确但语义错误的数据（如 order_id 不存在），API 返回什么？
+- 如果我并发调用同一接口，是否所有调用都返回 success 但数据不一致？
+- 如果我中断网络连接（模拟客户端超时），服务端状态是什么？
+
+### 6. 级联追踪
+假成功 → 调用方以为操作完成 → 基于错误假设做下一步操作 → 级联错误
+部分执行 → 数据半更新 → 后续操作看到不一致的中间状态
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "OUTCOME-NNN",
+      "rule_type": "silent_failure | partial_execution | false_success | rollback_missing",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么结果异常严重",
+      "source_entity": "操作的实体",
+      "target_entity": "受影响的下游实体",
+      "expected_behavior": "正确的行为",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "operation": "执行的操作",
+        "before_snapshot": "操作前的状态",
+        "after_check": "操作后如何验证结果",
+        "silence_check": "如何检测静默失败"
+      }},
+      "cascade_check": "假成功 → 错误假设 → 错误操作 → 数据损坏",
+      "adversarial_angle": "攻击者如何利用假成功/静默失败",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_METAMORPHIC_PROMPT = """变形关系分析 — 通过变换输入验证系统行为的一致性。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 关系：{relations}
 数据：{test_data}
 已有发现：{heuristic_findings}
 
-重点：排列、缩放、加法、过滤、补集"""
+## 分析步骤
 
-REASONER_TEMPORAL_PROMPT = """时序回归分析。
+### 1. 排列变换
+改变输入参数的顺序，验证输出是否一致：
+- 列表接口：改变排序参数 → 总记录数应不变
+- 搜索接口：改变查询条件顺序 → 结果应不变 or 有确定的排序规则
 
+### 2. 缩放变换
+改变输入的规模，验证输出是否按预期缩放：
+- 分页接口：page_size=10 vs page_size=100 → 总记录数应相同
+- 金额接口：金额=1.00 vs 金额=100.00 → 结果应与金额成正比（如税率计算）
+
+### 3. 加法变换
+添加额外元素到输入，验证输出变化是否符合预期：
+- 列表查询：添加不存在的 filter → 结果应为空，不应报错
+- 创建接口：添加额外字段 → 应忽略 or 报错，不应静默接受
+
+### 4. 过滤变换
+对输入应用不同过滤条件，验证结果关系：
+- 宽条件 vs 窄条件 → 窄条件结果应是宽条件的子集
+- 相等条件 vs 范围条件 → 结果应重合
+
+### 5. 补集变换
+- 全集 - 过滤结果 = 补集结果的并集
+- 正查询 vs 反查询（如 status=active vs status!=active）→ 并集应为全集
+
+### 6. 对抗视角
+- 如果我构造极大的分页参数，系统是否 OOM？
+- 如果我传入矛盾的条件组合（如 min > max），系统如何响应？
+- 如果我传入 0 或空集，系统如何响应？
+
+### 7. 级联追踪
+分页异常 → 部分数据未被处理 → 下游分析不完整 → 错误结论
+排序异常 → 用户看到错误顺序 → 错误操作 → 数据不一致
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "META-NNN",
+      "rule_type": "permutation | scaling | addition | filtering | complement",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么变形关系违反严重",
+      "source_entity": "输入实体",
+      "target_entity": "受影响的下游",
+      "expected_behavior": "变形关系应该成立的行为",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "base_input": "基准输入",
+        "transformed_input": "变换后的输入",
+        "expected_relation": "期望的输入-输出关系",
+        "check_method": "如何验证变形关系"
+      }},
+      "cascade_check": "变形失败 → 数据处理异常 → 下游影响",
+      "adversarial_angle": "攻击者如何利用变形关系违反",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
+
+REASONER_TEMPORAL_PROMPT = """时序回归分析 — 发现数据随时间变化的不一致和丢失。
+
+{REAL_BUG_EXAMPLES}
+
+## 上下文
 T1：{snapshot_t1}
 T2：{snapshot_t2}
 Schema：{schema_context}
 已有发现：{heuristic_findings}
 
-重点：不可变字段变化、追溯修改、计算漂移、审计缺失 + 级联"""
+## 分析步骤
+
+### 1. 快照差异对比
+逐字段对比 T1 和 T2 的数据：
+- T1 存在但 T2 消失的字段 → 数据丢失
+- T1 不存在但 T2 出现的字段 → 新增数据（是否符合预期？）
+- T1 和 T2 都有但值变化的字段 → 变化的合理性
+
+### 2. 不可变字段检测
+识别应为不可变的字段（ID、创建时间、创建者），检查是否被修改：
+- `created_at` / `create_time` — 任何时候不应变化
+- `id` / `uuid` — 任何时候不应变化
+- `created_by` / `creator_id` — 任何时候不应变化
+- `version` / `revision` — 只能递增，不能回退
+
+### 3. 追溯修改检测
+- 是否存在通过 API 修改历史记录的能力？（如修改已完成的订单）
+- 修改操作是否有审计日志？日志是否完整？
+- 是否能检测到"先修改再改回"的隐蔽操作？
+
+### 4. 计算漂移检测
+- 聚合值（总计、平均值）是否随时间重新计算而变化？
+- 缓存值和实时值之间的漂移
+- 不同时间点的同一查询是否返回不同统计结果？
+
+### 5. 对抗视角
+- 我能否通过修改时间参数访问未来的数据？
+- 我能否修改 `created_at` 字段让一条新记录看起来像是旧记录？
+- 我能否通过时区参数绕过基于时间的访问控制？
+
+### 6. 级联追踪
+数据被追溯修改 → 审计日志不完整 → 合规审查失败 → 法律风险
+时间字段缺失 → 排序/分页异常 → 部分数据被遗漏 → 决策错误
+
+## 输出格式
+
+```json
+{{
+  "hypotheses": [
+    {{
+      "hypothesis_id": "TEMP-NNN",
+      "rule_type": "immutable_change | retroactive_edit | compute_drift | audit_missing",
+      "severity": "P0 | P1 | P2",
+      "title": "简明标题",
+      "why_this_matters": "为什么时序问题严重",
+      "source_entity": "时间T1的实体",
+      "target_entity": "时间T2的实体",
+      "expected_behavior": "正确的时序行为",
+      "symptoms_if_broken": ["症状1", "症状2"],
+      "verification_method": {{
+        "t1_endpoint": "T1时调用的端点（记录快照）",
+        "t2_endpoint": "T2时调用的端点（对比快照）",
+        "immutable_fields": ["应不变的字段列表"],
+        "drift_check": "如何检测计算漂移"
+      }},
+      "cascade_check": "时序异常 → 数据不一致 → 下游错误 → 级联影响",
+      "adversarial_angle": "攻击者如何利用时序漏洞",
+      "similar_known_bugs": ["已知类似Bug"],
+      "confidence": 0.0-1.0,
+      "false_positive_risk": "误报场景",
+      "priority": 1-5,
+      "what_happens_if_ignored": "不修会怎样"
+    }}
+  ]
+}}
+```"""
 
 
 # ===========================================================================

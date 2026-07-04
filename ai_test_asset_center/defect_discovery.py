@@ -683,12 +683,19 @@ def build_execution_readiness_plan(model: dict, scenario_coverage: dict, probes:
             }
         )
     gaps = build_testability_gaps(requirements)
+    # Hard blockers: cannot produce reliable evidence without real data sources
+    hard_blockers = [g for g in gaps if g["gap_type"] in (
+        "database_checkpoint_template", "external_dependency_stub",
+        "missing_account_role", "missing_tenant_account",
+    )]
     return {
         "mode": "auto_inferred_from_single_input",
         "manual_test_data_design_required": False,
         "account_pool_summary": {"roles": roles, "tenants": tenants, "account_count": len(account_items)},
         "test_data_requirements": requirements,
         "testability_gaps": gaps,
+        "hard_blockers": hard_blockers,  # Must be resolved before execution
+        "hard_blocker_count": len(hard_blockers),
         "execution_readiness_plan": {
             "scenario_count": len(requirements),
             "auto_preparable_scenarios": sum(1 for item in requirements if item["automation_status"] == "auto_preparable"),
@@ -818,7 +825,7 @@ def simple_database_actions(gaps: list[dict], requirements: list[dict]) -> list[
             "what_to_fill": "提供一个测试、开发或验收环境的只读连接；如果企业不允许连数据库，可选择接口或报表兜底校验",
             "why": "金额、库存、状态和租户一致性问题，如果能和持久化数据交叉校验，发现结果会更可靠。",
             "example": {"环境": "测试环境", "权限": "只读", "资源": resources[:8]},
-            "required": False,
+            "required": True,  # Without real DB, deep consistency checks are impossible
         }
     ]
 
@@ -3849,12 +3856,9 @@ def execute_feedback_learning_probe(client: HttpClient, tokens: dict[str, str], 
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid == "AUTH_LOCKED_USER_BYPASS":
-        request_body = {"username": "locked_user", "password": "Locked123!"}
+        request_body = {"username": os.environ.get("QUALIBUG_TEST_LOCKED_USER", "locked_user"),
+                        "password": os.environ.get("QUALIBUG_TEST_LOCKED_PASS", "")}
         evidence_response = req("POST", "/login", None, request_body)
-        failed = evidence_response["status_code"] < 400
-        actual = evidence_response["status_code"]
-    elif tid == "AUTH_VERTICAL_BYPASS":
-        evidence_response = req("GET", "/admin/orders", token)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid == "AUTH_USER_WRITE_ADMIN":
@@ -4010,7 +4014,8 @@ def execute_pattern_library_probe(client: HttpClient, tokens: dict[str, str], it
         return client.request(method, path, token=tok, body=body)
 
     if pid == "PATTERN_LOCKED_ACCOUNT_LOGIN":
-        request_body = {"username": "locked_user", "password": "Locked123!"}
+        request_body = {"username": os.environ.get("QUALIBUG_TEST_LOCKED_USER", "locked_user"),
+                        "password": os.environ.get("QUALIBUG_TEST_LOCKED_PASS", "")}
         evidence_response = req("POST", "/login", None, request_body)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
@@ -4512,7 +4517,8 @@ def body_for_probe(item: dict) -> dict:
     if "ADMIN_WRITE" in pid or "ADMIN_ADMIN_WRITE" in pid or "ANON_ADMIN_WRITE" in pid or "USER_WRITE_ADMIN" in pid:
         return {"stock": 999}
     if "LOCKED_LOGIN" in pid:
-        return {"username": "locked_user", "password": "Locked123!"}
+        return {"username": os.environ.get("QUALIBUG_TEST_LOCKED_USER", "locked_user"),
+                "password": os.environ.get("QUALIBUG_TEST_LOCKED_PASS", "")}
     if "IDOR_CREATE" in pid or "IDOR_POST_ORDER" in pid:
         return {"product_id": "p200", "quantity": 1, "tenant_id": "tenant_b", "owner": "bob"}
     if "STOCK_OVERSELL" in pid:

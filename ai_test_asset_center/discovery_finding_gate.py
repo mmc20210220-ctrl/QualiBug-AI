@@ -346,7 +346,7 @@ class RuntimeEvidenceGate:
 
     @staticmethod
     def check(contract: dict[str, Any]) -> tuple[str, list[str]]:
-        """Check runtime evidence traceability.
+        """Check runtime evidence traceability AND data authenticity.
 
         Returns (status, reasons) where status is from RUNTIME_GATE_STATUS.
         """
@@ -367,10 +367,97 @@ class RuntimeEvidenceGate:
             untraceable = 0
             for c in calls:
                 admin = c.get("results", {}).get("admin", {})
-                if not admin.get("status") and not admin.get("body"):
+                # "status" key absent → truly untraceable (0 is a valid status: connection failure)
+                if "status" not in admin and "body" not in admin:
                     untraceable += 1
             if untraceable == len(calls):
                 return "FAILED_UNTRACEABLE", [f"All {len(calls)} calls have no admin status/body"]
+
+            # ── NEW: Synthetic/unresolved ID detection ──
+            synthetic_count = 0
+            for c in calls:
+                call_path = c.get("path", "") or c.get("call", "")
+                if "QUALIBUG_UNRESOLVED_ID" in call_path:
+                    synthetic_count += 1
+            if synthetic_count == len(calls):
+                reasons.append(f"All {len(calls)} calls use synthetic IDs (QUALIBUG_UNRESOLVED_ID)")
+
+            # ── NEW: HTTP status code validity ──
+            all_404 = True
+            all_0 = True
+            total_checked = 0
+            status_counts = {}
+            for c in calls:
+                for role in ("admin", "viewer", "no_auth"):
+                    role_data = c.get("results", {}).get(role)
+                    if not isinstance(role_data, dict):
+                        continue  # skip non-existent roles
+                    status = role_data.get("status", 0)
+                    total_checked += 1
+                    status_counts[status] = status_counts.get(status, 0) + 1
+                    if status != 404:
+                        all_404 = False
+                    if status != 0:
+                        all_0 = False
+            if all_404 and total_checked > 0:
+                reasons.append(f"All {total_checked} HTTP responses were 404 — target endpoints may not exist")
+            if all_0 and total_checked > 0:
+                reasons.append(f"All {total_checked} HTTP calls failed with status 0 — network or auth issue")
+
+            # ── NEW: Response body structure validity ──
+            empty_bodies = 0
+            total_role_results = 0
+            for c in calls:
+                for role in ("admin", "viewer", "no_auth"):
+                    role_data = c.get("results", {}).get(role)
+                    if not isinstance(role_data, dict):
+                        continue
+                    total_role_results += 1
+                    body = role_data.get("body", {})
+                    if isinstance(body, dict) and len(body) == 0:
+                        empty_bodies += 1
+                    elif body is None:
+                        empty_bodies += 1
+            if total_role_results > 0 and empty_bodies == total_role_results:
+                reasons.append(f"All {total_role_results} role results have empty response bodies")
+
+            # ── NEW: Cross-verification — at least one call should carry a request snapshot ──
+            has_request_snapshot = False
+            for c in calls:
+                for role in ("admin", "viewer", "no_auth"):
+                    role_data = c.get("results", {}).get(role)
+                    if not isinstance(role_data, dict):
+                        continue
+                    req = role_data.get("_request", {})
+                    if isinstance(req, dict) and req.get("url"):
+                        has_request_snapshot = True
+                        break
+                if has_request_snapshot:
+                    break
+
+            if not has_request_snapshot:
+                reasons.append("No request snapshots (_request.url) — evidence not independently reproducible")
+            else:
+                # Count how many calls have snapshots for quality scoring
+                snapshot_count = sum(1 for c in calls
+                    if any(isinstance(c.get("results", {}).get(r, {}).get("_request", {}), dict)
+                           and c["results"][r]["_request"].get("url")
+                           for r in ("admin", "viewer", "no_auth")
+                           if isinstance(c.get("results", {}).get(r), dict)))
+                if snapshot_count < len(calls) * 0.5:
+                    reasons.append(f"Only {snapshot_count}/{len(calls)} calls have request snapshots — evidence partially reproducible")
+
+            # ── NEW: Evidence quality scoring ──
+            # Auto-downgrade when too many red flags accumulate
+            quality_red_flags = sum([
+                1 if synthetic_count == len(calls) else 0,
+                1 if all_404 else 0,
+                1 if all_0 else 0,
+                1 if empty_bodies == total_role_results else 0,
+                1 if not has_request_snapshot else 0,
+            ])
+            if quality_red_flags >= 3:
+                reasons.append(f"Evidence quality critically low ({quality_red_flags}/5 red flags)")
 
         # ── Stage_verify trace exists ──
         semantic_ref = evidence.get("semantic_evidence_ref") or evidence.get("verifier_trace_ref", "")
@@ -382,17 +469,27 @@ class RuntimeEvidenceGate:
         entity_binding = evidence.get("entity_binding") or {}
         if isinstance(entity_binding, dict):
             tenant = str(entity_binding.get("tenant_id", ""))
-            project = str(contract.get("project_id", ""))
-            # Single-tenant is always ok; cross-tenant is blocked
-            # (but not for single-tenant MES)
+            # Single-tenant is ok
 
         # ── Key IDs or structured missing ──
         missing = evidence.get("missing_requirements") or []
         if isinstance(missing, list) and missing:
-            # Having structured missing requirements is OK — they're honest
             pass
 
         if reasons:
+            # Use FAILED_LOW_EVIDENCE_QUALITY when quality checks dominate,
+            # keep FAILED_UNTRACEABLE for structural traceability issues
+            quality_indicators = any(
+                phrase in " ".join(reasons).lower()
+                for phrase in ("synthetic", "404", "failed with status 0",
+                              "empty response", "request snapshots",
+                              "red flags")
+            )
+            if quality_indicators and not (
+                "No probe calls" in " ".join(reasons)
+                or "All " in " ".join(reasons) and "no admin status" in " ".join(reasons)
+            ):
+                return "FAILED_LOW_EVIDENCE_QUALITY", reasons
             return "FAILED_UNTRACEABLE", reasons
 
         return "PASSED", []

@@ -1,0 +1,10 @@
+- [x] 真实 Bug 正式计数只包含同时满足严格 verifier、可复现步骤、完整 evidence refs 的发现
+- [x] 所有汇总与报表都明确区分 `candidate`、`pending finding`、`validated bug`
+- [x] discovery rate 默认基于 `validated bug` 口径计算，不再用候选量或待确认发现量替代
+- [x] 系统能输出候选生成、Probe 选入、实际执行、验证通过、正式记账五阶段漏斗指标
+- [x] 低发现率或 0 发现结果附带明确阻断原因，而不是只返回空结论
+- [x] Probe 预算选择逻辑能证明优先提升真实 Bug 产出率，而不是只放大候选规模
+- [x] 缺失 verifier、repro 或 evidence 的结果会自动降级，不能混入正式 Bug 统计
+- [x] benchmark 回归结果同时展示真实 Bug 数、发现率、复现成功率、证据完整率
+- [x] benchmark suite 汇总显式给出至少一个代表性 benchmark 的 funnel before/after 对比字段，能说明 legacy 口径与 strict validated 口径差异并暴露剩余瓶颈
+- [x] 自动化测试或回归检查覆盖严格计数、阶段漏斗、报表口径，并直接断言 discovery_accounting 的严格降级规则

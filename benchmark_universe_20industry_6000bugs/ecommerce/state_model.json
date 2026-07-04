@@ -1,0 +1,10 @@
+{
+  "industry": "ecommerce",
+  "states": [
+    "created",
+    "paid",
+    "shipped",
+    "completed",
+    "cancelled"
+  ]
+}

@@ -1,4 +1,6 @@
 import type { Finding } from '../types';
+import { getEvidenceSummaryText } from '../lib/evidence';
+import { formatBeijingDateTime } from '../lib/time';
 
 /** Map common English boilerplate to readable Chinese */
 function toChinese(text: string): string {
@@ -58,7 +60,7 @@ export function buildReportData(summary: {
 }): ReportData {
   return {
     projectName: summary.projectName,
-    generatedAt: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+    generatedAt: formatBeijingDateTime(new Date()),
     beiScore: summary.beiScore,
     bdsScore: summary.bdsScore,
     bcsScore: summary.bcsScore,
@@ -74,23 +76,24 @@ export function buildReportData(summary: {
       title: f.title,
       expected: toChinese(f.expected),
       actual: toChinese(f.actual),
-      evidence: f.proof?.hash || f.proof?.script_path || '',
+      evidence: getEvidenceSummaryText(f),
     })),
     dbFindings: summary.dbFindings || [],
   };
 }
 
 export function renderReportHTML(d: ReportData): string {
-  const getBEIColor = (s: number) => s >= 80 ? '#0ea571' : s >= 60 ? '#d97706' : '#e02449';
-  const getBEILabel = (s: number) => s >= 80 ? '良好' : s >= 60 ? '一般' : '需关注';
-  const sevStyle = (s: string) => s === 'P0' ? 'color:#e02449;background:#fff1f2' : s === 'P1' ? 'color:#d97706;background:#fffbeb' : 'color:#5865f2;background:#eef2ff';
+  const getBEILabel = (s: number) => s >= 80 ? '稳健' : s >= 60 ? '关注' : '优先治理';
+  const getScoreTone = (s: number) => s >= 80 ? 'tone-success' : s >= 60 ? 'tone-warning' : 'tone-danger';
+  const getSeverityClass = (s: string) => s === 'P0' ? 'p0' : s === 'P1' ? 'p1' : 'p2';
+  const getMetricTone = (value?: string) => value || 'tone-ink';
 
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>QualiBug 行为风险评级报告 — ${d.projectName}</title>
+<title>QualiBug AI 风险评级报告 — ${d.projectName}</title>
 <style>
   :root {
     --ink: #0b1424; --muted: #64748b; --line: #e2e8f0;
@@ -104,8 +107,9 @@ export function renderReportHTML(d: ReportData): string {
   
   /* Cover */
   .cover{text-align:center;padding:48px 0 40px;border-bottom:2px solid var(--line);margin-bottom:36px}
-  .cover .logo{display:inline-flex;align-items:center;gap:8px;margin-bottom:20px}
+  .cover .logo{display:inline-flex;align-items:center;gap:10px;margin-bottom:20px}
   .cover .logo strong{font-size:22px;font-weight:800;letter-spacing:-.02em}
+  .cover .logo strong .ai{color:#2563eb}
   .cover .logo span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;font-weight:700}
   .cover h1{font-size:26px;font-weight:900;letter-spacing:-.02em;margin-bottom:8px}
   .cover .meta{color:var(--muted);font-size:13px}
@@ -115,11 +119,30 @@ export function renderReportHTML(d: ReportData): string {
   .score-card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:24px;text-align:center}
   .score-card .label{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
   .score-card .value{font-size:42px;font-weight:900;letter-spacing:-.03em}
+  .score-card .value span{font-size:16px;font-weight:600;color:var(--muted)}
   .score-card .sub{font-size:11px;color:var(--muted);margin-top:4px}
+  .tone-success{color:var(--success)}
+  .tone-warning{color:var(--warning)}
+  .tone-danger{color:var(--danger)}
+  .tone-primary{color:var(--primary)}
+  .tone-ink{color:var(--ink)}
   
   /* Section */
   .section{margin-bottom:32px}
   .section h2{font-size:18px;font-weight:800;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid var(--primary)}
+  .section-intro{font-size:12px;color:var(--muted);margin:-8px 0 14px}
+  .section-subtitle{font-size:13px;font-weight:700;color:var(--muted);margin:16px 0 8px}
+  .section-subtitle.spacing-top{margin-top:20px}
+  .summary-copy{font-size:11px;color:var(--muted);margin:-4px 0 10px}
+  .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .metric-card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px;text-align:center}
+  .metric-card.detail{padding:18px 16px;text-align:left}
+  .metric-value{font-size:24px;font-weight:900}
+  .metric-card.detail .metric-value{font-size:28px;margin-bottom:4px}
+  .metric-label{font-size:10px;color:var(--muted);font-weight:600;margin-top:2px}
+  .metric-card.detail .metric-label{font-size:12px;font-weight:700;color:var(--ink);margin:0 0 6px}
+  .metric-copy{font-size:10px;color:var(--muted);line-height:1.5}
+  .empty-state{text-align:center;color:var(--muted);padding:40px}
   
   /* Finding Item */
   .finding{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:12px;page-break-inside:avoid}
@@ -128,13 +151,18 @@ export function renderReportHTML(d: ReportData): string {
   .finding.p2{border-left:4px solid var(--primary)}
   .finding .head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
   .finding .sev{padding:3px 10px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.04em;white-space:nowrap}
+  .finding .sev.p0{color:var(--danger);background:#fff1f2}
+  .finding .sev.p1{color:var(--warning);background:#fffbeb}
+  .finding .sev.p2{color:var(--primary);background:#eef2ff}
   .finding .title{font-size:14px;font-weight:700;flex:1}
   .finding .body{font-size:12px;color:var(--muted)}
   .finding .body .row{display:flex;gap:24px;margin-top:8px}
   .finding .body .row>div{flex:1}
   .finding .body .row label{display:block;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+  .finding .body .row label.act-label{color:var(--danger)}
   .finding .body .row .exp{color:var(--ink)}
   .finding .body .row .act{color:var(--danger)}
+  .finding .evidence-note{margin-top:8px;font-size:11px;color:var(--muted)}
   
   /* DB Finding */
   .db-finding{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;margin-bottom:8px;font-size:12px;display:flex;gap:10px;align-items:flex-start}
@@ -157,91 +185,116 @@ export function renderReportHTML(d: ReportData): string {
   <!-- Cover -->
   <div class="cover">
     <div class="logo">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5865f2" stroke-width="2"><path d="M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Z"/></svg>
-      <div><strong>QualiBug</strong><span>行为风险终端</span></div>
+      <svg width="40" height="40" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="report-brand-outer" x1="16" y1="96" x2="100" y2="24" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#1D4ED8"/>
+            <stop offset="0.55" stop-color="#2563EB"/>
+            <stop offset="1" stop-color="#22D3EE"/>
+          </linearGradient>
+          <linearGradient id="report-brand-accent" x1="38" y1="88" x2="96" y2="42" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#2563EB"/>
+            <stop offset="1" stop-color="#2DD4BF"/>
+          </linearGradient>
+        </defs>
+        <path d="M85 29C77 21 66 17 54 17c-24.85 0-45 20.15-45 45s20.15 45 45 45c11.34 0 21.71-4.2 29.63-11.14" stroke="url(#report-brand-outer)" stroke-width="12" stroke-linecap="round"/>
+        <path d="M53 36c16.42 0 31.07 7.57 40.67 19.42L72 66.67" stroke="url(#report-brand-accent)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M72 66.67 94 91" stroke="url(#report-brand-accent)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="54" cy="60" r="22" stroke="#60A5FA" stroke-width="2.5" opacity="0.85"/>
+        <path d="M32 54c7-10 18.64-16 31-16 9.04 0 17.69 3.22 24.46 9.1" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" opacity="0.92"/>
+        <path d="M34 74c8 5.68 17.57 8.72 27.38 8.72 4.66 0 9.27-.69 13.68-2.07" stroke="#2563EB" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
+        <circle cx="34" cy="54" r="5.5" fill="#3B82F6"/>
+        <circle cx="48" cy="36" r="5.5" fill="#14B8A6"/>
+        <circle cx="85" cy="47" r="5.5" fill="#38BDF8"/>
+        <path d="M60 50c5.52 0 10 4.48 10 10v6c0 5.52-4.48 10-10 10s-10-4.48-10-10v-6c0-5.52 4.48-10 10-10Z" stroke="#1D4ED8" stroke-width="2.8"/>
+        <path d="M56 46.5 60 50l4-3.5" stroke="#1D4ED8" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M50 59h-6m6 8h-6m32-8h-6m6 8h-6M55 54l-4-4m18 4 4-4" stroke="#1D4ED8" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M54 56v14m12-14v14" stroke="#1D4ED8" stroke-width="2.2" stroke-linecap="round" opacity="0.6"/>
+      </svg>
+      <div><strong>QualiBug <span class="ai">AI</span></strong><span>风险决策台</span></div>
     </div>
-    <h1>${d.projectName} · 行为风险评级报告</h1>
+    <h1>${d.projectName} · 风险评级报告</h1>
     <p class="meta">生成时间：${d.generatedAt} · 行业：${d.industry}</p>
   </div>
 
   <!-- Scores -->
   <div class="scores">
     <div class="score-card">
-      <div class="label">BEI · 行为暴露指数</div>
-      <div class="value" style="color:${getBEIColor(d.beiScore)}">${d.beiScore}</div>
+      <div class="label">风险评级</div>
+      <div class="value ${getScoreTone(d.beiScore)}">${d.beiScore}</div>
       <div class="sub">${getBEILabel(d.beiScore)}</div>
     </div>
     <div class="score-card">
       <div class="label">缺陷密度</div>
-      <div class="value" style="color:var(--warning)">${d.bdsScore}<span style="font-size:16px;font-weight:600;color:var(--muted)"> 个</span></div>
+      <div class="value tone-warning">${d.bdsScore}<span> 个</span></div>
       <div class="sub">每千个行为路径中高危缺陷</div>
     </div>
     <div class="score-card">
       <div class="label">多源自洽度</div>
-      <div class="value" style="color:${d.bcsScore >= 80 ? 'var(--success)' : 'var(--warning)'}">${d.bcsScore}<span style="font-size:16px;font-weight:600;color:var(--muted)">%</span></div>
+      <div class="value ${d.bcsScore >= 80 ? 'tone-success' : 'tone-warning'}">${d.bcsScore}<span>%</span></div>
       <div class="sub">全部企业资料交叉验证一致率</div>
     </div>
   </div>
 
   <!-- Summary -->
   <div class="section">
-    <h2>📊 扫描摘要</h2>
+    <h2>扫描摘要</h2>
     
-    <h3 style="font-size:13px;font-weight:700;color:var(--muted);margin:16px 0 8px">风险严重度分布</h3>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+    <h3 class="section-subtitle">风险层级分布</h3>
+    <div class="metric-grid">
       ${[
-        {l:'风险发现',v:d.totalFindings},
-        {l:'P0 阻塞',v:d.p0Count,c:'var(--danger)'},
-        {l:'P1 高风险',v:d.p1Count,c:'var(--warning)'},
-        {l:'P2 提示',v:d.p2Count,c:'var(--primary)'},
-      ].map(m=>`<div style="background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px;text-align:center">
-        <div style="font-size:24px;font-weight:900;color:${m.c||'var(--ink)'}">${m.v}</div>
-        <div style="font-size:10px;color:var(--muted);font-weight:600;margin-top:2px">${m.l}</div>
+        {l:'风险发现',v:d.totalFindings,t:'tone-ink'},
+        {l:'P0 阻塞',v:d.p0Count,t:'tone-danger'},
+        {l:'P1 高风险',v:d.p1Count,t:'tone-warning'},
+        {l:'P2 提示',v:d.p2Count,t:'tone-primary'},
+      ].map(m=>`<div class="metric-card">
+        <div class="metric-value ${getMetricTone(m.t)}">${m.v}</div>
+        <div class="metric-label">${m.l}</div>
       </div>`).join('')}
     </div>
 
-    <h3 style="font-size:13px;font-weight:700;color:var(--muted);margin:20px 0 8px">验证方式</h3>
-    <p style="font-size:11px;color:var(--muted);margin:-4px 0 10px">QualiBug 通过多种方式交叉验证，确保发现可追溯、可复现</p>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+    <h3 class="section-subtitle spacing-top">验证方式</h3>
+    <p class="summary-copy">QualiBug AI 通过多种方式交叉验证，确保结论可追溯、可复现</p>
+    <div class="metric-grid">
       ${[
-        {l:'接口实时探测',v:d.runtimeProbes,sub:'对系统接口发起真实请求，验证实际行为'},
-        {l:'数据库直接检查',v:d.dbConfirmed,sub:'直连数据库，发现数据不一致、约束违反',c:d.dbConfirmed>0?'var(--danger)':'var(--success)'},
-        {l:'文档交叉验证',v:d.bcsScore+'%',sub:'对比 PRD、API 文档、数据库 Schema 三方一致性',c:d.bcsScore>=80?'var(--success)':'var(--warning)'},
-        {l:'静态规范扫描',v:d.findings.filter(f=>f.severity==='P3'||f.title.includes('operationId')||f.title.includes('spec')).length,sub:'扫描 OpenAPI 规范完整性、错误契约缺失'},
-      ].map(m=>`<div style="background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 16px">
-        <div style="font-size:28px;font-weight:900;color:${m.c||'var(--ink)'};margin-bottom:4px">${m.v}</div>
-        <div style="font-size:12px;font-weight:700;color:var(--ink);margin-bottom:6px">${m.l}</div>
-        <div style="font-size:10px;color:var(--muted);line-height:1.5">${m.sub}</div>
+        {l:'接口实时探测',v:d.runtimeProbes,sub:'对系统接口发起真实请求，验证实际行为',t:'tone-ink'},
+        {l:'数据库直接检查',v:d.dbConfirmed,sub:'直连数据库，发现数据不一致、约束违反',t:d.dbConfirmed>0?'tone-danger':'tone-success'},
+        {l:'文档交叉验证',v:d.bcsScore+'%',sub:'对比 PRD、API 文档、数据库 Schema 三方一致性',t:d.bcsScore>=80?'tone-success':'tone-warning'},
+        {l:'静态规范扫描',v:d.findings.filter(f=>f.title.includes('operationId')||f.title.includes('spec')).length,sub:'扫描 OpenAPI 规范完整性与错误契约缺失',t:'tone-ink'},
+      ].map(m=>`<div class="metric-card detail">
+        <div class="metric-value ${getMetricTone(m.t)}">${m.v}</div>
+        <div class="metric-label">${m.l}</div>
+        <div class="metric-copy">${m.sub}</div>
       </div>`).join('')}
     </div>
   </div>
 
   <!-- Findings -->
   <div class="section">
-    <h2>🔍 行为风险详情 (${d.findings.length < d.totalFindings ? `展示前 ${d.findings.length} 条，共 ${d.totalFindings} 条` : `共 ${d.totalFindings} 条`})</h2>
+    <h2>风险详情 (${d.findings.length < d.totalFindings ? `展示前 ${d.findings.length} 条，共 ${d.totalFindings} 条` : `共 ${d.totalFindings} 条`})</h2>
     ${d.findings.map(f=>`
-    <div class="finding ${f.severity.toLowerCase()}">
+    <div class="finding ${getSeverityClass(f.severity)}">
       <div class="head">
-        <span class="sev" style="${sevStyle(f.severity)}">${f.severity}</span>
+        <span class="sev ${getSeverityClass(f.severity)}">${f.severity}</span>
         <span class="title">${f.title}</span>
       </div>
       <div class="body">
         ${f.expected||f.actual?`
         <div class="row">
-          ${f.expected?`<div><label style="color:var(--muted)">预期行为</label><span class="exp">${f.expected.slice(0,150)}</span></div>`:''}
-          ${f.actual?`<div><label style="color:var(--danger)">实际行为</label><span class="act">${f.actual.slice(0,150)}</span></div>`:''}
+          ${f.expected?`<div><label>预期行为</label><span class="exp">${f.expected.slice(0,150)}</span></div>`:''}
+          ${f.actual?`<div><label class="act-label">实际行为</label><span class="act">${f.actual.slice(0,150)}</span></div>`:''}
         </div>`:''}
-        ${f.evidence?`<div style="margin-top:8px;font-family:monospace;font-size:10px;color:var(--muted)">📎 ${f.evidence}</div>`:''}
+        ${f.evidence?`<div class="evidence-note">证据说明：${f.evidence}</div>`:''}
       </div>
     </div>`).join('')}
-    ${d.findings.length === 0 ? '<p style="text-align:center;color:var(--muted);padding:40px">✅ 未检测到行为风险</p>' : ''}
+    ${d.findings.length === 0 ? '<p class="empty-state">当前未检测到行为风险</p>' : ''}
   </div>
 
   <!-- DB Findings -->
   ${d.dbFindings.length > 0 ? `
   <div class="section">
-    <h2>🗄️ 数据一致性隐患 (${d.dbFindings.length} 项)</h2>
-    <p style="font-size:12px;color:var(--muted);margin:-8px 0 14px">直接从数据库检测到的数据异常，如负库存、重复记录、引用失效等</p>
+    <h2>数据一致性隐患 (${d.dbFindings.length} 项)</h2>
+    <p class="section-intro">直接从数据库检测到的数据异常，如负库存、重复记录、引用失效等</p>
     ${d.dbFindings.map(f=>`
     <div class="db-finding">
       <span class="tag">${f.id}</span>
@@ -251,8 +304,8 @@ export function renderReportHTML(d: ReportData): string {
 
   <!-- Footer -->
   <div class="footer">
-    <p><b>QualiBug</b> · 行为风险评级基础设施</p>
-    <p style="margin-top:4px">支持私有部署 / SaaS · 审计链路完整 · 所有判定可追溯到原始检测证据</p>
+    <p><b>QualiBug AI</b> · 风险决策台</p>
+    <p class="section-intro">支持私有部署 / SaaS · 审计链路完整 · 所有判定可追溯到原始检测证据</p>
   </div>
 
 </div>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .discovery_accounting import classify_issue_accounting
 from .defect_family_registry import iter_defect_families, resolve_defect_family
 
 
@@ -50,8 +51,10 @@ def build_bug_family_coverage_report(
         materialized_sources = sorted({str(row.get("source_id") or "") for row in materialized_source_rows if str(row.get("source_id") or "")})
         missing_declared_sources = sorted({str(row.get("source_id") or "") for row in missing_source_rows if str(row.get("source_id") or "")})
         blocked_probe_count = sum(1 for item in family_probes if str(item.get("capability_gate") or "") == "browser_ui_unavailable")
-        candidate_only_count = sum(1 for item in family_issues if float(item.get("confidence") or 0.0) < 0.75)
-        validated_count = sum(1 for item in family_issues if float(item.get("confidence") or 0.0) >= 0.75)
+        accounting_rows = [classify_issue_accounting(item) for item in family_issues]
+        candidate_only_count = sum(1 for item in accounting_rows if item.get("accounting_state") == "candidate")
+        pending_count = sum(1 for item in accounting_rows if item.get("accounting_state") == "pending")
+        validated_count = sum(1 for item in accounting_rows if item.get("strict_validated_bug"))
         coverage_gap_reason_code = ""
         coverage_gap_reason = ""
         coverage_gap_action = ""
@@ -93,10 +96,13 @@ def build_bug_family_coverage_report(
                 "source_gap_reason": source_gap_reason,
                 "source_gap_action": source_gap_action,
                 "candidate_only_count": candidate_only_count,
+                "pending_count": pending_count,
                 "validated_count": validated_count,
                 "coverage_status": (
                     "validated"
                     if validated_count
+                    else "pending"
+                    if pending_count
                     else "candidate_only"
                     if family_probes or family_issues
                     else "not_covered"
@@ -114,6 +120,7 @@ def build_bug_family_coverage_report(
         "family_count": len(family_rows),
         "covered_family_count": sum(1 for row in family_rows if row["coverage_status"] != "not_covered"),
         "validated_family_count": sum(1 for row in family_rows if row["coverage_status"] == "validated"),
+        "pending_family_count": sum(1 for row in family_rows if row["coverage_status"] == "pending"),
         "candidate_only_family_count": sum(1 for row in family_rows if row["coverage_status"] == "candidate_only"),
         "declared_source_count": sum(int(row.get("declared_source_count") or 0) for row in family_rows),
         "materialized_source_count": sum(int(row.get("materialized_source_count") or 0) for row in family_rows),

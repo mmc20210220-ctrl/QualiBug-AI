@@ -23,12 +23,13 @@ _STATE_WORDS = (
     "retry", "submit", "force", "activate", "deactivate", "状态", "审批", "取消", "完成", "关闭",
 )
 _IDEMPOTENCY_WORDS = (
-    "post", "create", "callback", "event", "retry", "submit", "payment", "refund", "order", "receive",
-    "ship", "issue", "consume", "integration", "idempotency", "externalref", "message", "重复", "幂等",
+    "post", "create", "callback", "event", "retry", "submit", "receive",
+    "issue", "consume", "integration", "idempotency", "externalref", "message", "重复", "幂等",
 )
 _CONSERVATION_WORDS = (
-    "inventory", "warehouse", "stock", "qty", "quantity", "amount", "balance", "transaction", "order",
-    "material", "bom", "lot", "serial", "库存", "数量", "金额", "守恒", "扣减", "入库", "出库",
+    "qty", "quantity", "amount", "balance", "total", "sum", "count",
+    "limit", "quota", "remaining", "available", "used",
+    "数量", "金额", "总量", "剩余", "已用",
 )
 _AUTH_WORDS = ("auth", "permission", "认证", "权限", "anonymous", "匿名", "低权限")
 

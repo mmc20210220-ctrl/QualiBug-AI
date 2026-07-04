@@ -138,17 +138,10 @@ class StateMachineAnalyzer:
                         state_names_found.add(state_name)
                         break
 
-        # 如果没有提取到任何状态，添加默认状态
+        # 如果没有提取到任何状态，不注入虚假状态机
         if not sm.states:
-            default_states = ["draft", "pending", "active", "completed", "cancelled"]
-            for name in default_states:
-                sm.states[name] = State(
-                    id=name,
-                    name=name,
-                    description=f"{name}状态",
-                    is_final=name in ["completed", "cancelled"],
-                    is_initial=name == "draft"
-                )
+            logger.info("PRD中未提取到状态关键词，跳过状态机分析")
+            return
 
     def _extract_state_name(self, line: str, keyword: str) -> Optional[str]:
         """从行中提取状态名"""
@@ -186,14 +179,17 @@ class StateMachineAnalyzer:
         return any(kw in state_name.lower() for kw in initial_keywords)
 
     def _extract_transitions_from_api(self, api_spec: Dict[str, Any], sm: StateMachine):
-        """从API规格中提取状态转换"""
-        # 简化实现：查找状态转换相关的API端点
+        """从API规格中提取状态转换 — 创建实际 Transition 对象"""
         paths = api_spec.get("paths", {})
+
+        # 已知状态名集合（小写）
+        known_states = {s.name.lower(): s for s in sm.states.values()}
 
         for path, methods in paths.items():
             for method, config in methods.items():
                 summary = str(config.get("summary", "")).lower()
                 description = str(config.get("description", "")).lower()
+                combined = f"{summary} {description}"
 
                 # 检查是否是状态转换相关
                 transition_keywords = [
@@ -202,10 +198,26 @@ class StateMachineAnalyzer:
                     "更新", "修改", "转换", "设置", "状态", "审批", "取消"
                 ]
 
-                for keyword in transition_keywords:
-                    if keyword in summary or keyword in description:
-                        # 记录这个端点可能涉及状态转换
-                        self.endpoint_state_mapping.setdefault(path, []).append("status")
+                is_transition = any(kw in combined for kw in transition_keywords)
+                if not is_transition:
+                    continue
+
+                # 记录端点映射
+                self.endpoint_state_mapping.setdefault(path, []).append("status")
+
+                # 尝试从 summary/description 中提取目标状态
+                for state_name, state_obj in known_states.items():
+                    if state_name in combined:
+                        # 创建 Transition 对象
+                        transition = Transition(
+                            from_state="",  # 来源状态未知，留空
+                            to_state=state_obj.id,
+                            trigger=f"{method.upper()} {path}",
+                            conditions=[],
+                            actions=[summary],
+                            required_permissions=[]
+                        )
+                        sm.transitions.append(transition)
                         break
 
     def _determine_initial_and_final(self, sm: StateMachine):
@@ -303,28 +315,30 @@ class StateMachineAnalyzer:
         sm: StateMachine,
         endpoints: List[Dict[str, Any]]
     ) -> List[StateMachineBug]:
-        """检查是否缺少前置条件检查"""
+        """检查是否缺少前置条件 — 降为P2，仅对有状态转换的端点标记"""
         bugs = []
         bug_id = len(self.bugs)
 
-        # 简化实现：假设所有状态转换都应该检查前置条件
+        if not sm.states:
+            return bugs
+
         for path in self.endpoint_state_mapping:
             bug = StateMachineBug(
                 bug_id=f"SM_{bug_id:03d}",
                 category="C06",
                 severity="P2",
-                title="状态转换可能缺少前置条件检查",
-                description=f"端点 {path} 可能缺少当前状态验证",
-                state_involved=[],
+                title="状态转换端点需验证前置条件",
+                description=f"端点 {path} 涉及状态变更，需验证是否检查了当前状态的合法性",
+                state_involved=list(sm.states.keys())[:3],
                 transitions_involved=[],
-                evidence={"endpoint": path},
+                evidence={"endpoint": path, "known_states": list(sm.states.keys())},
                 reproduction_steps=[
                     f"1. 检查端点 {path} 的实现",
                     "2. 验证是否检查了当前状态",
                     "3. 尝试从不合法的状态进行转换"
                 ],
                 expected_behavior="状态转换前应该检查当前状态是否合法",
-                actual_behavior="可能缺少当前状态检查"
+                actual_behavior="需验证是否缺少当前状态检查"
             )
             bugs.append(bug)
             bug_id += 1
@@ -336,30 +350,44 @@ class StateMachineAnalyzer:
         sm: StateMachine,
         endpoints: List[Dict[str, Any]]
     ) -> List[StateMachineBug]:
-        """检查无效状态转换"""
+        """检查无效状态转换 — 仅在有实际转换数据时检查"""
         bugs = []
         bug_id = len(self.bugs)
 
-        # 简化实现
-        if len(sm.states) >= 2:
-            state_ids = list(sm.states.keys())
-            bug = StateMachineBug(
-                bug_id=f"SM_{bug_id:03d}",
-                category="C06",
-                severity="P1",
-                title="可能存在状态跳转过快",
-                description="系统可能允许跳过必要的中间状态",
-                state_involved=state_ids[:3],
-                transitions_involved=[],
-                evidence={"states": state_ids},
-                reproduction_steps=[
-                    "1. 尝试直接从第一个状态跳到最后一个状态",
-                    "2. 观察是否被允许"
-                ],
-                expected_behavior="应该遵循状态转换流程",
-                actual_behavior="可能跳过中间状态"
-            )
-            bugs.append(bug)
+        # 没有提取到状态或转换时，不做猜测
+        if len(sm.states) < 2 or not sm.transitions:
+            return bugs
+
+        # 检查是否有从终态出发的转换（真实风险）
+        for transition in sm.transitions:
+            from_state_id = transition.from_state
+            if not from_state_id:
+                continue
+            from_state = sm.states.get(from_state_id)
+            if from_state and from_state.is_final:
+                bug = StateMachineBug(
+                    bug_id=f"SM_{bug_id:03d}",
+                    category="C06",
+                    severity="P1",
+                    title=f"终态可能有后续转换: {from_state.name} -> {transition.to_state}",
+                    description=f"从终态 {from_state.name} 到 {transition.to_state} 的转换可能无效",
+                    state_involved=[from_state.id, transition.to_state],
+                    transitions_involved=[transition],
+                    evidence={
+                        "from_state": from_state.name,
+                        "to_state": transition.to_state,
+                        "trigger": transition.trigger
+                    },
+                    reproduction_steps=[
+                        f"1. 将对象设置为终态: {from_state.name}",
+                        f"2. 尝试触发转换: {transition.trigger}",
+                        "3. 观察是否被允许"
+                    ],
+                    expected_behavior="终态不应该有后续状态转换",
+                    actual_behavior=f"存在从终态 {from_state.name} 出发的转换"
+                )
+                bugs.append(bug)
+                bug_id += 1
 
         return bugs
 

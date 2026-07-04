@@ -33,8 +33,8 @@ FIXTURE_BACKED_READ_RISKS = {
     "role_downgrade_auth_boundary_probe",
 }
 MUTATION_FIELD_RE = {
-    "resource": re.compile(r"(?:amount|price|balance|quota|point|credit|stock|inventory|quantity|qty|limit|total|积分|额度|余额|库存|金额|数量)", re.I),
-    "tenant": re.compile(r"(?:tenant|org|owner|user|account|member|customer|object|resource|租户|组织|归属|用户)", re.I),
+    "resource": re.compile(r"(?:amount|price|balance|quota|point|credit|quantity|qty|limit|total|count|sum|金额|数量|总量|限额)", re.I),
+    "tenant": re.compile(r"(?:tenant|org|owner|user|account|member|resource|租户|组织|归属|用户)", re.I),
     "idempotency": re.compile(r"(?:idempotency|business[_-]?key|request[_-]?id|external[_-]?event[_-]?id|event[_-]?id|dedupe|幂等|业务键)", re.I),
     "state": re.compile(r"(?:status|state|stage|phase|from[_-]?status|target[_-]?status|状态)", re.I),
 }
@@ -64,17 +64,30 @@ def load_openapi_from_input(input_dir: str | Path | None) -> dict[str, Any]:
     root = Path(input_dir).resolve()
     if not root.exists():
         return {}
+    # Detect and parse all supported formats via universal parser
+    for filename in root.iterdir():
+        if filename.suffix.lower() not in (".json", ".yaml", ".yml", ".har", ".proto", ".graphql", ".gql"):
+            continue
+        try:
+            from .universal_api_parser import parse_to_openapi
+            result = parse_to_openapi(filename)
+            if result.get("paths"):
+                return result
+        except Exception:
+            pass
+    # Legacy fallback: try specific filenames
     for name in ("openapi.json", "swagger.json"):
         p = root / name
-        if p.exists() and not _contains_blocked_path(p, root):
+        if p.exists():
             try:
                 return json.loads(p.read_text(encoding="utf-8", errors="replace") or "{}")
             except Exception:
                 return {}
     for name in ("openapi.yaml", "openapi.yml", "swagger.yaml", "swagger.yml"):
         p = root / name
-        if p.exists() and not _contains_blocked_path(p, root):
+        if p.exists():
             try:
+                import yaml
                 return yaml.safe_load(p.read_text(encoding="utf-8", errors="replace") or "{}") or {}
             except Exception:
                 return {}
@@ -176,7 +189,12 @@ def _schema_for_endpoint(spec: dict[str, Any], method: str, path: str) -> dict[s
 def _schema_value(name: str, schema: dict[str, Any], seed: str) -> Any:
     if not isinstance(schema, dict):
         return f"qb_auto_{name}_{seed}"
-    if schema.get("$ref"):
+    # Resolve $ref to actual schema definition
+    ref = schema.get("$ref")
+    if ref and isinstance(ref, str):
+        resolved = _resolve_ref(ref, _openapi_spec_cache() if hasattr(_openapi_spec_cache, '__call__') else {})
+        if isinstance(resolved, dict) and resolved != schema:
+            return _schema_value(name, resolved, seed)
         return f"qb_auto_{name}_{seed}"
     if "enum" in schema and isinstance(schema.get("enum"), list) and schema["enum"]:
         return schema["enum"][0]
@@ -184,23 +202,68 @@ def _schema_value(name: str, schema: dict[str, Any], seed: str) -> Any:
     if not typ and "properties" in schema:
         typ = "object"
     lname = str(name or "value").lower()
+
     if typ == "object":
         props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
         required = list(schema.get("required") or [])
         keys = list(dict.fromkeys(required + list(props.keys())[:10]))[:20]
         return {str(k): _schema_value(str(k), props.get(k) if isinstance(props.get(k), dict) else {"type": "string"}, seed) for k in keys} or {"name": f"qb_auto_object_{seed}"}
+
     if typ == "array":
-        return [_schema_value(name + "_item", schema.get("items") if isinstance(schema.get("items"), dict) else {"type": "string"}, seed)]
+        item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else {"type": "string"}
+        min_items = schema.get("minItems", 1)
+        return [_schema_value(name + "_item", item_schema, f"{seed}_{i}") for i in range(min(min_items, 3))]
+
     if typ in {"integer", "number"}:
-        if any(x in lname for x in ("qty", "quantity", "count", "stock", "inventory")):
-            return 1
-        if any(x in lname for x in ("amount", "price", "balance", "total")):
-            return 1
-        if "version" in lname:
-            return 1
-        return 1
+        # Respect schema constraints: minimum/maximum/exclusive bounds/multipleOf
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if schema.get("exclusiveMinimum") is not None:
+            minimum = schema["exclusiveMinimum"] + (1 if typ == "integer" else 0.01)
+        if schema.get("exclusiveMaximum") is not None:
+            maximum = schema["exclusiveMaximum"] - (1 if typ == "integer" else 0.01)
+        multiple = schema.get("multipleOf")
+        # Start from minimum if defined, else 1
+        base = minimum if minimum is not None else 1
+        if isinstance(base, (int, float)):
+            if multiple and isinstance(multiple, (int, float)):
+                base = ((int(base) if typ == "integer" else base) // multiple) * multiple
+            # Clamp to maximum if defined
+            if maximum is not None and base > maximum:
+                base = maximum - (1 if typ == "integer" else 0.01)
+        if typ == "integer":
+            return max(0, int(base))
+        return max(0.0, float(base))
+
     if typ == "boolean":
         return True
+
+    # String type — check format attribute first, then name heuristics
+    fmt = schema.get("format", "")
+    if fmt in ("email",):
+        return f"qb-auto-{seed}@qualibug.local"
+    if fmt in ("uri", "url"):
+        return f"https://qualibug.local/api/test/{seed}"
+    if fmt in ("date",):
+        return "2026-01-01"
+    if fmt in ("date-time",):
+        return "2026-01-01T00:00:00Z"
+    if fmt in ("uuid",):
+        return f"00000000-0000-0000-0000-{seed.zfill(12)[:12]}"
+    if fmt in ("byte", "binary"):
+        return f"YmFzZTY0X3tiYXNlNjR9"
+    # Constraint-based string generation
+    min_len = schema.get("minLength", 1)
+    max_len = schema.get("maxLength", 255)
+    pattern = schema.get("pattern", "")
+    if isinstance(min_len, int) and min_len > 0:
+        base_val = f"qb_auto_{seed}"
+        if len(base_val) < min_len:
+            base_val = base_val * ((min_len // len(base_val)) + 1)
+        if isinstance(max_len, int) and len(base_val) > max_len:
+            base_val = base_val[:max_len]
+        return base_val
+    # Name-based heuristics (used only when format is not set)
     if "email" in lname:
         return f"qb-auto-{seed}@qualibug.local"
     if any(x in lname for x in ("phone", "mobile")):
@@ -320,10 +383,10 @@ def _risk_augmented_body(probe: dict[str, Any], seed: str, path_params: dict[str
         body.update({
             "id": object_id,
             "object_id": object_id,
-            "order_id": object_id,
+            "entity_id": object_id,
             "from_status": terminal,
             "status": terminal,
-            "target_status": "paid" if str(terminal).lower() != "paid" else "cancelled",
+            "target_status": "active" if str(terminal).lower() != "active" else "inactive",
             "action": "submit",
         })
     if risk in {"idempotency_replay_probe", "async_external_event_probe"}:
@@ -435,8 +498,7 @@ def _make_setup_body(spec: dict[str, Any], create_path: str, seed: str, generate
     body.update({
         "id": generated_id,
         "object_id": generated_id,
-        "order_id": generated_id,
-        "sku_id": generated_id if str(probe.get("risk_type")) == "conservation_probe" else body.get("sku_id", generated_id),
+        "entity_id": generated_id,
         "name": f"qb_auto_fixture_{seed}",
         "status": "cancelled" if str(probe.get("risk_type")) == "state_transition_probe" else body.get("status", "active"),
         "qualibug_test_run_id": f"qb_auto_run_{seed}",

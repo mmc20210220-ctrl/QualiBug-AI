@@ -1,13 +1,16 @@
 
-import hashlib, time
+import hashlib, os, secrets, time
 from collections import deque
 
 # ---------------- SECURITY / AUTH ----------------
 class Auth:
     def verify(self, token):
-        if not token:
-            return "anonymous"
-        return {"demo-token":"tenant_demo"}.get(token,"tenant_guest")
+        expected = os.environ.get("QUALIBUG_API_TOKEN", "").strip()
+        if not expected:
+            raise PermissionError("api token is not configured")
+        if not token or not secrets.compare_digest(str(token), expected):
+            raise PermissionError("invalid api token")
+        return os.environ.get("QUALIBUG_TENANT_ID", "tenant_demo")
 
 # ---------------- INFRA LAYERS (production abstraction) ----------------
 class RedisClient:

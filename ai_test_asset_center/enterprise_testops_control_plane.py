@@ -394,7 +394,9 @@ def _table_columns(table: dict[str, Any]) -> list[str]:
 
 def _data_kinds(asset: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    role_names = sorted({_role_name(row) for row in asset.get("roles") or [] if isinstance(row, dict)}) or ["normal_user", "admin"]
+    role_names = sorted({_role_name(row) for row in asset.get("roles") or [] if isinstance(row, dict)})
+    if not role_names:
+        role_names = ["operator"]  # least-privileged default; "admin" must be explicit
     result.extend({"kind": "account", "name": role, "source": "role", "isolation_key": "test_run_id"} for role in role_names)
     result.append({"kind": "tenant", "name": "isolated_test_tenant", "source": "permission_or_default", "isolation_key": "tenant_id"})
     for obj in asset.get("business_objects") or []:
@@ -730,7 +732,9 @@ def validate_cross_system_journey(journey: dict[str, Any], observations: list[di
 
 def build_permission_assets(asset: dict[str, Any], project_id: str, root: Path) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     raw = [item for item in asset.get("permission_matrix") or [] if isinstance(item, dict)]
-    roles = sorted({_role_name(item) for item in asset.get("roles") or [] if isinstance(item, dict)}) or ["normal_user", "admin"]
+    roles = sorted({_role_name(item) for item in asset.get("roles") or [] if isinstance(item, dict)})
+    if not roles:
+        roles = ["operator"]  # least-privileged default
     interfaces = _interface_index(asset)
     rows: list[dict[str, Any]] = []
     for item in raw:

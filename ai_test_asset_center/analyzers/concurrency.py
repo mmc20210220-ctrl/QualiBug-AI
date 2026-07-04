@@ -98,14 +98,19 @@ class ConcurrencyAnalyzer:
                 issue_types = []
 
                 # 检查是否是高风险操作
-                if any(kw in summary or kw in path_lower for kw in self.high_risk_keywords):
-                    risk_level = "high"
-                    issue_types.append(ConcurrencyIssueType.RACE_CONDITION)
+                has_high_risk = any(kw in summary or kw in path_lower for kw in self.high_risk_keywords)
 
                 # 检查是否涉及共享资源
-                if any(kw in summary or kw in path_lower for kw in self.shared_resource_keywords):
+                has_shared_resource = any(kw in summary or kw in path_lower for kw in self.shared_resource_keywords)
+
+                # 同时满足高风险操作+共享资源才标记为 high
+                if has_high_risk and has_shared_resource:
                     risk_level = "high"
-                    if ConcurrencyIssueType.RACE_CONDITION not in issue_types:
+                    issue_types.append(ConcurrencyIssueType.RACE_CONDITION)
+                elif has_high_risk or has_shared_resource:
+                    # 只满足一个条件，标记为 medium
+                    risk_level = "medium"
+                    if has_high_risk and has_shared_resource:
                         issue_types.append(ConcurrencyIssueType.RACE_CONDITION)
 
                 # 检查是否是写入操作
@@ -154,9 +159,9 @@ class ConcurrencyAnalyzer:
                     bug = ConcurrencyBug(
                         bug_id=f"CC_{bug_id:03d}",
                         category="C11",
-                        severity="P0" if candidate.risk_level == "high" else "P1",
-                        title=f"可能存在竞态条件: {candidate.method} {candidate.path}",
-                        description=f"该端点执行高风险操作，可能存在竞态条件",
+                        severity="P0" if candidate.risk_level == "high" else "P2",
+                        title=f"需验证并发安全: {candidate.method} {candidate.path}",
+                        description=f"该端点同时涉及高风险操作和共享资源，需验证是否有并发控制",
                         issue_type=ConcurrencyIssueType.RACE_CONDITION,
                         affected_endpoints=[candidate.path],
                         evidence={

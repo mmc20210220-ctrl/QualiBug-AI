@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "SAAS_0",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "low",
+    "description": "Simulated idempotency bug for saas scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_1",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_2",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_3",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_4",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_5",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_6",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_7",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "medium",
+    "description": "Simulated state_break bug for saas scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_8",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_9",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_10",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_11",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_12",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_13",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_14",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_15",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_16",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_17",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_18",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_19",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_20",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_21",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "medium",
+    "description": "Simulated state_break bug for saas scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_22",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_23",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "low",
+    "description": "Simulated money bug for saas scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_24",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_25",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_26",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_27",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_28",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_29",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_30",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "low",
+    "description": "Simulated money bug for saas scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_31",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_32",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_33",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_34",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_35",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_36",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_37",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_38",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_39",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_40",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_41",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_42",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_43",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "low",
+    "description": "Simulated money bug for saas scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_44",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_45",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_46",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_47",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_48",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_49",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_50",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_51",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_52",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_53",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_54",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_55",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_56",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_57",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_58",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_59",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_60",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_61",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_62",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_63",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "low",
+    "description": "Simulated idempotency bug for saas scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_64",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_65",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_66",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "medium",
+    "description": "Simulated state_break bug for saas scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_67",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "low",
+    "description": "Simulated idempotency bug for saas scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_68",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_69",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "low",
+    "description": "Simulated money bug for saas scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_70",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_71",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_72",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_73",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_74",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_75",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_76",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_77",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_78",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_79",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_80",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_81",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_82",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_83",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_84",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_85",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_86",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_87",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_88",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_89",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_90",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_91",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_92",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_93",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_94",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_95",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_96",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_97",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_98",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_99",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_100",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "medium",
+    "description": "Simulated state_break bug for saas scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_101",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_102",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_103",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_104",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_105",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_106",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_107",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_108",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_109",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_110",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_111",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_112",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_113",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_114",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_115",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_116",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_117",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_118",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_119",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_120",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_121",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_122",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_123",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_124",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_125",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_126",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_127",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_128",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_129",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_130",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_131",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_132",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_133",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_134",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_135",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_136",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_137",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_138",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_139",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_140",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_141",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_142",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_143",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_144",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_145",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "medium",
+    "description": "Simulated state_break bug for saas scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_146",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_147",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_148",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_149",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_150",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_151",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_152",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_153",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_154",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_155",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_156",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_157",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_158",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_159",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_160",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_161",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_162",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_163",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_164",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_165",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_166",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_167",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_168",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_169",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_170",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_171",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "low",
+    "description": "Simulated money bug for saas scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_172",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_173",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_174",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_175",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_176",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "low",
+    "description": "Simulated idempotency bug for saas scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_177",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_178",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_179",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_180",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_181",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_182",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_183",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_184",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_185",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_186",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_187",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_188",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "low",
+    "description": "Simulated idempotency bug for saas scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_189",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_190",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_191",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_192",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_193",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_194",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_195",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_196",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_197",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_198",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_199",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_200",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_201",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "low",
+    "description": "Simulated idempotency bug for saas scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_202",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_203",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_204",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_205",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_206",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_207",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "low",
+    "description": "Simulated money bug for saas scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_208",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_209",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_210",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_211",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_212",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_213",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_214",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_215",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_216",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_217",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "medium",
+    "description": "Simulated state_break bug for saas scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_218",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_219",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_220",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_221",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_222",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "high",
+    "description": "Simulated concurrency bug for saas scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_223",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_224",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_225",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_226",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_227",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_228",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_229",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_230",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "medium",
+    "description": "Simulated money bug for saas scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_231",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_232",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_233",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_234",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_235",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_236",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_237",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_238",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_239",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_240",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_241",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_242",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_243",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_244",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_245",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_246",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_247",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "low",
+    "description": "Simulated money bug for saas scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_248",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "high",
+    "description": "Simulated idempotency bug for saas scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_249",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_250",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_251",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_252",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_253",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_254",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_255",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_256",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_257",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_258",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "medium",
+    "description": "Simulated permission bug for saas scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_259",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_260",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_261",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_262",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_263",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_264",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "critical",
+    "description": "Simulated permission bug for saas scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_265",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_266",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for saas scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_267",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_268",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_269",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_270",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_271",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_272",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_273",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_274",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "high",
+    "description": "Simulated state_break bug for saas scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_275",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_276",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_277",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "low",
+    "description": "Simulated state_break bug for saas scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_278",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_279",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_280",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_281",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for saas scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_282",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "high",
+    "description": "Simulated permission bug for saas scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_283",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for saas scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_284",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_285",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for saas scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_286",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_287",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_288",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for saas scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_289",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "critical",
+    "description": "Simulated state_break bug for saas scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_290",
+    "type": "state_break",
+    "title": "state_break issue in saas",
+    "severity": "medium",
+    "description": "Simulated state_break bug for saas scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_291",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in saas",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for saas scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_292",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "high",
+    "description": "Simulated money bug for saas scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_293",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "low",
+    "description": "Simulated concurrency bug for saas scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_294",
+    "type": "money",
+    "title": "money issue in saas",
+    "severity": "critical",
+    "description": "Simulated money bug for saas scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_295",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "low",
+    "description": "Simulated idempotency bug for saas scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_296",
+    "type": "idempotency",
+    "title": "idempotency issue in saas",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for saas scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_297",
+    "type": "concurrency",
+    "title": "concurrency issue in saas",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for saas scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_298",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "SAAS_299",
+    "type": "permission",
+    "title": "permission issue in saas",
+    "severity": "low",
+    "description": "Simulated permission bug for saas scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

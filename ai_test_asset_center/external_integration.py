@@ -108,23 +108,45 @@ class JIRAIntegration(TrackerIntegration):
         logger.info(f"[JIRAIntegration] Initialized for project {self.project_key}")
     
     def create_issue(self, issue: Issue) -> Dict[str, Any]:
-        """Create an issue in JIRA (simulated)
+        """Create an issue in JIRA via REST API.
         
-        In a real implementation, this would use the JIRA REST API.
+        Requires QUALIBUG_JIRA_SERVER, QUALIBUG_JIRA_PROJECT, QUALIBUG_JIRA_EMAIL,
+        and QUALIBUG_JIRA_TOKEN environment variables.
         """
+        if not self.server or not self.project_key:
+            raise NotImplementedError(
+                "JIRA integration not configured. Set QUALIBUG_JIRA_SERVER and "
+                "QUALIBUG_JIRA_PROJECT environment variables."
+            )
+        
         logger.info(f"[JIRAIntegration] Creating issue: {issue.title}")
         
-        # Simulate API call
-        issue_key = f"{self.project_key}-{hash(issue.title) % 1000}"
-        
+        # Use JIRA REST API v3
+        import urllib.request, json as _json
+        url = f"{self.server.rstrip('/')}/rest/api/3/issue"
+        payload = _json.dumps({
+            "fields": {
+                "project": {"key": self.project_key},
+                "summary": issue.title,
+                "description": issue.description or f"Severity: {issue.severity}\nConfidence: {issue.confidence}",
+                "issuetype": {"name": "Bug"},
+                "priority": {"name": "Highest" if issue.severity == "P0" else "High" if issue.severity == "P1" else "Medium"},
+            }
+        }).encode()
+        req = urllib.request.Request(url, data=payload,
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Basic {base64.b64encode(f'{self.email}:{self.api_token}'.encode()).decode()}"},
+            method="POST")
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = _json.loads(resp.read())
         return {
             "tracker": "jira",
-            "issue_key": issue_key,
+            "issue_key": data.get("key", ""),
             "project": self.project_key,
             "title": issue.title,
             "severity": issue.severity,
             "created": True,
-            "url": f"{self.server}/browse/{issue_key}"
+            "url": f"{self.server}/browse/{data.get('key', '')}"
         }
 
 
@@ -139,23 +161,42 @@ class GitHubIntegration(TrackerIntegration):
         logger.info(f"[GitHubIntegration] Initialized for repo {self.repo_owner}/{self.repo_name}")
     
     def create_issue(self, issue: Issue) -> Dict[str, Any]:
-        """Create an issue in GitHub (simulated)
+        """Create an issue in GitHub via REST API.
         
-        In a real implementation, this would use the GitHub REST API.
+        Requires QUALIBUG_GITHUB_OWNER, QUALIBUG_GITHUB_REPO, and
+        QUALIBUG_GITHUB_TOKEN environment variables.
         """
+        if not self.repo_owner or not self.repo_name:
+            raise NotImplementedError(
+                "GitHub integration not configured. Set QUALIBUG_GITHUB_OWNER and "
+                "QUALIBUG_GITHUB_REPO environment variables."
+            )
+        
         logger.info(f"[GitHubIntegration] Creating issue: {issue.title}")
         
-        # Simulate API call
-        issue_number = abs(hash(issue.title) % 1000)
-        
+        import urllib.request, json as _json
+        url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/issues"
+        payload = _json.dumps({
+            "title": f"[QualiBug] {issue.title}",
+            "body": f"**Severity:** {issue.severity}\n**Confidence:** {issue.confidence}\n\n{issue.description or ''}",
+            "labels": ["bug", "qualibug", issue.severity.lower()],
+        }).encode()
+        headers = {"Content-Type": "application/json",
+                   "Accept": "application/vnd.github.v3+json",
+                   "User-Agent": "QualiBug/1.0"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = _json.loads(resp.read())
         return {
             "tracker": "github",
-            "issue_number": issue_number,
+            "issue_number": data.get("number", 0),
             "repo": f"{self.repo_owner}/{self.repo_name}",
             "title": issue.title,
             "severity": issue.severity,
             "created": True,
-            "url": f"https://github.com/{self.repo_owner}/{self.repo_name}/issues/{issue_number}"
+            "url": data.get("html_url", "")
         }
 
 

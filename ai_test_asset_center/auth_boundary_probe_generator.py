@@ -14,10 +14,10 @@ import re
 from typing import Any
 
 SENSITIVE_PATH_RE = re.compile(
-    r"(?:admin|tenant|org|workspace|project|user|member|account|role|permission|audit|export|report|invoice|payment|refund|order|customer|profile|\u79df\u6237|\u7ec4\u7ec7|\u6743\u9650|\u89d2\u8272|\u5ba1\u8ba1|\u5bfc\u51fa|\u8ba2\u5355|\u7528\u6237)",
+    r"(?:admin|tenant|org|workspace|project|user|member|account|role|permission|audit|export|report|profile|settings|config|import|sync|\u79df\u6237|\u7ec4\u7ec7|\u6743\u9650|\u89d2\u8272|\u5ba1\u8ba1|\u5bfc\u51fa|\u914d\u7f6e|\u7528\u6237)",
     re.I,
 )
-OWNER_PARAM_RE = re.compile(r"\{?(?:tenant|org|workspace|project|user|member|account|owner|customer)[A-Za-z0-9_\-]*\}?", re.I)
+OWNER_PARAM_RE = re.compile(r"\{?(?:tenant|org|workspace|project|user|member|account|owner)[A-Za-z0-9_\-]*\}?", re.I)
 AUTH_TEXT_RE = re.compile(r"(?:auth|authorization|permission|role|rbac|tenant|owner|access control|认证|鉴权|授权|权限|角色|租户|归属)", re.I)
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 

@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "LOGISTICS_0",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_1",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_2",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_3",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_4",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_5",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_6",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_7",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_8",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_9",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_10",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_11",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_12",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_13",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_14",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_15",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_16",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_17",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_18",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_19",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_20",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_21",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_22",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_23",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_24",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_25",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_26",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_27",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_28",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_29",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_30",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_31",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_32",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_33",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_34",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_35",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_36",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_37",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_38",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_39",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_40",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_41",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_42",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_43",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_44",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_45",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_46",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_47",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_48",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_49",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_50",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_51",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_52",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_53",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_54",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_55",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_56",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_57",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_58",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_59",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_60",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_61",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_62",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_63",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_64",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_65",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_66",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_67",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_68",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_69",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_70",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_71",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_72",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_73",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_74",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_75",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_76",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_77",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_78",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_79",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_80",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_81",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_82",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_83",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_84",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_85",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_86",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_87",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_88",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_89",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_90",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_91",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_92",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_93",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_94",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_95",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_96",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_97",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_98",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_99",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_100",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_101",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_102",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_103",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_104",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_105",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_106",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_107",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_108",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_109",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_110",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_111",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_112",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_113",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_114",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_115",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_116",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_117",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_118",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_119",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_120",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_121",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_122",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_123",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_124",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_125",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_126",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_127",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_128",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_129",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_130",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_131",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_132",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_133",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_134",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_135",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_136",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_137",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_138",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_139",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_140",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_141",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_142",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_143",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_144",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_145",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_146",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_147",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_148",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_149",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_150",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_151",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_152",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for logistics scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_153",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_154",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_155",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_156",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_157",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_158",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_159",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_160",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_161",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_162",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_163",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_164",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_165",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_166",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_167",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_168",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_169",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_170",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_171",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_172",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_173",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_174",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_175",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_176",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for logistics scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_177",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_178",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_179",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_180",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_181",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_182",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for logistics scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_183",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_184",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_185",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_186",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_187",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_188",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_189",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_190",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_191",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_192",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_193",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_194",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_195",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_196",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_197",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_198",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_199",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_200",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_201",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_202",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_203",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_204",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_205",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_206",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_207",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_208",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_209",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_210",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_211",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_212",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_213",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_214",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_215",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_216",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_217",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_218",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "high",
+    "description": "Simulated state_break bug for logistics scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_219",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_220",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_221",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_222",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_223",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_224",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_225",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_226",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_227",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_228",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_229",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_230",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_231",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_232",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_233",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_234",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_235",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_236",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_237",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "low",
+    "description": "Simulated money bug for logistics scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_238",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_239",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_240",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_241",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_242",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_243",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_244",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for logistics scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_245",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_246",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_247",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_248",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_249",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_250",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_251",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_252",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_253",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_254",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_255",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_256",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_257",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_258",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for logistics scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_259",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_260",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_261",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_262",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for logistics scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_263",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_264",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for logistics scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_265",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_266",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_267",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_268",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_269",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_270",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_271",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_272",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_273",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_274",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for logistics scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_275",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "medium",
+    "description": "Simulated money bug for logistics scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_276",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "low",
+    "description": "Simulated idempotency bug for logistics scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_277",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "critical",
+    "description": "Simulated permission bug for logistics scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_278",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "low",
+    "description": "Simulated state_break bug for logistics scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_279",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_280",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for logistics scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_281",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "low",
+    "description": "Simulated concurrency bug for logistics scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_282",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "high",
+    "description": "Simulated permission bug for logistics scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_283",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_284",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for logistics scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_285",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_286",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "medium",
+    "description": "Simulated permission bug for logistics scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_287",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "critical",
+    "description": "Simulated money bug for logistics scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_288",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for logistics scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_289",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "critical",
+    "description": "Simulated state_break bug for logistics scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_290",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_291",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for logistics scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_292",
+    "type": "state_break",
+    "title": "state_break issue in logistics",
+    "severity": "medium",
+    "description": "Simulated state_break bug for logistics scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_293",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_294",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_295",
+    "type": "money",
+    "title": "money issue in logistics",
+    "severity": "high",
+    "description": "Simulated money bug for logistics scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_296",
+    "type": "idempotency",
+    "title": "idempotency issue in logistics",
+    "severity": "high",
+    "description": "Simulated idempotency bug for logistics scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_297",
+    "type": "concurrency",
+    "title": "concurrency issue in logistics",
+    "severity": "high",
+    "description": "Simulated concurrency bug for logistics scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_298",
+    "type": "permission",
+    "title": "permission issue in logistics",
+    "severity": "low",
+    "description": "Simulated permission bug for logistics scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "LOGISTICS_299",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in logistics",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for logistics scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

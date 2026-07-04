@@ -93,9 +93,12 @@ CONNECTOR_KINDS = {
     "zentao_export": "ticket",
     "gitlab_diff": "collaboration_document",
     "openapi_contract": "openapi",
+    "http_api": "http_api_service",
+    "database": "postgresql",
 }
 REF_PREFIXES = ("vault:", "env:", "secret_ref:")
 SENSITIVE_VALUE_RE = re.compile(r"(?i)(password|token|api[_-]?key|secret)\s*[:=]\s*[^\s,;]+")
+SECRET_REFERENCE_RE = re.compile(r"^(?:vault|env|secret_ref):[A-Za-z0-9_.:/-]{1,220}$")
 
 
 def _now() -> str:
@@ -261,7 +264,13 @@ def _validate_ref(value: Any, name: str, allow_blank: bool = True) -> str:
         return ""
     if not text.startswith(REF_PREFIXES):
         raise ValueError(f"{name} 只能保存 vault:/env:/secret_ref: 引用，不能保存明文凭证")
-    if len(text) > 300 or SENSITIVE_VALUE_RE.search(text):
+    if (
+        len(text) > 300
+        or SENSITIVE_VALUE_RE.search(text)
+        or "://" in text
+        or "@" in text
+        or not SECRET_REFERENCE_RE.match(text)
+    ):
         raise ValueError(f"{name} 不是有效的凭证引用")
     return text
 
@@ -287,10 +296,15 @@ def register_enterprise_connector(project_id: str, payload: dict[str, Any], root
     connector_id = re.sub(r"[^a-zA-Z0-9_.-]", "_", connector_id)[:96]
     if not connector_id:
         raise ValueError("connector_id 不合法")
+    previous = next((row for row in registry["connectors"] if row.get("connector_id") == connector_id), None)
+    system_name = str(payload.get("system_name") or (previous.get("system_name") if isinstance(previous, dict) else "") or "").strip()[:80]
+    module_name = str(payload.get("module_name") or (previous.get("module_name") if isinstance(previous, dict) else "") or "").strip()[:80]
     record = {
         "connector_id": connector_id,
         "kind": kind,
         "display_name": str(payload.get("display_name") or kind)[:160],
+        "system_name": system_name,
+        "module_name": module_name,
         "enabled": bool(payload.get("enabled", True)),
         "read_only": True,
         "sync_mode": "manual_export",
@@ -304,7 +318,6 @@ def register_enterprise_connector(project_id: str, payload: dict[str, Any], root
         "created_at_utc": _now(),
         "created_by": clean_actor,
     }
-    previous = next((row for row in registry["connectors"] if row.get("connector_id") == connector_id), None)
     if previous:
         previous.update(record)
         outcome = "updated"

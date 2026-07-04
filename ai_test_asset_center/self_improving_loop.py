@@ -417,7 +417,7 @@ class SelfImprovingSweep:
             "execution_status": "FAILED_RETRYABLE",
             "failure_stage": getattr(_ACTIVE_RUNTIME, "_step", "unknown"),
             "error": str(exc),
-            "traceback": traceback.format_exc(),
+            "error_type": type(exc).__name__,
             "actions": [],
             "findings": [],
         }

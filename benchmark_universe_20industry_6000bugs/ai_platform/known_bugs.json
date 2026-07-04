@@ -1,0 +1,3602 @@
+[
+  {
+    "bug_id": "AI_PLATFORM_0",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 0",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_1",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 1",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_2",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 2",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_3",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 3",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_4",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 4",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_5",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 5",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_6",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 6",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_7",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 7",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_8",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 8",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_9",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 9",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_10",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 10",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_11",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 11",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_12",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 12",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_13",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 13",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_14",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 14",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_15",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 15",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_16",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 16",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_17",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 17",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_18",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 18",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_19",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 19",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_20",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 20",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_21",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 21",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_22",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 22",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_23",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 23",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_24",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 24",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_25",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 25",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_26",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 26",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_27",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 27",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_28",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 28",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_29",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 29",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_30",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 30",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_31",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 31",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_32",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 32",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_33",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 33",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_34",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 34",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_35",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 35",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_36",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 36",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_37",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 37",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_38",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 38",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_39",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 39",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_40",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 40",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_41",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 41",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_42",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 42",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_43",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 43",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_44",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 44",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_45",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 45",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_46",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 46",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_47",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 47",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_48",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 48",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_49",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 49",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_50",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 50",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_51",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 51",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_52",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 52",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_53",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 53",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_54",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 54",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_55",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 55",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_56",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 56",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_57",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 57",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_58",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 58",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_59",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 59",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_60",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 60",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_61",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 61",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_62",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 62",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_63",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 63",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_64",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 64",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_65",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 65",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_66",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 66",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_67",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 67",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_68",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 68",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_69",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 69",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_70",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 70",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_71",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 71",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_72",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 72",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_73",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 73",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_74",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 74",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_75",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 75",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_76",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 76",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_77",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 77",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_78",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 78",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_79",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 79",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_80",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 80",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_81",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 81",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_82",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 82",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_83",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 83",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_84",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 84",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_85",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 85",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_86",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 86",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_87",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 87",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_88",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 88",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_89",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 89",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_90",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 90",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_91",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 91",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_92",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 92",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_93",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 93",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_94",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 94",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_95",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 95",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_96",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 96",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_97",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 97",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_98",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 98",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_99",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 99",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_100",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated money bug for ai_platform scenario 100",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_101",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 101",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_102",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 102",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_103",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 103",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_104",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 104",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_105",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 105",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_106",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 106",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_107",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 107",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_108",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 108",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_109",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 109",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_110",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 110",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_111",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 111",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_112",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 112",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_113",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 113",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_114",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 114",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_115",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 115",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_116",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated money bug for ai_platform scenario 116",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_117",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 117",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_118",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 118",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_119",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 119",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_120",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 120",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_121",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 121",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_122",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 122",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_123",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 123",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_124",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 124",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_125",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 125",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_126",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 126",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_127",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated money bug for ai_platform scenario 127",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_128",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 128",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_129",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 129",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_130",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 130",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_131",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 131",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_132",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 132",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_133",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 133",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_134",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 134",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_135",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated money bug for ai_platform scenario 135",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_136",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 136",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_137",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 137",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_138",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 138",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_139",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 139",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_140",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 140",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_141",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated money bug for ai_platform scenario 141",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_142",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 142",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_143",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 143",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_144",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 144",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_145",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 145",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_146",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 146",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_147",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 147",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_148",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 148",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_149",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 149",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_150",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 150",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_151",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 151",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_152",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 152",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_153",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 153",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_154",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 154",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_155",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 155",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_156",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 156",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_157",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 157",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_158",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 158",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_159",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 159",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_160",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 160",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_161",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 161",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_162",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 162",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_163",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 163",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_164",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 164",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_165",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 165",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_166",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 166",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_167",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 167",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_168",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 168",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_169",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 169",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_170",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 170",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_171",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 171",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_172",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 172",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_173",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated money bug for ai_platform scenario 173",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_174",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 174",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_175",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 175",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_176",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 176",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_177",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 177",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_178",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 178",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_179",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 179",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_180",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 180",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_181",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 181",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_182",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 182",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_183",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 183",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_184",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 184",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_185",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 185",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_186",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 186",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_187",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 187",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_188",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 188",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_189",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated idempotency bug for ai_platform scenario 189",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_190",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 190",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_191",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 191",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_192",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 192",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_193",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 193",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_194",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 194",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_195",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 195",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_196",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 196",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_197",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 197",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_198",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 198",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_199",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 199",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_200",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 200",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_201",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 201",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_202",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 202",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_203",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 203",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_204",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 204",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_205",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 205",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_206",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 206",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_207",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 207",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_208",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 208",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_209",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 209",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_210",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 210",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_211",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 211",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_212",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 212",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_213",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 213",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_214",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 214",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_215",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 215",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_216",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 216",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_217",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 217",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_218",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 218",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_219",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 219",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_220",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 220",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_221",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 221",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_222",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 222",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_223",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 223",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_224",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 224",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_225",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 225",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_226",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 226",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_227",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 227",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_228",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 228",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_229",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 229",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_230",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 230",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_231",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 231",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_232",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 232",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_233",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 233",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_234",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 234",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_235",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated money bug for ai_platform scenario 235",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_236",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 236",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_237",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 237",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_238",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 238",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_239",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated idempotency bug for ai_platform scenario 239",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_240",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 240",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_241",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 241",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_242",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 242",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_243",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 243",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_244",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 244",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_245",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 245",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_246",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 246",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_247",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 247",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_248",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 248",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_249",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 249",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_250",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 250",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_251",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 251",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_252",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 252",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_253",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated state_break bug for ai_platform scenario 253",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_254",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 254",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_255",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 255",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_256",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 256",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_257",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated concurrency bug for ai_platform scenario 257",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_258",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 258",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_259",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 259",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_260",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 260",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_261",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 261",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_262",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 262",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_263",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated concurrency bug for ai_platform scenario 263",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_264",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 264",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_265",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 265",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_266",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated idempotency bug for ai_platform scenario 266",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_267",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 267",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_268",
+    "type": "idempotency",
+    "title": "idempotency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated idempotency bug for ai_platform scenario 268",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_269",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 269",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_270",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated state_break bug for ai_platform scenario 270",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_271",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 271",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_272",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 272",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_273",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 273",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_274",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 274",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_275",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 275",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_276",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 276",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_277",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 277",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_278",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 278",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_279",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated state_break bug for ai_platform scenario 279",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_280",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated concurrency bug for ai_platform scenario 280",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_281",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 281",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_282",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 282",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_283",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 283",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_284",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 284",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_285",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 285",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_286",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated money bug for ai_platform scenario 286",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_287",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated permission bug for ai_platform scenario 287",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_288",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 288",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_289",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 289",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_290",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 290",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_291",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 291",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_292",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated money bug for ai_platform scenario 292",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_293",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated permission bug for ai_platform scenario 293",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_294",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated permission bug for ai_platform scenario 294",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_295",
+    "type": "data_inconsistency",
+    "title": "data_inconsistency issue in ai_platform",
+    "severity": "high",
+    "description": "Simulated data_inconsistency bug for ai_platform scenario 295",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_296",
+    "type": "state_break",
+    "title": "state_break issue in ai_platform",
+    "severity": "critical",
+    "description": "Simulated state_break bug for ai_platform scenario 296",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_297",
+    "type": "concurrency",
+    "title": "concurrency issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated concurrency bug for ai_platform scenario 297",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_298",
+    "type": "permission",
+    "title": "permission issue in ai_platform",
+    "severity": "low",
+    "description": "Simulated permission bug for ai_platform scenario 298",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  },
+  {
+    "bug_id": "AI_PLATFORM_299",
+    "type": "money",
+    "title": "money issue in ai_platform",
+    "severity": "medium",
+    "description": "Simulated money bug for ai_platform scenario 299",
+    "repro_steps": [
+      "step1",
+      "step2",
+      "step3"
+    ]
+  }
+]

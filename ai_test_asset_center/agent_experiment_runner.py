@@ -37,7 +37,11 @@ from .real_project_onboarding import ROOT, _safe_project_id, config_paths, load_
 PHASE = "phase75_agent_experiment_runner"
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _OWNED_IDENTIFIER_TERMS = ("code", "no", "number", "serial", "reference", "externalref", "external_ref")
-_FOREIGN_REFERENCE_TERMS = ("material", "customer", "supplier", "warehouse", "routing", "bom", "equipment", "order", "parent")
+# Foreign reference detection: use universal naming patterns instead of industry-specific keywords.
+# Any field ending in _id or containing known reference patterns is treated as a reference candidate.
+_FOREIGN_REFERENCE_PATTERNS = re.compile(
+    r'(?:_id$|_no$|_code$|_ref$|_key$|_fk$|parent|owner|creator|assignee)', re.I
+)
 
 
 def _now() -> str:
@@ -92,7 +96,7 @@ def _reference_hints(body: Any) -> list[dict[str, str]]:
         name = str(key)
         lower = name.lower()
         if lower.endswith("id") or lower.endswith("_id") or lower.endswith("code") or lower.endswith("_code"):
-            relation = "foreign_reference" if any(term in lower for term in _FOREIGN_REFERENCE_TERMS) else "owned_or_reference"
+            relation = "foreign_reference" if _FOREIGN_REFERENCE_PATTERNS.search(lower) else "owned_or_reference"
             hints.append({"field": name, "relation": relation, "configured_value_present": str(value not in {None, ""}).lower()})
     return hints[:30]
 

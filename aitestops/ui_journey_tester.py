@@ -69,34 +69,29 @@ def is_reachable(url: str, timeout: int = 3) -> tuple[bool, str | None]:
 
 
 class UIJourneyGenerator:
-    """Generate UI Journey DSL from product intent, not Playwright code."""
+    """Generate UI Journey DSL from discovered page structure, not hardcoded e-commerce."""
 
     def generate(self, prd_text: str, openapi: Dict[str, Any], config: UIJourneyConfig) -> Dict[str, Any]:
         text = (prd_text or "").lower()
         paths = " ".join((openapi.get("paths") or {}).keys()).lower() if isinstance(openapi, dict) else ""
-        ecommerce = any(k in text + paths for k in ["checkout", "cart", "coupon", "order", "product", "购物车", "优惠券", "下单"])
-        if ecommerce:
-            steps = [
-                {"intent": "open_home_page"},
-                {"intent": "login", "actor": "normal_user"},
-                {"intent": "search_product", "keyword": "headphones"},
-                {"intent": "open_first_product"},
-                {"intent": "add_to_cart"},
-                {"intent": "open_cart"},
-                {"intent": "apply_coupon", "coupon": "WELCOME10"},
-                {"intent": "checkout"},
-                {"intent": "verify_order_created"},
-            ]
-            title = "Normal user checkout smoke journey"
-        else:
-            steps = [
-                {"intent": "open_home_page"},
-                {"intent": "login", "actor": "normal_user"},
-                {"intent": "verify_order_created"},
-            ]
-            title = "Core user smoke journey"
+
+        # ── Generic journey: discover pages + click through navigation ──
+        # Core smoke test that works for ANY web application:
+        #  1. Open home page
+        #  2. Login (if auth required)
+        #  3. Discover and navigate to major pages from links
+        #  4. Verify each page renders (not blank, has content)
+
+        steps: list[dict] = [
+            {"intent": "open_home_page"},
+            {"intent": "login", "actor": "default_user"},
+            {"intent": "discover_pages", "max_pages": 5},
+            {"intent": "verify_page_content", "page_index": 0},
+        ]
+        title = "通用页面探索冒烟测试"
+
         return {
-            "journey_id": "ecommerce_checkout_smoke",
+            "journey_id": "generic_smoke_journey",
             "title": title,
             "priority": "P0",
             "actor": "normal_user",
@@ -146,6 +141,7 @@ class BrowserExplorer:
             page_map = {
                 "status": "skipped",
                 "reason": f"Playwright is not available: {exc}",
+                "action": "pip install playwright && playwright install chromium（首次运行自动安装）",
                 "base_url": config.base_url,
                 "pages": [{"url": config.base_url, "title": "Playwright unavailable", "links": [], "text_fragments": [], "screenshot": str(screenshot)}],
                 "edges": [],
@@ -156,20 +152,36 @@ class BrowserExplorer:
             write_json(explorer_dir / "element_map.json", element_map)
             return {"page_map": page_map, "element_map": element_map}
 
+        # Auto-install browser if missing
+        try:
+            from ai_test_asset_center.auto_browser_setup import ensure_browser
+            pw_obj, browser_obj = ensure_browser(headless=config.headless)
+            if pw_obj is None:
+                raise RuntimeError(browser_obj)
+        except Exception as setup_err:
+            try:
+                pw_obj = sync_playwright().start()
+                browser_obj = getattr(pw_obj, config.browser).launch(
+                    headless=config.headless,
+                    args=["--no-sandbox", "--disable-setuid-sandbox"]
+                )
+            except Exception:
+                raise setup_err
+
         pages: List[Dict[str, Any]] = []
         elements: List[Dict[str, Any]] = []
         edges: List[Dict[str, str]] = []
-        with sync_playwright() as p:
-            browser = getattr(p, config.browser).launch(headless=config.headless)
-            page = browser.new_page()
-            page.goto(config.base_url, wait_until="domcontentloaded", timeout=8000)
-            page.screenshot(path=str(screenshot), full_page=True)
-            pages.append(self.page_snapshot(page, screenshot))
-            elements.extend(self.element_snapshot(page, config.base_url))
-            links = page.locator("a[href]").evaluate_all("(els) => els.slice(0, 20).map(e => e.href)")
-            for href in links[: max(0, config.max_pages - 1)]:
-                edges.append({"from": config.base_url, "to": href})
-            browser.close()
+        # Use the already-launched browser from ensure_browser
+        browser = browser_obj
+        page = browser.new_page()
+        page.goto(config.base_url, wait_until="domcontentloaded", timeout=8000)
+        page.screenshot(path=str(screenshot), full_page=True)
+        pages.append(self.page_snapshot(page, screenshot))
+        elements.extend(self.element_snapshot(page, config.base_url))
+        links = page.locator("a[href]").evaluate_all("(els) => els.slice(0, 20).map(e => e.href)")
+        for href in links[: max(0, config.max_pages - 1)]:
+            edges.append({"from": config.base_url, "to": href})
+        browser.close()
 
         page_map = {"status": "explored", "base_url": config.base_url, "pages": pages, "edges": edges, "max_pages": config.max_pages}
         element_map = {"status": "explored", "elements": elements}
@@ -207,8 +219,7 @@ class BrowserExplorer:
             ("username_input", "username field", "textbox", ""),
             ("password_input", "password field", "textbox", ""),
             ("search_input", "product search field", "textbox", ""),
-            ("add_to_cart_button", "add to cart button", "button", "Add to Cart"),
-            ("checkout_button", "checkout button", "button", "Checkout"),
+            ("navigation_menu", "navigation menu", "navigation", "Menu"),
         ]
         return [
             {
@@ -357,6 +368,7 @@ class IntentExecutor:
             write_json(workspace / "ui_execution" / "ui_execution_result.json", result)
             return result
 
+        # Auto-setup browser (second usage)
         try:
             from playwright.sync_api import sync_playwright  # type: ignore
         except Exception as exc:
@@ -365,9 +377,17 @@ class IntentExecutor:
             write_json(workspace / "ui_execution" / "ui_execution_result.json", result)
             return result
 
+        try:
+            from ai_test_asset_center.auto_browser_setup import ensure_browser
+            _, browser_obj2 = ensure_browser(headless=config.headless)
+            if _ is None:
+                raise RuntimeError(browser_obj2)
+        except Exception:
+            browser_obj2 = None
+
         step_results: List[Dict[str, Any]] = []
-        with sync_playwright() as p:
-            browser = getattr(p, config.browser).launch(headless=config.headless)
+        if browser_obj2 is not None:
+            browser = browser_obj2
             page = browser.new_page()
             for i, step in enumerate(steps, start=1):
                 intent = step.get("intent", "unknown")
@@ -394,26 +414,33 @@ class IntentExecutor:
             self.fill_first(page, ["password", "密码"], config.password, healer, intent)
             self.click_first(page, ["login", "sign in", "submit", "登录", "提交"], healer, intent)
             return
-        if intent == "search_product":
-            self.fill_first(page, ["search", "keyword", "product", "搜索", "商品"], step.get("keyword", "headphones"), healer, intent)
-            page.keyboard.press("Enter")
+        # ── Generic intents ──
+        if intent == "discover_pages":
+            # Collect all visible links and navigate to each
+            max_pages = step.get("max_pages", 5)
+            links = page.locator("a[href]").all()
+            discovered: list[str] = []
+            for link in links[:max_pages]:
+                try:
+                    href = link.get_attribute("href") or ""
+                    text = link.inner_text().strip()
+                    if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                        discovered.append(href)
+                except Exception:
+                    pass
+            collector.capture(step_id, "discover_pages", {"discovered": discovered}, page)
             return
-        if intent in {"open_first_product", "add_to_cart", "open_cart", "checkout", "verify_order_created"}:
-            words = {
-                "open_first_product": ["product", "detail", "headphones", "商品"],
-                "add_to_cart": ["add to cart", "cart", "加入购物车"],
-                "open_cart": ["cart", "购物车"],
-                "checkout": ["checkout", "place order", "submit order", "结算", "下单"],
-                "verify_order_created": ["order", "created", "订单"],
-            }[intent]
-            if intent == "verify_order_created":
-                page.get_by_text(words[0], exact=False).first.wait_for(timeout=3000)
+
+        if intent == "verify_page_content":
+            # Check page has meaningful content (not blank/error)
+            text_content = page.inner_text("body")
+            if len(text_content) < 50:
+                collector.capture(step_id, "verify_page_content",
+                                  {"status": "blank_page", "text_length": len(text_content)}, page)
             else:
-                self.click_first(page, words, healer, intent)
+                collector.capture(step_id, "verify_page_content",
+                                  {"status": "ok", "text_length": len(text_content)}, page)
             return
-        if intent == "apply_coupon":
-            self.fill_first(page, ["coupon", "优惠券"], step.get("coupon", "WELCOME10"), healer, intent)
-            self.click_first(page, ["apply", "use", "使用", "应用"], healer, intent)
 
     def fill_first(self, page: Any, words: List[str], value: str, healer: SelfHealingLocator, intent: str) -> None:
         for word in words:
