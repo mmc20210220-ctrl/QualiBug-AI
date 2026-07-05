@@ -420,7 +420,12 @@ def make_frontend_preview_handler(site: Phase105FrontendPreviewSite) -> type[Bas
             self.send_response(response.status)
             for key, value in response.headers.items():
                 self.send_header(key, value)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            # Restrict CORS to localhost for the preview server — this is a
+            # local-only static file server, not a public API.
+            _origin = self.headers.get("Origin", "") or "http://127.0.0.1"
+            if _origin not in ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost"):
+                _origin = "http://127.0.0.1"
+            self.send_header("Access-Control-Allow-Origin", _origin)
             self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.send_header("Content-Length", str(len(response.body) if write_body else 0))

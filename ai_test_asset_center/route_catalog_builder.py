@@ -30,6 +30,7 @@ class RouteEntry:
     tags: list[str] = field(default_factory=list)
     summary: str = ""
     path_params: list[str] = field(default_factory=list)
+    path_param_formats: dict[str, str] = field(default_factory=dict)  # param_name → schema format (uuid/int64/etc)
     query_params: list[dict[str, str]] = field(default_factory=list)
     request_body_schema: dict[str, Any] = field(default_factory=dict)
     response_schema: dict[str, Any] = field(default_factory=dict)
@@ -114,6 +115,7 @@ class RouteCatalogBuilder:
                 "path_pattern": entry.path,
                 "method": entry.method,
                 "path_params": entry.path_params,
+                "path_param_formats": entry.path_param_formats,
                 "has_body": bool(entry.request_body_schema),
                 "body_properties": entry.request_body_schema.get("properties", {}),
                 "tags": entry.tags,
@@ -206,9 +208,16 @@ class RouteCatalogBuilder:
 
                 # Path parameters
                 path_params = []
+                path_param_formats: dict[str, str] = {}
                 for p in details.get("parameters", []):
                     if isinstance(p, dict) and p.get("in") == "path":
-                        path_params.append(p.get("name", ""))
+                        pname = p.get("name", "")
+                        path_params.append(pname)
+                        # 提取参数的 schema format（uuid/int64/string 等）
+                        pschema = p.get("schema", {}) if isinstance(p.get("schema"), dict) else {}
+                        pformat = str(pschema.get("format", "") or pschema.get("type", "") or "")
+                        if pformat:
+                            path_param_formats[pname] = pformat
 
                 # Query parameters
                 query_params = []
@@ -250,6 +259,7 @@ class RouteCatalogBuilder:
                     tags=details.get("tags", []),
                     summary=details.get("summary", ""),
                     path_params=path_params,
+                    path_param_formats=path_param_formats,
                     query_params=query_params,
                     request_body_schema=body_schema,
                     response_schema=resp_schema,

@@ -1162,14 +1162,33 @@ class AutonomousDiscoveryEngine:
         """Generate test value variants: real ID + boundaries + edge cases.
         
         Returns list of values to try: [real_id, "0", "-1", "", "null", "undefined", "99999999"]
+        For uuid-type params, uses valid uuid-format boundary values instead of integers.
         """
         values = []
         real_id = self._fetch_real_id(param_name, resolved, route_map)
         if real_id and real_id != "1" and not real_id.startswith("QUALIBUG_"):
             values.append(real_id)
         
-        # Boundary values
-        values.extend(["0", "-1", "99999999", ""])
+        # Detect if parameter is uuid-type (from OpenAPI schema format, param name, or real_id format)
+        param_formats = resolved.get("path_param_formats", {}) if isinstance(resolved, dict) else {}
+        param_format = str(param_formats.get(param_name, "")).lower()
+        is_uuid_param = (
+            param_format == "uuid"
+            or "uuid" in param_name.lower()
+            or bool(re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', real_id or "", re.IGNORECASE))
+        )
+        
+        if is_uuid_param:
+            # UUID-type params: use valid-format uuid boundary values
+            # (non-uuid values like "0" or "-1" cause PostgreSQL "invalid input syntax for type uuid")
+            values.extend([
+                "00000000-0000-0000-0000-000000000000",  # nil uuid
+                "ffffffff-ffff-ffff-ffff-ffffffffffff",  # max uuid
+                "00000000-0000-0000-0000-000000000001",  # near-nil
+            ])
+        else:
+            # Integer/string params: standard boundary values
+            values.extend(["0", "-1", "99999999", ""])
         
         # SQL injection / XSS probes (lightweight, safe for sandbox)
         values.append("' OR '1'='1")
@@ -1203,8 +1222,17 @@ class AutonomousDiscoveryEngine:
                             real_ids[param] = self._fetch_real_id(param, resolved, route_map)
                         # If sentinel (unresolvable), fall back to "1" for the HTTP call
                         # but track that this is a synthetic ID → evidence quality degraded
+                        # For uuid-type params, use nil uuid to avoid PostgreSQL type errors
                         rid = real_ids.get(param, "1")
-                        actual_path = actual_path.replace(f"{{{param}}}", rid if not rid.startswith("QUALIBUG_") else "1")
+                        if rid.startswith("QUALIBUG_"):
+                            # Detect uuid-type param from OpenAPI schema format or param name
+                            param_formats = resolved.get("path_param_formats", {}) if isinstance(resolved, dict) else {}
+                            param_fmt = str(param_formats.get(param, "")).lower()
+                            if param_fmt == "uuid" or "uuid" in param.lower():
+                                rid = "00000000-0000-0000-0000-000000000000"
+                            else:
+                                rid = "1"
+                        actual_path = actual_path.replace(f"{{{param}}}", rid)
                     synthetic_id = any(v.startswith("QUALIBUG_") for v in real_ids.values())
                     calls.append({"method": resolved["method"], "path": actual_path,
                         "llm_path": llm_path, "resolved": True, "source": key,

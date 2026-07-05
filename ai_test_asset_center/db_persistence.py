@@ -3,7 +3,7 @@ QualiBug persistence layer — SQLite-based multi-tenant storage.
 Replaces file-based JSON with database, while keeping backward compatibility.
 """
 from __future__ import annotations
-import json, os, sqlite3, time, hashlib, secrets
+import json, os, sqlite3, time, hashlib, hmac, base64, secrets
 from pathlib import Path
 from typing import Any
 from contextlib import contextmanager
@@ -122,8 +122,40 @@ def init_db(root: Path) -> None:
 
 # ── Tenant management ──
 
+_PBKDF2_ITERATIONS = 200_000
+
 def _password_hash(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash password with PBKDF2-HMAC-SHA256 + random salt.
+
+    Format: ``pbkdf2_sha256$<iterations>$<salt_b64>$<hash_b64>``.
+    Replaces the legacy bare SHA-256 which was vulnerable to rainbow tables
+    and lacked per-user salts.
+    """
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS, dklen=32)
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
+
+def _verify_password(password: str, stored: str) -> bool:
+    """Verify a password against a stored hash.
+
+    Supports the new ``pbkdf2_sha256$...`` format and the legacy bare
+    SHA-256 hexdigest for backward compatibility with existing tenants.
+    Legacy hashes should be migrated on next password change.
+    """
+    if not stored or not password:
+        return False
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            _, iter_str, salt_b64, hash_b64 = stored.split("$", 3)
+            iterations = int(iter_str)
+            salt = base64.b64decode(salt_b64)
+            expected = base64.b64decode(hash_b64)
+            dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations, dklen=len(expected))
+            return hmac.compare_digest(dk, expected)
+        except Exception:
+            return False
+    # Legacy bare sha256 hexdigest — backward compat for pre-existing tenants.
+    return hmac.compare_digest(hashlib.sha256(password.encode("utf-8")).hexdigest(), stored)
 
 def create_tenant(
     root: Path,
@@ -163,10 +195,14 @@ def authenticate_tenant(root: Path, username_or_api_key: str, password: str = ""
     with _conn(root) as db:
         row = None
         if password:
-            row = db.execute(
-                "SELECT id, username, role FROM tenants WHERE username = ? AND password_hash = ?",
-                (username_or_api_key, _password_hash(password)),
+            # Salted hashes cannot be compared in SQL — fetch the stored hash and
+            # verify in Python so per-tenant salts are honoured.
+            candidate = db.execute(
+                "SELECT id, username, role, password_hash FROM tenants WHERE username = ?",
+                (username_or_api_key,),
             ).fetchone()
+            if candidate and _verify_password(password, candidate["password_hash"] or ""):
+                row = candidate
         else:
             row = db.execute(
                 "SELECT id, username, role FROM tenants WHERE api_key_hash = ?",
@@ -263,6 +299,224 @@ def save_scan(root: Path, tenant_id: str, project_id: str, scan_result: dict) ->
                 json.dumps(f.get("evidence", {}), ensure_ascii=False)
             ))
     return scan_id
+
+
+# ── Cumulative findings (cross-scan bug accumulation) ──
+
+def _finding_dedupe_key(f: dict) -> str:
+    """Generic dedupe key: normalized title + method + path.
+
+    Normalization removes engine/Oracle prefixes like [场景执行], [V12 HttpStatusOracle]
+    so that the same finding reported by different engines is treated as one bug.
+
+    Two findings with the same core title targeting the same API endpoint are the
+    same bug, regardless of which scan round or engine discovered them.
+    """
+    import re as _re
+    title = str(f.get("title") or f.get("description") or "")[:200].strip().lower()
+    # Strip engine/oracle prefixes: [xxx] prefix patterns
+    # Examples: [场景执行], [V12 HttpStatusOracle], [INPUT], [权限], [资金], etc.
+    title = _re.sub(r'^\[[^\]]*\]\s*', '', title)
+    # Also strip multiple leading [xxx] prefixes
+    title = _re.sub(r'^(\[[^\]]*\]\s*)+', '', title)
+    # Normalize whitespace
+    title = _re.sub(r'\s+', ' ', title).strip()
+
+    method = str(f.get("_api_method") or f.get("method") or (f.get("evidence") or {}).get("method") or "").upper()
+    path = str(f.get("_api_path") or f.get("path") or (f.get("evidence") or {}).get("path") or "").strip()
+    return f"{title}|{method}|{path}"
+
+
+def merge_findings_cumulative(
+    root: Path,
+    tenant_id: str,
+    project_id: str,
+    scan_id: str,
+    new_findings: list[dict],
+) -> dict:
+    """Merge new scan findings into the cumulative findings store.
+
+    Semantics (the "bug shelf" model):
+    - Bugs are never silently dropped when a new scan runs.
+    - A finding that already exists (same dedupe key) keeps its existing
+      ``status`` (open/resolved/falsified) — a new scan does not auto-close it.
+    - A finding that is brand-new gets inserted with status='open'.
+    - Findings from the previous scan that are NOT in the new scan are NOT
+      auto-closed either: they remain on the shelf because the bug may simply
+      not have been triggered this round (non-deterministic) or the new scan
+      had less coverage.  Only an explicit replay that returns success=False
+      (bug no longer reproduces) should flip status to 'resolved'.
+    - Returns a summary dict with counts: new, existing, total_open.
+
+    This is generic — no hardcoded business concepts, works for any industry.
+    """
+    init_db(root)
+    import json as _json
+    with _conn(root) as db:
+        # Load existing open findings for this project
+        # Load existing findings for this project across ALL tenants
+        # (same project may have been scanned under different tenant_id due to
+        #  login variations — bugs are per-project, not per-tenant)
+        existing_rows = db.execute(
+            "SELECT id, tenant_id, title, severity, category, description, confidence, status, evidence_json, scan_id "
+            "FROM findings WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+
+        # Build existing-key → row map
+        existing_map: dict[str, dict] = {}
+        for r in existing_rows:
+            f = {
+                "title": r["title"],
+                "severity": r["severity"],
+                "category": r["category"],
+                "description": r["description"],
+                "confidence": r["confidence"],
+                "_api_method": "",
+                "_api_path": "",
+            }
+            try:
+                ev = _json.loads(r["evidence_json"] or "{}")
+                if isinstance(ev, dict):
+                    f["_api_method"] = ev.get("method", "")
+                    f["_api_path"] = ev.get("path", "")
+            except Exception:
+                pass
+            key = _finding_dedupe_key(f)
+            existing_map[key] = dict(r)
+
+        new_count = 0
+        existing_count = 0
+        seen_keys: set[str] = set()
+
+        for i, f in enumerate(new_findings):
+            if not isinstance(f, dict):
+                continue
+            key = _finding_dedupe_key(f)
+            seen_keys.add(key)
+
+            if key in existing_map:
+                # Already on the shelf — keep its status, do not overwrite
+                existing_count += 1
+                continue
+
+            # Brand-new finding — insert as open
+            fid = f"{scan_id}_m{i}"
+            evidence = f.get("evidence") if isinstance(f.get("evidence"), dict) else {}
+            # Enrich evidence with API path/method for future dedupe
+            if f.get("_api_path") or f.get("_api_method"):
+                evidence = {**evidence}
+                if f.get("_api_path"):
+                    evidence.setdefault("path", f["_api_path"])
+                if f.get("_api_method"):
+                    evidence.setdefault("method", f["_api_method"])
+            db.execute("""
+                INSERT INTO findings (id, tenant_id, project_id, scan_id, title, severity, category, description, confidence, status, evidence_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+            """, (
+                fid, tenant_id, project_id, scan_id,
+                str(f.get("title") or f.get("description", ""))[:500],
+                str(f.get("severity", "P1")),
+                str(f.get("category") or f.get("risk_type", "")),
+                str(f.get("description", ""))[:500],
+                float(f.get("confidence_score") or f.get("score") or 0),
+                _json.dumps(evidence, ensure_ascii=False),
+            ))
+            new_count += 1
+
+    return {
+        "new": new_count,
+        "existing": existing_count,
+        "total_in_scan": len(new_findings),
+    }
+
+
+def get_cumulative_findings(
+    root: Path,
+    tenant_id: str,
+    project_id: str,
+    *,
+    include_resolved: bool = False,
+) -> list[dict]:
+    """Load all cumulative findings for a project from the DB.
+
+    By default returns only open findings (bugs not yet fixed).
+    Set include_resolved=True to also return resolved/falsified findings.
+    """
+    init_db(root)
+    import json as _json
+    with _conn(root) as db:
+        # Query by project_id across ALL tenants (bugs are per-project)
+        if include_resolved:
+            rows = db.execute(
+                "SELECT id, title, severity, category, description, confidence, status, evidence_json, scan_id, created_at "
+                "FROM findings WHERE project_id = ? ORDER BY created_at",
+                (project_id,),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT id, title, severity, category, description, confidence, status, evidence_json, scan_id, created_at "
+                "FROM findings WHERE project_id = ? AND status = 'open' ORDER BY created_at",
+                (project_id,),
+            ).fetchall()
+        results: list[dict] = []
+        for r in rows:
+            f = {
+                "risk_id": r["id"],
+                "title": r["title"],
+                "severity": r["severity"],
+                "category": r["category"],
+                "description": r["description"],
+                "confidence_score": r["confidence"],
+                "status": r["status"],
+                "scan_id": r["scan_id"],
+                "first_seen_at": r["created_at"],
+            }
+            try:
+                ev = _json.loads(r["evidence_json"] or "{}")
+                if isinstance(ev, dict):
+                    f["evidence"] = ev
+                    if ev.get("path"):
+                        f["_api_path"] = ev["path"]
+                    if ev.get("method"):
+                        f["_api_method"] = ev["method"]
+            except Exception:
+                pass
+            results.append(f)
+        return results
+
+
+def update_finding_status(root: Path, finding_id: str, status: str) -> bool:
+    """Update a finding's status (open/resolved/falsified).
+
+    Used by the replay engine to mark a bug as 'resolved' when replay
+    shows it no longer reproduces.
+    """
+    init_db(root)
+    with _conn(root) as db:
+        cur = db.execute(
+            "UPDATE findings SET status = ? WHERE id = ?",
+            (status, finding_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_finding_stats(root: Path, tenant_id: str, project_id: str) -> dict:
+    """Get cumulative finding statistics for a project (across all tenants)."""
+    init_db(root)
+    with _conn(root) as db:
+        rows = db.execute(
+            "SELECT status, COUNT(*) as cnt FROM findings "
+            "WHERE project_id = ? GROUP BY status",
+            (project_id,),
+        ).fetchall()
+        stats = {"open": 0, "resolved": 0, "falsified": 0, "total": 0}
+        for r in rows:
+            s = r["status"] or "open"
+            stats[s] = stats.get(s, 0) + r["cnt"]
+            stats["total"] += r["cnt"]
+        return stats
+
 
 def get_scan_history(root: Path, tenant_id: str, project_id: str, limit: int = 20) -> list[dict]:
     init_db(root)

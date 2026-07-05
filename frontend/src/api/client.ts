@@ -1,5 +1,4 @@
 export const API_BASE = '/api';
-import { resolveFindingTaxonomy } from '../lib/finding-taxonomy';
 
 const API_V1_BASE = '/api/v1';
 const TOKEN_KEY = 'qualibug_token';
@@ -13,16 +12,11 @@ export type LoginResult = {
 
 async function ensureAuth(): Promise<void> {
   if (localStorage.getItem(TOKEN_KEY)) return;
-
-  // Development mode: allow auto-login via qualibug_dev_token in localStorage
   const devToken = localStorage.getItem('qualibug_dev_token');
   if (devToken) {
     localStorage.setItem(TOKEN_KEY, devToken);
     return;
   }
-
-  // Production: must have a token. Throw a clear error so the UI can show
-  // a login prompt instead of silently guessing credentials.
   throw new Error(
     '未登录。请在浏览器控制台设置登录令牌，或联系管理员配置认证。\n' +
     '示例: localStorage.setItem("qualibug_dev_token", "<your-jwt-token>")'
@@ -137,7 +131,7 @@ async function fetchWithTenant(url: string, init?: RequestInit): Promise<unknown
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string> || {}) };
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const resp = await fetch(url, { ...init, headers });
+  const resp = await fetch(url, { ...init, headers, credentials: 'include' });
   if (!resp.ok) throw new Error(parseApiErrorMessage(resp.status, await resp.text()));
   return resp.json();
 }
@@ -145,6 +139,7 @@ async function fetchWithTenant(url: string, init?: RequestInit): Promise<unknown
 function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return fetchWithTenant(url, init) as Promise<T>;
 }
+
 type ProjectSummary = {
   project_id?: string;
   customer_name?: string;
@@ -183,16 +178,6 @@ function asString(value: unknown): string {
 
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function asBoolean(value: unknown): boolean {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    return normalized === 'true' || normalized === '1' || normalized === 'yes';
-  }
-  return false;
 }
 
 function parseApiErrorMessage(status: number, text: string) {
@@ -235,305 +220,26 @@ async function resolveProjectId(projectId: string) {
     const projects = await listProjects();
     return projects.some((item) => item.project_id === normalized) ? normalized : normalized;
   } catch {
-    return normalized; // Trust URL param on failure
+    return normalized;
   }
 }
 
-export type FindingsSnapshot = {
-  resolvedProjectId: string;
-  projectId: string;
-  projectName: string;
-  status: string;
-  updatedAt: string;
-  industry: string;
-  knowledgeSummary: {
-    activeSourceCount: number;
-    ruleCount: number;
-    riskDomainCount: number;
-    oracleCount: number;
-    businessObjectCount: number;
-    stateMachineCount: number;
-    knowledgeReady: boolean;
-  };
-  findings: ReturnType<typeof toLegacyFinding>[];
-  executiveSummary: {
-    totalFindings: number;
-    totalBugsFound: number;
-    criticalBugs: number;
-    highPriorityBugs: number;
-    llmPoweredAnalyses: number;
-    systemGrade: string;
-    overallScore: number;
-  };
-  runtimeVerification: {
-    totalProbes: number;
-    confirmed: number;
-  };
-  dbVerification: {
-    total: number;
-    confirmed: number;
-    hitRate: number;
-  };
-  scanMeta: {
-    scanId: string;
-    runCount: number;
-    firstScanAt: string;
-    lastScanAt: string;
-    totalMs: number;
-    totalFindings: number;
-    grade: string;
-    score: number;
-    reportPath: string;
-  };
-  valueMetrics: JsonRecord;
-  businessFlowSummary: JsonRecord;
-  discoveryFunnel: JsonRecord;
-  fullSpectrumCapabilityMatrix: JsonRecord;
-  bugFamilyCoverage: JsonRecord;
-  continuousDiscoveryCampaign: JsonRecord;
-  continuousDiscoveryMetrics: JsonRecord;
-  spectrum: JsonRecord;
-};
-
-function normalizeSeverity(input: string | undefined) {
-  const value = String(input || '').toLowerCase();
-  if (value === 'critical' || value === 'p0') return 'P0';
-  if (value === 'high' || value === 'p1') return 'P1';
-  if (value === 'medium' || value === 'p2') return 'P2';
-  return 'P2';
-}
-
-function toLegacyFinding(risk: JsonRecord) {
-  const businessFlow = asRecord(risk.affected_business_flow);
-  const flow = asString(businessFlow.name) || asString(businessFlow.business_flow_id) || asString(risk.impact_area);
-  const evidence = asRecord(risk.evidence);
-  const proof = asRecord(risk.proof) || asRecord(risk.evidence_pack);
-  const evidenceText = [
-    asString(risk.technical_title),
-    asString(risk.summary),
-    asString(risk.title),
-    asString(evidence.summary),
-    asString(evidence.path),
-    asString(evidence.path_template),
-    asString(risk.path),
-  ].filter(Boolean).join(' ');
-  const methodMatch = evidenceText.match(/\b(GET|POST|PUT|PATCH|DELETE)\b/i);
-  const pathMatch = evidenceText.match(/(\/api\/[A-Za-z0-9_./:{}-]+|\/[A-Za-z0-9_./:{}-]+\{[^\s]*\}|\/[A-Za-z0-9_./:{}-]+)/i);
-  const method = (
-    asString(risk._api_method)
-    || asString(risk.method)
-    || asString(evidence.method)
-    || asString(proof.method)
-    || methodMatch?.[1]
-    || ''
-  ).toUpperCase();
-  const path = asString(risk._api_path)
-    || asString(risk.path)
-    || asString(evidence.path)
-    || asString(evidence.path_template)
-    || asString(proof.path)
-    || pathMatch?.[1]
-    || '';
-  const title = asString(risk.title) || asString(risk.technical_title) || '未命名缺陷';
-  const status = asString(risk.status) || asString(risk.validation_verdict) || asString(risk.bug_confirmation);
-  const normalizedStatus = status.toLowerCase();
-  const riskType = asString(risk.risk_type) || asString(risk.category) || 'unknown';
-  const businessImpactText = asString(risk.business_impact) || asString(risk.impact) || asString(risk.description);
-  const summary = asString(risk.summary) || asString(evidence.summary) || businessImpactText;
-  const expectedBehavior = asString(risk.expected_behavior)
-    || asString(risk.expected)
-    || asString(evidence.expected)
-    || asString(risk.suggested_action)
-    || '未关联到明确的预期规则；需要回链 PRD / API 规范补强。';
-  const actualBehavior = asString(risk.actual_behavior)
-    || asString(risk.actual)
-    || asString(evidence.actual)
-    || businessImpactText
-    || summary
-    || '已发现风险线索，但缺少真实响应体、截图或日志片段。';
-  const confidenceScore = asNumber(risk.confidence_score, asNumber(risk.evidence_score, asNumber(risk.confidence, 0.5)));
-  const reproducibilityScore = asNumber(risk.reproducibility_score, asNumber(risk.reproducibility_confidence, 0));
-  const firstSeenAt = asString(risk.first_seen_at) || asString(risk.created_at_utc) || asString(risk.generated_at_utc);
-  const lastVerifiedAt = asString(risk.last_verified_at) || asString(risk.updated_at_utc) || asString(risk.timestamp);
-  const riskId = asString(risk.risk_id)
-    || asString(risk.finding_id)
-    || asString(risk.issue_id)
-    || asString(risk.bug_id)
-    || `${method || 'RISK'}:${path || title}`;
-  const affectedModules = asArray(risk.affected_modules).filter((item): item is string => typeof item === 'string');
-  const affectedRoles = asArray(risk.affected_roles).filter((item): item is string => typeof item === 'string');
-  const docRefs = asArray(risk._doc_refs).filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object')
-    || asArray(risk.doc_refs).filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object');
-  const rawSteps = asArray(risk.reproduction_steps).length ? asArray(risk.reproduction_steps) : asArray(risk.reproduce_steps_business);
-  const reproductionSteps = rawSteps.map((item) => String(item)).filter(Boolean);
-  if (!reproductionSteps.length) {
-    reproductionSteps.push(
-      path ? `在测试环境触发 ${method || 'GET'} ${path}` : `进入业务流 ${flow || '核心链路'} 触发相关场景`,
-      '记录请求参数、响应状态码、响应体、时间戳和业务主键',
-      `对比预期规则：${expectedBehavior}`,
-      `观察实际结果：${actualBehavior}`,
-    );
-  }
-  const taxonomy = resolveFindingTaxonomy({
-    title,
-    risk_type: riskType,
-    defect_family: asString(risk.defect_family),
-    reporting_bucket: asString(risk.reporting_bucket),
-    repro_path: path,
-    quality_assurance_gap: asBoolean(risk.quality_assurance_gap),
-  });
-  const confirmed = ['confirmed', 'validated', 'reproduced', 'reproducible'].some((token) => normalizedStatus.includes(token));
-  const sourceFile = asString(risk.source_file) || asString(evidence.source_file) || asString(evidence.report_path);
-  const evidenceHint = asString(risk.evidence_hint)
-    || asString(evidence.hint)
-    || sourceFile
-    || (path ? `${method || 'GET'} ${path}` : summary);
-  const moduleName = affectedModules[0] || asString(risk.module) || asString(evidence.module) || flow || '核心业务';
-
-  return {
-    bug_title: title,
-    title,
-    severity: normalizeSeverity(asString(risk.severity)),
-    defect_family: taxonomy.defect_family,
-    defect_family_label: taxonomy.defect_family_label,
-    verdict: confirmed ? 'confirmed' : 'pending',
-    bug_confirmation: confirmed ? 'confirmed' : 'unconfirmed_candidate',
-    confidence_score: confidenceScore,
-    actual_behavior: actualBehavior,
-    expected_behavior: expectedBehavior,
-    description: businessImpactText || summary,
-    source: asString(risk.source) || sourceFile || 'phase104_command_center',
-    impact_area: flow,
-    source_entity: affectedModules.join(' / ') || moduleName,
-    source_value: affectedRoles.join(', ') || asString(risk.source_value) || asString(evidence.assurance_unit_id) || asString(evidence.operation_id),
-    risk_type: riskType,
-    reporting_bucket: taxonomy.reporting_bucket,
-    reporting_bucket_label: taxonomy.reporting_bucket_label,
-    quality_assurance_gap: taxonomy.quality_assurance_gap,
-    timestamp: lastVerifiedAt || firstSeenAt || new Date().toISOString(),
-    validation_task_id: riskId,
-    reproduction_steps: reproductionSteps,
-    reproducibility: {
-      reproducible: confirmed || reproducibilityScore >= 0.75,
-      reproduction_confidence: Math.max(reproducibilityScore, confirmed ? 0.9 : 0),
-    },
-    evidence: {
-      ...evidence,
-      hash: asString(evidence.hash) || riskId,
-      path,
-      method,
-      summary: asString(evidence.summary) || summary || title,
-      source_file: sourceFile,
-      status_code: evidence.status_code || evidence.response_status || risk.response_status,
-      expected: expectedBehavior,
-      actual: actualBehavior,
-    },
-    path,
-    method,
-    _api_path: path,
-    _api_method: method,
-    evidence_hint: evidenceHint,
-    business_impact: {
-      summary: businessImpactText || actualBehavior,
-      urgency: normalizeSeverity(asString(risk.severity)),
-      module: moduleName,
-    },
-    investigation_guidance: {
-      primary_area: moduleName,
-      relevant_apis: path ? [`${method || 'GET'} ${path}`] : [],
-      relevant_tables: asArray(risk.relevant_tables).map((item) => String(item)).filter(Boolean),
-      log_search: evidenceHint || (path ? `${method || 'GET'} ${path}` : title),
-      sql_verify: asString(risk.sql_verify) || '按业务主键核对请求前后状态、金额、库存、权限或审批记录是否一致。',
-      trace_id: asString(risk.trace_id) || asString(evidence.trace_id),
-    },
-    reproduce_steps_business: reproductionSteps,
-    _doc_refs: docRefs,
-  };
-}
-
-async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapshot> {
+/**
+ * Fetch command-center data — pure passthrough, zero processing.
+ * Backend returns display-ready JSON, frontend just passes it through.
+ */
+export async function getFindings(projectId: string): Promise<JsonRecord> {
   const resolvedProjectId = await resolveProjectId(projectId);
   if (!resolvedProjectId) return emptyFindingsSnapshot('');
-
   try {
     const snapshotEnvelope = await fetchJSON<unknown>(
       `${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/command-center`
     );
-
-    const snapshot = asRecord(asRecord(snapshotEnvelope).data);
-    const liveMap = asRecord(snapshot.live_map);
-    const scanMeta = asRecord(snapshot.scan_meta);
-    const valueMetrics = asRecord(snapshot.value_metrics);
-    const businessFlowSummary = asRecord(snapshot.business_flow_summary);
-    const knowledgeSummary = asRecord(snapshot.knowledge_summary);
-    const risks = asArray(snapshot.risks).map(asRecord);
-    const findings = risks.map(toLegacyFinding);
-    const executive = asRecord(snapshot.executive_summary);
-    const scanTotalFindings = asNumber(scanMeta.total_findings, findings.length);
-    const canonicalTotalFindings = asNumber(executive.total_findings, scanTotalFindings);
-    const canonicalTotalBugsFound = asNumber(executive.total_bugs_found, canonicalTotalFindings);
-    const p0 = findings.filter((item) => item.severity === 'P0').length;
-    const p1 = findings.filter((item) => item.severity === 'P1').length;
-    const canonicalP0 = asNumber(executive.critical_bugs, asNumber(valueMetrics.p0_count, p0));
-    const canonicalP1 = asNumber(executive.high_priority_bugs, asNumber(valueMetrics.p1_count, p1));
-    const evidenceTrustScore = asNumber(valueMetrics.evidence_trust_score, 0);
-    const aiEquivalentTestPoints = asNumber(valueMetrics.ai_equivalent_test_points, 0);
-    const totalBusinessFlows = asNumber(businessFlowSummary.total, 0);
-
+    const data = asRecord(asRecord(snapshotEnvelope).data);
     return {
       resolvedProjectId,
       projectId: resolvedProjectId,
-      projectName: asString(snapshot.project_name) || resolvedProjectId,
-      status: asString(liveMap.status) === 'running' ? 'running' : 'completed',
-      updatedAt: asString(snapshot.updated_at) || '',
-      industry: asString(snapshot.industry),
-      knowledgeSummary: {
-        activeSourceCount: asNumber(knowledgeSummary.active_source_count, 0),
-        ruleCount: asNumber(knowledgeSummary.rule_count, 0),
-        riskDomainCount: asNumber(knowledgeSummary.risk_domain_count, 0),
-        oracleCount: asNumber(knowledgeSummary.oracle_count, 0),
-        businessObjectCount: asNumber(knowledgeSummary.business_object_count, 0),
-        stateMachineCount: asNumber(knowledgeSummary.state_machine_count, 0),
-        knowledgeReady: asBoolean(knowledgeSummary.knowledge_ready),
-      },
-      findings,
-      executiveSummary: {
-        totalFindings: canonicalTotalFindings,
-        totalBugsFound: canonicalTotalBugsFound,
-        criticalBugs: canonicalP0,
-        highPriorityBugs: canonicalP1,
-        llmPoweredAnalyses: aiEquivalentTestPoints,
-        systemGrade: asString(executive.system_grade),
-        overallScore: asNumber(executive.overall_score, 0),
-      },
-      runtimeVerification: {
-        totalProbes: totalBusinessFlows,
-        confirmed: findings.filter((item) => item.verdict === 'confirmed').length,
-      },
-      dbVerification: {
-        total: findings.length,
-        confirmed: findings.filter((item) => item.defect_family === 'data_integrity').length,
-        hitRate: evidenceTrustScore ? Math.round(evidenceTrustScore * 100) : 0,
-      },
-      scanMeta: {
-        scanId: asString(scanMeta.scan_id),
-        runCount: asNumber(scanMeta.run_count, 0),
-        firstScanAt: asString(scanMeta.first_scan_at),
-        lastScanAt: asString(scanMeta.last_scan_at) || asString(snapshot.updated_at),
-        totalMs: asNumber(scanMeta.total_ms, 0),
-        totalFindings: canonicalTotalFindings,
-        grade: asString(scanMeta.grade),
-        score: asNumber(scanMeta.score, 0),
-        reportPath: asString(scanMeta.report_path),
-      },
-      valueMetrics,
-      businessFlowSummary,
-      discoveryFunnel: asRecord(snapshot.discovery_funnel),
-      fullSpectrumCapabilityMatrix: asRecord(snapshot.full_spectrum_capability_matrix),
-      bugFamilyCoverage: asRecord(snapshot.bug_family_coverage),
-      continuousDiscoveryCampaign: asRecord(snapshot.continuous_discovery_campaign),
-      continuousDiscoveryMetrics: asRecord(snapshot.continuous_discovery_metrics),
-      spectrum: asRecord(snapshot.spectrum),
+      ...data,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -544,7 +250,7 @@ async function buildFindingsSnapshot(projectId: string): Promise<FindingsSnapsho
   }
 }
 
-function emptyFindingsSnapshot(projectId: string): FindingsSnapshot {
+function emptyFindingsSnapshot(projectId: string): JsonRecord {
   return {
     resolvedProjectId: projectId,
     projectId,
@@ -552,58 +258,12 @@ function emptyFindingsSnapshot(projectId: string): FindingsSnapshot {
     status: 'idle',
     updatedAt: '',
     industry: '',
-    knowledgeSummary: {
-      activeSourceCount: 0,
-      ruleCount: 0,
-      riskDomainCount: 0,
-      oracleCount: 0,
-      businessObjectCount: 0,
-      stateMachineCount: 0,
-      knowledgeReady: false,
-    },
-    findings: [],
-    executiveSummary: {
-      totalFindings: 0,
-      totalBugsFound: 0,
-      criticalBugs: 0,
-      highPriorityBugs: 0,
-      llmPoweredAnalyses: 0,
-      systemGrade: '',
-      overallScore: 0,
-    },
-    runtimeVerification: {
-      totalProbes: 0,
-      confirmed: 0,
-    },
-    dbVerification: {
-      total: 0,
-      confirmed: 0,
-      hitRate: 0,
-    },
-    scanMeta: {
-      scanId: '',
-      runCount: 0,
-      firstScanAt: '',
-      lastScanAt: '',
-      totalMs: 0,
-      totalFindings: 0,
-      grade: '',
-      score: 0,
-      reportPath: '',
-    },
-    valueMetrics: {},
-    businessFlowSummary: {},
-    discoveryFunnel: {},
-    fullSpectrumCapabilityMatrix: {},
-    bugFamilyCoverage: {},
-    continuousDiscoveryCampaign: {},
-    continuousDiscoveryMetrics: {},
-    spectrum: {},
+    risks: [],
+    scan_meta: {},
+    value_metrics: {},
+    executive_summary: {},
+    knowledge_summary: {},
   };
-}
-
-export async function getFindings(projectId: string) {
-  return buildFindingsSnapshot(projectId);
 }
 
 export async function getKnowledgeAsset(projectId: string) {
@@ -736,5 +396,17 @@ export async function saveServiceCredentials(body: Record<string, unknown>) {
   return fetchJSON(`${API_BASE}/v1/services/credentials`, {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+// Replay API — real-time bug reproduction
+export async function replayFinding(projectId: string, findingId: string, baseUrl?: string) {
+  return fetchJSON<unknown>(`${API_BASE}/v1/replay`, {
+    method: 'POST',
+    body: JSON.stringify({
+      project_id: projectId,
+      finding_id: findingId,
+      base_url: baseUrl || undefined,
+    }),
   });
 }

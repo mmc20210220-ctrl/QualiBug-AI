@@ -29,3 +29,4 @@ When refactoring configuration (e.g. Policy Registry migration), always verify t
 assert engine.client.config.timeout_seconds >= 300, "timeout too low"
 assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 ```
+所有产品前后端都不能有硬编码，要保持通用性，我做的是全行业适配的，绝对不能有硬编码

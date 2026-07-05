@@ -976,6 +976,7 @@ class BugEvidenceGraph:
     severity: str = "P1"; confidence: float = 0.0
     evidence_id: str = ""
     layers_triggered: list[str] = field(default_factory=list)
+    vote_summary: dict = field(default_factory=dict)          # voting-based confirmation
 
     def to_dict(self) -> dict:
         return {
@@ -988,6 +989,7 @@ class BugEvidenceGraph:
             "oracle_results": [r.to_dict() for r in self.oracle_results],
             "reproduction_steps": self.reproduction_steps,
             "evidence_id": self.evidence_id, "layers_triggered": self.layers_triggered,
+            "vote_summary": self.vote_summary,
         }
 
 class EvidenceGraphBuilder:

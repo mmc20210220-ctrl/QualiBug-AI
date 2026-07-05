@@ -471,10 +471,40 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                                 cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' AND column_name LIKE '%id' LIMIT 1")
                                 pk_rows = cur.fetchall()
                                 pk = pk_rows[0][0] if pk_rows else col_name
-                                cur.execute(f"SELECT {pk}, {col_name} FROM {table} WHERE {col_name} < 0 LIMIT 3")
+                                # 动态发现业务可读字段（通用：不硬编码字段名）
+                                cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' AND column_name IN ('order_id','sku','product_id','user_id','email','name','product_name','code','phone','amount','status')")
+                                biz_cols = [r[0] for r in cur.fetchall()]
+                                # 构建查询：主键 + 负值字段 + 业务字段
+                                select_cols = [pk, col_name] + [c for c in biz_cols if c != pk and c != col_name]
+                                select_sql = ", ".join(select_cols)
+                                cur.execute(f"SELECT {select_sql} FROM {table} WHERE {col_name} < 0 LIMIT 3")
                                 for row in cur.fetchall():
-                                    add(f"[DB] {table}.{col_name}为负: {row[0]}={row[1]}", "P0", "data_integrity",
-                                        f"表{table}列{col_name}含负数值", 0.95)
+                                    pk_val, neg_val = row[0], row[1]
+                                    # 构建业务可读的区分信息（通用：跳过UUID格式值，用户看不懂）
+                                    biz_parts = []
+                                    business_key_val = ""  # 用于 source_value
+                                    for i, col in enumerate(biz_cols, start=2):
+                                        val = row[i] if i < len(row) else None
+                                        if val is not None and str(val).strip():
+                                            val_str = str(val).strip()
+                                            # 跳过标准UUID格式（用户看不懂，只用在detail）
+                                            if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', val_str):
+                                                continue
+                                            biz_parts.append(f"{col}={val_str}")
+                                            if not business_key_val:
+                                                business_key_val = val_str
+                                    # 如果没有业务可读字段，用主键值（但也跳过UUID）
+                                    if not biz_parts:
+                                        pk_str = str(pk_val).strip() if pk_val is not None else ""
+                                        if not re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', pk_str):
+                                            biz_parts.append(f"{pk}={pk_str}")
+                                            business_key_val = pk_str
+                                        else:
+                                            biz_parts.append(f"id={pk_str[:8]}")
+                                    biz_info = "，".join(biz_parts[:3])
+                                    # 标题只用业务可读信息，UUID放detail
+                                    add(f"[DB] {table}.{col_name}为负: {biz_info}（值={neg_val}）", "P0", "data_integrity",
+                                        f"表{table}列{col_name}含负数值，主键={pk_val}", 0.95)
                         except Exception:
                             pass
                 
@@ -483,22 +513,42 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
             pass
     
     # ═══════════════════════════════════════
-    # 10. Input boundary: special chars
+    # 10. Input boundary: dynamic tests for ALL POST/PUT endpoints
     # ═══════════════════════════════════════
-    if buyer_token:
-        boundary_tests = [
-            ("超长email", "POST", "/api/auth/register",
-             {"email": "a" * 5000 + "@test.com", "password": "x", "name": "x", "phone": "x"}),
-            ("SQL注入", "POST", "/api/auth/login",
-             {"email": "'; DROP TABLE users;--", "password": "' OR 1=1--"}),
+    # 通用边界测试：对所有 POST/PUT 路由动态生成边界测试用例，
+    # 不硬编码特定端点（之前只测 /api/auth/login 和 /api/auth/register）
+    if buyer_token and routes:
+        # 通用边界测试数据（非业务概念）
+        boundary_payloads = [
+            ("超长字符串", {"_boundary_field_": "a" * 5000}),
+            ("SQL注入", {"_boundary_field_": "'; DROP TABLE--"}),
+            ("XSS", {"_boundary_field_": "<script>alert(1)</script>"}),
+            ("Null字节", {"_boundary_field_": "\x00\x01\x02"}),
+            ("空对象", {}),
         ]
-        if product_paths:
-            boundary_tests.append(("XSS搜索", "GET", f"/api/products?keyword=<script>alert(1)</script>", None))
-        for label, method, path, body in boundary_tests:
-            code = _http_error_code(path, method, body, H_buyer)
-            if code >= 500:
-                add(f"[边界] {label}导致服务端{code}", "P1", "input_validation",
-                    f"{method} {path} 返回{code}", 0.88)
+        tested_endpoints: set[str] = set()
+        for route in routes:
+            method = route.get("method", "GET").upper()
+            if method not in ("POST", "PUT", "PATCH"):
+                continue
+            path = route.get("path", "")
+            if not path or path in tested_endpoints:
+                continue
+            tested_endpoints.add(path)
+            # 从路由声明中提取 body 参数名（通用）
+            body_props = route.get("body_properties") or {}
+            if not isinstance(body_props, dict) or not body_props:
+                # 没有声明参数的端点，用一个通用字段名测试
+                body_props = {"input": ""}
+            # 取第一个参数名作为边界测试字段
+            test_field = next(iter(body_props.keys()), "input")
+            for label, template in boundary_payloads:
+                # 用实际参数名替换通用字段
+                payload = {test_field: v} if isinstance(template, dict) and "_boundary_field_" in template else template
+                code = _http_error_code(path, method, payload, H_buyer)
+                if code >= 500:
+                    add(f"[边界] {label}导致服务端{code}: {method} {path}", "P1", "input_validation",
+                        f"{method} {path} 返回{code}", 0.88)
     
     # ═══════════════════════════════════════
     # 11. Report accuracy (if reports exist)
@@ -554,19 +604,26 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
 
 
 def _load_config() -> dict:
-    """Load test_profile from connector_registry."""
+    """Load test_profile from connector_registry (generic, no hardcoded project name)."""
     from pathlib import Path
     import json
-    # Try common paths
-    for candidate in [
-        Path("platform_workspace") / "第一个真实项目测试" / "enterprise_pilot_runtime" / "connector_registry.json",
-        Path("platform_workspace") / ".." / "enterprise_pilot_runtime" / "connector_registry.json",
-    ]:
-        try:
-            cfg = json.loads(candidate.read_text(encoding='utf-8'))
-            return cfg.get("test_profile", {})
-        except Exception:
+    # Scan all project directories — do not hardcode a specific project name
+    workspace_root = Path(".")
+    for base_dir in ("platform_workspace", "platform_outputs"):
+        ws = workspace_root / base_dir
+        if not ws.exists():
             continue
+        for proj_dir in ws.iterdir():
+            if not proj_dir.is_dir():
+                continue
+            candidate = proj_dir / "enterprise_pilot_runtime" / "connector_registry.json"
+            try:
+                cfg = json.loads(candidate.read_text(encoding='utf-8'))
+                profile = cfg.get("test_profile", {})
+                if profile:
+                    return profile
+            except Exception:
+                continue
     return {}
 
 

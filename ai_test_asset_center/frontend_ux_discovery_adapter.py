@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from .defect_signal_schema import normalize_defect_signal
-from .phase105_frontend_interaction_acceptance import run_frontend_interaction_acceptance
+try:
+    from .phase105_frontend_interaction_acceptance import run_frontend_interaction_acceptance
+except ImportError:
+    run_frontend_interaction_acceptance = None
 from .real_project_onboarding import ROOT, config_paths
 
 

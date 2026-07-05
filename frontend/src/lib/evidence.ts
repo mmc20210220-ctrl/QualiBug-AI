@@ -1,8 +1,9 @@
+/** @deprecated 后端 display_ready_formatter.py 已返回 display 版本的 evidence 字段，此文件仅保留函数签名作 fallback。 */
 import type { Finding } from '../types';
 
 type EvidenceLike = Pick<
   Finding,
-  'title' | 'severity' | 'repro_method' | 'repro_path' | 'source_entity' | 'docRefs' | 'evidence_chain' | 'investigation_guidance' | 'evidence_quality'
+  'title' | 'severity' | 'repro_method' | 'repro_path' | 'source_entity' | 'doc_refs' | 'evidence_chain' | 'investigation_guidance' | 'evidence_quality'
 >;
 
 function clean(value: string | undefined) {
@@ -18,7 +19,7 @@ export function getEvidenceSummaryText(finding: EvidenceLike) {
 
   if (clean(finding.repro_path)) parts.push('接口复现链路已附');
   if (clean(finding.source_entity)) parts.push(`数据核验线索：${clean(finding.source_entity)}`);
-  if ((finding.docRefs || []).length > 0) parts.push('资料交叉验证已附');
+  if ((finding.doc_refs || []).length > 0) parts.push('资料交叉验证已附');
   if (parts.length === 0 && (finding.evidence_chain || []).length > 0) parts.push('检测证据已归档');
 
   return parts.join(' / ') || '检测证据已归档';

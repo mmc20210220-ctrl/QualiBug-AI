@@ -29,6 +29,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .ssrf_guard import safe_urlopen, SsrfBlockedError
+from .credential_crypto import decrypt as _decrypt_cred
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -239,12 +242,15 @@ class EnterpriseCredentialManager:
             cred.base_url = base_url
             cred.login_api = role_cfg.get("login_api", login_api)
             cred.username = str(role_cfg.get("username", ""))
-            cred.password = str(role_cfg.get("password", ""))
+            cred.password = _decrypt_cred(str(role_cfg.get("password", "")))
             if not cred.username and not cred.password:
                 continue  # Skip empty roles
-            cred.bearer_token = str(role_cfg.get("bearer_token", ""))
-            cred.api_key = str(role_cfg.get("api_key", ""))
-            cred.db_connection = role_cfg.get("db", {}) or {}
+            cred.bearer_token = _decrypt_cred(str(role_cfg.get("bearer_token", "")))
+            cred.api_key = _decrypt_cred(str(role_cfg.get("api_key", "")))
+            _db_conn = dict(role_cfg.get("db", {}) or {})
+            if _db_conn.get("password"):
+                _db_conn["password"] = _decrypt_cred(str(_db_conn["password"]))
+            cred.db_connection = _db_conn
             self.store.set(cred)
 
         # Global bearer_token / api_key (applies to all roles)
@@ -252,14 +258,14 @@ class EnterpriseCredentialManager:
             cred = ServiceCredential(name, "admin", "bearer_token")
             cred.base_url = base_url
             cred.login_api = login_api
-            cred.bearer_token = str(auth["bearer_token"])
+            cred.bearer_token = _decrypt_cred(str(auth["bearer_token"]))
             self.store.set(cred)
 
         if auth.get("api_key") and not self.store.get(name, "admin"):
             cred = ServiceCredential(name, "admin", "api_key")
             cred.base_url = base_url
             cred.login_api = login_api
-            cred.api_key = str(auth["api_key"])
+            cred.api_key = _decrypt_cred(str(auth["api_key"]))
             self.store.set(cred)
 
     def _load_service_accounts(self, name: str, base_url: str,
@@ -278,9 +284,9 @@ class EnterpriseCredentialManager:
                 cred.base_url = acc.get("base_url", base_url)
                 cred.login_api = acc.get("login_api", login_api)
                 cred.username = str(acc.get("username", ""))
-                cred.password = str(acc.get("password", ""))
-                cred.bearer_token = str(acc.get("bearer_token", "") or acc.get("token", ""))
-                cred.api_key = str(acc.get("api_key", ""))
+                cred.password = _decrypt_cred(str(acc.get("password", "")))
+                cred.bearer_token = _decrypt_cred(str(acc.get("bearer_token", "") or acc.get("token", "")))
+                cred.api_key = _decrypt_cred(str(acc.get("api_key", "")))
                 self.store.set(cred)
 
     # ── Environment variable loading ──
@@ -418,8 +424,14 @@ class EnterpriseCredentialManager:
         if cred.bearer_token and cred.is_valid():
             return cred
 
-        username = cred.username or role
-        password = cred.password or f"{role}123"
+        # Never guess passwords — skip login when no credentials are configured
+        # instead of trying weak defaults like "{role}123" which could lock out
+        # accounts or succeed against poorly-configured targets.
+        if not cred.username or not cred.password:
+            print(f"  [WARN] {service}/{role}: no credentials configured, skipping login", flush=True)
+            return None
+        username = cred.username
+        password = cred.password
 
         # ── Build candidate list ──
         candidates = []
@@ -461,7 +473,7 @@ class EnterpriseCredentialManager:
             )
 
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                with safe_urlopen(req, timeout=timeout) as resp:
                     data = json.loads(resp.read().decode())
             except Exception:
                 continue  # Try next path
@@ -571,7 +583,7 @@ class EnterpriseCredentialManager:
                     url, method="POST", data=body,
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=5) as resp:
+                with safe_urlopen(req, timeout=5) as resp:
                     data = json.loads(resp.read().decode())
                 new_token = (
                     (data.get("data") or {}).get("accessToken") or

@@ -77,6 +77,13 @@ def extract_tenant_from_request(headers: dict, root: Any = None) -> str:
 
     # 3. Dev mode fallback
     if os.environ.get("QUALIBUG_AUTH_BYPASS", "0") == "1":
+        # Auth bypass must never be active when the service is exposed to a
+        # public network. Refuse rather than silently grant unauthenticated access.
+        if os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1":
+            raise RuntimeError(
+                "QUALIBUG_AUTH_BYPASS=1 is forbidden when QUALIBUG_ALLOW_PUBLIC_BIND=1 "
+                "(auth bypass cannot be enabled on a publicly-bound service)"
+            )
         return os.environ.get("QUALIBUG_TENANT", "default")
 
     return ""

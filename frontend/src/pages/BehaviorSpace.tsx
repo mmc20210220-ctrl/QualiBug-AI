@@ -218,16 +218,34 @@ function buildBehaviorItems(findings: Finding[]): BehaviorItem[] {
   return Array.from(byKey.values());
 }
 
+/** Check if a path looks like a valid API endpoint (not a description text). */
+function isValidApiPath(path: string): boolean {
+  if (!path || typeof path !== 'string') return false;
+  const p = path.trim();
+  if (!p.startsWith('/')) return false;
+  // Must be ASCII-only (no Chinese chars that indicate description text)
+  if (!/^[a-zA-Z0-9_/{}:.@.-]+$/.test(p)) return false;
+  // Must have at least one alphabetic segment
+  const segments = p.split('/').filter(Boolean);
+  if (!segments.some(s => /^[a-zA-Z]/.test(s))) return false;
+  return true;
+}
+
 function classifyBehaviorType(finding: Finding): BehaviorType {
   const source = `${finding.source_entity || ''} ${finding.source_value || ''} ${finding.title}`.toLowerCase();
-  if (finding.repro_path) return 'API';
+  // Only classify as API if repro_path is a valid API endpoint
+  if (isValidApiPath(finding.repro_path)) return 'API';
   if (source.includes('prd') || source.includes('openapi') || source.includes('文档')) return '文档';
-  if (source.includes('db') || source.includes('table') || source.includes('库存') || source.includes('transaction')) return '数据库';
+  if (source.includes('db') || source.includes('table') || source.includes('transaction')) return '数据库';
   return '业务流程';
 }
 
 function buildIdentifier(type: BehaviorType, finding: Finding): string {
-  if (type === 'API') return finding.repro_path || finding.title;
+  if (type === 'API') {
+    // Only use repro_path if it's valid; otherwise use a generic label
+    // (don't fallback to title — title is a description, not an identifier)
+    return isValidApiPath(finding.repro_path) ? finding.repro_path : '业务场景';
+  }
   return finding.source_entity || finding.title;
 }
 
@@ -240,10 +258,7 @@ function formatBehaviorIdentifier(value: string) {
   const normalized = String(value || '').trim();
   if (!normalized) return '待生成';
   if (normalized.toLowerCase() === 'system') return '系统主流程';
-  if (normalized === 'RequiredFieldOracle') return '必填字段校验链路';
-  if (normalized === 'IdempotencyOracle') return '幂等校验链路';
   if (normalized.toLowerCase() === 'default') return '默认业务链路';
-  // Generic: return the normalized value as-is (no industry mapping)
   return normalized;
 }
 
@@ -251,12 +266,7 @@ function formatBehaviorDetail(value: string) {
   const normalized = String(value || '').trim();
   if (!normalized) return '待补充';
   if (normalized.toLowerCase() === 'system') return '系统级行为信号';
-  if (normalized === 'RequiredFieldOracle') return '必填字段校验规则';
-  if (normalized === 'IdempotencyOracle') return '幂等约束校验规则';
-  return normalized
-    .replace(/RequiredFieldOracle/g, '必填字段校验规则')
-    .replace(/IdempotencyOracle/g, '幂等约束校验规则')
-    .replace(/\bV12\b/g, '当前检测链路');
+  return normalized;
 }
 
 function getBehaviorHeatTone(findings: number) {

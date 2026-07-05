@@ -262,6 +262,10 @@ def _parse_structured_content(cleaned: str) -> tuple[Any | None, str, str]:
                 return json.loads(balanced), "degraded", "json_slice_extracted"
             except json.JSONDecodeError:
                 pass
+        # SECURITY: ast.literal_eval only evaluates Python literals (str, num,
+        # tuple, list, dict, set, bool, None) — it does NOT execute code, so
+        # this is safe even with adversarial model output. The isinstance check
+        # below further restricts the result to dict/list.
         try:
             parsed = ast.literal_eval(balanced or cleaned)
         except (SyntaxError, ValueError):

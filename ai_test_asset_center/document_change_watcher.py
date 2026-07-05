@@ -167,9 +167,13 @@ def detect_changed_documents_from_git(
     import subprocess
     root = root or ROOT
 
+    # Validate base_branch to prevent git argument injection (e.g. --upload-pack).
+    import re
+    if not re.match(r"^[A-Za-z0-9._/-]+$", base_branch or ""):
+        return {"error": "invalid_base_branch", "base_branch": str(base_branch)[:100]}
     try:
         result = subprocess.run(
-            ["git", "diff", "--name-only", base_branch + "...HEAD"],
+            ["git", "diff", "--name-only", "--", base_branch + "...HEAD"],
             cwd=str(root),
             capture_output=True, text=True, timeout=10,
         )

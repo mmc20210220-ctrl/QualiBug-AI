@@ -536,8 +536,16 @@ def build_database_validation_config(asset: dict[str, Any], project_id: str, roo
         columns = _table_columns(table)
         if not name:
             continue
+        # SQL identifier whitelist — prevent injection via table/column names
+        # sourced from user-supplied asset data.
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            continue
         lower_cols = {_norm(col) for col in columns}
         primary = next((col for col in columns if _norm(col) in {"id", f"{_norm(name)} id", f"{_norm(name)}_id"} or _norm(col).endswith("_id")), columns[0] if columns else "id")
+        # Validate the primary-key identifier before it is interpolated
+        # into the safe_query_template SQL.
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", primary or ""):
+            primary = "id"
         status_field = next((col for col in columns if _norm(col) in {"status", "state"} or "status" in _norm(col) or "state" in _norm(col)), "")
         amount_fields = [col for col in columns if any(term in _norm(col) for term in ("amount", "balance", "price", "quota", "stock", "inventory", "金额", "余额", "库存", "额度"))]
         tenant_field = next((col for col in columns if any(term in _norm(col) for term in ("tenant", "org", "organization", "租户", "组织"))), "")

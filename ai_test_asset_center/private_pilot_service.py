@@ -57,6 +57,10 @@ def _dbg_env() -> tuple[str, str]:
 
 
 def _dbg_report(*, hypothesis_id: str, msg: str, data: dict[str, Any] | None = None, run_id: str = "pre-fix", trace_id: str = "") -> None:
+    # Debug reporting is disabled by default — must be explicitly enabled via
+    # QUALIBUG_DEBUG_REPORT=1 to prevent unintended internal-state exfiltration.
+    if not _truthy_env("QUALIBUG_DEBUG_REPORT", "0"):
+        return
     try:
         url, session_id = _dbg_env()
         payload = {
@@ -80,7 +84,7 @@ def _current_tenant() -> str:
     return os.environ.get("QUALIBUG_TENANT", "default")
 
 def _tenant_from_headers(headers: dict) -> str:
-    """Resolve tenant from request headers (Bearer JWT or API key)."""
+    """Resolve tenant from request headers (Bearer JWT, Cookie, or API key)."""
     # 1. Bearer JWT
     auth = headers.get("Authorization") or headers.get("authorization") or ""
     if auth.startswith("Bearer "):
@@ -88,7 +92,23 @@ def _tenant_from_headers(headers: dict) -> str:
         payload = _ja.verify_token(auth[7:])
         if payload:
             return str(payload.get("sub", ""))
-    # 2. API Key
+    # 2. HttpOnly Cookie (set by /api/auth/login) — preferred over localStorage
+    #    because it is not readable by JavaScript, mitigating XSS token theft.
+    cookie = headers.get("Cookie") or headers.get("cookie") or ""
+    if cookie:
+        from http.cookies import SimpleCookie
+        try:
+            ck = SimpleCookie()
+            ck.load(cookie)
+            morsel = ck.get("qualibug_token")
+            if morsel:
+                from . import jwt_auth as _ja
+                payload = _ja.verify_token(morsel.value)
+                if payload:
+                    return str(payload.get("sub", ""))
+        except Exception:
+            pass
+    # 3. API Key
     api_key = headers.get("X-API-Key") or headers.get("x-api-key") or ""
     if api_key:
         from . import db_persistence as _dp
@@ -101,6 +121,39 @@ def _tenant_from_headers(headers: dict) -> str:
     return _current_tenant()
 
 _TENANT = _current_tenant()
+
+
+def _validate_api_path(path: str) -> str:
+    """验证提取的路径是合法 API 端点，防止描述文本被误判为路径。
+
+    合法 API 路径规则（通用，非业务概念）：
+    - 必须以 / 开头
+    - 只包含 ASCII 字母、数字、/_-{}:.@
+    - 不包含中文字符、空格或描述性文字
+    - 长度合理（< 200 字符）
+    - 至少有一个路径段（/ 后有内容）
+    """
+    if not path or not isinstance(path, str):
+        return ""
+    p = path.strip()
+    if not p.startswith("/"):
+        return ""
+    if len(p) > 200:
+        return ""
+    # 只允许 ASCII 路径字符
+    import re as _re
+    if not _re.match(r'^/[a-zA-Z0-9_/{}:.@-]+$', p):
+        return ""
+    # 排除明显的描述性文本（包含连续的中文标点或描述词）
+    # 例如 "/api/orders两次均返回201" 已被 ASCII 正则过滤
+    # 但 "/OFF_SALE/HIDDEN" 这种仍可能通过——检查是否像真实端点
+    segments = [s for s in p.split("/") if s]
+    if not segments:
+        return ""
+    # 至少有一个段以字母开头（端点名通常以字母开头）
+    if not any(s[0].isalpha() for s in segments):
+        return ""
+    return p
 KNOWLEDGE_INGEST_SOURCE_TYPES = (
     "prd",
     "mrd",
@@ -321,12 +374,15 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         configured = getattr(self.server, "qualibug_private_root", None)
         return Path(configured).resolve() if configured else _root()
 
-    def _json(self, body: Any, status: int = 200) -> None:
+    def _json(self, body: Any, status: int = 200, extra_headers: dict[str, str] | None = None) -> None:
         try:
             raw = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
+            if extra_headers:
+                for _hk, _hv in extra_headers.items():
+                    self.send_header(_hk, _hv)
             self.end_headers()
             self.wfile.write(raw)
         except (ConnectionAbortedError, ConnectionResetError, OSError):
@@ -433,6 +489,7 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         local_development = (
             server_host in {"127.0.0.1", "localhost", "::1"}
             and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1"
+            and _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "1")
         )
         if local_development:
             return True
@@ -677,30 +734,31 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         if parsed.path == "/findings":
             return self._render_findings(project, root)
         if parsed.path == "/api/v1/projects":
-            # Try DB first, fallback to file system
+            # Merge DB projects + filesystem-discovered projects (dedup by project_id)
+            tenant_id = _tenant_from_headers(dict(self.headers))
             try:
                 db_persist.init_db(root)
-                items = db_persist.list_projects(root, _tenant_from_headers(dict(self.headers)))
+                items = db_persist.list_projects(root, tenant_id)
             except Exception:
                 items = []
-            if not items:
-                scopes, wildcard = self._project_list_scope_filter()
-                seen: set[str] = set()
-                for base_name in ("platform_outputs", "platform_workspace", "platform_inputs"):
-                    for d in sorted((root / base_name).glob("*")):
-                        if not d.is_dir():
-                            continue
-                        if not wildcard and d.name not in scopes:
-                            continue
-                        if d.name in seen:
-                            continue
-                        seen.add(d.name)
-                        items.append({
-                            "project_id": d.name,
-                            "customer_name": d.name,
-                            "project_name": d.name,
-                            "source": base_name,
-                        })
+            # Always scan filesystem to discover projects not yet in DB
+            scopes, wildcard = self._project_list_scope_filter()
+            seen: set[str] = {str(it.get("project_id") or "") for it in items}
+            for base_name in ("platform_outputs", "platform_workspace", "platform_inputs"):
+                for d in sorted((root / base_name).glob("*")):
+                    if not d.is_dir():
+                        continue
+                    if not wildcard and d.name not in scopes:
+                        continue
+                    if d.name in seen:
+                        continue
+                    seen.add(d.name)
+                    items.append({
+                        "project_id": d.name,
+                        "customer_name": d.name,
+                        "project_name": d.name,
+                        "source": base_name,
+                    })
             return self._json({"ok": True, "data": items})
         # Bridge: serve V12 results in legacy format for Dashboard/Findings
         if parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/command-center"):
@@ -897,12 +955,15 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     str(auth_result["tenant_id"]),
                     str(auth_result.get("role") or "admin"),
                 )
+                _cookie_flags = "HttpOnly; SameSite=Lax; Path=/"
+                if os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1":
+                    _cookie_flags += "; Secure"
                 return self._json({
                     "ok": True,
                     "token": token,
                     "tenant_id": auth_result["tenant_id"],
                     "role": auth_result.get("role") or "admin",
-                })
+                }, extra_headers={"Set-Cookie": f"qualibug_token={token}; {_cookie_flags}"})
             if parsed.path == "/api/tenants/create":
                 tid = str(body.get("tenant_id") or "").strip()
                 name = str(body.get("name") or "").strip()
@@ -950,10 +1011,16 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 return self._handle_v12_scan(project, root, actor, body)
             elif parsed.path == "/api/v1/continuous/status":
                 return self._json(_get_continuous_state(root, project))
+            elif parsed.path == "/api/v1/continuous/start":
+                return self._handle_continuous_start(project, root, actor, body)
+            elif parsed.path == "/api/v1/continuous/stop":
+                return self._handle_continuous_stop(project, root)
             elif parsed.path == "/api/v1/spectrum/status":
                 return self._get_spectrum_status(project, root)
             elif parsed.path == "/api/v1/db-test":
                 return self._handle_db_test(body)
+            elif parsed.path == "/api/v1/replay":
+                return self._handle_replay(project, root, body)
             elif parsed.path == "/api/v1/services/credentials":
                 if self.command == "GET":
                     return self._handle_get_service_credentials(project, root)
@@ -1131,11 +1198,88 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "message": f"'{filename}' permanently deleted.",
         })
 
+    def _handle_continuous_start(self, project: str, root: Path, actor: dict[str, str], body: dict[str, Any]) -> None:
+        """Start a continuous auto-scan loop for a project.
+
+        The loop runs scans at intervals until convergence (no new findings
+        for N consecutive rounds + coverage threshold) or explicit stop.
+        Manual scans remain available in parallel — they do not conflict.
+        """
+        import threading as _threading
+        key = (str(root), project)
+
+        # Already running?
+        if key in _continuous_threads and not _continuous_threads[key].get("stop"):
+            return self._json({
+                "ok": True,
+                "message": "持续检测已在运行中。",
+                "round": _continuous_threads[key].get("round", 0),
+            })
+
+        interval_s = int(body.get("interval_s", 60))  # default 60s between rounds
+        interval_s = max(10, min(interval_s, 600))  # clamp 10s–10min
+
+        # Reset converged flag
+        state_file = root / "platform_workspace" / project / "defect_discovery" / _CONTINUOUS_STATE_FILE
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8")) or {}
+                state["status"] = "scanning"
+                state["converged"] = False
+                state.pop("converge_reason", None)
+                state_file.write_text(json.dumps(state, ensure_ascii=False, default=str), encoding="utf-8")
+            except Exception:
+                pass
+
+        tenant_id = _tenant_from_headers(dict(self.headers))
+        thread_entry = {"stop": False, "round": 0, "converged": False, "started_at": time.time()}
+        _continuous_threads[key] = thread_entry
+
+        t = _threading.Thread(
+            target=_continuous_scan_loop,
+            args=(root, project, tenant_id, interval_s),
+            daemon=True,
+        )
+        t.start()
+        _continuous_threads[key]["thread"] = t
+
+        return self._json({
+            "ok": True,
+            "message": f"持续检测已启动，每 {interval_s} 秒一轮，直到覆盖收敛。",
+            "interval_s": interval_s,
+        })
+
+    def _handle_continuous_stop(self, project: str, root: Path) -> None:
+        """Stop the continuous auto-scan loop for a project."""
+        key = (str(root), project)
+        entry = _continuous_threads.get(key)
+        if entry:
+            entry["stop"] = True
+            # Mark state
+            state_file = root / "platform_workspace" / project / "defect_discovery" / _CONTINUOUS_STATE_FILE
+            if state_file.exists():
+                try:
+                    state = json.loads(state_file.read_text(encoding="utf-8")) or {}
+                    state["status"] = "stopped"
+                    state["converged"] = False
+                    state_file.write_text(json.dumps(state, ensure_ascii=False, default=str), encoding="utf-8")
+                except Exception:
+                    pass
+            return self._json({"ok": True, "message": "持续检测已手动停止。"})
+        return self._json({"ok": True, "message": "持续检测未在运行。"})
+
     def _handle_v12_scan(self, project: str, root: Path, actor: dict[str, str], body: dict[str, Any]) -> None:
         try:
             from .__main__ import scan
             api_doc = str(body.get("api_doc") or body.get("api_doc_text") or "")
             base_url = str(body.get("base_url") or "").strip()
+            # SSRF guard: validate user-supplied base_url before it reaches scan().
+            if base_url:
+                from .ssrf_guard import validate_url, SsrfBlockedError
+                try:
+                    validate_url(base_url)
+                except SsrfBlockedError as exc:
+                    return self._json({"ok": False, "error": "SSRF_BLOCKED", "message": str(exc)}, 400)
             if not api_doc:
                 p = root / "platform_outputs" / project / "api_spec.md"
                 if p.exists(): api_doc = p.read_text(encoding="utf-8")
@@ -1172,7 +1316,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
             result = scan(project=project, root=root, prd_text=str(body.get("prd","")),
                           api_doc_text=api_doc, base_url=base_url, multi_layer=bool(base_url))
-            # Persist to DB
+            # Persist to DB — use cumulative merge so bugs accumulate across scans
             try:
                 db_persist.init_db(root)
                 # Extract findings from report
@@ -1182,19 +1326,46 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     import json as _jr
                     report_data = _jr.loads(report_path.read_text(encoding="utf-8"))
                 findings_list = report_data.get("real_findings") or report_data.get("bug_scores") or []
+                # Also include multi-source findings from scan result
+                if isinstance(result.get("db_findings"), list):
+                    findings_list = list(findings_list) + result["db_findings"]
+                if isinstance(result.get("e2e_findings"), list):
+                    findings_list = list(findings_list) + result["e2e_findings"]
+                if isinstance(result.get("deep_findings"), list):
+                    findings_list = list(findings_list) + result["deep_findings"]
+                if isinstance(result.get("ui_findings"), list):
+                    findings_list = list(findings_list) + result["ui_findings"]
+                # Dedupe input list before merging
+                seen_titles: set[str] = set()
+                deduped_findings: list[dict] = []
+                for f in (findings_list if isinstance(findings_list, list) else []):
+                    if not isinstance(f, dict):
+                        continue
+                    t = str(f.get("title") or f.get("description", ""))[:160].lower()
+                    if t in seen_titles:
+                        continue
+                    seen_titles.add(t)
+                    deduped_findings.append(f)
+                # Save scan record
                 enriched = dict(result)
                 enriched["findings"] = [
                     {"title": str(f.get("title") or f.get("description", ""))[:120],
                      "severity": str(f.get("severity", "P1")),
                      "category": str(f.get("category", "")),
                      "description": str(f.get("description", ""))[:500],
-                     "confidence_score": float(f.get("confidence_score") or f.get("score") or 0)}
-                    for f in (findings_list if isinstance(findings_list, list) else [])
-                    if isinstance(f, dict)
+                     "confidence_score": float(f.get("confidence_score") or f.get("score") or 0),
+                     "_api_path": str(f.get("_api_path") or f.get("path") or ""),
+                     "_api_method": str(f.get("_api_method") or f.get("method") or ""),
+                     "evidence": f.get("evidence") if isinstance(f.get("evidence"), dict) else {}}
+                    for f in deduped_findings
                 ]
-                db_persist.save_scan(root, self._request_tenant(), project, enriched)
+                scan_id = db_persist.save_scan(root, self._request_tenant(), project, enriched)
+                # Cumulative merge — bugs accumulate, never silently dropped
+                merge_result = db_persist.merge_findings_cumulative(
+                    root, self._request_tenant(), project, scan_id, enriched["findings"]
+                )
             except Exception:
-                pass
+                merge_result = {}
             # Increment scan counter
             try:
                 import json as _j2, time as _t
@@ -1256,7 +1427,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "total_findings": result.get("total_findings",0), "total_ms": result.get("total_ms",0),
                 "layers": result.get("layers",{}),
                 "spectrum": result.get("spectrum", {}),
-                "auto_har": result.get("auto_har", {}),})
+                "auto_har": result.get("auto_har", {}),
+                "cumulative": merge_result,})
         except Exception as e:
             return self._json({"ok": False, "error": "V12_SCAN_FAILED", "message": str(e)[:500]}, 500)
 
@@ -1615,25 +1787,25 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
             import re
             text_for_route = " ".join([title, description, str(evidence), str(probe)])
-            path_match = re.search(r'(/api/[\w/{}.-]+|/[\w{}.-]+/[\w/{}.-]+)', text_for_route)
+            # 提取 API 路径——用 ASCII-only 正则避免中文/日文等被误匹配为路径
+            # \w 在 Python re 默认包含 Unicode，导致"/api/orders两次均返回201"被整体匹配
+            path_match = re.search(r'(/api/[a-zA-Z0-9_/{}.-]+|/[a-zA-Z0-9{}.-]+/[a-zA-Z0-9_/{}.-]+)', text_for_route)
             api_path = self._first_text(item.get("_api_path"), item.get("path"), item.get("path_template"), evidence.get("path"), evidence.get("path_template"), probe.get("path"), path_match.group(1) if path_match else "")
+            # 验证提取的路径是合法 API 端点（防止描述文本被误判为路径）
+            if api_path:
+                api_path = _validate_api_path(api_path)
             method_match = re.search(r'\b(POST|GET|PUT|DELETE|PATCH)\b', text_for_route, re.IGNORECASE)
             api_method = self._first_text(item.get("_api_method"), item.get("method"), evidence.get("method"), probe.get("method"), method_match.group(1) if method_match else "").upper()
 
             matched = item.get("_doc_refs") if isinstance(item.get("_doc_refs"), list) else (self._match_docs_for_finding(title, docs) if docs else [])
             severity = self._normalize_severity(item.get("severity"))
-            risk_type = self._first_text(item.get("category"), item.get("risk_type"), item.get("business_assurance_type"), "v12_discovery")
+            risk_type = self._first_text(item.get("category"), item.get("risk_type"), item.get("business_assurance_type"), "业务规则验证")
             status = self._first_text(item.get("status"), item.get("verdict"), item.get("bug_confirmation"), "confirmed")
             quality_gap = bool(item.get("quality_assurance_gap")) or "coverage_gap" in risk_type or status in {"needs_human_review", "candidate", "pending"}
             expected = self._first_text(item.get("expected_behavior"), item.get("expected"), evidence.get("expected"), item.get("suggested_action"))
             actual = self._first_text(item.get("actual_behavior"), item.get("actual"), evidence.get("actual"), item.get("business_impact"), description)
             steps = item.get("reproduction_steps") if isinstance(item.get("reproduction_steps"), list) else []
-            if not steps:
-                steps = [
-                    f"定位业务流：{self._first_text(item.get('flow'), risk_type, '核心链路')}",
-                    f"执行 {api_method or '业务操作'} {api_path or title}",
-                    "记录请求、响应、日志、DB 快照，对比预期与实际行为。",
-                ]
+            # 不伪造复现步骤——如果没有真实步骤，留空列表，由 formatter 生成标记为 [指引] 的建议
 
             finding_evidence = dict(evidence)
             finding_evidence.update({
@@ -1677,14 +1849,26 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         return findings
 
     def _load_enterprise_docs(self, project_id: str, root: Path) -> list[dict]:
-        """Load enterprise knowledge documents for evidence association."""
+        """Load enterprise knowledge documents for evidence association.
+
+        来源优先级（文件系统优先）：
+        1. JSON 文件 — 上传走 ingest_enterprise_knowledge_documents，写入
+           source_registry.json + enterprise_knowledge_center/sources/，
+           不写 knowledge_docs 表，因此文件系统是文档的实际存储位置。
+        2. SQLite 数据库 knowledge_docs 表 — 补充源，用请求上下文中的真实
+           tenant_id 查询（不再硬编码 "default"，避免租户隔离失效）。
+
+        所有路径均按 project_id 严格隔离，绝不跨项目/跨客户读取文档。
+        """
+        rows: list[dict[str, Any]] = []
+
+        # ── 1. 从 JSON 文件加载（上传文档的实际存储位置，优先）──
         candidates = [
+            root / "platform_workspace" / project_id / "enterprise_knowledge_center" / "source_registry.json",
+            root / "platform_workspace" / project_id / "defect_discovery" / "enterprise_business_knowledge_asset.json",
             root / "platform_outputs" / project_id / "enterprise_knowledge_center" / "enterprise_business_knowledge_asset.json",
             root / "platform_outputs" / project_id / "defect_discovery" / "enterprise_business_knowledge_asset.json",
-            root / "platform_workspace" / project_id / "defect_discovery" / "enterprise_business_knowledge_asset.json",
-            root / "platform_workspace" / project_id / "enterprise_knowledge_center" / "source_registry.json",
         ]
-        rows: list[dict[str, Any]] = []
         for doc_path in candidates:
             if not doc_path.exists():
                 continue
@@ -1707,6 +1891,27 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                         "type": self._first_text(s.get("type"), s.get("source_type"), "文档"),
                         "excerpt": self._first_text(s.get("summary"), s.get("excerpt"), s.get("content"))[:260],
                     })
+
+        # ── 2. 从数据库加载（补充源，用真实 tenant_id 保证租户隔离）──
+        try:
+            from . import db_persistence as dbp
+            tenant_id = _tenant_from_headers(dict(self.headers))
+            db_docs = dbp.get_knowledge_docs(root, tenant_id, project_id)
+            for d in db_docs:
+                content = ""
+                try:
+                    content = dbp.get_knowledge_doc_content(root, d.get("source_id", ""))
+                except Exception:
+                    pass
+                rows.append({
+                    "source_id": d.get("source_id", ""),
+                    "display_name": d.get("display_name", ""),
+                    "type": d.get("type", "文档"),
+                    "excerpt": content[:260] if content else "",
+                })
+        except Exception:
+            pass
+
         return self._dedupe_docs(rows)
 
     @staticmethod
@@ -1794,16 +1999,23 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         return "system"
 
     def _match_docs_for_finding(self, title: str, docs: list[dict]) -> list[dict]:
-        """Match enterprise documents to a finding by keyword overlap."""
+        """Match enterprise documents to a finding by keyword overlap.
+
+        通用方案：从 finding 标题动态提取关键词（2字以上的中文词、英文单词），
+        与文档名/摘要做交集匹配。不硬编码任何业务关键词。
+        """
         if not docs: return []
+        import re as _re
         title_lower = title.lower()
+        # 从标题动态提取关键词（通用：2字以上中文、3字母以上英文）
+        cn_words = set(_re.findall(r'[\u4e00-\u9fff]{2,}', title_lower))
+        en_words = set(w for w in _re.findall(r'[a-z]{3,}', title_lower) if w not in ('the', 'and', 'for', 'with', 'from'))
+        keywords = cn_words | en_words
+        if not keywords:
+            return []
         matched = []
         for doc in docs:
             doc_text = f"{doc.get('display_name','')} {doc.get('excerpt','')} {doc.get('type','')}".lower()
-            # Simple keyword match
-            keywords = ["订单", "order", "支付", "pay", "退款", "refund", "取消", "cancel",
-                       "权限", "permission", "admin", "注册", "register", "审计", "audit",
-                       "库存", "inventory", "安全", "security"]
             score = sum(1 for kw in keywords if kw in title_lower and kw in doc_text)
             if score > 0:
                 matched.append({**doc, "relevance": score})
@@ -1837,7 +2049,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         deep = report.get("deep_findings", [])
         if isinstance(deep, list):
             for f in deep:
-                f.setdefault("risk_type", "deep_verifier")
+                f.setdefault("risk_type", "深度验证")
                 f.setdefault("defect_family", "deep_test")
             risks.extend(deep)
         # Frontend UI findings
@@ -1847,11 +2059,162 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 f.setdefault("risk_type", "frontend_ui")
                 f.setdefault("defect_family", "ui")
             risks.extend(ui)
+        # ── 累积 findings：从 DB 加载跨扫描累积的未修复 bug ──
+        # 这是"bug 货架"模型的核心：只要 bug 没修复（status='open'），
+        # 就一直保留在列表里，即使本次扫描没触发也要展示。
+        # 注意：只加载不在当前 report findings 中的（避免双重计算）
+        try:
+            tenant_id = _tenant_from_headers(dict(self.headers))
+            cumulative = db_persist.get_cumulative_findings(root, tenant_id, project_id)
+            if cumulative:
+                # Build dedupe keys from current report findings to avoid double-counting
+                import re as _re2
+                current_keys: set[str] = set()
+                for r in risks:
+                    t = str(r.get("title") or "")[:200].strip().lower()
+                    t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
+                    t = _re2.sub(r'\s+', ' ', t).strip()
+                    m = str(r.get("_api_method") or (r.get("evidence") or {}).get("method") or "").upper()
+                    p = str(r.get("_api_path") or (r.get("evidence") or {}).get("path") or "").strip()
+                    current_keys.add(f"{t}|{m}|{p}")
+                # Only add cumulative findings NOT already in current report
+                added_count = 0
+                for f in cumulative:
+                    t = str(f.get("title") or "")[:200].strip().lower()
+                    t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
+                    t = _re2.sub(r'\s+', ' ', t).strip()
+                    m = str(f.get("_api_method") or (f.get("evidence") or {}).get("method") or "").upper()
+                    p = str(f.get("_api_path") or (f.get("evidence") or {}).get("path") or "").strip()
+                    key = f"{t}|{m}|{p}"
+                    if key not in current_keys:
+                        f.setdefault("risk_type", f.get("category") or "累积发现")
+                        f.setdefault("defect_family", "cumulative")
+                        f.setdefault("_cumulative", True)
+                        risks.append(f)
+                        current_keys.add(key)
+                        added_count += 1
+        except Exception:
+            pass
         risks = self._dedupe_risks([item for item in risks if isinstance(item, dict)])
-        materialized_total = len(risks)
-        p0 = sum(1 for item in risks if self._normalize_severity(item.get("severity")) == "P0")
-        p1 = sum(1 for item in risks if self._normalize_severity(item.get("severity")) == "P1")
-        p2 = sum(1 for item in risks if self._normalize_severity(item.get("severity")) in {"P2", "P3"})
+
+        # ── 为所有未关联文档的 finding 补充文档匹配（通用，非 v12 finding 也需要）──
+        if enterprise_docs:
+            for item in risks:
+                if not item.get("_doc_refs"):
+                    title = str(item.get("title") or "")
+                    matched = self._match_docs_for_finding(title, enterprise_docs)
+                    if matched:
+                        item["_doc_refs"] = matched
+
+        # ── Generic: convert code identifiers to customer-facing labels ──
+        import re
+        # Rule: any snake_case or lowercase_underscore identifier is internal;
+        # infer a readable label from the finding's actual category/title instead.
+        _INTERNAL_PATTERNS = [
+            (re.compile(r".*_verifier$"), "验证引擎"),
+            (re.compile(r".*_discovery$|.*_scanner$"), "检测引擎"),
+            (re.compile(r".*_engine$|.*_oracle$"), "规则引擎"),
+            (re.compile(r".*_pipeline$|.*_pilot$"), "分析引擎"),
+            (re.compile(r".*_command_center$|.*_center$"), "分析引擎"),
+            (re.compile(r".*_bridge$|.*_enricher$"), "证据引擎"),
+        ]
+
+        def _is_internal_name(s: str) -> bool:
+            """A string looks internal if it's snake_case with no Chinese chars."""
+            if not s or not isinstance(s, str):
+                return False
+            # Has underscores and no Chinese characters
+            return "_" in s and not any("\u4e00" <= c <= "\u9fff" for c in s)
+
+        def _to_customer_label(s: str, title: str = "") -> str:
+            """Convert internal identifier to customer label using title hints."""
+            if not _is_internal_name(s):
+                return s
+            # Try pattern match first
+            for pat, label in _INTERNAL_PATTERNS:
+                if pat.match(s):
+                    return label
+            # Infer from title keywords
+            t = title.lower()
+            if "权限" in t or "auth" in t:
+                return "权限检测"
+            if "状态" in t or "state" in t or "禁止路径" in t:
+                return "状态机分析"
+            if "库存" in t or "inventory" in t:
+                return "数据完整性检测"
+            if "并发" in t or "concurrent" in t:
+                return "并发检测"
+            if "幂等" in t or "idempotent" in t:
+                return "幂等检测"
+            if "数据" in t or "泄露" in t or "data" in t:
+                return "数据安全检测"
+            # Generic fallback: just say "业务规则验证"
+            return "业务规则验证"
+
+        for r in risks:
+            for field in ("source", "risk_type", "defect_family"):
+                val = r.get(field, "")
+                if val and _is_internal_name(str(val)):
+                    new_val = _to_customer_label(str(val), str(r.get("title", "")))
+                    r[field] = new_val
+        # Debug: verify cleanup worked
+        _remaining = sum(1 for r in risks for f in ("source","risk_type","defect_family") if r.get(f) and _is_internal_name(str(r.get(f,""))))
+        if _remaining:
+            print(f"[CLEANUP] WARNING: {_remaining} internal name fields remain after cleanup", flush=True)
+
+        # ── HAR Bridge: enrich findings with real HTTP call evidence ──
+        try:
+            from .har_bridge import enrich_findings_batch_with_har, load_har_entries
+            # Load scan_result.json for HAR entries
+            scan_result_path = root / "platform_outputs" / project_id / "scan_result.json"
+            if scan_result_path.exists():
+                scan_result = self._read_json_dict(scan_result_path)
+                har_entries = load_har_entries(scan_result) if scan_result else []
+                if har_entries:
+                    risks = enrich_findings_batch_with_har(risks, har_entries)
+            # Also check if the current report has auto_har
+            if isinstance(report, dict):
+                har_entries_rpt = load_har_entries(report)
+                if har_entries_rpt:
+                    risks = enrich_findings_batch_with_har(risks, har_entries_rpt)
+        except Exception:
+            pass  # HAR enrichment is best-effort
+
+        # ── V3 Evidence Enrichment: three-perspective evidence chain ──
+        # guaranteed mode: never silently drop enrichment, always produce display-ready evidence
+        try:
+            from .evidence_enricher_v3 import enrich_findings_batch, load_enterprise_context
+            enterprise_ctx = load_enterprise_context(project_id, root)
+            risks = enrich_findings_batch(risks, enterprise_ctx)
+        except Exception as e:
+            # Fallback: ensure every finding has at least basic evidence fields
+            _dbg_report(hypothesis_id="E", msg="[WARN] evidence enrichment fallback", data={"error": str(e)})
+            for r in risks:
+                if isinstance(r, dict):
+                    r.setdefault("evidence", {})
+                    r.setdefault("reproduction_steps", [])
+                    r.setdefault("business_impact", {"summary": str(r.get("actual") or r.get("title") or ""), "urgency": "中", "module": "核心业务"})
+                    r.setdefault("investigation_guidance", {"primary_area": "", "relevant_apis": [], "relevant_tables": [], "log_search": "", "sql_verify": "", "trace_id": ""})
+
+        # ── Display-Ready Formatting: unify all findings into display-ready JSON ──
+        try:
+            from .display_ready_formatter import format_findings_display_ready
+            enterprise_ctx_for_fmt = {}
+            try:
+                from .evidence_enricher_v3 import load_enterprise_context as _lec
+                enterprise_ctx_for_fmt = _lec(project_id, root) or {}
+            except Exception:
+                pass
+            display_risks, display_metrics = format_findings_display_ready(risks, enterprise_ctx_for_fmt, report)
+        except Exception as e:
+            _dbg_report(hypothesis_id="F", msg="[WARN] display_ready_formatter fallback", data={"error": str(e)})
+            display_risks = risks
+            display_metrics = {}
+
+        materialized_total = len(display_risks)
+        p0 = sum(1 for item in display_risks if item.get("severity") == "P0")
+        p1 = sum(1 for item in display_risks if item.get("severity") == "P1")
+        p2 = sum(1 for item in display_risks if item.get("severity") in {"P2", "P3"})
         canonical_total = max(
             materialized_total,
             self._report_summary_number(report, "risk_total", "risk_count", "total_findings", "total_bugs_found", "total_found", "raw_total", fallback=0),
@@ -1860,6 +2223,11 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         canonical_p1 = self._report_summary_number(report, "p1", "p1_count", "high_priority_bugs", fallback=p1)
         canonical_p2 = max(0, canonical_total - canonical_p0 - canonical_p1) if canonical_total else p2
         evidence_trust = self._evidence_trust_score(risks)
+        # Use display-ready formatter's scores if available
+        scores = display_metrics.get("scores") or {}
+        commercial_value = display_metrics.get("commercial_value") or {}
+        if scores:
+            evidence_trust = scores.get("evidence_trust_score", evidence_trust)
         try:
             ai_points = max(int(report.get("raw_total") or 0), int(report.get("total_findings") or 0), canonical_total)
         except Exception:
@@ -1884,7 +2252,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "updated_at": scan_meta["last_scan_at"] or str(report.get("generated_at_utc") or ""),
             "live_map": {"status": "completed" if report else "idle"},
             "scan_meta": scan_meta,
-            "risks": risks,
+            "risks": display_risks,
             "value_metrics": {
                 "evidence_trust_score": evidence_trust,
                 "ai_equivalent_test_points": ai_points,
@@ -1893,6 +2261,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "p0_count": canonical_p0,
                 "p1_count": canonical_p1,
                 "p2_count": canonical_p2,
+                "scores": scores,
+                "commercial_value": commercial_value,
             },
             "business_flow_summary": {"total": ai_points},
             "executive_summary": {
@@ -1919,6 +2289,16 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         spectrum = self._load_spectrum_status_payload(root, project_id)
         if spectrum:
             data["spectrum"] = spectrum
+        # ── 累积 findings 统计 + continuous 状态 ──
+        try:
+            tenant_id = _tenant_from_headers(dict(self.headers))
+            data["cumulative_stats"] = db_persist.get_finding_stats(root, tenant_id, project_id)
+        except Exception:
+            pass
+        try:
+            data["continuous_state"] = _get_continuous_state(root, project_id)
+        except Exception:
+            pass
         return {
             "ok": True,
             "data": data,
@@ -1936,6 +2316,20 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 f.setdefault("risk_type", "db_snapshot")
                 f.setdefault("defect_family", "data_integrity")
                 f.setdefault("confidence_score", 0.95)
+                # 从 evidence.db_row 提取业务主键和表名（通用，不硬编码）
+                ev_row = f.get("evidence", {}).get("db_row") if isinstance(f.get("evidence"), dict) else None
+                if isinstance(ev_row, dict) and ev_row:
+                    # 第一个值作为业务主键（通用：db_row 通常只存一行数据的字段）
+                    for k, v in ev_row.items():
+                        if v is not None and str(v).strip():
+                            f.setdefault("source_value", str(v))
+                            break
+                # 从 description 提取实际行为（通用：description 是 DB 查询结果的文本描述）
+                desc = str(f.get("description") or "").strip()
+                if desc:
+                    f.setdefault("actual_behavior", desc)
+                # 预期行为：DB 验证的预期是"数据应符合业务约束"
+                f.setdefault("expected_behavior", "数据应符合业务一致性约束")
             return db_findings
         except Exception:
             return []
@@ -2198,6 +2592,45 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         scheme = dsn.split(":", 1)[0].lower() if ":" in dsn else "unknown"
         return self._json({"ok": True, "message": "DSN accepted for validation.", "db_type": scheme})
 
+    def _handle_replay(self, project: str, root: Path, body: dict[str, Any]) -> None:
+        """Handle replay request: re-execute finding against live test environment.
+
+        If replay shows the bug no longer reproduces (success=False), mark the
+        finding as 'resolved' in the cumulative store so it drops off the open
+        bug shelf.
+        """
+        finding_id = str(body.get("finding_id") or "").strip()
+        base_url_override = str(body.get("base_url") or "").strip()
+        if not finding_id:
+            return self._json({"ok": False, "error": "MISSING_FINDING_ID", "message": "finding_id is required"}, 400)
+        try:
+            # Load command-center risks to find the finding
+            command_center = self._build_command_center(project, root)
+            risks = command_center.get("data", {}).get("risks") or []
+            # Use replay engine
+            from .replay_engine import ReplayEngine
+            engine = ReplayEngine(root, project)
+            result = engine.replay(finding_id, risks, base_url_override)
+            # If replay confirmed bug is gone, mark finding as resolved
+            if isinstance(result, dict) and result.get("ok") and result.get("success") is False:
+                try:
+                    db_persist.update_finding_status(root, finding_id, "resolved")
+                    result["finding_status"] = "resolved"
+                    result["message"] = "复现失败：Bug 已不再触发，标记为已修复。"
+                except Exception:
+                    pass
+            elif isinstance(result, dict) and result.get("ok") and result.get("success") is True:
+                try:
+                    # Bug still reproduces — ensure it stays open
+                    db_persist.update_finding_status(root, finding_id, "open")
+                    result["finding_status"] = "open"
+                    result["message"] = "复现成功：Bug 仍然存在。"
+                except Exception:
+                    pass
+            return self._json(result)
+        except Exception as e:
+            return self._json({"ok": False, "finding_id": finding_id, "error": f"复现失败: {e}"}, 500)
+
     # ── Multi-Service Credential Management ──
 
     def _handle_get_service_credentials(self, project: str, root: Path) -> None:
@@ -2323,6 +2756,28 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             config["services"].append(svc)
 
         config_path.parent.mkdir(parents=True, exist_ok=True)
+        # Encrypt sensitive credential fields before writing to disk so that
+        # secrets are not stored in plaintext in multi_service_config.json.
+        from .credential_crypto import encrypt as _enc_secret, is_encrypted as _is_enc
+        for _svc in config.get("services", []):
+            if not isinstance(_svc, dict):
+                continue
+            _auth = _svc.get("auth")
+            if isinstance(_auth, dict):
+                for _role_cfg in _auth.values():
+                    if isinstance(_role_cfg, dict):
+                        _pw = _role_cfg.get("password")
+                        if _pw and not _is_enc(_pw):
+                            _role_cfg["password"] = _enc_secret(_pw)
+                for _field in ("bearer_token", "api_key"):
+                    _val = _auth.get(_field)
+                    if _val and not _is_enc(_val):
+                        _auth[_field] = _enc_secret(_val)
+            _db_cfg = _svc.get("db")
+            if isinstance(_db_cfg, dict):
+                _db_pw = _db_cfg.get("password")
+                if _db_pw and not _is_enc(_db_pw):
+                    _db_cfg["password"] = _enc_secret(_db_pw)
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # Reload credential manager if running
@@ -2450,6 +2905,108 @@ def run_private_pilot_service(root: Path | None = None, host: str | None = None,
 # ── Continuous discovery state management ─────────────────────────────
 
 _CONTINUOUS_STATE_FILE = "continuous_discovery_state.json"
+
+# In-memory tracking of active continuous-scan threads per project.
+# Key: (root, project_id), Value: dict with thread + stop flag.
+_continuous_threads: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _continuous_scan_loop(root: Path, project: str, tenant_id: str, interval_s: int) -> None:
+    """Background loop: run scans at intervals until convergence or stop.
+
+    Convergence = consecutive N rounds with zero new findings AND coverage
+    above threshold. Once converged, the loop auto-stops and records the
+    reason so the UI can show "覆盖收敛，自动暂停".
+    """
+    import time as _time
+    import threading as _threading
+    from .__main__ import scan as _scan_fn
+
+    key = (str(root), project)
+    no_new_rounds = 0
+    CONVERGE_ROUNDS = 3  # 连续3轮无新发现视为收敛
+    CONVERGE_COVERAGE = 0.7
+    MAX_ROUNDS = 20  # 安全上限，防止无限循环
+
+    for round_num in range(1, MAX_ROUNDS + 1):
+        # Check stop flag
+        entry = _continuous_threads.get(key)
+        if not entry or entry.get("stop"):
+            break
+
+        try:
+            # Run scan
+            result = _scan_fn(project, root, save_report=True)
+
+            # Cumulative merge
+            try:
+                db_persist.init_db(root)
+                report_path = root / "platform_outputs" / project / "intelligence_report.json"
+                report_data = {}
+                if report_path.exists():
+                    import json as _jr
+                    report_data = _jr.loads(report_path.read_text(encoding="utf-8"))
+                findings_list = report_data.get("real_findings") or report_data.get("bug_scores") or []
+                findings_list = [f for f in (findings_list if isinstance(findings_list, list) else []) if isinstance(f, dict)]
+                enriched = dict(result)
+                enriched["findings"] = findings_list
+                scan_id = db_persist.save_scan(root, tenant_id, project, enriched)
+                merge_result = db_persist.merge_findings_cumulative(root, tenant_id, project, scan_id, findings_list)
+                new_count = merge_result.get("new", 0)
+            except Exception:
+                new_count = 0
+
+            # Update continuous state
+            _update_continuous_state(root, project, result)
+
+            # Convergence check
+            if new_count == 0:
+                no_new_rounds += 1
+            else:
+                no_new_rounds = 0
+
+            coverage = float(result.get("coverage", 0) or 0)
+            converged = no_new_rounds >= CONVERGE_ROUNDS and coverage >= CONVERGE_COVERAGE
+
+            # Update thread entry with progress
+            if key in _continuous_threads:
+                _continuous_threads[key]["round"] = round_num
+                _continuous_threads[key]["last_new"] = new_count
+                _continuous_threads[key]["no_new_rounds"] = no_new_rounds
+                if converged:
+                    _continuous_threads[key]["converged"] = True
+                    _continuous_threads[key]["stop"] = True
+                    # Mark state as converged
+                    _mark_continuous_converged(root, project, reason="连续{}轮无新发现且覆盖率≥{:.0%}".format(CONVERGE_ROUNDS, CONVERGE_COVERAGE))
+                    break
+        except Exception:
+            pass
+
+        # Wait for next interval (check stop flag every second)
+        for _ in range(interval_s):
+            entry = _continuous_threads.get(key)
+            if not entry or entry.get("stop"):
+                break
+            _time.sleep(1)
+
+    # Clean up thread entry
+    _continuous_threads.pop(key, None)
+
+
+def _mark_continuous_converged(root: Path, project: str, reason: str) -> None:
+    """Mark the continuous discovery state as converged with a reason."""
+    state_file = root / "platform_workspace" / project / "defect_discovery" / _CONTINUOUS_STATE_FILE
+    state: dict[str, Any] = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8")) or {}
+        except Exception:
+            state = {}
+    state["status"] = "converged"
+    state["converged"] = True
+    state["converge_reason"] = reason
+    state_file.write_text(json.dumps(state, ensure_ascii=False, default=str), encoding="utf-8")
+
 
 def _update_continuous_state(root: Path, project: str, scan_result: dict) -> None:
     """Track continuous discovery coverage state after each auto-scan."""

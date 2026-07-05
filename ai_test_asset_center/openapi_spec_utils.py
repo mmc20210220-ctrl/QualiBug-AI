@@ -8,8 +8,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .phase104_api_contract_exporter import route_contracts
-
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 PATH_LINE_RE = re.compile(r"^\s*(/[^:\s]+)\s*:\s*$")
 METHOD_LINE_RE = re.compile(r"^\s{2,}(get|post|put|patch|delete|head|options)\s*:\s*$", re.I)
@@ -75,17 +73,6 @@ def _extract_paths_from_route_refs(text: str) -> dict[str, dict[str, Any]]:
         if not path:
             continue
         paths.setdefault(path, {})[method] = {}
-    return paths
-
-
-def _fallback_contract_paths() -> dict[str, dict[str, Any]]:
-    paths: dict[str, dict[str, Any]] = {}
-    for contract in route_contracts():
-        paths.setdefault(contract.path, {})[contract.method.lower()] = {
-            "summary": contract.summary,
-            "operationId": contract.operation_id,
-            "description": contract.description,
-        }
     return paths
 
 

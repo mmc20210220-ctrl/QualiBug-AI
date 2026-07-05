@@ -40,7 +40,11 @@ def _record_v12_har(method: str, url: str, status: int, resp_body: str,
 
 
 def _v12_har_report() -> dict[str, Any]:
-    """Generate auto HAR report for V12 pipeline results."""
+    """Generate auto HAR report for V12 pipeline results.
+    
+    Now includes full `entries` list so the evidence enricher can
+    link each finding to the actual HTTP request/response that triggered it.
+    """
     if not _v12_har_entries:
         return {"status": "no_traffic"}
     errors = [e for e in _v12_har_entries if e["response"]["status"] >= 400]
@@ -48,11 +52,34 @@ def _v12_har_report() -> dict[str, Any]:
     for e in _v12_har_entries:
         s = e["response"]["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
+    # Build lightweight entries for serialization (strip huge bodies to max 2000 chars)
+    light_entries = []
+    for e in _v12_har_entries:
+        resp = e.get("response", {})
+        content = resp.get("content", {})
+        text = content.get("text", "") if isinstance(content, dict) else str(content)
+        if len(text) > 2000:
+            text = text[:2000] + "...[truncated]"
+        req = e.get("request", {})
+        light_entries.append({
+            "startedDateTime": e.get("startedDateTime", ""),
+            "time": e.get("time", 0),
+            "request": {
+                "method": req.get("method", ""),
+                "url": req.get("url", ""),
+            },
+            "response": {
+                "status": resp.get("status", 0),
+                "body": text,
+            },
+            "_actor": e.get("_actor", ""),
+        })
     return {
         "status": "captured",
         "total_calls": len(_v12_har_entries),
         "error_responses": len(errors),
         "status_distribution": status_counts,
+        "entries": light_entries,
     }
 # ───────────────────────────────────────────────────────────────────────
 
@@ -306,7 +333,7 @@ def __execute_scenario_once(scenario, base_url: str) -> dict:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 resp_body = json.loads(resp.read())
                 _record_v12_har(step.api_method, url, resp.status,
-                                json.dumps(resp_body)[:5000],
+                                json.dumps(resp_body, ensure_ascii=False)[:5000],
                                 actor=step.actor or "",
                                 elapsed_ms=(time.time() - t_req_start) * 1000)
                 # Capture trace headers for evidence
@@ -325,7 +352,7 @@ def __execute_scenario_once(scenario, base_url: str) -> dict:
                 resp_body = {}
             status = e.code
             _record_v12_har(step.api_method, url, status,
-                            json.dumps(resp_body)[:5000],
+                            json.dumps(resp_body, ensure_ascii=False)[:5000],
                             actor=step.actor or "",
                             elapsed_ms=(time.time() - t_req_start) * 1000)
         except Exception as e:

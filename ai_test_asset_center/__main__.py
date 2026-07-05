@@ -307,9 +307,9 @@ def scan(
                 orphan_orders = cur.fetchall()
                 for oo in orphan_orders:
                     db_findings.append({
-                        "severity": "P0", "title": f"[DB����] ����'{oo[1]}'������������",
+                        "severity": "P0", "title": f"[DB验证] 订单'{oo[1]}'缺少订单明细",
                         "category": "data_integrity", "source": "db_verifier",
-                        "description": f"order_id={oo[0]} ��order_items��������������",
+                        "description": f"order_id={oo[0]} 在order_items中没有对应记录",
                         "confidence_score": 0.95, "evidence": {"db_row": {"order_no": oo[1]}}
                     })
                 
@@ -318,9 +318,9 @@ def scan(
                 orphan_payments = cur.fetchall()
                 for op in orphan_payments:
                     db_findings.append({
-                        "severity": "P0", "title": f"[DB����] ����'{op[1]}'��������������",
+                        "severity": "P0", "title": f"[DB验证] 支付单'{op[1]}'关联订单不存在",
                         "category": "data_integrity", "source": "db_verifier",
-                        "description": f"payment_id={op[0]} order_id={op[2]} ��orders����������",
+                        "description": f"payment_id={op[0]} order_id={op[2]} 在orders中不存在",
                         "confidence_score": 0.95, "evidence": {"db_row": {"payment_no": op[1]}}
                     })
                 
@@ -329,7 +329,7 @@ def scan(
                 bad_discounts = cur.fetchall()
                 for bd in bad_discounts:
                     db_findings.append({
-                        "severity": "P1", "title": f"[DB����] ����'{bd[0]}'���������������",
+                        "severity": "P1", "title": f"[DB验证] 订单'{bd[0]}'有优惠金额但无优惠券",
                         "category": "financial", "source": "db_verifier",
                         "description": f"total={bd[1]} discount={bd[2]} coupon={bd[3]}",
                         "confidence_score": 0.88, "evidence": {"db_row": {"order_no": bd[0], "discount": bd[2]}}
@@ -341,9 +341,9 @@ def scan(
                 for ce in calc_errors:
                     expected = float(ce[1]) - float(ce[2]) if ce[1] and ce[2] else 0
                     db_findings.append({
-                        "severity": "P0", "title": f"[DB����] ����'{ce[0]}'������������",
+                        "severity": "P0", "title": f"[DB验证] 订单'{ce[0]}'应付金额计算错误",
                         "category": "financial", "source": "db_verifier",
-                        "description": f"total={ce[1]} discount={ce[2]} payable={ce[3]} (����{expected})",
+                        "description": f"total={ce[1]} discount={ce[2]} payable={ce[3]} (应为{expected})",
                         "confidence_score": 0.95, "evidence": {"db_row": {"order_no": ce[0]}}
                     })
                 
@@ -352,7 +352,7 @@ def scan(
                 over_refunds = cur.fetchall()
                 for orf in over_refunds:
                     db_findings.append({
-                        "severity": "P0", "title": f"[DB����] ������'{orf[0]}'��������������",
+                        "severity": "P0", "title": f"[DB验证] 退款单'{orf[0]}'退款金额超过实付",
                         "category": "financial", "source": "db_verifier",
                         "description": f"refund={orf[1]} > payable={orf[2]}",
                         "confidence_score": 0.95, "evidence": {"db_row": {"refund_no": orf[0]}}
@@ -363,9 +363,9 @@ def scan(
                 locked_inv = cur.fetchall()
                 for li in locked_inv:
                     db_findings.append({
-                        "severity": "P1", "title": f"[DB����] ����'{li[0]}'�������{li[1]}�������",
+                        "severity": "P1", "title": f"[DB验证] SKU'{li[0]}'锁定库存{li[1]}但无活动订单",
                         "category": "data_integrity", "source": "db_verifier",
-                        "description": f"SKU={li[0]} locked_qty={li[1]},����������������������",
+                        "description": f"SKU={li[0]} locked_qty={li[1]}, 可能存在未释放的库存锁定",
                         "confidence_score": 0.85, "evidence": {"db_row": {"sku": li[0], "locked": li[1]}}
                     })
                 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Finding } from '../types';
-import { getEvidenceSummaryText } from '../lib/evidence';
+import { formatResponseSummary } from '../lib/display';
 import { formatBeijingDateTime } from '../lib/time';
 
 interface EvidenceFeedProps { findings: Finding[] }
@@ -18,6 +18,14 @@ export function EvidenceFeed({ findings }: EvidenceFeedProps) {
   const filters: Array<{ label: string; value: typeof filter }> = [
     { label: '全部', value: 'all' }, { label: 'P0', value: 'P0' }, { label: 'P1', value: 'P1' }, { label: 'P2', value: 'P2' },
   ];
+
+  const getStepContent = (step: Finding['evidence_chain'][number]) => {
+    if (step.tag === 'response') {
+      return formatResponseSummary(step.content || '', step.structured);
+    }
+
+    return step.content || '暂无内容';
+  };
 
   return (
     <div>
@@ -55,7 +63,7 @@ export function EvidenceFeed({ findings }: EvidenceFeedProps) {
               {finding.evidence_chain.map((step, i) => (
                 <div className="chain-step" key={i}>
                   <span className={`step-tag ${step.tag}`}>{step.label}</span>
-                  <strong>{step.content}</strong>
+                  <strong>{getStepContent(step)}</strong>
                   <code>{step.detail}</code>
                 </div>
               ))}
@@ -63,8 +71,8 @@ export function EvidenceFeed({ findings }: EvidenceFeedProps) {
             <div className="evidence-proof">
               <svg viewBox="0 0 24 24" width="16" height="16"><path d="M20 6 9 17l-5-5" /></svg>
               <div>
-                <strong>证据验证通过 · 复现率 {finding.proof.repro_rate}%</strong>
-                <p>{getEvidenceSummaryText(finding)}</p>
+                <strong>证据验证{finding.proof.repro_rate >= 80 ? '通过' : '中'} · 复现率 {finding.proof.repro_rate}%</strong>
+                <p>{finding.evidence_quality ? `${finding.evidence_quality.label} · ${finding.evidence_quality.score}/100 · ${finding.evidence_quality.summary}` : '检测证据已归档'}</p>
               </div>
             </div>
           </div>

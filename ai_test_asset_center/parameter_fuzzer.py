@@ -27,11 +27,55 @@ class ParameterFuzzer:
     }
 
     ACL_TESTS = [
-        # (method, path, body, token, description)
-        ("GET", "/api/audit-logs", None, None, "审计日志无需认证"),
-        ("GET", "/api/admin/stats", None, "buyer", "买家访问管理统计"),
-        ("POST", "/api/users", {"role": "admin"}, None, "任意注册admin角色"),
+        # Static fallback ACL tests (used when no routes provided)
+        # These are generic HTTP patterns, not business-specific endpoints
     ]
+
+    def _test_acl(self, routes: list[dict] | None = None) -> list[dict]:
+        """ACL tests: dynamically generated from routes + static fallback.
+
+        For each route, test:
+        1. No-auth access (should 401/403 on protected endpoints)
+        2. Low-privilege token access to admin endpoints (should 403)
+        """
+        findings = []
+        # Dynamic ACL tests from routes
+        if routes:
+            admin_patterns = ("admin", "manage", "audit", "dashboard", "setting", "config", "system")
+            for route in routes:
+                method = route.get("method", "GET").upper()
+                path = route.get("path", "")
+                if not path:
+                    continue
+                # Skip auth endpoints (login/register) — 401 there is expected
+                if "/auth/" in path or "/login" in path or "/register" in path:
+                    continue
+                # 1. No-auth access test
+                status, resp_body, _ = self._call(method, path)
+                if status < 400 and method != "GET":
+                    # Non-GET endpoint accessible without auth = potential ACL bypass
+                    findings.append(self._to_finding(method, path, status, resp_body,
+                        f"无认证可执行 {method} {path}", "ACL", "P0"))
+                # 2. Admin endpoint access with buyer token (if admin patterns match)
+                path_lower = path.lower()
+                if any(p in path_lower for p in admin_patterns) and self._buyer_token:
+                    status, resp_body, _ = self._call(method, path, tok=self._buyer_token)
+                    if status < 400:
+                        findings.append(self._to_finding(method, path, status, resp_body,
+                            f"普通用户可访问管理端点 {method} {path}", "ACL", "P0"))
+        # Static fallback tests
+        for method, path, body_extra, token_type, desc in self.ACL_TESTS:
+            body = {"username": "test_" + str(int(time.time()) % 10000),
+                    "password": "x"} if method == "POST" else None
+            if body and body_extra:
+                body.update(body_extra)
+            tok = self._get_token(token_type) if token_type else None
+            status, resp_body, elapsed = self._call(method, path, body, tok=tok)
+            if status < 400 and isinstance(resp_body, dict) and resp_body.get("ok"):
+                severity = "P0" if "admin" in desc.lower() or "管理" in desc else "P1"
+                findings.append(self._to_finding(method, path, status, resp_body,
+                    desc, "ACL", severity))
+        return findings
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
@@ -135,8 +179,8 @@ class ParameterFuzzer:
                         findings.append(self._to_finding(method, path + qp, status_q, body_q,
                             f"注入式查询返回异常数据", "INJECTION"))
 
-        # ACL tests — run once
-        findings += self._test_acl()
+        # ACL tests — dynamically generated from routes
+        findings += self._test_acl(routes)
         return findings
 
     def _declared_params(self, route: dict) -> list[str]:

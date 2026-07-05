@@ -73,7 +73,7 @@ class BenchmarkIdentity:
 
 
 def _benchmark_identities() -> list[BenchmarkIdentity]:
-    shared_password = "benchmark-demo-password"
+    shared_password = os.environ.get("QUALIBUG_BENCHMARK_PASSWORD", "benchmark-demo-password")
     return [
         BenchmarkIdentity("normal_user", "qb_normal_user", shared_password, "normal_user", "t-a", "qb-token-normal-user", "qb_sid_normal_user"),
         BenchmarkIdentity("admin_user", "qb_admin_user", shared_password, "admin_user", "t-a", "qb-token-admin-user", "qb_sid_admin_user"),

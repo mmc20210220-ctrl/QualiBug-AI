@@ -1,3 +1,4 @@
+/** @deprecated 后端 display_ready_formatter.py 已返回 taxonomy 字段，此文件仅保留类型导出作 fallback。 */
 export type DefectFamilyId =
   | 'scenario_flow'
   | 'api_contract'

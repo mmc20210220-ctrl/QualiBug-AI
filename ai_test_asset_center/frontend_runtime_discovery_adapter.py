@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from .defect_signal_schema import normalize_defect_signal
-from .phase104_frontend_runtime_smoke import run_frontend_runtime_smoke
+try:
+    from .phase104_frontend_runtime_smoke import run_frontend_runtime_smoke
+except ImportError:
+    run_frontend_runtime_smoke = None
 from .real_project_onboarding import ROOT, config_paths
 
 

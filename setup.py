@@ -41,8 +41,6 @@ setup(
     
     # Core dependencies
     install_requires=[
-        "flask>=2.3.0",
-        "werkzeug>=2.3.0",
         "jsonschema>=4.0.0",
         "pyyaml>=6.0",
         "requests>=2.28.0",

@@ -115,8 +115,8 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
                 setScanLoad(true); setScanRes(null); setShowResult(false);
                 try {
                   const before = await getFindings(project).catch(() => null);
-                  const beforeRun = Number(before?.scanMeta?.runCount || 0);
-                  const beforeUpdatedAt = String(before?.scanMeta?.lastScanAt || before?.updatedAt || '');
+                  const beforeRun = Number((before as any)?.scan_meta?.run_count || 0);
+                  const beforeUpdatedAt = String((before as any)?.scan_meta?.last_scan_at || (before as any)?.updated_at || '');
                   const r = await runV12Scan(project);
                   setScanRes(r);
                   setShowResult(true);
@@ -125,18 +125,18 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
                       await wait(attempt === 0 ? 250 : 1000);
                       const raw = await getFindings(project).catch(() => null);
                       if (!raw) continue;
-                      const es = (raw.executiveSummary || {}) as Record<string, unknown>;
-                      const meta = raw.scanMeta || {};
-                      const nextRun = Number(meta.runCount || 0);
-                      const nextUpdatedAt = String(meta.lastScanAt || raw.updatedAt || '');
+                      const es = ((raw as any).executive_summary || {}) as Record<string, unknown>;
+                      const meta = (raw as any).scan_meta || {};
+                      const nextRun = Number(meta.run_count || 0);
+                      const nextUpdatedAt = String(meta.last_scan_at || (raw as any).updated_at || '');
                       setScanRes((prev) => prev
                         ? {
                             ...prev,
-                            scan_id: String(meta.scanId || prev.scan_id || ''),
-                            total_findings: Number(es['totalFindings'] || es['totalBugsFound'] || meta.totalFindings || prev.total_findings || 0),
-                            grade: String(meta.grade || es['systemGrade'] || prev.grade || ''),
-                            score: Number(meta.score || es['overallScore'] || prev.score || 0),
-                            total_ms: Number(meta.totalMs || prev.total_ms || 0),
+                            scan_id: String(meta.scan_id || prev.scan_id || ''),
+                            total_findings: Number(es['total_findings'] || es['total_bugs_found'] || meta.total_findings || prev.total_findings || 0),
+                            grade: String(meta.grade || es['system_grade'] || prev.grade || ''),
+                            score: Number(meta.score || es['overall_score'] || prev.score || 0),
+                            total_ms: Number(meta.total_ms || prev.total_ms || 0),
                           }
                         : prev);
                       emitScanCompleted(project);

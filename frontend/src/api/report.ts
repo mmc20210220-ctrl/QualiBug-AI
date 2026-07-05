@@ -1,26 +1,5 @@
 import type { Finding } from '../types';
-import { getEvidenceSummaryText } from '../lib/evidence';
 import { formatBeijingDateTime } from '../lib/time';
-
-/** Map common English boilerplate to readable Chinese */
-function toChinese(text: string): string {
-  if (!text) return '';
-  if (/[\u4e00-\u9fff]/.test(text)) return text;
-  const patterns: [RegExp, string][] = [
-    [/document and implement 401\/403 behavior/i, '应实现 401/403 认证失败响应'],
-    [/no idempotency.*header.*documented/i, '缺少幂等性保障机制'],
-    [/a permission-sensitive mutating operation does not document/i, '权限敏感操作未声明认证失败的错误响应'],
-    [/declared responses:?\s*\[?'200'\]?/i, '仅声明了 200 响应，缺少 401/403 等错误码'],
-    [/may start async work without observable progress/i, '异步操作缺少可观测的进度反馈'],
-    [/lacks validation\/conflict error contract/i, '缺少参数校验和冲突处理的错误响应'],
-    [/operation is missing operationid/i, '接口定义缺少 operationId'],
-    [/no .*header parameter is documented/i, '缺少必要的请求头参数声明'],
-    [/every operation should have a unique operationid/i, '每个接口应有唯一的 operationId 标识符'],
-    [/openapi operation .*violates this/i, '该接口定义违反了 OpenAPI 规范要求'],
-  ];
-  for (const [re, r] of patterns) if (re.test(text)) return r;
-  return text.length > 60 ? text.slice(0, 60) + '…' : text;
-}
 
 interface ReportData {
   projectName: string;
@@ -41,11 +20,12 @@ interface ReportData {
     expected: string;
     actual: string;
     evidence: string;
+    defect_family?: string;
   }>;
   dbFindings: Array<{ id: string; desc: string }>;
 }
 
-/** Build report data from the pipeline summary already loaded by Dashboard */
+/** Build report data from display-ready findings (backend already returns Chinese labels). */
 export function buildReportData(summary: {
   projectName: string;
   industry: string;
@@ -57,7 +37,7 @@ export function buildReportData(summary: {
   dbConfirmed: number;
   findings: Finding[];
   dbFindings?: Array<{ id: string; desc: string }>;
-}): ReportData {
+}) {
   return {
     projectName: summary.projectName,
     generatedAt: formatBeijingDateTime(new Date()),
@@ -74,9 +54,10 @@ export function buildReportData(summary: {
     findings: summary.findings.slice(0, 30).map(f => ({
       severity: f.severity,
       title: f.title,
-      expected: toChinese(f.expected),
-      actual: toChinese(f.actual),
-      evidence: getEvidenceSummaryText(f),
+      expected: f.expected || '',
+      actual: f.actual || '',
+      evidence: f.evidence_quality ? `${f.evidence_quality.label} · ${f.evidence_quality.score}/100` : '',
+      defect_family: f.defect_family,
     })),
     dbFindings: summary.dbFindings || [],
   };
@@ -260,7 +241,7 @@ export function renderReportHTML(d: ReportData): string {
         {l:'接口实时探测',v:d.runtimeProbes,sub:'对系统接口发起真实请求，验证实际行为',t:'tone-ink'},
         {l:'数据库直接检查',v:d.dbConfirmed,sub:'直连数据库，发现数据不一致、约束违反',t:d.dbConfirmed>0?'tone-danger':'tone-success'},
         {l:'文档交叉验证',v:d.bcsScore+'%',sub:'对比 PRD、API 文档、数据库 Schema 三方一致性',t:d.bcsScore>=80?'tone-success':'tone-warning'},
-        {l:'静态规范扫描',v:d.findings.filter(f=>f.title.includes('operationId')||f.title.includes('spec')).length,sub:'扫描 OpenAPI 规范完整性与错误契约缺失',t:'tone-ink'},
+        {l:'静态规范扫描',v:d.findings.filter(f=>f.defect_family === 'api_contract' || f.defect_family === 'observability').length,sub:'扫描 OpenAPI 规范完整性与错误契约缺失',t:'tone-ink'},
       ].map(m=>`<div class="metric-card detail">
         <div class="metric-value ${getMetricTone(m.t)}">${m.v}</div>
         <div class="metric-label">${m.l}</div>

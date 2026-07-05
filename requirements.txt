@@ -5,10 +5,6 @@
 # Python itself is constrained by pyproject.toml / setup.py (>=3.11).
 # Do not list "python>=..." here: pip treats it as a package name.
 
-# Web framework
-flask>=2.3.0
-werkzeug>=2.3.0
-
 # Data handling
 jsonschema>=4.0.0
 pyyaml>=6.0

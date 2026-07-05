@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from .defect_signal_schema import normalize_defect_signal
-from .phase104_api_contract_acceptance import validate_contract_artifacts
+try:
+    from .phase104_api_contract_acceptance import validate_contract_artifacts
+except ImportError:
+    validate_contract_artifacts = None
 from .real_project_onboarding import ROOT, _load_json, config_paths
 
 
