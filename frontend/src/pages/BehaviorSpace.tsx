@@ -14,6 +14,12 @@ interface BehaviorItem {
   findings: number;
 }
 
+const DISPLAYABLE_BUG_STATUS = new Set(['reproduced', 'suspected']);
+const NON_ACTIONABLE_BUG_STATUS = new Set(['risk_clue', 'not_reproduced', 'false_positive']);
+const DISPLAYABLE_VERDICT = new Set(['confirmed', 'validated_candidate']);
+const SAMPLE_VALUE_RE = /(?:^|[-_=:/])(?:sample|mock|demo|draft|placeholder|example|test)(?:$|[-_=:/])/i;
+const PLACEHOLDER_PATH_RE = /(?:\{[^}/]+\}|:id\b|QUALIBUG_UNRESOLVED_ID|<\s*(?:FILL|TODO|REQUIRED|SANDBOX|REPLACE)[^>]*>)/i;
+
 const typeAccentMap: Record<BehaviorType, string> = {
   'API': 'var(--primary)',
   '数据库': 'var(--success)',
@@ -34,6 +40,7 @@ export function BehaviorSpace() {
   const project = params.get('project')?.trim() || '';
   const { findings, loading } = useFindingsData(project);
   const behaviors = useMemo(() => buildBehaviorItems(findings), [findings]);
+  const maxFindings = Math.max(1, ...behaviors.map((behavior) => behavior.findings));
   const covered = behaviors.filter(r => r.tested).length;
   const totalFindings = behaviors.reduce((s, r) => s + r.findings, 0);
   const pct = behaviors.length > 0 ? Math.round((covered / behaviors.length) * 100) : 0;
@@ -169,8 +176,8 @@ export function BehaviorSpace() {
                   <td>
                     <div className="behavior-heat-track">
                       <div
-                        className={`behavior-heat-bar ${getBehaviorHeatTone(b.findings)}`}
-                        style={{ '--heat-width': `${Math.min(100, (b.findings + 1) * 25)}%` } as CSSProperties}
+                        className={`behavior-heat-bar ${getBehaviorHeatTone(b.findings, maxFindings)}`}
+                        style={{ '--heat-width': `${getBehaviorHeatWidth(b.findings, maxFindings)}%` } as CSSProperties}
                       />
                     </div>
                   </td>
@@ -196,6 +203,7 @@ function buildBehaviorItems(findings: Finding[]): BehaviorItem[] {
   const byKey = new Map<string, BehaviorItem>();
 
   findings.forEach((finding) => {
+    if (!isDisplayableBehaviorFinding(finding)) return;
     const type = classifyBehaviorType(finding);
     const identifier = buildIdentifier(type, finding);
     if (!identifier) return;
@@ -210,12 +218,12 @@ function buildBehaviorItems(findings: Finding[]): BehaviorItem[] {
       type,
       identifier,
       detail: buildDetail(type, finding),
-      tested: finding.verdict !== 'inconclusive',
+      tested: isCoveredFinding(finding),
       findings: 1,
     });
   });
 
-  return Array.from(byKey.values());
+  return Array.from(byKey.values()).sort((a, b) => b.findings - a.findings || a.type.localeCompare(b.type) || a.identifier.localeCompare(b.identifier));
 }
 
 /** Check if a path looks like a valid API endpoint (not a description text). */
@@ -223,6 +231,7 @@ function isValidApiPath(path: string): boolean {
   if (!path || typeof path !== 'string') return false;
   const p = path.trim();
   if (!p.startsWith('/')) return false;
+  if (PLACEHOLDER_PATH_RE.test(p)) return false;
   // Must be ASCII-only (no Chinese chars that indicate description text)
   if (!/^[a-zA-Z0-9_/{}:.@.-]+$/.test(p)) return false;
   // Must have at least one alphabetic segment
@@ -231,8 +240,42 @@ function isValidApiPath(path: string): boolean {
   return true;
 }
 
+function isDisplayableBehaviorFinding(finding: Finding): boolean {
+  if (NON_ACTIONABLE_BUG_STATUS.has(String(finding.bug_status || ''))) return false;
+  if (!hasRuntimeEvidence(finding)) return false;
+  if (isValidApiPath(finding.repro_path)) return true;
+  return Boolean(
+    cleanEntityLabel(finding.source_entity)
+    || cleanEntityLabel(finding.defect_family_label)
+    || cleanEntityLabel(finding.reporting_bucket_label)
+  );
+}
+
+function isCoveredFinding(finding: Finding): boolean {
+  return hasRuntimeEvidence(finding);
+}
+
+function hasRuntimeEvidence(finding: Finding): boolean {
+  if (finding.gate_passed || finding.is_reproducible) return true;
+  if (finding.raw_evidence?.has_real_evidence) return true;
+  if (finding.evidence_quality?.can_reproduce) return true;
+  if (finding.evidence_quality?.level === 'validated') return true;
+  if (DISPLAYABLE_BUG_STATUS.has(String(finding.bug_status || ''))) return true;
+  return DISPLAYABLE_VERDICT.has(String(finding.verdict || ''));
+}
+
+function cleanEntityLabel(value: string) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  if (normalized.length > 80) return '';
+  if (SAMPLE_VALUE_RE.test(normalized)) return '';
+  if (/=/.test(normalized)) return '';
+  if (/^[A-Z]{2,}[-_][A-Z0-9_-]+$/i.test(normalized)) return '';
+  return normalized;
+}
+
 function classifyBehaviorType(finding: Finding): BehaviorType {
-  const source = `${finding.source_entity || ''} ${finding.source_value || ''} ${finding.title}`.toLowerCase();
+  const source = `${finding.source_entity || ''} ${finding.title}`.toLowerCase();
   // Only classify as API if repro_path is a valid API endpoint
   if (isValidApiPath(finding.repro_path)) return 'API';
   if (source.includes('prd') || source.includes('openapi') || source.includes('文档')) return '文档';
@@ -246,12 +289,15 @@ function buildIdentifier(type: BehaviorType, finding: Finding): string {
     // (don't fallback to title — title is a description, not an identifier)
     return isValidApiPath(finding.repro_path) ? finding.repro_path : '业务场景';
   }
-  return finding.source_entity || finding.title;
+  return cleanEntityLabel(finding.source_entity) || cleanEntityLabel(finding.defect_family_label) || cleanEntityLabel(finding.reporting_bucket_label) || '';
 }
 
 function buildDetail(type: BehaviorType, finding: Finding): string {
   if (type === 'API') return finding.repro_method || 'GET';
-  return finding.source_value || finding.actual || finding.expected || '待补充';
+  if (type === '业务流程') return finding.defect_family_label || finding.reporting_bucket_label || '运行证据聚合';
+  if (type === '数据库') return finding.investigation_guidance?.relevant_tables?.join(', ') || '数据一致性证据';
+  if (type === '文档') return finding.doc_refs?.[0]?.display_name || '资料规则证据';
+  return '待补充';
 }
 
 function formatBehaviorIdentifier(value: string) {
@@ -269,9 +315,15 @@ function formatBehaviorDetail(value: string) {
   return normalized;
 }
 
-function getBehaviorHeatTone(findings: number) {
-  if (findings >= 2) return 'tone-danger';
-  if (findings === 1) return 'tone-warning';
+function getBehaviorHeatWidth(findings: number, maxFindings: number) {
+  if (findings <= 0) return 0;
+  return Math.max(8, Math.round((findings / Math.max(1, maxFindings)) * 100));
+}
+
+function getBehaviorHeatTone(findings: number, maxFindings: number) {
+  const ratio = findings / Math.max(1, maxFindings);
+  if (ratio >= 0.65 && findings >= 3) return 'tone-danger';
+  if (ratio >= 0.25 || findings >= 2) return 'tone-warning';
   return 'tone-success';
 }
 
