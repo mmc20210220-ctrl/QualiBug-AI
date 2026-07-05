@@ -14,6 +14,10 @@ interface BehaviorItem {
   findings: number;
 }
 
+type BehaviorAccumulator = BehaviorItem & {
+  riskKeys: Set<string>;
+};
+
 const DISPLAYABLE_BUG_STATUS = new Set(['reproduced', 'suspected']);
 const NON_ACTIONABLE_BUG_STATUS = new Set(['risk_clue', 'not_reproduced', 'false_positive']);
 const DISPLAYABLE_VERDICT = new Set(['confirmed', 'validated_candidate']);
@@ -200,30 +204,43 @@ export function BehaviorSpace() {
 }
 
 function buildBehaviorItems(findings: Finding[]): BehaviorItem[] {
-  const byKey = new Map<string, BehaviorItem>();
+  const byKey = new Map<string, BehaviorAccumulator>();
 
   findings.forEach((finding) => {
-    if (!isDisplayableBehaviorFinding(finding)) return;
+    if (!isDisplayableBehaviorUnit(finding)) return;
     const type = classifyBehaviorType(finding);
     const identifier = buildIdentifier(type, finding);
     if (!identifier) return;
     const key = `${type}:${identifier}`;
     const current = byKey.get(key);
+    const riskKey = buildActionableRiskKey(finding);
     if (current) {
-      current.findings += 1;
-      current.tested = current.tested || finding.verdict !== 'inconclusive';
+      if (riskKey) current.riskKeys.add(riskKey);
+      current.findings = current.riskKeys.size;
+      current.tested = current.tested || isCoveredFinding(finding);
       return;
     }
+    const riskKeys = new Set<string>();
+    if (riskKey) riskKeys.add(riskKey);
     byKey.set(key, {
       type,
       identifier,
       detail: buildDetail(type, finding),
       tested: isCoveredFinding(finding),
-      findings: 1,
+      findings: riskKeys.size,
+      riskKeys,
     });
   });
 
-  return Array.from(byKey.values()).sort((a, b) => b.findings - a.findings || a.type.localeCompare(b.type) || a.identifier.localeCompare(b.identifier));
+  return Array.from(byKey.values())
+    .map((item) => ({
+      type: item.type,
+      identifier: item.identifier,
+      detail: item.detail,
+      tested: item.tested,
+      findings: item.findings,
+    }))
+    .sort((a, b) => b.findings - a.findings || Number(b.tested) - Number(a.tested) || a.type.localeCompare(b.type) || a.identifier.localeCompare(b.identifier));
 }
 
 /** Check if a path looks like a valid API endpoint (not a description text). */
@@ -240,9 +257,7 @@ function isValidApiPath(path: string): boolean {
   return true;
 }
 
-function isDisplayableBehaviorFinding(finding: Finding): boolean {
-  if (NON_ACTIONABLE_BUG_STATUS.has(String(finding.bug_status || ''))) return false;
-  if (!hasRuntimeEvidence(finding)) return false;
+function isDisplayableBehaviorUnit(finding: Finding): boolean {
   if (isValidApiPath(finding.repro_path)) return true;
   return Boolean(
     cleanEntityLabel(finding.source_entity)
@@ -253,6 +268,20 @@ function isDisplayableBehaviorFinding(finding: Finding): boolean {
 
 function isCoveredFinding(finding: Finding): boolean {
   return hasRuntimeEvidence(finding);
+}
+
+function buildActionableRiskKey(finding: Finding): string {
+  if (NON_ACTIONABLE_BUG_STATUS.has(String(finding.bug_status || ''))) return '';
+  if (!hasRuntimeEvidence(finding)) return '';
+  return [
+    finding.severity,
+    finding.bug_status,
+    finding.verdict,
+    finding.defect_family || finding.reporting_bucket || finding.risk_type,
+    normalizeRiskText(finding.title),
+    normalizeRiskText(finding.expected),
+    normalizeRiskText(finding.actual),
+  ].filter(Boolean).join('|');
 }
 
 function hasRuntimeEvidence(finding: Finding): boolean {
@@ -272,6 +301,17 @@ function cleanEntityLabel(value: string) {
   if (/=/.test(normalized)) return '';
   if (/^[A-Z]{2,}[-_][A-Z0-9_-]+$/i.test(normalized)) return '';
   return normalized;
+}
+
+function normalizeRiskText(value: string) {
+  return String(value || '')
+    .trim()
+    .replace(/'[^']*'|"[^"]*"/g, '<value>')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '<id>')
+    .replace(/\b[A-Z]{2,}[-_][A-Z0-9_-]+\b/gi, '<id>')
+    .replace(/\b\d{6,}\b/g, '<number>')
+    .replace(/\s+/g, ' ')
+    .slice(0, 180);
 }
 
 function classifyBehaviorType(finding: Finding): BehaviorType {
