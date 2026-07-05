@@ -507,6 +507,35 @@ class TestRuntimeEvidenceTraceability:
         assert formatted["reproduction"]["har_evidence"] is None
         assert any("does not match observed runtime path" in item for item in formatted["gate_failures"])
 
+    def test_unrelated_har_response_does_not_prove_business_state_claim(self):
+        finding = {
+            "title": "workflow: cancelled -> pay -> paid",
+            "status": "confirmed",
+            "_api_method": "POST",
+            "_api_path": "/api/orders",
+            "source_entity": "orders",
+            "source_value": "POST /api/orders",
+            "expected_behavior": "cancelled resources must reject pay action",
+            "actual_behavior": "workflow: cancelled -> pay -> paid",
+            "har_evidence": {
+                "method": "POST",
+                "path": "/api/orders",
+                "status_code": 500,
+                "response_body": '{"error":"invalid uuid syntax: \\"test-addr\\""}',
+                "actor": "admin",
+                "duration_ms": 73,
+            },
+        }
+
+        formatted = _format_single_finding(finding)
+
+        assert formatted["bug_status"] == "not_reproduced"
+        assert formatted["gate_passed"] is False
+        assert formatted["evidence_quality"]["can_reproduce"] is False
+        assert formatted["raw_evidence"]["response_raw"] == {}
+        assert formatted["reproduction"]["har_evidence"] is None
+        assert any("不匹配" in item for item in formatted["gate_failures"])
+
     def test_placeholder_path_does_not_count_as_api_evidence(self):
         finding = {
             "title": "unbound id route",

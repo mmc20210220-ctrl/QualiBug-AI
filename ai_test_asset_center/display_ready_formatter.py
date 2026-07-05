@@ -164,6 +164,99 @@ def _status_code_int(value: Any) -> int:
         return 0
 
 
+_RUNTIME_TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{2,}|[\u4e00-\u9fff]{2,}")
+_RUNTIME_TOKEN_STOPWORDS = {
+    "api", "body", "code", "data", "error", "false", "http", "message", "null",
+    "path", "post", "request", "response", "status", "true", "type",
+    "接口", "响应", "错误", "状态", "返回", "系统", "应该", "实际", "预期",
+}
+
+
+def _runtime_text_tokens(value: Any) -> set[str]:
+    text = _clean(value).lower()
+    tokens = {token for token in _RUNTIME_TOKEN_RE.findall(text) if token not in _RUNTIME_TOKEN_STOPWORDS}
+    return {token for token in tokens if not _is_placeholder_value(token)}
+
+
+def _finding_semantic_text(finding: dict) -> str:
+    parts = [
+        finding.get("title"),
+        finding.get("bug_title"),
+        finding.get("expected_behavior"),
+        finding.get("expected"),
+        finding.get("actual_behavior"),
+        finding.get("actual"),
+        finding.get("description"),
+        finding.get("source_entity"),
+        finding.get("source_value"),
+    ]
+    return " ".join(_clean(part) for part in parts if _clean(part))
+
+
+def _runtime_observation_supports_finding(finding: dict, obs: dict[str, Any]) -> bool:
+    """Return True only when runtime response evidence belongs to this finding.
+
+    Same endpoint is not enough: a generic 500 from a placeholder request must not
+    be used as proof for an unrelated business-state finding.
+    """
+    if _clean(obs.get("source")) != "har":
+        return True
+
+    path = _clean(obs.get("path"))
+    if _is_placeholder_value(path):
+        return False
+
+    finding_text = _finding_semantic_text(finding)
+    finding_text_lower = finding_text.lower()
+    body_text = _clean(obs.get("body"))
+    request_text = _clean(obs.get("request_body"))
+    runtime_text = " ".join(part for part in (body_text, request_text) if part)
+    runtime_text_lower = runtime_text.lower()
+    status = _status_code_int(obs.get("status_code"))
+
+    placeholder_tokens = [
+        token for token in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", runtime_text_lower)
+        if _is_placeholder_value(token)
+    ]
+    if placeholder_tokens and not any(token in finding_text_lower for token in placeholder_tokens):
+        return False
+
+    has_identifier_context = (
+        bool(re.search(r"\b(?:uuid|id|identifier|address|param|parameter|type)\b", finding_text_lower))
+        or any(token in finding_text for token in ("主键", "标识", "地址", "参数", "类型"))
+    )
+    if "uuid" in runtime_text_lower and not has_identifier_context:
+        return False
+
+    return True
+
+
+def _relevant_har_evidence(finding: dict) -> dict[str, Any]:
+    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    if not har:
+        return {}
+    obs = {
+        "source": "har",
+        "method": _clean(har.get("method") or finding.get("_api_method") or finding.get("method") or "GET").upper(),
+        "path": _clean(har.get("path") or finding.get("_api_path") or finding.get("path")),
+        "status_code": har.get("status_code"),
+        "body": har.get("response_body"),
+        "request_body": har.get("request_body"),
+        "duration_ms": har.get("duration_ms") or 0,
+        "actor": _clean(har.get("actor")),
+    }
+    return har if _runtime_observation_supports_finding(finding, obs) else {}
+
+
+def _runtime_relevance_mismatch_reasons(finding: dict) -> list[str]:
+    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    if not har or _relevant_har_evidence(finding):
+        return []
+    if not (har.get("status_code") or har.get("response_body")):
+        return []
+    return ["运行时响应与当前缺陷描述不匹配，已拒绝作为复现证据"]
+
+
 def _extract_runtime_call_evidence(finding: dict) -> list[dict[str, Any]]:
     evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
     calls = evidence.get("calls") if isinstance(evidence.get("calls"), list) else []
@@ -198,7 +291,7 @@ def _extract_runtime_call_evidence(finding: dict) -> list[dict[str, Any]]:
 
 def _runtime_observations(finding: dict) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     if har.get("status_code") or har.get("response_body") or har.get("path"):
         observations.append({
             "source": "har",
@@ -206,6 +299,7 @@ def _runtime_observations(finding: dict) -> list[dict[str, Any]]:
             "path": _clean(har.get("path") or finding.get("_api_path") or finding.get("path")),
             "status_code": har.get("status_code"),
             "body": har.get("response_body"),
+            "request_body": har.get("request_body"),
             "duration_ms": har.get("duration_ms") or 0,
             "actor": _clean(har.get("actor")),
         })
@@ -228,7 +322,11 @@ def _has_runtime_response(finding: dict) -> bool:
         path = _clean(obs.get("path"))
         status = _status_code_int(obs.get("status_code"))
         has_status = status > 0
-        if (has_status or _response_body_has_value(obs.get("body"))) and not _is_placeholder_value(path):
+        if (
+            (has_status or _response_body_has_value(obs.get("body")))
+            and not _is_placeholder_value(path)
+            and _runtime_observation_supports_finding(finding, obs)
+        ):
             return True
     return False
 
@@ -237,6 +335,8 @@ def _has_anomaly_signal(finding: dict) -> bool:
     if _extract_db_evidence(finding):
         return True
     for obs in _runtime_observations(finding):
+        if not _runtime_observation_supports_finding(finding, obs):
+            continue
         status = _status_code_int(obs.get("status_code"))
         if status >= 400:
             return True
@@ -482,7 +582,7 @@ def _extract_db_evidence(finding: dict) -> dict | None:
 
 def _extract_har_response_evidence(finding: dict) -> dict | None:
     """从 har_evidence 提取结构化请求响应证据（通用，不硬编码业务概念）。"""
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     status_code = har.get("status_code") or 0
     response_body = _clean(har.get("response_body"))
     actor = _clean(har.get("actor"))
@@ -509,7 +609,7 @@ def _compute_evidence_completeness(finding: dict) -> dict:
 
     维度：规则来源 / 接口请求 / 接口响应 / 数据核验 / 日志追溯 / 复现验证
     """
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     inv = finding.get("investigation_guidance") if isinstance(finding.get("investigation_guidance"), dict) else {}
     doc_refs = finding.get("_doc_refs") or finding.get("doc_refs") or []
     has_docs = isinstance(doc_refs, list) and len(doc_refs) > 0
@@ -788,7 +888,7 @@ def _filter_chain_for_test(chain: list[dict]) -> list[dict]:
 def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None) -> dict:
     """构建复现信息展示（基于 HAR 真实数据）"""
     ctx = enterprise_ctx or {}
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     finding_path = finding.get("_api_path") or finding.get("repro_path") or ""
     finding_method = (finding.get("_api_method") or finding.get("repro_method") or "").upper()
     har_path = har.get("path") or ""
@@ -852,7 +952,7 @@ def _generate_default_repro_steps(finding: dict, path: str, method: str, ctx: di
     调用方应通过 is_synthetic=True 标记，前端据此区分"真实复现步骤"与"建议指引"。
     """
     # 如果有 HAR 真实响应，说明请求确实执行过，可以基于真实数据生成指引
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     has_real_response = _has_runtime_response(finding)
 
     if not path or _is_placeholder_value(path):
@@ -937,7 +1037,7 @@ def _extract_business_keys(finding: dict) -> list[tuple[str, str]]:
             keys.append((field, val))
 
     # 5. 从 HAR evidence 请求体动态提取（通用）
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     if har.get("request_body"):
         import json as _json
         try:
@@ -1149,7 +1249,7 @@ def _build_investigation_display(finding: dict) -> dict:
                 trace_id = _clean(m.group(1))
     if not trace_id:
         # 从 har_evidence 响应体提取
-        har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+        har = _relevant_har_evidence(finding)
         har_body = har.get("response_body") or ""
         if har_body:
             import json as _json
@@ -1363,7 +1463,7 @@ def _check_claim_evidence_consistency(finding: dict) -> list[str]:
     """
     contradictions: list[str] = []
 
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     actual_status = har.get("status_code") or 0
     actual_body = _clean(har.get("response_body"))
 
@@ -1484,6 +1584,7 @@ def _enforce_evidence_gate(
     """
     # ── 1. 声明-证据一致性检查（所有状态都执行）──
     contradictions = _check_claim_evidence_consistency(finding)
+    contradictions.extend(_runtime_relevance_mismatch_reasons(finding))
     contradictions.extend(_path_mismatch_reasons(finding))
     if contradictions:
         return {
@@ -1543,7 +1644,7 @@ def _compute_reproducibility_confidence(finding: dict, bug_status: dict, evidenc
     can_reproduce = evidence_quality.get("can_reproduce", False)
 
     # 有运行时证据加权
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     if har.get("status_code"):
         score = min(1.0, score + 0.1)
     if can_reproduce:
@@ -1587,7 +1688,7 @@ def _extract_failed_assertions(finding: dict, reproduction: dict) -> list[dict]:
         })
 
     # 3. API 响应状态码异常
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     status_code = har.get("status_code") or 0
     if status_code and status_code >= 400:
         assertions.append({
@@ -1639,7 +1740,7 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
 
     从 HAR/DB/日志/执行记录中提取原始证据，不伪造。
     """
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     inv = finding.get("investigation_guidance") if isinstance(finding.get("investigation_guidance"), dict) else {}
     evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
     db_ev = _extract_db_evidence(finding)
@@ -1704,7 +1805,7 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
 
 def _build_technical_details(finding: dict, investigation: dict, reproduction: dict) -> dict:
     """构建研发定位证据（让研发一眼能定位问题）。"""
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
     risk_type = _clean(finding.get("risk_type") or finding.get("category") or "unknown")
     path = _clean(finding.get("_api_path") or finding.get("repro_path") or finding.get("path"))
     method = _clean(finding.get("_api_method") or finding.get("method") or "GET").upper()
@@ -1817,7 +1918,7 @@ def _build_expected_actual_comparison(finding: dict) -> dict:
     expected = _strip_internal_tags(_clean(finding.get("expected_behavior") or finding.get("expected")))
     actual = _strip_internal_tags(_clean(finding.get("actual_behavior") or finding.get("actual") or finding.get("description")))
     db_ev = _extract_db_evidence(finding)
-    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    har = _relevant_har_evidence(finding)
 
     comparison = {
         "expected": expected or "未关联预期规则（需上传 PRD / API 规范）",
