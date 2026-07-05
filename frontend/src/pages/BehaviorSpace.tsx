@@ -47,8 +47,10 @@ export function BehaviorSpace() {
   const project = params.get('project')?.trim() || '';
   const { findings, loading } = useFindingsData(project);
   const behaviors = useMemo(() => buildBehaviorItems(findings), [findings]);
+  const riskBehaviors = useMemo(() => behaviors.filter((behavior) => behavior.findings > 0), [behaviors]);
   const maxFindings = Math.max(1, ...behaviors.map((behavior) => behavior.findings));
   const covered = behaviors.filter(r => r.tested).length;
+  const zeroRiskCovered = behaviors.filter((behavior) => behavior.tested && behavior.findings === 0).length;
   const totalFindings = behaviors.reduce((s, r) => s + r.findings, 0);
   const pct = behaviors.length > 0 ? Math.round((covered / behaviors.length) * 100) : 0;
   const pending = Math.max(0, behaviors.length - covered);
@@ -164,14 +166,16 @@ export function BehaviorSpace() {
             <span className="panel-kicker">矩阵明细</span>
             <h2>行为覆盖矩阵</h2>
           </div>
-          <div className="coverage-header-meta">按行为单元查看覆盖状态、风险数量与优先补测点</div>
+          <div className="coverage-header-meta">
+            仅展示有可行动风险的行为单元；{zeroRiskCovered} 个已触达且无风险的单元已归入覆盖汇总
+          </div>
         </div>
-        {behaviors.length > 0 && (
+        {riskBehaviors.length > 0 && (
         <div className="overflow-x-auto">
           <table className="data-table">
             <thead><tr><th>类型</th><th>标识</th><th>详情</th><th className="text-center">覆盖状态</th><th className="text-center">风险</th><th>风险热度</th></tr></thead>
             <tbody>
-              {behaviors.map((b, i) => (
+              {riskBehaviors.map((b, i) => (
                 <tr key={`${b.type}-${b.identifier}-${i}`}>
                   <td><span className={`behavior-type-chip ${typeToneClass[b.type]}`}>{b.type}</span></td>
                   <td className="font-mono behavior-matrix-code">{formatBehaviorIdentifier(b.identifier)}</td>
@@ -193,6 +197,13 @@ export function BehaviorSpace() {
             </tbody>
           </table>
         </div>
+        )}
+        {!loading && behaviors.length > 0 && riskBehaviors.length === 0 && (
+          <section className="findings-empty-state compact">
+            <span className="findings-empty-kicker">当前无可行动风险</span>
+            <h3>已触达行为单元未发现可交付风险</h3>
+            <p>当前矩阵只展示能支撑交付的风险证据链；无风险覆盖已计入上方覆盖汇总，不在明细表铺开。</p>
+          </section>
         )}
         {!loading && behaviors.length === 0 && (
           <section className="findings-empty-state compact">

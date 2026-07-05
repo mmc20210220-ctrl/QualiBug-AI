@@ -222,8 +222,8 @@ def _runtime_observation_supports_finding(finding: dict, obs: dict[str, Any]) ->
         return False
 
     has_identifier_context = (
-        bool(re.search(r"\b(?:uuid|id|identifier|address|param|parameter|type)\b", finding_text_lower))
-        or any(token in finding_text for token in ("主键", "标识", "地址", "参数", "类型"))
+        bool(re.search(r"\b(?:uuid|id|identifier|address|param|parameter)\b", finding_text_lower))
+        or any(token in finding_text for token in ("主键", "标识", "地址", "参数"))
     )
     if "uuid" in runtime_text_lower and not has_identifier_context:
         return False

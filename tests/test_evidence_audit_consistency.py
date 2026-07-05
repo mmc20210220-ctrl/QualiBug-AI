@@ -38,6 +38,7 @@ from ai_test_asset_center.display_ready_formatter import (  # noqa: E402
     _has_runtime_response,
     _path_mismatch_reasons,
 )
+from ai_test_asset_center.phase104_command_center_http_api import _sanitize_customer_evidence_payload  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -535,6 +536,67 @@ class TestRuntimeEvidenceTraceability:
         assert formatted["raw_evidence"]["response_raw"] == {}
         assert formatted["reproduction"]["har_evidence"] is None
         assert any("不匹配" in item for item in formatted["gate_failures"])
+
+    def test_response_sanitizer_downgrades_cached_mismatched_display_risk(self):
+        payload = {
+            "ok": True,
+            "data": {
+                "risks": [
+                    {
+                        "title": "workflow: cancelled -> pay -> paid",
+                        "expected": "cancelled resources must reject pay action",
+                        "actual": "workflow: cancelled -> pay -> paid",
+                        "bug_status": "reproduced",
+                        "verdict": "confirmed",
+                        "gate_passed": True,
+                        "is_reproducible": True,
+                        "repro_method": "POST",
+                        "repro_path": "/api/orders",
+                        "evidence_quality": {"score": 82, "can_reproduce": True, "verified": ["已捕获真实接口响应（状态码/响应体）"], "missing": []},
+                        "raw_evidence": {
+                            "request_raw": {"method": "POST", "path": "/api/orders", "actor": "admin"},
+                            "response_raw": {"status_code": 500, "body": '{"error":"invalid uuid syntax: \\"test-addr\\""}', "duration_ms": 73},
+                            "has_real_evidence": True,
+                        },
+                        "reproduction": {"har_evidence": {"status_code": 500, "response_body": '{"error":"invalid uuid syntax: \\"test-addr\\""}'}, "steps": ["old polluted step"]},
+                        "proof": {"repro_rate": 100},
+                    }
+                ]
+            },
+        }
+
+        sanitized = _sanitize_customer_evidence_payload(payload)
+        risk = sanitized["data"]["risks"][0]
+
+        assert risk["bug_status"] == "not_reproduced"
+        assert risk["gate_passed"] is False
+        assert risk["raw_evidence"]["response_raw"] == {}
+        assert risk["reproduction"]["har_evidence"] is None
+        assert risk["proof"]["repro_rate"] == 0
+
+    def test_response_sanitizer_does_not_treat_content_type_as_uuid_context(self):
+        payload = {
+            "title": "missing security header: X-Content-Type-Options",
+            "expected": "response should include X-Content-Type-Options",
+            "actual": "HTTP response missed X-Content-Type-Options",
+            "bug_status": "reproduced",
+            "verdict": "confirmed",
+            "gate_passed": True,
+            "is_reproducible": True,
+            "evidence_quality": {"score": 82, "can_reproduce": True, "verified": [], "missing": []},
+            "raw_evidence": {
+                "request_raw": {"method": "POST", "path": "/api/orders"},
+                "response_raw": {"status_code": 500, "body": '{"error":"invalid uuid syntax: \\"test-addr\\""}'},
+                "has_real_evidence": True,
+            },
+            "reproduction": {"har_evidence": {"status_code": 500}},
+            "proof": {"repro_rate": 100},
+        }
+
+        sanitized = _sanitize_customer_evidence_payload(payload)
+
+        assert sanitized["bug_status"] == "not_reproduced"
+        assert sanitized["raw_evidence"]["response_raw"] == {}
 
     def test_placeholder_path_does_not_count_as_api_evidence(self):
         finding = {

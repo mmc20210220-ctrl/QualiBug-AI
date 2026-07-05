@@ -37,9 +37,11 @@ from ai_test_asset_center.phase103_command_center_api import (
 )
 from ai_test_asset_center.phase103_demo_runner import seed_demo_project
 from ai_test_asset_center.phase103_enterprise_command_center import redact_value
+from ai_test_asset_center.display_ready_formatter import _runtime_observation_supports_finding
 from ai_test_asset_center.real_project_onboarding import ROOT, _safe_project_id
 
 PHASE104A_VERSION = "phase104a-command-center-http-api-v1"
+EVIDENCE_RELEVANCE_FAILURE = "运行时响应与当前缺陷描述不匹配，已拒绝作为复现证据"
 
 
 @dataclass(frozen=True)
@@ -214,6 +216,104 @@ def _augment_command_center_snapshot(project_id: str, envelope: Mapping[str, Any
     return updated
 
 
+def _sanitize_customer_evidence_payload(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_sanitize_customer_evidence_payload(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    sanitized = {str(key): _sanitize_customer_evidence_payload(item) for key, item in value.items()}
+    if _looks_like_display_risk(sanitized):
+        return _sanitize_display_risk(sanitized)
+    return sanitized
+
+
+def _looks_like_display_risk(item: Mapping[str, Any]) -> bool:
+    return (
+        "title" in item
+        and ("raw_evidence" in item or "reproduction" in item or "evidence_quality" in item)
+        and ("bug_status" in item or "verdict" in item)
+    )
+
+
+def _sanitize_display_risk(risk: dict[str, Any]) -> dict[str, Any]:
+    raw_evidence = risk.get("raw_evidence") if isinstance(risk.get("raw_evidence"), dict) else {}
+    response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+    if not response_raw:
+        return risk
+
+    request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+    obs = {
+        "source": "har",
+        "method": request_raw.get("method") or risk.get("repro_method"),
+        "path": request_raw.get("path") or risk.get("repro_path"),
+        "status_code": response_raw.get("status_code"),
+        "body": response_raw.get("body"),
+        "request_body": request_raw.get("body"),
+        "duration_ms": response_raw.get("duration_ms") or 0,
+        "actor": request_raw.get("actor"),
+    }
+    if _runtime_observation_supports_finding(risk, obs):
+        return risk
+
+    cleaned = dict(risk)
+    cleaned["bug_status"] = "not_reproduced"
+    cleaned["bug_status_label"] = "未复现"
+    cleaned["bug_status_description"] = EVIDENCE_RELEVANCE_FAILURE
+    cleaned["verdict"] = "pending"
+    cleaned["is_reproducible"] = False
+    cleaned["gate_passed"] = False
+    failures = [str(item) for item in cleaned.get("gate_failures") or [] if str(item)]
+    if EVIDENCE_RELEVANCE_FAILURE not in failures:
+        failures.append(EVIDENCE_RELEVANCE_FAILURE)
+    cleaned["gate_failures"] = failures
+    cleaned["confidence"] = 0.0
+
+    cleaned_raw = dict(raw_evidence)
+    cleaned_raw["response_raw"] = {}
+    cleaned_raw["has_real_evidence"] = bool(
+        cleaned_raw.get("db_snapshot")
+        or cleaned_raw.get("logs")
+        or cleaned_raw.get("execution_trace")
+    )
+    cleaned["raw_evidence"] = cleaned_raw
+
+    reproduction = dict(cleaned.get("reproduction") or {})
+    reproduction["har_evidence"] = None
+    reproduction["is_synthetic"] = True
+    reproduction["steps"] = [
+        "当前运行响应与缺陷描述不匹配，已拒绝作为复现证据；请重新执行与该缺陷场景一致的复现步骤。"
+    ]
+    cleaned["reproduction"] = reproduction
+
+    quality = dict(cleaned.get("evidence_quality") or {})
+    quality["can_reproduce"] = False
+    quality["score"] = min(int(quality.get("score") or 0), 40)
+    quality["level"] = "needs_evidence"
+    quality["label"] = "风险线索"
+    quality["summary"] = EVIDENCE_RELEVANCE_FAILURE
+    quality["verified"] = [
+        item for item in quality.get("verified") or []
+        if "接口响应" not in str(item) and "复现" not in str(item)
+    ]
+    missing = [str(item) for item in quality.get("missing") or [] if str(item)]
+    if "缺少与缺陷描述匹配的真实接口响应" not in missing:
+        missing.insert(0, "缺少与缺陷描述匹配的真实接口响应")
+    quality["missing"] = missing[:6]
+    cleaned["evidence_quality"] = quality
+
+    comparison = dict(cleaned.get("expected_actual_comparison") or {})
+    comparison["api_comparison"] = None
+    cleaned["expected_actual_comparison"] = comparison
+    cleaned["failed_assertions"] = [
+        assertion for assertion in cleaned.get("failed_assertions") or []
+        if isinstance(assertion, dict) and assertion.get("type") not in {"http_status_error", "response_error_field", "behavior_mismatch"}
+    ]
+    proof = dict(cleaned.get("proof") or {})
+    proof["repro_rate"] = 0
+    cleaned["proof"] = proof
+    return cleaned
+
+
 class Phase104CommandCenterHttpApp:
     """Route adapter that exposes EnterpriseCommandCenterAPI over V1 HTTP paths."""
 
@@ -370,7 +470,8 @@ class Phase104CommandCenterHttpApp:
         return _json_error("NOT_FOUND", "未找到请求的项目 API 路由。", status=404, details={"project_id": project_id, "tail": tail})
 
     def _wrap(self, envelope: Mapping[str, Any], *, status: int = 200) -> HttpAPIResponse:
-        return HttpAPIResponse.json(envelope, status=_status_from_envelope(envelope, default=status))
+        sanitized = _sanitize_customer_evidence_payload(envelope)
+        return HttpAPIResponse.json(sanitized, status=_status_from_envelope(sanitized, default=status))
 
     def _method_not_allowed(self, method: str) -> HttpAPIResponse:
         return _json_error(
