@@ -598,6 +598,29 @@ class TestRuntimeEvidenceTraceability:
         assert sanitized["bug_status"] == "not_reproduced"
         assert sanitized["raw_evidence"]["response_raw"] == {}
 
+    def test_response_sanitizer_removes_unbound_test_placeholder_response(self):
+        payload = {
+            "title": "POST parameter mutation orderId=-1",
+            "expected": "request should return a controlled validation error",
+            "actual": "server returned 500",
+            "bug_status": "not_reproduced",
+            "verdict": "pending",
+            "gate_passed": False,
+            "evidence_quality": {"score": 40, "can_reproduce": False, "verified": [], "missing": []},
+            "raw_evidence": {
+                "request_raw": {"method": "POST", "path": "/api/payments/pay"},
+                "response_raw": {"status_code": 500, "body": '{"error":"invalid uuid syntax: \\"test-addr\\""}'},
+                "has_real_evidence": True,
+            },
+            "reproduction": {"har_evidence": {"status_code": 500}},
+            "proof": {"repro_rate": 0},
+        }
+
+        sanitized = _sanitize_customer_evidence_payload(payload)
+
+        assert sanitized["raw_evidence"]["response_raw"] == {}
+        assert sanitized["reproduction"]["har_evidence"] is None
+
     def test_placeholder_path_does_not_count_as_api_evidence(self):
         finding = {
             "title": "unbound id route",

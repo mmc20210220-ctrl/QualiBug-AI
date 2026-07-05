@@ -137,7 +137,9 @@ def _clean(value: Any) -> str:
 
 _PLACEHOLDER_TOKEN_RE = re.compile(
     r"(?:QUALIBUG_UNRESOLVED_ID|<\s*(?:FILL|TODO|REQUIRED|SANDBOX|REPLACE)[^>]*>|"
-    r"\{[^}/]+\}|:id\b|/id\b|(?:^|[/{:_-])(?:example|sample|mock|placeholder)(?:$|[}/_-]))",
+    r"\{[^}/]+\}|:id\b|/id\b|"
+    r"(?:^|[/{:_-])(?:example|sample|mock|placeholder)(?:$|[}/_-])|"
+    r"(?:^|[{:_-])(?:demo|draft|test)(?:$|[}_-]))",
     re.I,
 )
 
@@ -1463,7 +1465,7 @@ def _check_claim_evidence_consistency(finding: dict) -> list[str]:
     """
     contradictions: list[str] = []
 
-    har = _relevant_har_evidence(finding)
+    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
     actual_status = har.get("status_code") or 0
     actual_body = _clean(har.get("response_body"))
 
