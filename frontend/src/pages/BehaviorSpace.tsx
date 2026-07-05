@@ -177,9 +177,9 @@ export function BehaviorSpace() {
                   <td className="font-mono behavior-matrix-code">{formatBehaviorIdentifier(b.identifier)}</td>
                   <td className="behavior-matrix-detail">{formatBehaviorDetail(b.detail)}</td>
                   <td className="text-center">
-                    <span className={`status ${b.tested ? 'status-success' : 'status-warning'}`}>{b.findings > 0 ? '有风险' : b.tested ? '已触达' : '待检测'}</span>
+                    <span className={`status ${b.findings > 0 ? 'status-warning' : b.tested ? 'status-success' : 'status-warning'}`}>{b.findings > 0 ? '有风险' : b.tested ? '无风险' : '待检测'}</span>
                   </td>
-                  <td className={`text-center behavior-findings${b.findings > 0 ? ' is-risk' : ''}`}>{b.findings || '-'}</td>
+                  <td className={`text-center behavior-findings${b.findings > 0 ? ' is-risk' : ''}`}>{b.findings}</td>
                   <td>
                     <div className="behavior-heat-track">
                       <div
