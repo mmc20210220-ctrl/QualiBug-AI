@@ -22,7 +22,10 @@ const DISPLAYABLE_BUG_STATUS = new Set(['reproduced', 'suspected']);
 const NON_ACTIONABLE_BUG_STATUS = new Set(['risk_clue', 'not_reproduced', 'false_positive']);
 const DISPLAYABLE_VERDICT = new Set(['confirmed', 'validated_candidate']);
 const SAMPLE_VALUE_RE = /(?:^|[-_=:/])(?:sample|mock|demo|draft|placeholder|example|test)(?:$|[-_=:/])/i;
-const PLACEHOLDER_PATH_RE = /(?:\{[^}/]+\}|:id\b|QUALIBUG_UNRESOLVED_ID|<\s*(?:FILL|TODO|REQUIRED|SANDBOX|REPLACE)[^>]*>)/i;
+const PLACEHOLDER_PATH_RE = /(?:\{[^}/]+\}|:[a-z_][a-z0-9_]*\b|QUALIBUG_UNRESOLVED_ID|<\s*(?:FILL|TODO|REQUIRED|SANDBOX|REPLACE)[^>]*>)/i;
+const BEHAVIOR_SUBJECT_RE = /^([a-z][a-z0-9_-]{1,40})(?=[:：\s]|[\u0080-\uFFFF])/i;
+const NON_BUSINESS_SUBJECTS = new Set(['api', 'cors', 'get', 'http', 'patch', 'post', 'put', 'sec', 'ui']);
+const AGGREGATE_LAYER_FINDING_RE = /^\d+\s*个?.{0,24}层发现/;
 
 const typeAccentMap: Record<BehaviorType, string> = {
   'API': 'var(--primary)',
@@ -174,7 +177,7 @@ export function BehaviorSpace() {
                   <td className="font-mono behavior-matrix-code">{formatBehaviorIdentifier(b.identifier)}</td>
                   <td className="behavior-matrix-detail">{formatBehaviorDetail(b.detail)}</td>
                   <td className="text-center">
-                    <span className={`status ${b.tested ? 'status-success' : 'status-warning'}`}>{b.tested ? '已覆盖' : '待检测'}</span>
+                    <span className={`status ${b.tested ? 'status-success' : 'status-warning'}`}>{b.findings > 0 ? '有风险' : b.tested ? '已触达' : '待检测'}</span>
                   </td>
                   <td className={`text-center behavior-findings${b.findings > 0 ? ' is-risk' : ''}`}>{b.findings || '-'}</td>
                   <td>
@@ -273,11 +276,26 @@ function isCoveredFinding(finding: Finding): boolean {
 function buildActionableRiskKey(finding: Finding): string {
   if (NON_ACTIONABLE_BUG_STATUS.has(String(finding.bug_status || ''))) return '';
   if (!hasRuntimeEvidence(finding)) return '';
-  return [
+  if (AGGREGATE_LAYER_FINDING_RE.test(String(finding.title || '').trim())) return '';
+  const subject = extractBehaviorSubject(finding);
+  const isApiBucket = isValidApiPath(finding.repro_path) && !subject;
+  const stableParts = [
     finding.severity,
     finding.bug_status,
     finding.verdict,
     finding.defect_family || finding.reporting_bucket || finding.risk_type,
+    finding.reporting_bucket,
+    finding.risk_type,
+  ];
+  if (isApiBucket) {
+    return [
+      ...stableParts,
+      finding.repro_method,
+      finding.repro_path,
+    ].filter(Boolean).join('|');
+  }
+  return [
+    ...stableParts,
     normalizeRiskText(finding.title),
     normalizeRiskText(finding.expected),
     normalizeRiskText(finding.actual),
@@ -303,6 +321,21 @@ function cleanEntityLabel(value: string) {
   return normalized;
 }
 
+function extractBehaviorSubject(finding: Finding) {
+  const candidates = [finding.title, finding.actual];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || '').trim();
+    const match = normalized.match(BEHAVIOR_SUBJECT_RE);
+    const subject = cleanEntityLabel(match?.[1] || '');
+    if (!subject) continue;
+    const lower = subject.toLowerCase();
+    if (NON_BUSINESS_SUBJECTS.has(lower)) continue;
+    if (subject === subject.toUpperCase()) continue;
+    return subject;
+  }
+  return '';
+}
+
 function normalizeRiskText(value: string) {
   return String(value || '')
     .trim()
@@ -315,6 +348,7 @@ function normalizeRiskText(value: string) {
 }
 
 function classifyBehaviorType(finding: Finding): BehaviorType {
+  if (extractBehaviorSubject(finding)) return '业务流程';
   const source = `${finding.source_entity || ''} ${finding.title}`.toLowerCase();
   // Only classify as API if repro_path is a valid API endpoint
   if (isValidApiPath(finding.repro_path)) return 'API';
@@ -329,7 +363,7 @@ function buildIdentifier(type: BehaviorType, finding: Finding): string {
     // (don't fallback to title — title is a description, not an identifier)
     return isValidApiPath(finding.repro_path) ? finding.repro_path : '业务场景';
   }
-  return cleanEntityLabel(finding.source_entity) || cleanEntityLabel(finding.defect_family_label) || cleanEntityLabel(finding.reporting_bucket_label) || '';
+  return extractBehaviorSubject(finding) || cleanEntityLabel(finding.source_entity) || cleanEntityLabel(finding.defect_family_label) || cleanEntityLabel(finding.reporting_bucket_label) || '';
 }
 
 function buildDetail(type: BehaviorType, finding: Finding): string {
