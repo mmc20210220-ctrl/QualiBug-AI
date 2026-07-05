@@ -85,8 +85,9 @@ def test_runtime_evidence_scoreboard_counts_actual_setup_binding_snapshot_and_cl
     assert scoreboard["cleanup_accepted_count"] == 1
     assert scoreboard["snapshot_request_count"] == 2
     assert scoreboard["snapshot_accepted_count"] == 1
-    assert scoreboard["runtime_binding_event_count"] == 5
+    assert scoreboard["runtime_binding_event_count"] == 7
     assert scoreboard["runtime_binding_success_count"] == 5
+    assert scoreboard["runtime_binding_success_rate"] == 71.43
     assert scoreboard["query_bound_request_count"] == 3
     assert scoreboard["top_failure_or_gap_reasons"] == {"missing_path_params:order_id": 1}
 

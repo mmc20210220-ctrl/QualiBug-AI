@@ -93,8 +93,8 @@ def test_runtime_customer_reproduction_pack_packages_validated_finding_trace() -
                         "purpose": "delete_order",
                         "accepted": True,
                         "method": "DELETE",
-                        "path": "/orders/srv_ready",
-                        "body_runtime_binding": {"bound": False, "source": "runtime_target_request_body"},
+                            "path": "/orders/srv_ready",
+                            "body_runtime_binding": {"bound": True, "source": "runtime_target_request_body"},
                         "response": {"status_code": 204, "payload": {}},
                     }
                 ],
@@ -112,7 +112,7 @@ def test_runtime_customer_reproduction_pack_packages_validated_finding_trace() -
     item = pack["packages"][0]
     assert item["finding_id"] == "GPF-0001"
     assert item["customer_ready"] is True
-    assert item["runtime_evidence"]["runtime_binding_bound_count"] == 4
+    assert item["runtime_evidence"]["runtime_binding_bound_count"] == 5
     phases = [step["phase"] for step in item["reproduction_trace"]]
     assert phases == ["setup", "snapshot_before", "snapshot_after", "target_flow_step", "cleanup"]
     assert item["reproduction_trace"][0]["curl_template"].startswith("curl -X POST")

@@ -34,6 +34,9 @@ from ai_test_asset_center.display_ready_formatter import (  # noqa: E402
     _enforce_evidence_gate,
     _extract_failed_assertions,
     _generate_default_repro_steps,
+    _format_single_finding,
+    _has_runtime_response,
+    _path_mismatch_reasons,
 )
 
 
@@ -200,14 +203,14 @@ class TestEvidenceQualityNoInflation:
         q = _compute_evidence_quality(finding, "/api/test")
         assert q["can_reproduce"] is False
 
-    def test_status_code_counts_as_runtime_proof(self):
-        """A real status_code in evidence counts as runtime proof."""
+    def test_bare_status_code_without_request_trace_is_not_runtime_proof(self):
+        """A bare status_code without request trace should not count as runtime proof."""
         finding = {
             "title": "某问题",
             "evidence": {"status_code": 500},
         }
         q = _compute_evidence_quality(finding, "/api/test")
-        assert q["can_reproduce"] is True
+        assert q["can_reproduce"] is False
 
     def test_text_only_not_assertion(self):
         """expected+actual text alone should NOT count as assertion."""
@@ -259,15 +262,15 @@ class TestEvidenceCompletenessReproduction:
         repro = [d for d in ec["dimensions"] if d["key"] == "reproduction"][0]
         assert repro["present"] is True
 
-    def test_explicit_reproducible_flag_is_reproduction(self):
-        """reproducibility.reproducible=True marks reproduction present."""
+    def test_explicit_reproducible_flag_without_runtime_trace_is_not_reproduction(self):
+        """reproducibility.reproducible=True still needs a request/response trace."""
         finding = {
             "title": "某问题",
             "reproducibility": {"reproducible": True},
         }
         ec = _compute_evidence_completeness(finding)
         repro = [d for d in ec["dimensions"] if d["key"] == "reproduction"][0]
-        assert repro["present"] is True
+        assert repro["present"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -476,3 +479,83 @@ class TestBugStatusComputation:
         q = {"score": 100, "can_reproduce": True}
         conf = _compute_reproducibility_confidence(finding, bs, q)
         assert conf <= 0.69
+
+
+class TestRuntimeEvidenceTraceability:
+    """Regression coverage for customer-facing evidence traceability."""
+
+    def test_path_mismatch_downgrades_to_not_reproduced(self):
+        finding = {
+            "title": "HTTP 500 on documented endpoint",
+            "status": "confirmed",
+            "_api_method": "POST",
+            "_api_path": "/api/orders/create",
+            "expected_behavior": "request should fail with a business validation error",
+            "actual_behavior": "HTTP 500 was reported",
+            "har_evidence": {
+                "method": "POST",
+                "path": "/api/users/create",
+                "status_code": 500,
+                "response_body": '{"error":"boom"}',
+            },
+        }
+
+        formatted = _format_single_finding(finding)
+
+        assert formatted["bug_status"] == "not_reproduced"
+        assert formatted["verdict"] == "pending"
+        assert formatted["reproduction"]["har_evidence"] is None
+        assert any("does not match observed runtime path" in item for item in formatted["gate_failures"])
+
+    def test_placeholder_path_does_not_count_as_api_evidence(self):
+        finding = {
+            "title": "unbound id route",
+            "_api_path": "/api/resources/QUALIBUG_UNRESOLVED_ID",
+            "expected_behavior": "resource should be validated",
+            "actual_behavior": "candidate risk only",
+            "evidence": {"source_file": "engine-output.json"},
+        }
+
+        quality = _compute_evidence_quality(finding, finding["_api_path"])
+        completeness = _compute_evidence_completeness(finding)
+        formatted = _format_single_finding(finding)
+
+        assert quality["can_reproduce"] is False
+        assert {d["key"]: d["present"] for d in completeness["dimensions"]}["api_request"] is False
+        assert formatted["repro_path"] == ""
+        assert formatted["bug_status"] in {"risk_clue", "not_reproduced"}
+
+    def test_confirmed_text_and_source_file_are_not_runtime_evidence(self):
+        finding = {
+            "title": "text-only candidate",
+            "status": "confirmed",
+            "_api_path": "/api/customers",
+            "expected_behavior": "expected text",
+            "actual_behavior": "actual text",
+            "evidence": {"source_file": "reasoner-output.json"},
+        }
+
+        assert _has_runtime_response(finding) is False
+        quality = _compute_evidence_quality(finding, "/api/customers")
+        formatted = _format_single_finding(finding)
+
+        assert quality["can_reproduce"] is False
+        assert formatted["bug_status"] != "reproduced"
+        assert formatted["raw_evidence"]["has_real_evidence"] is False
+
+    def test_runtime_call_status_string_counts_as_observed_response(self):
+        finding = {
+            "title": "runtime call evidence",
+            "_api_path": "/api/accounts",
+            "evidence": {
+                "calls": [
+                    {
+                        "call": "GET /api/accounts",
+                        "results": {"admin": {"status": "500", "body": {"error": "failed"}}},
+                    }
+                ]
+            },
+        }
+
+        assert _has_runtime_response(finding) is True
+        assert _path_mismatch_reasons(finding) == []

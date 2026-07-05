@@ -3920,6 +3920,8 @@ def _meaningful_runtime_binding(binding: Any) -> bool:
     return any(
         key in binding
         for key in (
+            "bound",
+            "source",
             "reason",
             "original",
             "rendered",
