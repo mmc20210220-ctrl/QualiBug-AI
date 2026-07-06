@@ -12,6 +12,8 @@ API_SPEC = json.dumps({
     "components": {"schemas": {"Case": {"type": "object", "properties": {"state": {"type": "string", "enum": ["DRAFT", "APPROVED"]}}}}},
 })
 
+SOURCE_MANIFEST = {"source_id": "api-spec-v1", "source_hash": "sha256-test-source-v1"}
+
 
 def test_unified_scan_requires_a_real_source_asset(tmp_path):
     result = scan(project="enterprise-project", root=tmp_path)
@@ -19,14 +21,29 @@ def test_unified_scan_requires_a_real_source_asset(tmp_path):
     assert "api_doc" in result["error"]
 
 
+def test_inline_source_without_provenance_is_blocked_before_campaign_planning(tmp_path):
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC)
+
+    assert result["success"] is True
+    assert result["grade"] == "blocked"
+    assert result["campaign"]["campaign_status"] == "blocked"
+    assert any(gap["code"] == "SOURCE_PROVENANCE_MISSING" for gap in result["input_gaps"])
+    assert result["execution_status"] == "blocked"
+
+
 def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_path):
     result = scan(
         project="enterprise-project",
         root=tmp_path,
         api_doc_text=API_SPEC,
-        campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
+        campaign_context={
+            "scope_id": "service-a",
+            "environment_ref": "test-a",
+            "source_manifest": SOURCE_MANIFEST,
+        },
     )
     assert result["success"] is True
+    assert result["grade"] == "inconclusive"
     assert result["total_findings"] == 0
     assert result["db_findings"] == []
     assert result["e2e_findings"] == []
@@ -50,8 +67,8 @@ def test_runtime_target_is_blocked_without_explicit_enterprise_contract(tmp_path
     codes = {gap["code"] for gap in result["input_gaps"]}
     assert result["success"] is True
     assert result["runtime_contract"]["status"] == "blocked"
-    assert {"SOURCE_PROVENANCE_MISSING", "CAMPAIGN_SCOPE_MISSING", "ENVIRONMENT_REFERENCE_MISSING"}.issubset(codes)
-    assert result["execution_status"] in {"skipped", "plan_only"}
+    assert "SOURCE_PROVENANCE_MISSING" in codes
+    assert result["execution_status"] == "blocked"
     assert result["total_findings"] == 0
 
 
