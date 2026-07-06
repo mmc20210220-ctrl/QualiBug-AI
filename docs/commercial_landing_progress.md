@@ -1,6 +1,6 @@
 # Commercial Landing Progress
 
-Current focus: only fully verified and replayable findings should enter the customer-facing list.
+Current focus: fully harden the core enterprise evidence chain: enterprise inputs -> parsing/knowledge -> test plan -> execution -> bug discovery -> evidence bundle.
 
 Completed so far:
 
@@ -23,12 +23,16 @@ Completed so far:
 - Exposed `customer_delivery_gate_patch` in the command-center payload so frontend/customer environments can verify that the strict gate is active.
 - Surfaced the strict delivery-gate status on the dashboard summary and diagnostics cards.
 - Added a frontend contract test so the dashboard cannot silently lose delivery-gate diagnostics.
+- Added a main enterprise evidence chain contract that reads the actual runtime artifacts and reports which core stage is missing, partial, or passed.
+- Added tests proving the main chain is ready only when inputs, parsed knowledge, plan, execution, discovered bugs, and evidence bundle are all present.
+- Added tests proving candidate findings are not customer-delivery-ready when no validated bug exists.
 
 Current commercial rule:
 
 - Customer pages should show defects only after the delivery gate accepts them.
 - Internal clue pages should keep non-ready findings and show the missing evidence reasons.
 - Showing zero defects is acceptable when evidence is incomplete; showing a non-reproducible defect is not acceptable.
+- A project run is not commercially complete until the whole enterprise evidence chain is complete: inputs, parsing, plan, execution, discovery, and evidence.
 
 Current service integration:
 
@@ -37,8 +41,11 @@ Current service integration:
 - The wrapper exposes patch status and restore helpers for operational diagnostics and isolated tests.
 - Command-center responses now include `customer_delivery_gate_patch` at the top level and under `data`, `data_contract`, and `delivery_tracks`.
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
+- `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
 
 Next engineering step:
 
+- Wire `evaluate_main_chain_contract()` into `run_real_project_discovery()` so every discovery run automatically writes and returns the chain contract.
+- Then expose the chain contract in Command Center and the dashboard, but only after the backend run output owns it.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
