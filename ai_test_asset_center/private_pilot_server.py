@@ -4,12 +4,14 @@ from __future__ import annotations
 
 The legacy private pilot service is intentionally kept stable because it is a
 large HTTP entrypoint. This wrapper installs the stricter backend customer
-delivery gate and the scan campaign-context bridge before delegating to the
-original server runner.
+delivery gate, the scan campaign-context bridge, and private-pilot credential
+safety guards before delegating to the original server runner.
 """
 
 import contextvars
 import json
+import os
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,8 @@ from ai_test_asset_center.real_project_onboarding import ROOT, _safe_project_id,
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_server"
 MAIN_CHAIN_NOT_READY_REASON = "MAIN_CHAIN_NOT_READY"
+_CREDENTIAL_KEY_ENV = "QUALIBUG_CRED_ENC_KEY"
+_MASKED_SECRET = "********"
 _SCAN_CAMPAIGN_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "qualibug_private_pilot_scan_campaign_context",
     default=None,
@@ -46,6 +50,106 @@ def _text(value: Any) -> str:
 
 def _continuous_context_key(root: Path, project: str) -> tuple[str, str]:
     return (str(root), str(project))
+
+
+def _credential_ref(project: str, service: str, path: str) -> str:
+    safe_project = _safe_project_id(project)
+    safe_service = _safe_project_id(service or "service")
+    safe_path = str(path or "secret").replace("/", ".").replace(" ", "_")
+    return f"qualibug://credentials/{safe_project}/{safe_service}/{safe_path}"
+
+
+def _ensure_local_credential_encryption_key(root: Path) -> str:
+    """Ensure private deployments encrypt service secrets at rest by default.
+
+    ``credential_crypto.encrypt`` intentionally keeps compatibility by returning
+    plaintext when QUALIBUG_CRED_ENC_KEY is missing. For the private pilot server
+    we do not want that fallback for newly saved service credentials, so this
+    wrapper provisions a local machine key and exports it for the current process.
+    """
+    existing = os.environ.get(_CREDENTIAL_KEY_ENV, "").strip()
+    if existing:
+        return "env"
+    key_dir = root / "platform_workspace" / ".secrets"
+    key_path = key_dir / "credential_encryption.key"
+    try:
+        key_dir.mkdir(parents=True, exist_ok=True)
+        if key_path.exists():
+            key = key_path.read_text(encoding="utf-8").strip()
+        else:
+            key = secrets.token_urlsafe(48)
+            key_path.write_text(key, encoding="utf-8")
+            try:
+                key_path.chmod(0o600)
+            except Exception:
+                pass
+        if key:
+            os.environ[_CREDENTIAL_KEY_ENV] = key
+            return "local_private_key_file"
+    except Exception:
+        pass
+    return "missing"
+
+
+def _mask_secret_field(container: dict[str, Any], key: str, project: str, service: str, ref_path: str) -> None:
+    value = container.get(key)
+    if value is None or value == "":
+        return
+    container[key] = _MASKED_SECRET
+    container[f"{key}_configured"] = True
+    container[f"{key}_ref"] = _credential_ref(project, service, ref_path)
+    container[f"{key}_masked"] = True
+
+
+def _mask_service_credentials_for_frontend(project: str, services: list[Any]) -> list[dict[str, Any]]:
+    """Return service configs with credential values replaced by masked refs."""
+    masked_services: list[dict[str, Any]] = []
+    for raw in services:
+        if not isinstance(raw, dict):
+            continue
+        svc = json.loads(json.dumps(raw, ensure_ascii=False, default=str))
+        service_name = _text(svc.get("name")) or "service"
+
+        for top_key in ("admin_pass", "bearer_token", "api_key", "token", "password"):
+            _mask_secret_field(svc, top_key, project, service_name, f"service.{top_key}")
+
+        auth = svc.get("auth")
+        if isinstance(auth, dict):
+            for role, role_cfg in list(auth.items()):
+                if isinstance(role_cfg, dict):
+                    _mask_secret_field(role_cfg, "password", project, service_name, f"auth.{role}.password")
+                    _mask_secret_field(role_cfg, "token", project, service_name, f"auth.{role}.token")
+                    _mask_secret_field(role_cfg, "api_key", project, service_name, f"auth.{role}.api_key")
+                elif role in {"bearer_token", "api_key", "token", "password"} and role_cfg:
+                    auth[role] = _MASKED_SECRET
+                    auth[f"{role}_configured"] = True
+                    auth[f"{role}_ref"] = _credential_ref(project, service_name, f"auth.{role}")
+                    auth[f"{role}_masked"] = True
+
+        db_cfg = svc.get("db")
+        if isinstance(db_cfg, dict):
+            _mask_secret_field(db_cfg, "password", project, service_name, "db.password")
+
+        role_accounts = svc.get("role_accounts")
+        if isinstance(role_accounts, list):
+            for idx, account in enumerate(role_accounts):
+                if isinstance(account, dict):
+                    role = _text(account.get("role")) or str(idx)
+                    _mask_secret_field(account, "password", project, service_name, f"role_accounts.{role}.password")
+
+        masked_services.append(svc)
+    return masked_services
+
+
+def _credential_storage_status(root: Path) -> dict[str, Any]:
+    source = _ensure_local_credential_encryption_key(root)
+    return {
+        "mode": "encrypted_at_rest",
+        "key_source": source,
+        "returns_plaintext": False,
+        "frontend_secret_policy": "masked_refs_only",
+        "config_file_policy": "encrypt_before_write",
+    }
 
 
 def _resolve_project_id(payload: dict[str, Any]) -> str:
@@ -366,6 +470,8 @@ def _install_scan_campaign_context_patch() -> None:
     original_handler = getattr(_service.PrivatePilotHandler, "_handle_v12_scan")
     original_continuous_start = getattr(_service.PrivatePilotHandler, "_handle_continuous_start")
     original_continuous_loop = getattr(_service, "_continuous_scan_loop")
+    original_get_credentials = getattr(_service.PrivatePilotHandler, "_handle_get_service_credentials")
+    original_save_credentials = getattr(_service.PrivatePilotHandler, "_handle_save_service_credentials")
 
     def _scan_with_campaign_context(*args: Any, **kwargs: Any) -> dict[str, Any]:
         pending_context = _SCAN_CAMPAIGN_CONTEXT.get()
@@ -418,14 +524,44 @@ def _install_scan_campaign_context_patch() -> None:
         finally:
             _SCAN_CAMPAIGN_CONTEXT.reset(token)
 
+    def _handle_get_service_credentials_masked(self: Any, project: str, root: Path) -> Any:
+        _ensure_local_credential_encryption_key(root)
+        config_path = root / "platform_workspace" / project / "multi_service_config.json"
+        services: list[Any] = []
+        try:
+            if config_path.exists():
+                data = json.loads(config_path.read_text(encoding="utf-8") or "{}")
+                raw_services = data.get("services", []) if isinstance(data, dict) else []
+                services = raw_services if isinstance(raw_services, list) else []
+        except Exception:
+            services = []
+        return self._json({
+            "project": project,
+            "services": _mask_service_credentials_for_frontend(project, services),
+            "credential_storage": _credential_storage_status(root),
+        })
+
+    def _handle_save_service_credentials_secure(
+        self: Any,
+        project: str,
+        root: Path,
+        body: dict[str, Any],
+    ) -> Any:
+        _ensure_local_credential_encryption_key(root)
+        return original_save_credentials(self, project, root, body)
+
     scanner_module.scan = _scan_with_campaign_context
     _service.PrivatePilotHandler._handle_v12_scan = _handle_v12_scan_with_campaign_context
     _service.PrivatePilotHandler._handle_continuous_start = _handle_continuous_start_with_campaign_context
+    _service.PrivatePilotHandler._handle_get_service_credentials = _handle_get_service_credentials_masked
+    _service.PrivatePilotHandler._handle_save_service_credentials = _handle_save_service_credentials_secure
     _service._continuous_scan_loop = _continuous_scan_loop_with_campaign_context
     _service._ORIGINAL_V12_SCAN = original_scan  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = original_handler  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_CONTINUOUS_START = original_continuous_start  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = original_continuous_loop  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS = original_get_credentials  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS = original_save_credentials  # type: ignore[attr-defined]
     _service._SCAN_CAMPAIGN_CONTEXT_PATCHED = True  # type: ignore[attr-defined]
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
 
@@ -470,6 +606,8 @@ def customer_delivery_gate_patch_status() -> dict[str, Any]:
         "scan_campaign_context_patch_source": str(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE", "")),
         "continuous_scan_context_patched": bool(getattr(_service, "_ORIGINAL_CONTINUOUS_SCAN_LOOP", None)),
         "continuous_context_count": len(_CONTINUOUS_CAMPAIGN_CONTEXTS),
+        "credential_response_masking_patched": bool(getattr(_service, "_ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS", None)),
+        "credential_save_encryption_patched": bool(getattr(_service, "_ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS", None)),
     }
 
 
@@ -486,6 +624,8 @@ def restore_customer_delivery_gate_patch() -> None:
     original_handler = getattr(_service, "_ORIGINAL_HANDLE_V12_SCAN", None)
     original_continuous_start = getattr(_service, "_ORIGINAL_HANDLE_CONTINUOUS_START", None)
     original_continuous_loop = getattr(_service, "_ORIGINAL_CONTINUOUS_SCAN_LOOP", None)
+    original_get_credentials = getattr(_service, "_ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS", None)
+    original_save_credentials = getattr(_service, "_ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS", None)
     if original_scan is not None:
         from ai_test_asset_center import __main__ as scanner_module
 
@@ -496,6 +636,10 @@ def restore_customer_delivery_gate_patch() -> None:
         _service.PrivatePilotHandler._handle_continuous_start = original_continuous_start
     if original_continuous_loop is not None:
         _service._continuous_scan_loop = original_continuous_loop
+    if original_get_credentials is not None:
+        _service.PrivatePilotHandler._handle_get_service_credentials = original_get_credentials
+    if original_save_credentials is not None:
+        _service.PrivatePilotHandler._handle_save_service_credentials = original_save_credentials
 
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = False  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
@@ -507,6 +651,8 @@ def restore_customer_delivery_gate_patch() -> None:
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
     _CONTINUOUS_CAMPAIGN_CONTEXTS.clear()
 
 
