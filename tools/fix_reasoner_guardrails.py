@@ -1,8 +1,9 @@
 """Patch Stage 2 reasoner guardrail constants in-place.
 
 This script is intentionally tiny and conservative:
-- it only replaces the two known legacy constants;
-- it verifies that both old values existed before editing;
+- it replaces only the two known legacy constants when present;
+- it is idempotent, so it also succeeds when the target is already fixed;
+- it verifies the required guardrails after normalization;
 - it parses the edited Python file with ast.parse before saving success.
 
 Run from repository root:
@@ -36,24 +37,33 @@ def main() -> int:
     original = TARGET.read_text(encoding="utf-8")
     updated = original
 
-    missing_old = [old for old in REPLACEMENTS if old not in original]
-    if missing_old:
-        raise SystemExit(f"Expected legacy constants not found: {missing_old}")
-
+    applied = []
     for old, new in REPLACEMENTS.items():
-        updated = updated.replace(old, new, 1)
+        if old in updated:
+            updated = updated.replace(old, new, 1)
+            applied.append(old)
 
     missing_after = [item for item in REQUIRED_AFTER if item not in updated]
     if missing_after:
-        raise SystemExit(f"Required guardrails missing after patch: {missing_after}")
+        raise SystemExit(f"Required guardrails missing after normalization: {missing_after}")
 
     for old in REPLACEMENTS:
         if old in updated:
-            raise SystemExit(f"Forbidden legacy value still present after patch: {old}")
+            raise SystemExit(f"Forbidden legacy value still present after normalization: {old}")
 
     ast.parse(updated, filename=str(TARGET))
-    TARGET.write_text(updated, encoding="utf-8")
-    print("Patched reasoner guardrails: MAX_HYPOTHESES=15, MAX_HYPOTHESES_HARD_LIMIT=15")
+
+    if updated != original:
+        TARGET.write_text(updated, encoding="utf-8")
+        print(
+            "Patched reasoner guardrails: "
+            "MAX_HYPOTHESES=15, MAX_HYPOTHESES_HARD_LIMIT=15"
+        )
+    else:
+        print("Reasoner guardrails already normalized")
+
+    if applied:
+        print(f"Applied replacements: {len(applied)}")
     return 0
 
 
