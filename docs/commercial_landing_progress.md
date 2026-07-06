@@ -38,6 +38,8 @@ Completed so far:
 - Added tests proving stale or optimistic payload fields cannot claim customer-delivery readiness while the main enterprise evidence chain is incomplete.
 - Surfaced `main_chain_contract` on the dashboard with the six core stages, first blocked stage, and next action.
 - Added a frontend contract test so dashboard main-chain diagnostics cannot be silently removed.
+- Tightened the main-chain evidence stage so passing evidence now requires stable `issue_id`, raw request/response, expected+actual, replay/reproduction, a real execution receipt, and non-synthetic evidence.
+- Added tests proving weak evidence bundles without replay/execution receipt, synthetic evidence, or missing expected/actual pairs cannot close the evidence chain.
 
 Current commercial rule:
 
@@ -46,6 +48,7 @@ Current commercial rule:
 - Showing zero defects is acceptable when evidence is incomplete; showing a non-reproducible defect is not acceptable.
 - A project run is not commercially complete until the whole enterprise evidence chain is complete: inputs, parsing, plan, execution, discovery, and evidence.
 - If `main_chain_contract.chain_ready=false`, Command Center must report `MAIN_CHAIN_NOT_READY` and must not claim customer-delivery readiness.
+- Evidence-chain completion requires raw request/response, expected+actual, replay/reproduction, execution receipt, stable issue linkage, and non-synthetic proof.
 
 Current service integration:
 
@@ -63,6 +66,6 @@ Current service integration:
 
 Next engineering step:
 
-- Tighten `main_chain_contract` evidence checks so evidence-chain pass requires replay information, raw request/response, expected/actual, and a stable issue link.
+- Normalize evidence bundle output from the discovery engine so generated evidence consistently includes the fields required by the strict evidence-chain contract.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
