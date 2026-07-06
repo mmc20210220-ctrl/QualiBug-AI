@@ -1,9 +1,10 @@
-"""Patch Stage 2 reasoner guardrail constants in-place.
+"""Patch Stage 2 reasoner guardrails and quality-report wiring in-place.
 
-This script is intentionally tiny and conservative:
-- it replaces only the two known legacy constants when present;
+This script is intentionally conservative:
+- it replaces only known legacy constants when present;
 - it is idempotent, so it also succeeds when the target is already fixed;
-- it verifies the required guardrails after normalization;
+- it wires executable-quality reporting into _last_engine_report when missing;
+- it verifies the required guardrails and report fields after normalization;
 - it parses the edited Python file with ast.parse before saving success.
 
 Run from repository root:
@@ -28,6 +29,61 @@ REQUIRED_AFTER = (
     "MIN_REASONER_TIMEOUT_SECONDS = 300",
     "MIN_REASONER_MAX_TOKENS = 32768",
 )
+QUALITY_IMPORT = "from .reasoner_quality_report import build_executable_quality_report"
+QUALITY_SNIPPET = """    executable_quality_report = build_executable_quality_report(
+        results_by_engine,
+        engine_names_for_report,
+        all_hypotheses,
+    )
+
+"""
+QUALITY_UPDATE_SNIPPET = """    self._last_engine_report.update(executable_quality_report)
+"""
+QUALITY_LOCAL_SNIPPET = """        local_executable_quality_report = build_executable_quality_report(
+            {"local_bootstrap": {"hypotheses": local_hypotheses}},
+            ["local_bootstrap"],
+            local_hypotheses,
+        )
+        self._last_engine_report.update(local_executable_quality_report)
+"""
+QUALITY_FIELDS = (
+    "executable_hypotheses",
+    "non_executable_hypotheses",
+    "executable_hypothesis_ratio",
+    "per_engine_executable_hypotheses",
+    "per_engine_non_executable_hypotheses",
+    "per_engine_executable_ratio",
+    "engines_with_no_executable_output",
+)
+
+
+def _wire_quality_report(source: str) -> str:
+    updated = source
+    if QUALITY_IMPORT not in updated:
+        anchor = "from .console_output import safe_print as print\n"
+        if anchor not in updated:
+            raise SystemExit("Cannot wire quality report import: console_output import anchor missing")
+        updated = updated.replace(anchor, anchor + QUALITY_IMPORT + "\n", 1)
+
+    if QUALITY_SNIPPET not in updated:
+        anchor = "    # ── Build engine health report ──\n"
+        if anchor not in updated:
+            raise SystemExit("Cannot wire executable quality report: engine health anchor missing")
+        updated = updated.replace(anchor, QUALITY_SNIPPET + anchor, 1)
+
+    if QUALITY_UPDATE_SNIPPET not in updated:
+        anchor = "    print(f\"  [OK] 生成了 {len(all_hypotheses)} 条假设 (across {len(engines)} engines)\", flush=True)\n"
+        if anchor not in updated:
+            raise SystemExit("Cannot update _last_engine_report: final print anchor missing")
+        updated = updated.replace(anchor, QUALITY_UPDATE_SNIPPET + "\n" + anchor, 1)
+
+    if QUALITY_LOCAL_SNIPPET not in updated:
+        anchor = "        print(f\"    [WARN] [local_bootstrap_only] {len(local_hypotheses)} read-only hypotheses\", flush=True)\n"
+        if anchor not in updated:
+            raise SystemExit("Cannot wire local_bootstrap quality report: local print anchor missing")
+        updated = updated.replace(anchor, QUALITY_LOCAL_SNIPPET + anchor, 1)
+
+    return updated
 
 
 def main() -> int:
@@ -43,6 +99,8 @@ def main() -> int:
             updated = updated.replace(old, new, 1)
             applied.append(old)
 
+    updated = _wire_quality_report(updated)
+
     missing_after = [item for item in REQUIRED_AFTER if item not in updated]
     if missing_after:
         raise SystemExit(f"Required guardrails missing after normalization: {missing_after}")
@@ -51,16 +109,19 @@ def main() -> int:
         if old in updated:
             raise SystemExit(f"Forbidden legacy value still present after normalization: {old}")
 
+    missing_quality = [field for field in QUALITY_FIELDS if field not in updated]
+    if missing_quality:
+        raise SystemExit(f"Executable quality report fields missing after wiring: {missing_quality}")
+
     ast.parse(updated, filename=str(TARGET))
 
     if updated != original:
         TARGET.write_text(updated, encoding="utf-8")
         print(
-            "Patched reasoner guardrails: "
-            "MAX_HYPOTHESES=15, MAX_HYPOTHESES_HARD_LIMIT=15"
+            "Patched reasoner guardrails and executable quality-report wiring"
         )
     else:
-        print("Reasoner guardrails already normalized")
+        print("Reasoner guardrails and quality-report wiring already normalized")
 
     if applied:
         print(f"Applied replacements: {len(applied)}")
