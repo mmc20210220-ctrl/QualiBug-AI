@@ -5,6 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_GATE = ROOT / "frontend" / "src" / "api" / "data.ts"
+INTERNAL_CLUES_PAGE = ROOT / "frontend" / "src" / "pages" / "InternalClues.tsx"
+FINDING_TYPES = ROOT / "frontend" / "src" / "types" / "index.ts"
 
 
 def _source() -> str:
@@ -51,3 +53,14 @@ def test_customer_ready_findings_keep_internal_clues_out_of_customer_list() -> N
     assert "environment_blocked" in source
     assert "coverage_gap" in source
     assert "not_reproduced" in source
+
+
+def test_internal_clue_page_surfaces_delivery_gate_reasons() -> None:
+    page = INTERNAL_CLUES_PAGE.read_text(encoding="utf-8")
+    types = FINDING_TYPES.read_text(encoding="utf-8")
+
+    assert "customer_delivery_gate_reasons?: string[]" in types
+    assert "GATE_REASON_LABELS" in page
+    assert "customer_delivery_gate_reasons" in page
+    assert "未进入客户缺陷的原因" in page
+    assert "explainGateReason" in page
