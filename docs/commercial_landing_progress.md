@@ -29,6 +29,9 @@ Completed so far:
 - Added a chain-aware discovery runner that calls the existing real-project discovery engine and then writes/returns the main chain contract.
 - Added a `qualibug-discover-chain` CLI entrypoint for running discovery with automatic main-chain validation.
 - Added tests proving the chain-aware runner attaches `main_chain_contract` to the discovery result and persists the contract artifact.
+- Added a chain-aware enterprise pilot runtime wrapper that patches the pilot runtime's `real_project_discovery` callable to the chain-aware discovery runner before task execution.
+- Added a `qualibug-pilot-chain` CLI entrypoint for running pilot runtime tasks with automatic main-chain validation.
+- Added tests proving the chain-aware pilot wrapper installs/restores the patch and delegates `run_next` only after the chain-aware discovery runner is active.
 
 Current commercial rule:
 
@@ -46,10 +49,10 @@ Current service integration:
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
 - `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for automatic chain validation.
+- `enterprise_pilot_runtime_with_chain.py` provides the safe pilot-runtime entrypoint that routes `real_project_discovery` tasks through the chain-aware runner.
 
 Next engineering step:
 
-- Route the private pilot runtime task `real_project_discovery` through the chain-aware runner when a safe small patch path is available.
-- Then expose `main_chain_contract` in Command Center from backend output, not by frontend guessing.
+- Expose `main_chain_contract` in Command Center from backend output, not by frontend guessing.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
