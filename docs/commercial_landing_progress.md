@@ -26,6 +26,9 @@ Completed so far:
 - Added a main enterprise evidence chain contract that reads the actual runtime artifacts and reports which core stage is missing, partial, or passed.
 - Added tests proving the main chain is ready only when inputs, parsed knowledge, plan, execution, discovered bugs, and evidence bundle are all present.
 - Added tests proving candidate findings are not customer-delivery-ready when no validated bug exists.
+- Added a chain-aware discovery runner that calls the existing real-project discovery engine and then writes/returns the main chain contract.
+- Added a `qualibug-discover-chain` CLI entrypoint for running discovery with automatic main-chain validation.
+- Added tests proving the chain-aware runner attaches `main_chain_contract` to the discovery result and persists the contract artifact.
 
 Current commercial rule:
 
@@ -42,10 +45,11 @@ Current service integration:
 - Command-center responses now include `customer_delivery_gate_patch` at the top level and under `data`, `data_contract`, and `delivery_tracks`.
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
+- `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for automatic chain validation.
 
 Next engineering step:
 
-- Wire `evaluate_main_chain_contract()` into `run_real_project_discovery()` so every discovery run automatically writes and returns the chain contract.
-- Then expose the chain contract in Command Center and the dashboard, but only after the backend run output owns it.
+- Route the private pilot runtime task `real_project_discovery` through the chain-aware runner when a safe small patch path is available.
+- Then expose `main_chain_contract` in Command Center from backend output, not by frontend guessing.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
