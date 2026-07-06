@@ -64,3 +64,15 @@ def test_internal_clue_page_surfaces_delivery_gate_reasons() -> None:
     assert "customer_delivery_gate_reasons" in page
     assert "未进入客户缺陷的原因" in page
     assert "explainGateReason" in page
+
+
+def test_internal_clue_page_prefers_backend_gate_explanations_with_reason_fallback() -> None:
+    page = INTERNAL_CLUES_PAGE.read_text(encoding="utf-8")
+
+    assert "type GateExplanation" in page
+    assert "function getGateExplanations" in page
+    assert "customer_delivery_gate_explanations" in page
+    assert "if (valid.length > 0) return valid" in page
+    assert "return reasonCodes.map" in page
+    assert "reason.next_action" in page
+    assert "下一步：" in page
