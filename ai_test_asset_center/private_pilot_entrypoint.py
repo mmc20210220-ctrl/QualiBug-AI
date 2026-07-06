@@ -3,14 +3,11 @@ from __future__ import annotations
 """Deployment entrypoint for the patched private pilot HTTP service.
 
 This module is the canonical executable entrypoint for local and Docker private
-pilot deployments. It installs runtime patches and normalizes the health
-contract before delegating to the legacy HTTP server.
+pilot deployments. It installs runtime patches before delegating to the legacy
+HTTP server.
 """
 
-import json
 import os
-import platform
-import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -18,100 +15,19 @@ from urllib.parse import urlparse
 from ai_test_asset_center import private_pilot_server as _server_patch
 from ai_test_asset_center import private_pilot_service as _service
 from ai_test_asset_center.customer_safe_report import contains_mojibake, render_customer_safe_report_html
+from ai_test_asset_center.private_pilot_health_contract import build_private_pilot_health_payload
 from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
-from ai_test_asset_center.version import (
-    CANONICAL_HEALTH_PATH,
-    DEFAULT_PRIVATE_PILOT_PORT,
-    LEGACY_HEALTH_PATH,
-    PRODUCT_CHANNEL,
-    PRODUCT_NAME,
-    PRODUCT_PHASE,
-    PRODUCT_VERSION,
-)
+from ai_test_asset_center.version import CANONICAL_HEALTH_PATH, LEGACY_HEALTH_PATH
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_entrypoint"
 
 
-def _int_env(name: str, fallback: int) -> int:
-    try:
-        return int(os.environ.get(name, "") or fallback)
-    except Exception:
-        return fallback
-
-
-def _pattern_library_count(root: Path) -> int:
-    for candidate in (
-        root / "pattern_library" / "patterns.json",
-        root / "platform_workspace" / "pattern_library" / "patterns.json",
-    ):
-        try:
-            if candidate.exists():
-                data = json.loads(candidate.read_text(encoding="utf-8") or "{}")
-                patterns = data.get("patterns") if isinstance(data, dict) else []
-                return len(patterns) if isinstance(patterns, list) else 0
-        except Exception:
-            continue
-    return 0
-
-
-def _browser_ui_status() -> dict[str, Any]:
-    try:
-        from ai_test_asset_center.browser_ui_smoke import is_browser_ui_enabled
-
-        enabled = is_browser_ui_enabled()
-    except Exception:
-        enabled = False
-    return {
-        "enabled": enabled,
-        "env_flag": "QUALIBUG_BROWSER_UI_SMOKE",
-        "mode": "smoke" if enabled else "disabled",
-        "evidence": ["page_reachability", "console_errors", "network_errors", "screenshots", "har"],
-    }
-
-
 def _health_payload(handler: Any) -> dict[str, Any]:
-    try:
-        root = handler._root()
-    except Exception:
-        root = _service._root()
-    try:
-        llm_health = handler._llm_health()
-    except Exception as exc:
-        llm_health = {
-            "available": False,
-            "status": "offline",
-            "label": "offline",
-            "error": str(exc)[:300],
-        }
-    return {
-        "ok": True,
-        "service": "qualibug_private_pilot",
-        "product": PRODUCT_NAME,
-        "version": PRODUCT_VERSION,
-        "product_version": PRODUCT_VERSION,
-        "phase": PRODUCT_PHASE,
-        "channel": PRODUCT_CHANNEL,
-        "api_version": "v1",
-        "private_root": str(root),
-        "private_root_exists": root.exists(),
-        "public_bind_allowed": os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1",
-        "bind_host": os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1"),
-        "port": _int_env("QUALIBUG_PORT", DEFAULT_PRIVATE_PILOT_PORT),
-        "canonical_health_path": CANONICAL_HEALTH_PATH,
-        "legacy_health_path": LEGACY_HEALTH_PATH,
-        "python_version": sys.version.split()[0],
-        "platform": platform.system(),
-        "llm_available": bool(llm_health.get("available")),
-        "llm_status": llm_health,
-        "browser_ui_smoke": _browser_ui_status(),
-        "pattern_library_patterns": _pattern_library_count(root),
-        "deployment_contract_patch": {
-            "patched": True,
-            "source": PATCH_SOURCE,
-            "port_contract": f"container:{DEFAULT_PRIVATE_PILOT_PORT}",
-            "health_contract": CANONICAL_HEALTH_PATH,
-        },
-    }
+    return build_private_pilot_health_payload(
+        handler,
+        fallback_root=_service._root(),
+        patch_source=PATCH_SOURCE,
+    )
 
 
 def _scan_project_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
