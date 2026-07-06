@@ -2,7 +2,7 @@ import { currentToken, hasUsableAuth } from './client';
 
 type JsonRecord = Record<string, unknown>;
 
-const ENTERPRISE_API_BASE = '/api/v1';
+const ENTERPRISE_API_BASE = String(import.meta.env.VITE_QUALIBUG_ENTERPRISE_API_BASE || '/enterprise-api/v1').replace(/\/+$/, '');
 
 export type SourceManifest = {
   source_id: string;
@@ -128,7 +128,6 @@ export function registerEnterpriseSourceAsset(input: {
   origin?: string;
   external_ref?: string;
   metadata?: JsonRecord;
-  actor?: JsonRecord;
 }): Promise<SourceManifest> {
   return enterpriseRequest<SourceManifest>('/source-assets/register', {
     method: 'POST',
@@ -159,7 +158,6 @@ export function issueEnterpriseTestDataReceipt(input: {
   fixture_ref?: string;
   provenance_ref?: string;
   operation_ref?: string;
-  actor?: JsonRecord;
 }): Promise<TestDataReceipt> {
   return enterpriseRequest<TestDataReceipt>('/test-data-receipts', {
     method: 'POST',
@@ -176,7 +174,6 @@ export function issueEnterpriseExecutionApproval(input: {
   target_base_url: string;
   execution_mode: 'safe_read_only' | 'approved_sandbox_write';
   expires_at_utc: string;
-  actor?: JsonRecord;
 }): Promise<ExecutionApproval> {
   return enterpriseRequest<ExecutionApproval>('/execution-approvals', {
     method: 'POST',
