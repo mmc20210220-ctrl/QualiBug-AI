@@ -24,14 +24,19 @@ def test_persisted_bundle_is_redacted_and_integrity_verifiable(tmp_path):
 
     manifest = load_evidence_bundle("enterprise-project", bundle["bundle_id"], root=tmp_path)
     result = verify_evidence_bundle("enterprise-project", bundle["bundle_id"], root=tmp_path)
-    runtime_path = tmp_path / manifest["artifacts"][0]["path"]
+    manifest_path = tmp_path / bundle["manifest_ref"]
+    bundle_dir = manifest_path.parent
+    runtime_artifact = bundle_dir / manifest["artifacts"][0]["path"]
+    har_artifact = bundle_dir / manifest["artifacts"][2]["path"]
 
     assert bundle["status"] == "persisted"
     assert bundle["evidence_level"] == "runtime_captured"
     assert result["valid"] is True
     assert manifest["campaign_id"] == "CMP_1"
-    assert "secret-token" not in (tmp_path / bundle["manifest_ref"]).read_text(encoding="utf-8")
-    assert runtime_path.exists() is False
+    assert "secret-token" not in manifest_path.read_text(encoding="utf-8")
+    assert "secret-token" not in runtime_artifact.read_text(encoding="utf-8")
+    assert "secret-token" not in har_artifact.read_text(encoding="utf-8")
+    assert "<REDACTED>" in runtime_artifact.read_text(encoding="utf-8")
 
 
 def test_tampered_artifact_invalidates_bundle(tmp_path):
