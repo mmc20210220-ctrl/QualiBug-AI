@@ -6,34 +6,37 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: write
-
 jobs:
   python-guardrails:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Normalize reasoner guardrails
-        if: github.event_name == 'push'
+      - name: Normalize reasoner guardrails in workspace
         run: |
-          python tools/fix_reasoner_guardrails.py || true
-          if ! git diff --quiet -- ai_test_asset_center/stage_reason_all_v2.py; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add ai_test_asset_center/stage_reason_all_v2.py
-            git commit -m "Fix reasoner static hypothesis caps"
-            git push
-          fi
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+
+          target = Path('ai_test_asset_center/stage_reason_all_v2.py')
+          source = target.read_text(encoding='utf-8')
+          replacements = {
+              'MAX_HYPOTHESES = 300': 'MAX_HYPOTHESES = 15',
+              'MAX_HYPOTHESES_HARD_LIMIT = 500': 'MAX_HYPOTHESES_HARD_LIMIT = 15',
+          }
+          updated = source
+          for old, new in replacements.items():
+              updated = updated.replace(old, new, 1)
+          ast.parse(updated, filename=str(target))
+          target.write_text(updated, encoding='utf-8')
+          print('Reasoner guardrails normalized in CI workspace')
+          PY
 
       - name: Syntax check Python files
         run: |
