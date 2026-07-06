@@ -45,6 +45,8 @@ Completed so far:
 - Added tests proving evidence normalization can close strict evidence fields when source artifacts contain the required runtime data, and reports missing fields when it cannot.
 - Exposed `evidence_bundle_normalization_report` and `evidence_bundle_normalization_summary` in Command Center payloads.
 - Added tests proving Command Center surfaces evidence normalization counts and missing-field statistics across top-level, data contract, delivery tracks, and executive summary.
+- Surfaced evidence normalization blockers on the dashboard main-chain diagnostics, including missing-field counts for execution receipts, replay/reproduction, request/response, and expected/actual.
+- Added a frontend contract test so dashboard evidence-normalization blockers cannot be silently removed.
 
 Current commercial rule:
 
@@ -67,12 +69,13 @@ Current service integration:
 - Command-center responses now force readiness fields to false and attach `MAIN_CHAIN_NOT_READY` when the main enterprise evidence chain is not closed.
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - Dashboard displays the main enterprise evidence chain status, six-stage progress, first blocked stage, and next action from the backend contract.
+- Dashboard displays evidence normalization blockers and missing proof fields from the backend summary.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
 - `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for discovery, evidence normalization, and automatic chain validation.
 - `enterprise_pilot_runtime_with_chain.py` provides the safe pilot-runtime entrypoint that routes `real_project_discovery` tasks through the chain-aware runner.
 
 Next engineering step:
 
-- Surface evidence normalization blockers in the dashboard main-chain diagnostics so operators can see exactly which proof fields still prevent evidence-chain closure.
+- Tighten the evidence normalizer/report around per-item issue linkage so each blocked evidence item shows the exact issue/probe/replay field that still prevents customer delivery.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
