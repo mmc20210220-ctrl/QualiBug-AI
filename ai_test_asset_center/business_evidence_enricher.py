@@ -1,8 +1,8 @@
 """Receipt-driven business evidence enrichment.
 
 This existing bridge turns normalized execution receipts into the typed business
-contract.  It never invents a tenant, actor, entity, snapshot, invariant,
-cleanup or reproduction step when the runtime receipt did not observe one.
+contract. It never invents tenant, actor, entity, snapshot, invariant, cleanup
+or reproduction data that the runtime receipt did not observe.
 """
 from __future__ import annotations
 
@@ -48,6 +48,15 @@ def _finding_value(finding: Any, key: str) -> Any:
     return finding.get(key) if isinstance(finding, dict) else getattr(finding, key, None)
 
 
+def _effective_method(runtime: dict[str, Any]) -> str:
+    action = _sourced(runtime, "action_ref")
+    action_text = _text(_observed(action))
+    action_method = action_text.split(None, 1)[0].upper() if action_text else ""
+    if action_method in _WRITE_METHODS:
+        return action_method
+    return _text(_observed(_sourced(runtime, "method"))).upper()
+
+
 class BusinessEvidenceEnricher:
     def _compute_business_evidence_status(self, draft: BusinessEvidenceDraft, semantic_verdict: str) -> str:
         missing = set(draft.missing_requirements)
@@ -90,11 +99,16 @@ class BusinessEvidenceEnricher:
         entity_id, entity_type = _sourced(runtime, "entity_id"), _sourced(runtime, "entity_type")
         if _observed(entity_id) not in (None, ""):
             draft.entity_binding = {
-                "entity_id": _observed(entity_id), "entity_type": _observed(entity_type) or "",
-                "source": entity_id.get("source", ""), "confidence": entity_id.get("confidence", "evidenced"),
+                "entity_id": _observed(entity_id),
+                "entity_type": _observed(entity_type) or "",
+                "source": entity_id.get("source", ""),
+                "confidence": entity_id.get("confidence", "evidenced"),
             }
         else:
-            draft.entity_binding = {"entity_id": "", "entity_type": _observed(entity_type) or "", "source": entity_id.get("source", "entity_not_observed"), "confidence": "missing"}
+            draft.entity_binding = {
+                "entity_id": "", "entity_type": _observed(entity_type) or "",
+                "source": entity_id.get("source", "entity_not_observed"), "confidence": "missing",
+            }
             _add_missing(draft, "ENTITY_BINDING_MISSING")
         tenant, owner, correlation = _sourced(runtime, "tenant_id"), _sourced(runtime, "owner_id"), _sourced(runtime, "correlation_id")
         draft.tenant_binding = {"tenant_id": _observed(tenant) or "", "source": tenant.get("source", "scope_not_observed"), "confidence": tenant.get("confidence", "missing")}
@@ -111,8 +125,7 @@ class BusinessEvidenceEnricher:
         if after:
             draft.after_snapshot_data = _dict(after.get("body_snapshot"))
             draft.after_snapshot_ref = _snapshot_ref(draft.after_snapshot_data)
-        method = _text(_observed(_sourced(runtime, "method"))).upper()
-        if method in _WRITE_METHODS:
+        if _effective_method(runtime) in _WRITE_METHODS:
             if not draft.before_snapshot_ref:
                 _add_missing(draft, "BEFORE_SNAPSHOT_MISSING")
             if not draft.after_snapshot_ref:
