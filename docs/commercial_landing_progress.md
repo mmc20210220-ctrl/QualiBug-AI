@@ -43,6 +43,8 @@ Completed so far:
 - Added an evidence bundle normalizer that standardizes request/response aliases, copies expected/actual from linked issues, attaches captured execution receipts, and derives replay data only from captured executions.
 - Wired evidence normalization into the chain-aware discovery runner before main-chain contract evaluation.
 - Added tests proving evidence normalization can close strict evidence fields when source artifacts contain the required runtime data, and reports missing fields when it cannot.
+- Exposed `evidence_bundle_normalization_report` and `evidence_bundle_normalization_summary` in Command Center payloads.
+- Added tests proving Command Center surfaces evidence normalization counts and missing-field statistics across top-level, data contract, delivery tracks, and executive summary.
 
 Current commercial rule:
 
@@ -61,6 +63,7 @@ Current service integration:
 - The wrapper exposes patch status and restore helpers for operational diagnostics and isolated tests.
 - Command-center responses now include `customer_delivery_gate_patch` at the top level and under `data`, `data_contract`, and `delivery_tracks`.
 - Command-center responses now include `main_chain_contract` and `main_chain_contract_summary` loaded from backend output/workspace artifacts.
+- Command-center responses now include `evidence_bundle_normalization_report` and a compact summary of normalized and blocked evidence items.
 - Command-center responses now force readiness fields to false and attach `MAIN_CHAIN_NOT_READY` when the main enterprise evidence chain is not closed.
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - Dashboard displays the main enterprise evidence chain status, six-stage progress, first blocked stage, and next action from the backend contract.
@@ -70,6 +73,6 @@ Current service integration:
 
 Next engineering step:
 
-- Expose `evidence_bundle_normalization_report` in Command Center so operators can see which evidence fields were normalized and which still block the chain.
+- Surface evidence normalization blockers in the dashboard main-chain diagnostics so operators can see exactly which proof fields still prevent evidence-chain closure.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
