@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
+from ai_test_asset_center.policy_wiring import _behavior_slice_execution_value
 from ai_test_asset_center.v12_pipeline import (
     _behavior_slice_settings,
     _schedule_behavior_slices,
@@ -87,6 +88,16 @@ def test_unique_schema_field_overlap_binds_invariant_without_inventing_state():
     assert invariant_slices[0]["states"] == []
     assert "STATE_ANCHOR_NOT_SOURCE_BOUND" in invariant_slices[0]["evidence_gaps"]
     assert not contract["coverage_gaps"]
+
+
+def test_behavior_slice_policy_guardrails_cap_budget_and_round_bounds(monkeypatch):
+    monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "999")
+    monkeypatch.setenv("QUALIBUG_DISCOVERY_ROUND", "0")
+    monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "999")
+
+    assert _behavior_slice_execution_value("max_behavior_slices_per_round", 999, 15) == 15
+    assert _behavior_slice_execution_value("incremental_discovery_round", 0, 1) == 1
+    assert _behavior_slice_execution_value("incremental_discovery_round_limit", 999, 3) == 12
 
 
 def test_slice_budget_is_hard_capped_at_fifteen(monkeypatch):
