@@ -18,10 +18,68 @@ def test_acceptance_smoke_generates_report_and_checks_contract(tmp_path: Path) -
     assert payload["checks"]["scan_context_contract"]["ok"] is True
     assert payload["checks"]["credential_safety"]["ok"] is True
     assert payload["checks"]["http_health"]["status"] == "skipped"
+    assert "scenario_readiness" in payload["checks"]
     assert payload["acceptance"]["level"] in {"accepted", "warning", "blocked"}
     assert saved["acceptance_report_file"] == str(report_path)
     assert saved["support_bundle_manifest"]["policy"] == "diagnostics_only_no_customer_data"
     assert (tmp_path / "platform_outputs" / "private_pilot_doctor_report.json").exists()
+
+
+def test_acceptance_smoke_warns_when_scenario_readiness_is_optional(tmp_path: Path) -> None:
+    from ai_test_asset_center.private_pilot_acceptance_smoke import run_acceptance_smoke
+
+    payload = run_acceptance_smoke(root=tmp_path, install_patches=True, write_doctor=False)
+    scenario = payload["checks"]["scenario_readiness"]
+
+    assert scenario["ready"] is False
+    assert scenario["required"] is False
+    assert "source_registry_asset" in scenario["missing"]
+    assert "base_url" in scenario["missing"]
+    assert payload["acceptance"]["level"] == "warning"
+    assert any(str(item).startswith("scenario_readiness_missing:") for item in payload["acceptance"]["warnings"])
+
+
+def test_acceptance_smoke_blocks_when_required_scenario_readiness_is_missing(tmp_path: Path) -> None:
+    from ai_test_asset_center.private_pilot_acceptance_smoke import run_acceptance_smoke
+
+    payload = run_acceptance_smoke(root=tmp_path, install_patches=True, write_doctor=False, require_scenario_ready=True)
+
+    assert payload["checks"]["scenario_readiness"]["required"] is True
+    assert payload["acceptance"]["level"] == "blocked"
+    assert any(str(item).startswith("scenario_readiness_missing:") for item in payload["acceptance"]["blockers"])
+
+
+def test_acceptance_smoke_accepts_complete_scenario_preflight(tmp_path: Path) -> None:
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+    from ai_test_asset_center.private_pilot_acceptance_smoke import run_acceptance_smoke
+
+    register_source_asset(
+        "demo",
+        "openapi-main",
+        "openapi: 3.0.0\npaths:\n  /api/orders:\n    get:\n      responses:\n        '200': {description: ok}\n",
+        source_type="openapi",
+        root=tmp_path,
+        actor={"name": "tester", "role": "qa_lead"},
+    )
+    payload = run_acceptance_smoke(
+        root=tmp_path,
+        install_patches=True,
+        write_doctor=False,
+        project="demo",
+        scan_base_url="http://127.0.0.1:8000",
+        scope_id="orders-scope",
+        environment_ref="staging-env",
+        test_data_strategy="synthetic_only",
+        require_scenario_ready=True,
+    )
+
+    scenario = payload["checks"]["scenario_readiness"]
+    assert scenario["ready"] is True
+    assert scenario["missing"] == []
+    assert scenario["source_registry"]["asset_count"] == 1
+    assert scenario["source_registry"]["assets"][0]["source_id"] == "openapi-main"
+    assert payload["acceptance"]["level"] in {"accepted", "warning"}
+    assert not any(str(item).startswith("scenario_readiness_missing:") for item in payload["acceptance"].get("blockers", []))
 
 
 def test_acceptance_smoke_blocks_when_runtime_patches_are_skipped(tmp_path: Path) -> None:
@@ -69,6 +127,7 @@ def test_acceptance_smoke_cli_writes_custom_report(tmp_path: Path, capsys) -> No
     assert '"schema_version"' in captured
     assert '"acceptance"' in captured
     assert '"checks"' in captured
+    assert '"scenario_readiness"' in captured
 
 
 def test_acceptance_smoke_cli_script_is_registered() -> None:
