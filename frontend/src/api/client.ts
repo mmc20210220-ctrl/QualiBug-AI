@@ -44,6 +44,30 @@ export type ConnectorRecord = {
   last_sync_status?: string;
 };
 
+export type CampaignGovernance = {
+  campaign_id?: string;
+  campaign_status?: 'active' | 'completed' | 'coverage_deferred' | 'blocked' | string;
+  scope_id?: string;
+  environment_ref?: string;
+  source_id?: string;
+  source_hash?: string;
+  source_snapshot_hash?: string;
+  round_count?: number;
+  slice_budget?: number;
+  automatic_round_limit?: number;
+  attempted_slice_count?: number;
+  confirmed_slice_count?: number;
+  coverage_deferred_reason?: string;
+  next_campaign_reason?: string;
+};
+
+export type TestDataPlan = {
+  status?: 'ready' | 'blocked_with_testability_gap' | string;
+  strategy?: string;
+  missing_requirements?: string[];
+  coverage_gaps?: Array<{ kind?: string; code?: string; campaign_id?: string }>;
+};
+
 export type V12ScanResult = {
   ok: boolean;
   scan_id?: string;
@@ -52,9 +76,14 @@ export type V12ScanResult = {
   coverage?: number;
   total_findings?: number;
   total_ms?: number;
+  execution_status?: string;
   layers?: Record<string, { findings: number; ms: number; tool?: string }>;
   spectrum?: { capabilities_run: number; total_findings: number };
   auto_har?: Record<string, unknown>;
+  campaign?: CampaignGovernance;
+  coverage_gaps?: Array<Record<string, unknown>>;
+  runtime_contract?: Record<string, unknown>;
+  test_data_plan?: TestDataPlan;
   report_path?: string;
   error?: string;
   message?: string;
@@ -252,6 +281,8 @@ function emptyFindingsSnapshot(projectId: string): JsonRecord {
     value_metrics: {},
     executive_summary: {},
     knowledge_summary: {},
+    campaign: {},
+    coverage_gaps: [],
   };
 }
 
@@ -330,7 +361,7 @@ export function ingestKnowledge(projectId: string, file: File, type: string): Pr
         reject(error);
       }
     };
-    reader.onerror = () => reject(reader.error || new Error('无法读取上传资料'));
+    reader.onerror = () => reject(reader.error || new Error('无法读取资料'));
     reader.readAsDataURL(file);
   });
 }
@@ -339,10 +370,18 @@ export function deleteKnowledge(projectId: string, sourceId: string): Promise<un
   return fetchJSON<unknown>(`${API_BASE}/knowledge/delete`, { method: 'POST', body: JSON.stringify({ project_id: projectId, source_id: sourceId }) });
 }
 
-export function runV12Scan(projectId: string, options?: { api_doc?: string; base_url?: string }): Promise<V12ScanResult> {
+export function runV12Scan(projectId: string, options?: { api_doc?: string; base_url?: string; scope_id?: string; environment_ref?: string; source_id?: string; source_hash?: string; test_data_contract?: JsonRecord }): Promise<V12ScanResult> {
   return fetchJSON<V12ScanResult>(`${API_BASE}/v1/scan`, {
     method: 'POST',
-    body: JSON.stringify({ project_id: projectId, api_doc: options?.api_doc || undefined, base_url: options?.base_url || undefined }),
+    body: JSON.stringify({
+      project_id: projectId,
+      api_doc: options?.api_doc || undefined,
+      base_url: options?.base_url || undefined,
+      scope_id: options?.scope_id || undefined,
+      environment_ref: options?.environment_ref || undefined,
+      source_manifest: options?.source_id || options?.source_hash ? { source_id: options?.source_id || '', source_hash: options?.source_hash || '' } : undefined,
+      test_data_contract: options?.test_data_contract,
+    }),
   });
 }
 
@@ -356,11 +395,4 @@ export function getServiceCredentials(projectId: string): Promise<unknown> {
 
 export function saveServiceCredentials(body: JsonRecord): Promise<unknown> {
   return fetchJSON<unknown>(`${API_BASE}/v1/services/credentials`, { method: 'POST', body: JSON.stringify(body) });
-}
-
-export function replayFinding(projectId: string, findingId: string, baseUrl?: string): Promise<unknown> {
-  return fetchJSON<unknown>(`${API_BASE}/v1/replay`, {
-    method: 'POST',
-    body: JSON.stringify({ project_id: projectId, finding_id: findingId, base_url: baseUrl || undefined }),
-  });
 }
