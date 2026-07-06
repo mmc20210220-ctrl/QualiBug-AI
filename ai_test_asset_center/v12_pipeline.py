@@ -1,9 +1,9 @@
 """V12 source-grounded, incrementally sliced behavior pipeline.
 
-The existing public ``run_v12_pipeline`` entry point remains stable.  A run
-selects a bounded set of source-derived behavior slices; it never invents a
-route, actor, fixture or cleanup contract.  Missing prerequisites stay as
-plan-only coverage obligations and cannot become confirmed defects.
+The public ``run_v12_pipeline`` entry point is retained. A run selects a
+bounded set of source-derived behavior slices and never invents a route, actor,
+fixture or cleanup contract. Missing prerequisites remain plan-only coverage
+obligations and cannot become confirmed defects.
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def _behavior_slice_settings() -> dict[str, int]:
     budget = _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", configured_budget), 15, 1, 15)
     round_number = _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", configured_round), 1, 1, 12)
     round_limit = _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", configured_limit), 3, 1, 12)
-    return {"slice_budget": budget, "round_number": min(round_number, round_limit), "round_limit": round_limit}
+    return {"slice_budget": budget, "round_number": round_number, "round_limit": round_limit}
 
 
 def _slice_history(existing_findings: list[dict[str, Any]] | None) -> tuple[set[str], set[str]]:
@@ -112,39 +112,100 @@ def _slice_history(existing_findings: list[dict[str, Any]] | None) -> tuple[set[
     return attempted, confirmed
 
 
+def _selection_result(
+    *,
+    status: str,
+    stop_reason: str,
+    selected: list[dict[str, Any]],
+    pending: list[dict[str, Any]],
+    attempted: set[str],
+    confirmed: set[str],
+    next_round: int | None,
+    selection_mode: str,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "stop_reason": stop_reason,
+        "selected": selected,
+        "selected_slice_ids": [str(item.get("slice_id") or "") for item in selected],
+        "next_round": next_round,
+        "remaining_slice_count": max(0, len(pending) - len(selected)),
+        "attempted_slice_ids": sorted(attempted),
+        "confirmed_slice_ids": sorted(confirmed),
+        "selection_mode": selection_mode,
+    }
+
+
 def _schedule_behavior_slices(
     slices: list[dict[str, Any]],
     settings: dict[str, int],
     existing_findings: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
+    """Select a bounded source slice batch without rerunning stale plan-only work.
+
+    Explicit rounds page through the initial slice set. When a persisted ledger is
+    supplied, previously selected but unconfirmed slices are treated as attempted;
+    the scheduler advances to the next unattempted slice. Once all pending slices
+    have been attempted, it stops and asks for new evidence, fixtures or policy
+    rather than replaying stale plan-only candidates indefinitely.
+    """
     attempted, confirmed = _slice_history(existing_findings)
     all_slices = [item for item in slices if isinstance(item, dict) and str(item.get("slice_id") or "")]
     pending = [item for item in all_slices if str(item["slice_id"]) not in confirmed]
     round_number = int(settings["round_number"])
     round_limit = int(settings["round_limit"])
     budget = int(settings["slice_budget"])
+
     if not all_slices:
-        return {"status": "stopped", "stop_reason": "no_source_bound_behavior_slices", "selected": [], "selected_slice_ids": [], "next_round": None, "remaining_slice_count": 0, "attempted_slice_ids": sorted(attempted), "confirmed_slice_ids": sorted(confirmed)}
+        return _selection_result(status="stopped", stop_reason="no_source_bound_behavior_slices", selected=[], pending=[], attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="none")
     if not pending:
-        return {"status": "stopped", "stop_reason": "all_source_bound_slices_confirmed", "selected": [], "selected_slice_ids": [], "next_round": None, "remaining_slice_count": 0, "attempted_slice_ids": sorted(attempted), "confirmed_slice_ids": sorted(confirmed)}
+        return _selection_result(status="stopped", stop_reason="all_source_bound_slices_confirmed", selected=[], pending=[], attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="none")
     if round_number > round_limit:
-        return {"status": "stopped", "stop_reason": "configured_round_limit_reached", "selected": [], "selected_slice_ids": [], "next_round": None, "remaining_slice_count": len(pending), "attempted_slice_ids": sorted(attempted), "confirmed_slice_ids": sorted(confirmed)}
+        return _selection_result(status="stopped", stop_reason="configured_round_limit_reached", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="round_limit")
+
+    unattempted = [item for item in pending if str(item["slice_id"]) not in attempted]
+    if attempted:
+        if not unattempted:
+            return _selection_result(
+                status="stopped",
+                stop_reason="all_pending_slices_attempted_needs_new_evidence_or_policy",
+                selected=[],
+                pending=pending,
+                attempted=attempted,
+                confirmed=confirmed,
+                next_round=None,
+                selection_mode="history_exhausted",
+            )
+        selected = unattempted[:budget]
+        remaining = max(0, len(unattempted) - len(selected))
+        next_round = round_number + 1 if remaining > 0 and round_number < round_limit else None
+        return _selection_result(
+            status="planned",
+            stop_reason="slice_budget_reached" if remaining > 0 else "selected_final_unattempted_slice_batch",
+            selected=selected,
+            pending=unattempted,
+            attempted=attempted,
+            confirmed=confirmed,
+            next_round=next_round,
+            selection_mode="next_unattempted_after_history",
+        )
+
     offset = (round_number - 1) * budget
     selected = pending[offset:offset + budget]
     if not selected:
-        return {"status": "stopped", "stop_reason": "no_remaining_slice_in_configured_round", "selected": [], "selected_slice_ids": [], "next_round": None, "remaining_slice_count": len(pending), "attempted_slice_ids": sorted(attempted), "confirmed_slice_ids": sorted(confirmed)}
+        return _selection_result(status="stopped", stop_reason="no_remaining_slice_in_configured_round", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="round_paging")
     remaining = max(0, len(pending) - offset - len(selected))
     next_round = round_number + 1 if remaining > 0 and round_number < round_limit else None
-    return {
-        "status": "planned",
-        "stop_reason": "slice_budget_reached" if remaining > 0 else "selected_final_available_slice_batch",
-        "selected": selected,
-        "selected_slice_ids": [str(item["slice_id"]) for item in selected],
-        "next_round": next_round,
-        "remaining_slice_count": remaining,
-        "attempted_slice_ids": sorted(attempted),
-        "confirmed_slice_ids": sorted(confirmed),
-    }
+    return _selection_result(
+        status="planned",
+        stop_reason="slice_budget_reached" if remaining > 0 else "selected_final_available_slice_batch",
+        selected=selected,
+        pending=pending[offset:],
+        attempted=attempted,
+        confirmed=confirmed,
+        next_round=next_round,
+        selection_mode="round_paging",
+    )
 
 
 def run_v12_pipeline(
@@ -177,9 +238,11 @@ def run_v12_pipeline(
                     api_spec_text = json.dumps(normalized, ensure_ascii=False, default=str)
         except Exception:
             pass
+
     try:
         graph_started = time.time()
         from .business_state_graph import BusinessStateGraphBuilder
+
         builder = BusinessStateGraphBuilder()
         graphs = builder.build(prd_text, api_spec_text, db_schema_text)
         behavior_contract = builder.behavior_contract()
@@ -191,6 +254,7 @@ def run_v12_pipeline(
             "round": settings["round_number"],
             "round_limit": settings["round_limit"],
             "slice_budget": settings["slice_budget"],
+            "selection_mode": selection["selection_mode"],
             "selected_slice_ids": selection["selected_slice_ids"],
             "attempted_slice_ids": selection["attempted_slice_ids"],
             "confirmed_slice_ids": selection["confirmed_slice_ids"],
@@ -210,29 +274,37 @@ def run_v12_pipeline(
             "round": settings["round_number"],
             "round_limit": settings["round_limit"],
             "slice_budget": settings["slice_budget"],
+            "selection_mode": selection["selection_mode"],
             "selected_slices": selection["selected"],
             "remaining_slice_count": selection["remaining_slice_count"],
             "next_round": selection["next_round"],
             "stop_reason": selection["stop_reason"],
         }
 
-        selected_paths = {str(path) for item in selection["selected"] for path in item.get("endpoints", []) if str(path)}
+        selected_paths = {
+            str(path)
+            for item in selection["selected"]
+            for path in item.get("endpoints", [])
+            if str(path)
+        }
         fuzz_started = time.time()
         fuzzer_findings: list[dict[str, Any]] = []
         if base_url and selected_paths:
             try:
                 from .parameter_fuzzer import ParameterFuzzer
                 from .route_catalog_builder import RouteCatalogBuilder
+
                 catalog = [entry.to_dict() for entry in RouteCatalogBuilder().build(api_spec_text)]
                 scoped_catalog = [entry for entry in catalog if str(entry.get("path") or "") in selected_paths]
                 fuzzer_findings = ParameterFuzzer(base_url, allow_write=False).fuzz_all(scoped_catalog, max_variants=6)
                 for finding in fuzzer_findings:
-                    if isinstance(finding, dict):
-                        path = str(finding.get("path") or "")
-                        matching = next((item for item in selection["selected"] if path and path in item.get("endpoints", [])), None)
-                        if matching:
-                            finding["behavior_slice_id"] = matching["slice_id"]
-                            finding["discovery_round"] = settings["round_number"]
+                    if not isinstance(finding, dict):
+                        continue
+                    path = str(finding.get("path") or "")
+                    matching = next((item for item in selection["selected"] if path and path in item.get("endpoints", [])), None)
+                    if matching:
+                        finding["behavior_slice_id"] = matching["slice_id"]
+                        finding["discovery_round"] = settings["round_number"]
             except Exception:
                 pass
         result["findings"].extend(fuzzer_findings)
@@ -247,6 +319,7 @@ def run_v12_pipeline(
 
         scenario_started = time.time()
         from .semantic_scenario_generator import SemanticScenarioGenerator
+
         scenarios = SemanticScenarioGenerator().generate(
             graphs,
             api_spec_text,
@@ -307,6 +380,7 @@ def run_v12_pipeline(
 
         oracle_started = time.time()
         from .oracle_engine import EvidenceGraphBuilder, OracleEngine
+
         oracle, evidence_builder = OracleEngine(), EvidenceGraphBuilder()
         for scenario, trace in traces:
             for oracle_result in oracle.evaluate(scenario.to_dict(), trace, None):
