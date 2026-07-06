@@ -4,9 +4,11 @@ from __future__ import annotations
 
 The legacy private pilot service is intentionally kept stable because it is a
 large HTTP entrypoint. This wrapper installs the stricter backend customer
-delivery gate before delegating to the original server runner.
+delivery gate and the scan campaign-context bridge before delegating to the
+original server runner.
 """
 
+import contextvars
 import json
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,10 @@ from ai_test_asset_center.real_project_onboarding import ROOT, _safe_project_id,
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_server"
 MAIN_CHAIN_NOT_READY_REASON = "MAIN_CHAIN_NOT_READY"
+_SCAN_CAMPAIGN_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "qualibug_private_pilot_scan_campaign_context",
+    default=None,
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -27,6 +33,14 @@ def _read_json(path: Path) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _resolve_project_id(payload: dict[str, Any]) -> str:
@@ -100,6 +114,129 @@ def _main_chain_contract_summary(contract: dict[str, Any]) -> dict[str, Any]:
         "partial_stage_count": int(summary.get("partial_stage_count") or 0),
         "missing_stage_count": int(summary.get("missing_stage_count") or 0),
     }
+
+
+def _source_manifest_from_body(body: dict[str, Any]) -> dict[str, str]:
+    manifest = _dict(body.get("source_manifest"))
+    for key in ("source_id", "source_hash", "source_version_id", "source_origin"):
+        value = _text(body.get(key))
+        if value and not _text(manifest.get(key)):
+            manifest[key] = value
+    cleaned: dict[str, str] = {}
+    for key in ("source_id", "source_hash", "source_version_id", "source_origin", "source_type"):
+        value = _text(manifest.get(key))
+        if value:
+            cleaned[key] = value
+    return cleaned
+
+
+def _load_source_content_from_manifest(project: str, root: Path, manifest: dict[str, str]) -> str:
+    source_hash = _text(manifest.get("source_hash")).lower().removeprefix("sha256:")
+    if not source_hash:
+        return ""
+    try:
+        from ai_test_asset_center.enterprise_source_registry import load_source_content
+
+        return load_source_content(project, source_hash, root=root)
+    except Exception:
+        return ""
+
+
+def _latest_registered_source(project: str, root: Path) -> tuple[str, dict[str, str]]:
+    try:
+        from ai_test_asset_center.enterprise_source_registry import list_source_assets, load_source_content
+
+        assets = list_source_assets(project, root=root)
+    except Exception:
+        return "", {}
+    if not assets:
+        return "", {}
+
+    def _sort_key(item: dict[str, Any]) -> tuple[str, str]:
+        return (_text(item.get("updated_at_utc")), _text(item.get("source_id")))
+
+    latest = max((item for item in assets if isinstance(item, dict)), key=_sort_key, default={})
+    source_hash = _text(latest.get("latest_source_hash")).lower().removeprefix("sha256:")
+    source_id = _text(latest.get("source_id"))
+    if not source_id or not source_hash:
+        return "", {}
+    try:
+        content = load_source_content(project, source_hash, root=root)
+    except Exception:
+        return "", {}
+    manifest = {
+        "source_id": source_id,
+        "source_hash": source_hash,
+        "source_version_id": _text(latest.get("latest_version_id")),
+        "source_origin": "registered_source_registry",
+        "source_type": _text(latest.get("source_type")),
+    }
+    return content, {key: value for key, value in manifest.items() if value}
+
+
+def _prepare_scan_body_for_campaign(project: str, root: Path, body: dict[str, Any]) -> dict[str, Any]:
+    """Fill scan body gaps from the immutable source registry before legacy routing.
+
+    The legacy handler tries connector/fallback API docs whenever ``api_doc`` is
+    missing. That is unsafe when the frontend already submitted a source_manifest:
+    a fallback document would not match the source hash, causing a false source
+    mismatch. This helper loads the registered source content first so the V12
+    source contract remains bound to the intended immutable asset.
+    """
+    prepared = dict(body or {})
+    api_doc = _text(prepared.get("api_doc") or prepared.get("api_doc_text"))
+    manifest = _source_manifest_from_body(prepared)
+
+    if not api_doc and manifest:
+        content = _load_source_content_from_manifest(project, root, manifest)
+        if content:
+            prepared["api_doc"] = content
+            prepared["source_manifest"] = manifest
+            return prepared
+
+    if not api_doc and not manifest:
+        content, latest_manifest = _latest_registered_source(project, root)
+        if content and latest_manifest:
+            prepared["api_doc"] = content
+            prepared["source_manifest"] = latest_manifest
+            return prepared
+
+    if manifest:
+        prepared["source_manifest"] = manifest
+    return prepared
+
+
+def _build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Build the V12 campaign_context from the frontend scan contract."""
+    context: dict[str, Any] = {}
+    manifest = _source_manifest_from_body(body)
+    if manifest:
+        context["source_manifest"] = manifest
+
+    for key in (
+        "scope_id",
+        "environment_ref",
+        "target_environment",
+        "execution_approval_id",
+        "execution_mode",
+    ):
+        value = _text(body.get(key))
+        if value:
+            context[key] = value
+
+    if "execution_mode" not in context:
+        context["execution_mode"] = "safe_read_only"
+
+    test_data_contract = _dict(body.get("test_data_contract"))
+    if test_data_contract:
+        context["test_data_contract"] = test_data_contract
+    elif _text(body.get("test_data_strategy")):
+        context["test_data_contract"] = {"strategy": _text(body.get("test_data_strategy"))}
+
+    release_policy = _dict(body.get("release_policy"))
+    if release_policy:
+        context["release_policy"] = release_policy
+    return context
 
 
 def _append_unique(values: Any, item: str) -> list[str]:
@@ -213,8 +350,52 @@ def _inject_delivery_gate_patch_status(payload: dict[str, Any]) -> dict[str, Any
     return payload
 
 
+def _install_scan_campaign_context_patch() -> None:
+    if getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False):
+        return
+
+    from ai_test_asset_center import __main__ as scanner_module
+
+    original_scan = getattr(scanner_module, "scan")
+    original_handler = getattr(_service.PrivatePilotHandler, "_handle_v12_scan")
+
+    def _scan_with_campaign_context(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pending_context = _SCAN_CAMPAIGN_CONTEXT.get()
+        if pending_context:
+            explicit_context = kwargs.get("campaign_context")
+            merged = dict(explicit_context) if isinstance(explicit_context, dict) else {}
+            for key, value in pending_context.items():
+                if value and (key not in merged or not merged.get(key)):
+                    merged[key] = value
+            kwargs["campaign_context"] = merged
+        return original_scan(*args, **kwargs)
+
+    def _handle_v12_scan_with_campaign_context(
+        self: Any,
+        project: str,
+        root: Path,
+        actor: dict[str, str],
+        body: dict[str, Any],
+    ) -> Any:
+        prepared_body = _prepare_scan_body_for_campaign(project, root, body)
+        campaign_context = _build_campaign_context_from_scan_body(prepared_body)
+        token = _SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
+        try:
+            return original_handler(self, project, root, actor, prepared_body)
+        finally:
+            _SCAN_CAMPAIGN_CONTEXT.reset(token)
+
+    scanner_module.scan = _scan_with_campaign_context
+    _service.PrivatePilotHandler._handle_v12_scan = _handle_v12_scan_with_campaign_context
+    _service._ORIGINAL_V12_SCAN = original_scan  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_V12_SCAN = original_handler  # type: ignore[attr-defined]
+    _service._SCAN_CAMPAIGN_CONTEXT_PATCHED = True  # type: ignore[attr-defined]
+    _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
+
+
 def install_customer_delivery_gate_patch() -> None:
-    """Route legacy delivery-track partitioning and response diagnostics through the backend gate."""
+    """Route legacy delivery-track partitioning and scan context through backend gates."""
+    _install_scan_campaign_context_patch()
     if getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False):
         return
 
@@ -240,7 +421,7 @@ def install_customer_delivery_gate_patch() -> None:
 
 
 def customer_delivery_gate_patch_status() -> dict[str, Any]:
-    """Return runtime diagnostics for the delivery-gate patch."""
+    """Return runtime diagnostics for the delivery-gate and scan-context patches."""
     return {
         "patched": bool(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False)),
         "source": str(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE", "")),
@@ -248,21 +429,37 @@ def customer_delivery_gate_patch_status() -> dict[str, Any]:
         "has_original_normalizer": bool(getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None)),
         "active_partition_name": getattr(getattr(_service, "_partition_delivery_tracks", None), "__name__", ""),
         "active_normalizer_name": getattr(getattr(_service, "_normalize_command_center_envelope", None), "__name__", ""),
+        "scan_campaign_context_patched": bool(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False)),
+        "scan_campaign_context_patch_source": str(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE", "")),
     }
 
 
 def restore_customer_delivery_gate_patch() -> None:
-    """Restore the original partition and normalizer functions for isolated tests or diagnostics."""
+    """Restore the original partition, normalizer, scan and handler functions for tests."""
     original_partition = getattr(_service, "_ORIGINAL_PARTITION_DELIVERY_TRACKS", None)
     original_normalizer = getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None)
     if original_partition is not None:
         _service._partition_delivery_tracks = original_partition  # type: ignore[attr-defined]
     if original_normalizer is not None:
         _service._normalize_command_center_envelope = original_normalizer  # type: ignore[attr-defined]
+
+    original_scan = getattr(_service, "_ORIGINAL_V12_SCAN", None)
+    original_handler = getattr(_service, "_ORIGINAL_HANDLE_V12_SCAN", None)
+    if original_scan is not None:
+        from ai_test_asset_center import __main__ as scanner_module
+
+        scanner_module.scan = original_scan
+    if original_handler is not None:
+        _service.PrivatePilotHandler._handle_v12_scan = original_handler
+
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = False  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
     _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = None  # type: ignore[attr-defined]
     _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = None  # type: ignore[attr-defined]
+    _service._SCAN_CAMPAIGN_CONTEXT_PATCHED = False  # type: ignore[attr-defined]
+    _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    _service._ORIGINAL_V12_SCAN = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
 
 
 def run_server() -> None:
