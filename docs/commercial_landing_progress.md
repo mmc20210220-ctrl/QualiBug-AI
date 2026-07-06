@@ -15,6 +15,9 @@ Completed so far:
 - Added a frontend contract test to keep the internal clue explanation panel from regressing.
 - Added a command-center delivery normalization adapter that rechecks legacy `defects`, `risks`, and `findings` through the backend gate.
 - Added tests proving legacy non-ready `defects` are downgraded into internal clues.
+- Added a private pilot server wrapper that patches the legacy delivery-track partitioning through the backend gate before startup.
+- Routed the default `qualibug-server` entrypoint through the private pilot server wrapper.
+- Added tests proving the patched entrypoint downgrades legacy light-gate results into internal clues when business evidence is not validated.
 
 Current commercial rule:
 
@@ -22,7 +25,12 @@ Current commercial rule:
 - Internal clue pages should keep non-ready findings and show the missing evidence reasons.
 - Showing zero defects is acceptable when evidence is incomplete; showing a non-reproducible defect is not acceptable.
 
+Current service integration:
+
+- `qualibug-server` now starts through `ai_test_asset_center.private_pilot_server:run_server`.
+- The wrapper installs the strict backend customer-delivery gate before delegating to the original private pilot service.
+
 Next engineering step:
 
-- Wire the command center service to call `normalize_command_center_delivery()` as the final response step.
-- Make formatter/service output populate `customer_delivery_gate_reasons` for every clue produced from legacy or display-ready sources.
+- Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
+- Keep the wrapper as a compatibility safety net for default startup.
