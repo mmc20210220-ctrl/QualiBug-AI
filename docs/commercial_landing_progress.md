@@ -47,6 +47,8 @@ Completed so far:
 - Added tests proving Command Center surfaces evidence normalization counts and missing-field statistics across top-level, data contract, delivery tracks, and executive summary.
 - Surfaced evidence normalization blockers on the dashboard main-chain diagnostics, including missing-field counts for execution receipts, replay/reproduction, request/response, and expected/actual.
 - Added a frontend contract test so dashboard evidence-normalization blockers cannot be silently removed.
+- Expanded per-item evidence normalization reports with `evidence_id`, `issue_id`, `probe_id`, `execution_id`, `trace_id`, matched issue/execution flags, missing-field details, and next actions.
+- Added tests proving each blocked evidence item now tells operators which proof field is missing and how to fix it.
 
 Current commercial rule:
 
@@ -57,6 +59,7 @@ Current commercial rule:
 - If `main_chain_contract.chain_ready=false`, Command Center must report `MAIN_CHAIN_NOT_READY` and must not claim customer-delivery readiness.
 - Evidence-chain completion requires raw request/response, expected+actual, replay/reproduction, execution receipt, stable issue linkage, and non-synthetic proof.
 - Evidence normalization may standardize and enrich fields only from captured runtime artifacts; it must not invent validated proof.
+- Every blocked evidence item should expose the missing proof fields and next action for repair.
 
 Current service integration:
 
@@ -76,6 +79,6 @@ Current service integration:
 
 Next engineering step:
 
-- Tighten the evidence normalizer/report around per-item issue linkage so each blocked evidence item shows the exact issue/probe/replay field that still prevents customer delivery.
+- Surface per-item evidence normalization actions in Command Center/Dashboard so operators can click from a blocked evidence item to its exact next action.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
