@@ -14,7 +14,6 @@ API_SPEC = json.dumps({
 
 def test_unified_scan_requires_a_real_source_asset(tmp_path):
     result = scan(project="enterprise-project", root=tmp_path)
-
     assert result["success"] is False
     assert "api_doc" in result["error"]
 
@@ -26,14 +25,29 @@ def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_pa
         api_doc_text=API_SPEC,
         campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
     )
-
     assert result["success"] is True
     assert result["total_findings"] == 0
     assert result["db_findings"] == []
     assert result["e2e_findings"] == []
     assert result["ui_findings"] == []
     assert result["layers"]["legacy_domain_layers"]["tool"] == "disabled"
-    assert any(gap["code"] == "RUNTIME_TARGET_MISSING" for gap in result["input_gaps"])
+    assert result["runtime_contract"]["status"] == "plan_only"
     assert result["campaign"]["scope_id"] == "service-a"
     assert result["campaign"]["environment_ref"] == "test-a"
     assert result["campaign"]["confirmed_slice_count"] == 0
+
+
+def test_runtime_target_is_blocked_without_explicit_enterprise_contract(tmp_path):
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        base_url="https://example.invalid",
+        campaign_context={},
+    )
+    codes = {gap["code"] for gap in result["input_gaps"]}
+    assert result["success"] is True
+    assert result["runtime_contract"]["status"] == "blocked"
+    assert {"SOURCE_PROVENANCE_MISSING", "CAMPAIGN_SCOPE_MISSING", "ENVIRONMENT_REFERENCE_MISSING"}.issubset(codes)
+    assert result["execution_status"] in {"skipped", "plan_only"}
+    assert result["total_findings"] == 0
