@@ -18,9 +18,9 @@ RULES = """
 # Case lifecycle
 CREATED -> CLOSED
 
-# Forbidden transitions
-CLOSED -> CREATED
-ARCHIVED -> CREATED
+Forbidden transitions:
+- CLOSED -> CREATED
+- ARCHIVED -> CREATED
 
 # Case rules
 A closed case must not be reopened.
