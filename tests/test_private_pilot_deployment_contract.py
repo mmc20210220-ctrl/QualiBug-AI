@@ -33,12 +33,17 @@ def test_health_payload_uses_product_version_and_canonical_port(tmp_path: Path, 
     assert payload["llm_available"] is True
 
 
-def test_health_contract_is_extracted_from_entrypoint() -> None:
+def test_health_contract_and_deployment_patch_are_extracted_from_entrypoint() -> None:
     entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
     health_module = Path("ai_test_asset_center/private_pilot_health_contract.py").read_text(encoding="utf-8")
+    deployment_patch = Path("ai_test_asset_center/private_pilot_deployment_patch.py").read_text(encoding="utf-8")
 
-    assert "from ai_test_asset_center.private_pilot_health_contract import build_private_pilot_health_payload" in entrypoint
+    assert "from ai_test_asset_center.private_pilot_health_contract import build_private_pilot_health_payload" not in entrypoint
+    assert "from ai_test_asset_center.private_pilot_deployment_patch import" in entrypoint
     assert "def build_private_pilot_health_payload" in health_module
+    assert "def install_deployment_contract_patch" in deployment_patch
+    assert "urlparse" not in entrypoint
+    assert "def _do_get_with_deployment_contract" not in entrypoint
     assert "def _pattern_library_count" not in entrypoint
     assert "def _browser_ui_status" not in entrypoint
 
