@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+from ai_test_asset_center.customer_delivery_gate import (
+    is_customer_deliverable_defect,
+    split_customer_delivery_tracks,
+)
+
+
+def _ready_finding() -> dict:
+    return {
+        "id": "BUG-1",
+        "title": "支付金额守恒失败",
+        "bug_status": "reproduced",
+        "gate_passed": True,
+        "execution_status": "executed",
+        "confirmation_status": "validated_candidate",
+        "evidence_quality": {
+            "level": "validated",
+            "score": 95,
+            "can_reproduce": True,
+        },
+        "evidence_status": {
+            "semantic_verdict": "SEMANTIC_CONFIRMED",
+            "business_evidence_status": "VALIDATED",
+            "final_review_status": "VALIDATED_CANDIDATE",
+            "missing_requirements": [],
+        },
+        "expected": "订单金额应等于支付金额",
+        "actual": "订单金额 100，支付金额 1",
+        "raw_evidence": {
+            "has_real_evidence": True,
+            "timestamp": "2026-07-06T12:00:00Z",
+            "request_raw": {"method": "POST", "path": "/api/payments"},
+            "response_raw": {"status_code": 200, "body": {"paid_amount": 1}},
+        },
+        "reproduction": {
+            "method": "POST",
+            "path": "/api/payments",
+            "is_synthetic": False,
+            "har_evidence": {"status_code": 200, "response_body": {"paid_amount": 1}},
+        },
+    }
+
+
+def test_backend_gate_accepts_only_fully_validated_replayable_defect() -> None:
+    assert is_customer_deliverable_defect(_ready_finding()) is True
+
+
+def test_backend_gate_rejects_missing_business_evidence_status() -> None:
+    finding = _ready_finding()
+    finding.pop("evidence_status")
+
+    assert is_customer_deliverable_defect(finding) is False
+
+
+def test_backend_gate_rejects_missing_requirements() -> None:
+    finding = _ready_finding()
+    finding["evidence_status"]["missing_requirements"] = ["AFTER_SNAPSHOT_MISSING"]
+
+    assert is_customer_deliverable_defect(finding) is False
+
+
+def test_backend_gate_rejects_low_quality_or_non_replayable_evidence() -> None:
+    low_score = _ready_finding()
+    low_score["evidence_quality"]["score"] = 89
+
+    cannot_reproduce = _ready_finding()
+    cannot_reproduce["evidence_quality"]["can_reproduce"] = False
+
+    assert is_customer_deliverable_defect(low_score) is False
+    assert is_customer_deliverable_defect(cannot_reproduce) is False
+
+
+def test_backend_gate_rejects_synthetic_or_blocked_findings() -> None:
+    synthetic = _ready_finding()
+    synthetic["reproduction"]["is_synthetic"] = True
+
+    blocked = _ready_finding()
+    blocked["block_reason"] = "environment_blocked"
+
+    assert is_customer_deliverable_defect(synthetic) is False
+    assert is_customer_deliverable_defect(blocked) is False
+
+
+def test_backend_gate_splits_non_ready_items_into_internal_clues() -> None:
+    ready = _ready_finding()
+    clue = _ready_finding()
+    clue["id"] = "CLUE-1"
+    clue["evidence_status"]["business_evidence_status"] = "PENDING"
+
+    defects, clues = split_customer_delivery_tracks([ready, clue])
+
+    assert [item["id"] for item in defects] == ["BUG-1"]
+    assert [item["id"] for item in clues] == ["CLUE-1"]
+    assert defects[0]["customer_visible"] is True
+    assert clues[0]["customer_visible"] is False
+    assert defects[0]["customer_delivery_status"] == "defect"
+    assert clues[0]["customer_delivery_status"] == "clue"
