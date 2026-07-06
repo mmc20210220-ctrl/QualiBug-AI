@@ -15,6 +15,28 @@ from typing import Any
 
 from .real_project_onboarding import ROOT, _safe_project_id, _write_json, config_paths
 
+FIELD_LABELS = {
+    "issue_id": "稳定 issue_id",
+    "request": "原始 request",
+    "response": "原始 response",
+    "expected": "expected",
+    "actual": "actual",
+    "reproduction_or_replay": "reproduction / replay",
+    "execution_receipt": "execution receipt",
+    "non_synthetic_evidence": "非 synthetic 证据",
+}
+
+FIELD_NEXT_ACTIONS = {
+    "issue_id": "把证据项绑定到 discovered_issues.json 中稳定的 issue_id。",
+    "request": "从真实 HTTP 执行回执或 HAR 中补齐原始 request。",
+    "response": "从真实 HTTP 执行回执或 HAR 中补齐原始 response。",
+    "expected": "从业务规则、Oracle 或 linked issue 中补齐 expected。",
+    "actual": "从真实响应、断言结果或 linked issue 中补齐 actual。",
+    "reproduction_or_replay": "补齐 reproduction/replay，且必须来源于 captured execution receipt。",
+    "execution_receipt": "补齐 execution_id/probe_id/trace_id/timestamp/duration/response_status 等真实执行回执。",
+    "non_synthetic_evidence": "重新采集非 synthetic 的真实运行证据。",
+}
+
 
 def _read_json(path: Path, fallback: Any) -> Any:
     if not path.exists():
@@ -150,6 +172,23 @@ def _missing_fields(item: dict[str, Any]) -> list[str]:
     return missing
 
 
+def _missing_field_details(missing_fields: list[str]) -> list[dict[str, str]]:
+    return [
+        {
+            "field": field,
+            "label": FIELD_LABELS.get(field, field),
+            "next_action": FIELD_NEXT_ACTIONS.get(field, f"补齐 {field}。"),
+        }
+        for field in missing_fields
+    ]
+
+
+def _item_next_action(missing_fields: list[str]) -> str:
+    if not missing_fields:
+        return "证据字段已标准化，可进入严格证据链合同校验。"
+    return "；".join(FIELD_NEXT_ACTIONS.get(field, f"补齐 {field}。") for field in missing_fields)
+
+
 def _normalize_item(item: dict[str, Any], issue: dict[str, Any], execution: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized = dict(item)
     request = _request_from(item, execution)
@@ -177,10 +216,17 @@ def _normalize_item(item: dict[str, Any], issue: dict[str, Any], execution: dict
 
     missing = _missing_fields(normalized)
     return normalized, {
+        "evidence_id": _text(normalized.get("evidence_id") or normalized.get("id")),
         "issue_id": _text(normalized.get("issue_id")),
         "probe_id": _text(normalized.get("probe_id")),
+        "execution_id": _text(normalized.get("execution_id")),
+        "trace_id": _text(normalized.get("trace_id")),
+        "matched_issue": bool(issue),
+        "matched_execution": bool(execution),
         "normalized": len(missing) == 0,
         "missing_fields": missing,
+        "missing_field_details": _missing_field_details(missing),
+        "next_action": _item_next_action(missing),
     }
 
 
@@ -226,6 +272,7 @@ def normalize_evidence_bundle(project_id: str = "real_project_demo", root: Path 
         "input_item_count": len(evidence_items),
         "output_item_count": len(normalized_items),
         "fully_normalized_count": sum(1 for item in item_reports if item["normalized"]),
+        "blocked_item_count": sum(1 for item in item_reports if not item["normalized"]),
         "items": item_reports,
         "rules": [
             "preserve existing proof",
