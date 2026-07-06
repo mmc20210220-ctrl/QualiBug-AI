@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -10,8 +11,8 @@ from backend import main
 API_SPEC = '{"openapi":"3.0.0","paths":{"/api/cases/{case_id}/approve":{"patch":{"operationId":"approveCase"}}}}'
 
 
-def _headers() -> dict[str, str]:
-    return {"Authorization": "Bearer configured-secret"}
+def _headers(token: str = "configured-secret") -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _expiry() -> str:
@@ -21,6 +22,7 @@ def _expiry() -> str:
 def test_enterprise_api_registers_source_plans_scan_and_verifies_evidence(monkeypatch, tmp_path):
     monkeypatch.setenv("QUALIBUG_API_TOKEN", "configured-secret")
     monkeypatch.setenv("QUALIBUG_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.delenv("QUALIBUG_ACCESS_POLICY_JSON", raising=False)
     monkeypatch.delenv("QUALIBUG_ALLOWED_TARGET_ORIGINS", raising=False)
     client = TestClient(main.app)
 
@@ -70,6 +72,7 @@ def test_enterprise_api_registers_source_plans_scan_and_verifies_evidence(monkey
 def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkeypatch, tmp_path):
     monkeypatch.setenv("QUALIBUG_API_TOKEN", "configured-secret")
     monkeypatch.setenv("QUALIBUG_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.delenv("QUALIBUG_ACCESS_POLICY_JSON", raising=False)
     client = TestClient(main.app)
 
     manifest = client.post(
@@ -141,6 +144,7 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
 def test_enterprise_api_issues_metadata_only_test_data_receipts(monkeypatch, tmp_path):
     monkeypatch.setenv("QUALIBUG_API_TOKEN", "configured-secret")
     monkeypatch.setenv("QUALIBUG_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.delenv("QUALIBUG_ACCESS_POLICY_JSON", raising=False)
     client = TestClient(main.app)
 
     response = client.post(
@@ -162,3 +166,46 @@ def test_enterprise_api_issues_metadata_only_test_data_receipts(monkeypatch, tmp
     assert receipt["receipt_id"].startswith("tdr_")
     assert receipt["data_scope_ref"] == "isolated-sandbox"
     assert "content" not in receipt
+
+
+def test_enterprise_api_access_policy_enforces_permission_and_project_scope(monkeypatch, tmp_path):
+    policy = {
+        "planner-token": {
+            "principal_id": "planner-a",
+            "tenant_id": "tenant-a",
+            "permissions": ["identity.read", "source.read", "campaign.plan"],
+            "project_ids": ["project-a"],
+        },
+        "operator-token": {
+            "principal_id": "operator-a",
+            "tenant_id": "tenant-a",
+            "permissions": ["identity.read", "source.register", "source.read", "campaign.plan", "evidence.verify"],
+            "project_ids": ["project-a"],
+        },
+    }
+    monkeypatch.delenv("QUALIBUG_API_TOKEN", raising=False)
+    monkeypatch.setenv("QUALIBUG_ACCESS_POLICY_JSON", json.dumps(policy))
+    monkeypatch.setenv("QUALIBUG_WORKSPACE_ROOT", str(tmp_path))
+    client = TestClient(main.app)
+
+    me = client.get("/v1/access/me", headers=_headers("planner-token"))
+    assert me.status_code == 200
+    assert me.json()["principal_id"] == "planner-a"
+
+    denied_register = client.post(
+        "/v1/source-assets/register",
+        headers=_headers("planner-token"),
+        json={"project_id": "project-a", "source_id": "api-contract", "source_type": "openapi", "content": API_SPEC},
+    )
+    assert denied_register.status_code == 403
+
+    cross_project = client.get("/v1/source-assets/project-b", headers=_headers("operator-token"))
+    assert cross_project.status_code == 403
+
+    allowed_register = client.post(
+        "/v1/source-assets/register",
+        headers=_headers("operator-token"),
+        json={"project_id": "project-a", "source_id": "api-contract", "source_type": "openapi", "content": API_SPEC},
+    )
+    assert allowed_register.status_code == 200
+    assert allowed_register.json()["source_id"] == "api-contract"
