@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from ai_test_asset_center import private_pilot_server as _server_patch
 from ai_test_asset_center import private_pilot_service as _service
 from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
 from ai_test_asset_center.version import (
@@ -53,6 +54,21 @@ def _pattern_library_count(root: Path) -> int:
     return 0
 
 
+def _browser_ui_status() -> dict[str, Any]:
+    try:
+        from ai_test_asset_center.browser_ui_smoke import is_browser_ui_enabled
+
+        enabled = is_browser_ui_enabled()
+    except Exception:
+        enabled = False
+    return {
+        "enabled": enabled,
+        "env_flag": "QUALIBUG_BROWSER_UI_SMOKE",
+        "mode": "smoke" if enabled else "disabled",
+        "evidence": ["page_reachability", "console_errors", "network_errors", "screenshots", "har"],
+    }
+
+
 def _health_payload(handler: Any) -> dict[str, Any]:
     try:
         root = handler._root()
@@ -87,6 +103,7 @@ def _health_payload(handler: Any) -> dict[str, Any]:
         "platform": platform.system(),
         "llm_available": bool(llm_health.get("available")),
         "llm_status": llm_health,
+        "browser_ui_smoke": _browser_ui_status(),
         "pattern_library_patterns": _pattern_library_count(root),
         "deployment_contract_patch": {
             "patched": True,
@@ -95,6 +112,97 @@ def _health_payload(handler: Any) -> dict[str, Any]:
             "health_contract": CANONICAL_HEALTH_PATH,
         },
     }
+
+
+def _scan_project_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    value = kwargs.get("project")
+    if not value and args:
+        value = args[0]
+    return str(value or os.environ.get("QUALIBUG_PROJECT") or "real_project_demo")
+
+
+def _scan_root_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Path:
+    value = kwargs.get("root")
+    if value is None and len(args) >= 2:
+        value = args[1]
+    try:
+        return Path(value).resolve() if value is not None else _service._root()
+    except Exception:
+        return _service._root()
+
+
+def _scan_base_url_from_context(kwargs: dict[str, Any]) -> str:
+    for key in ("ui_base_url", "base_url"):
+        value = str(kwargs.get(key) or "").strip()
+        if value:
+            return value.rstrip("/")
+    try:
+        pending = _server_patch._SCAN_CAMPAIGN_CONTEXT.get()  # type: ignore[attr-defined]
+    except Exception:
+        pending = None
+    if isinstance(pending, dict):
+        for key in ("ui_base_url", "base_url", "target_url"):
+            value = str(pending.get(key) or "").strip()
+            if value:
+                return value.rstrip("/")
+    for env_name in ("QUALIBUG_BROWSER_UI_BASE_URL", "QUALIBUG_TARGET_UI_BASE_URL", "QUALIBUG_TARGET_BASE_URL"):
+        value = str(os.environ.get(env_name) or "").strip()
+        if value:
+            return value.rstrip("/")
+    return ""
+
+
+def install_browser_ui_smoke_patch() -> None:
+    """Attach non-blocking browser UI smoke evidence to patched scans."""
+    if getattr(_service, "_BROWSER_UI_SMOKE_PATCHED", False):
+        return
+    from ai_test_asset_center import __main__ as scanner_module
+    from ai_test_asset_center.browser_ui_smoke import attach_browser_ui_health
+
+    original_scan = getattr(scanner_module, "scan")
+
+    def _scan_with_browser_ui_smoke(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = original_scan(*args, **kwargs)
+        if not isinstance(result, dict):
+            return result
+        project = _scan_project_from_args(args, kwargs)
+        root = _scan_root_from_args(args, kwargs)
+        base_url = _scan_base_url_from_context(kwargs)
+        try:
+            return attach_browser_ui_health(result, project=project, root=root, base_url=base_url)
+        except Exception as exc:
+            updated = dict(result)
+            updated["browser_ui_health"] = {
+                "schema_version": "browser-ui-smoke-v1",
+                "enabled": False,
+                "status": "error",
+                "reason_code": "E_BROWSER_UI_RUNTIME_ERROR",
+                "message": str(exc)[:500],
+                "page_count": 0,
+                "reachable_page_count": 0,
+                "console_error_count": 0,
+                "network_error_count": 0,
+                "screenshot_count": 0,
+                "pages": [],
+                "evidence_files": [],
+            }
+            return updated
+
+    scanner_module.scan = _scan_with_browser_ui_smoke
+    _service._ORIGINAL_BROWSER_UI_SMOKE_SCAN = original_scan  # type: ignore[attr-defined]
+    _service._BROWSER_UI_SMOKE_PATCHED = True  # type: ignore[attr-defined]
+    _service._BROWSER_UI_SMOKE_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
+
+
+def restore_browser_ui_smoke_patch() -> None:
+    original_scan = getattr(_service, "_ORIGINAL_BROWSER_UI_SMOKE_SCAN", None)
+    if original_scan is not None:
+        from ai_test_asset_center import __main__ as scanner_module
+
+        scanner_module.scan = original_scan
+    _service._ORIGINAL_BROWSER_UI_SMOKE_SCAN = None  # type: ignore[attr-defined]
+    _service._BROWSER_UI_SMOKE_PATCHED = False  # type: ignore[attr-defined]
+    _service._BROWSER_UI_SMOKE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
 
 
 def install_deployment_contract_patch() -> None:
@@ -122,10 +230,12 @@ def restore_deployment_contract_patch() -> None:
     _service._ORIGINAL_DEPLOYMENT_DO_GET = None  # type: ignore[attr-defined]
     _service._DEPLOYMENT_CONTRACT_PATCHED = False  # type: ignore[attr-defined]
     _service._DEPLOYMENT_CONTRACT_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    restore_browser_ui_smoke_patch()
 
 
 def run_server() -> None:
     install_customer_delivery_gate_patch()
+    install_browser_ui_smoke_patch()
     install_deployment_contract_patch()
     _service.run_server()
 
