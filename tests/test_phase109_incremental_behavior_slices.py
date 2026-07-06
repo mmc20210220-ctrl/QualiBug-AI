@@ -85,6 +85,44 @@ def test_plan_only_slice_is_not_misclassified_as_confirmed():
     assert selection["selected_slice_ids"] == ["BHV_example"]
 
 
+def test_history_advances_to_next_unattempted_slice_without_promoting_prior_plan():
+    selection = _schedule_behavior_slices(
+        [
+            {"slice_id": "BHV_first", "entity": "example", "kind": "transition"},
+            {"slice_id": "BHV_second", "entity": "example", "kind": "invariant"},
+        ],
+        {"slice_budget": 1, "round_number": 1, "round_limit": 3},
+        [{"behavior_slice_ledger": {"selected_slice_ids": ["BHV_first"], "confirmed_slice_ids": []}}],
+    )
+
+    assert selection["status"] == "planned"
+    assert selection["selection_mode"] == "next_unattempted_after_history"
+    assert selection["selected_slice_ids"] == ["BHV_second"]
+    assert selection["confirmed_slice_ids"] == []
+
+
+def test_scheduler_stops_after_all_pending_slices_were_attempted_without_confirmation():
+    selection = _schedule_behavior_slices(
+        [{"slice_id": "BHV_example", "entity": "example", "kind": "transition"}],
+        {"slice_budget": 1, "round_number": 1, "round_limit": 3},
+        [{"behavior_slice_ledger": {"selected_slice_ids": ["BHV_example"], "confirmed_slice_ids": []}}],
+    )
+
+    assert selection["status"] == "stopped"
+    assert selection["stop_reason"] == "all_pending_slices_attempted_needs_new_evidence_or_policy"
+
+
+def test_scheduler_respects_explicit_round_limit():
+    selection = _schedule_behavior_slices(
+        [{"slice_id": "BHV_example", "entity": "example", "kind": "transition"}],
+        {"slice_budget": 1, "round_number": 4, "round_limit": 3},
+        [],
+    )
+
+    assert selection["status"] == "stopped"
+    assert selection["stop_reason"] == "configured_round_limit_reached"
+
+
 def test_pipeline_selects_different_source_slices_across_incremental_rounds(monkeypatch, tmp_path):
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "1")
     monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "2")
