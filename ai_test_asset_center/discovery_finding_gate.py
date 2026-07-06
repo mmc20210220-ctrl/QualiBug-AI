@@ -1,8 +1,8 @@
 """Mandatory receipt-backed gate for DiscoveryEngine findings.
 
 The gate is the existing promotion point between discovery and customer-facing
-results.  It consumes the normalized receipt and business evidence contract;
-it does not re-parse calls with default admin/tenant/role assumptions.
+results. It consumes the normalized receipt and business evidence contract; it
+does not re-parse calls with default admin, tenant, role, or call-order rules.
 """
 from __future__ import annotations
 
@@ -66,6 +66,17 @@ def _calls(evidence: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _method(runtime: dict[str, Any]) -> str:
+    """Use the observed mutation receipt when a flow begins with a read.
+
+    A common proof shape is GET(before) -> PATCH(action) -> GET(after). The
+    resource method alone therefore cannot decide whether before/after and
+    cleanup evidence are mandatory.
+    """
+    action = _dict(runtime.get("action_ref"))
+    action_text = _text(action.get("value"))
+    action_method = action_text.split(None, 1)[0].upper() if action_text else ""
+    if action_method in _WRITE_METHODS:
+        return action_method
     field = _dict(runtime.get("method"))
     return _text(field.get("value")).upper()
 
@@ -80,7 +91,11 @@ def _has_real_result(call: dict[str, Any]) -> bool:
 
 def _source_refs(row: dict[str, Any], evidence: dict[str, Any]) -> list[Any]:
     values: list[Any] = []
-    for candidate in (row.get("source_refs"), row.get("document_refs"), row.get("evidence_refs"), evidence.get("source_refs"), evidence.get("document_refs"), evidence.get("obligation_id"), row.get("context_artifact_id")):
+    for candidate in (
+        row.get("source_refs"), row.get("document_refs"), row.get("evidence_refs"),
+        evidence.get("source_refs"), evidence.get("document_refs"),
+        evidence.get("obligation_id"), row.get("context_artifact_id"),
+    ):
         if isinstance(candidate, list):
             values.extend(candidate)
         elif candidate:
@@ -146,7 +161,10 @@ def discovery_finding_to_contract(item: Any, *, project_id: str, policy_version:
     bundle = normalize_finding_evidence(row, calls)
     runtime = _dict(bundle.get("runtime"))
     semantic = _dict(bundle.get("semantic"))
-    enriched = enrich_finding_evidence(row, calls=calls, normalized=runtime, semantic=semantic, project_id=project_id, policy_version=policy_version)
+    enriched = enrich_finding_evidence(
+        row, calls=calls, normalized=runtime, semantic=semantic,
+        project_id=project_id, policy_version=policy_version,
+    )
     hypothesis_id = _text(row.get("hypothesis_id"), 160)
     digest = hashlib.sha256(json.dumps({"project": project_id, "hypothesis": hypothesis_id, "title": row.get("title", "")}, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
     evidence = {
@@ -204,29 +222,49 @@ def _pending_status(missing: list[str]) -> str:
     return "PENDING_ENTITY_BINDING"
 
 
-def gate_discovery_findings(findings: Iterable[Any], *, project_id: str | None = None,
-                            policy_version: str = "", context_artifact_id: str = "",
-                            enable_llm_disprover: bool | None = None,
-                            write_human_review_ledger: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def gate_discovery_findings(findings: Iterable[Any], *, project_id: str | None = None, policy_version: str = "", context_artifact_id: str = "", enable_llm_disprover: bool | None = None, write_human_review_ledger: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     resolved_project = project_id or os.environ.get("QUALIBUG_PROJECT", "real_project_demo")
-    contracts = [discovery_finding_to_contract(item, project_id=resolved_project, policy_version=policy_version, context_artifact_id=context_artifact_id) for item in findings]
+    contracts = [
+        discovery_finding_to_contract(item, project_id=resolved_project,
+                                      policy_version=policy_version,
+                                      context_artifact_id=context_artifact_id)
+        for item in findings
+    ]
     runtime_gate, business_gate = RuntimeEvidenceGate(), BusinessEvidenceGate()
-    summary = {"input_count": len(contracts), "validated_candidate_count": 0, "needs_more_evidence_count": 0, "blocked_runtime_count": 0, "by_missing_requirement": {}}
+    summary = {
+        "input_count": len(contracts), "validated_candidate_count": 0,
+        "needs_more_evidence_count": 0, "blocked_runtime_count": 0,
+        "by_missing_requirement": {},
+    }
     for contract in contracts:
         runtime_status, runtime_reasons = runtime_gate.check(contract)
         contract["runtime_gate_status"] = runtime_status
         if runtime_status != "PASSED":
-            contract.update({"verdict": "NEEDS_MORE_EVIDENCE", "business_evidence_status": "BLOCKED_BY_RUNTIME_EVIDENCE", "final_review_status": "BLOCKED", "business_gate_status": "NOT_RUN", "business_gate_missing": runtime_reasons})
+            contract.update({
+                "verdict": "NEEDS_MORE_EVIDENCE",
+                "business_evidence_status": "BLOCKED_BY_RUNTIME_EVIDENCE",
+                "final_review_status": "BLOCKED",
+                "business_gate_status": "NOT_RUN",
+                "business_gate_missing": runtime_reasons,
+            })
             summary["blocked_runtime_count"] += 1
             continue
         business_status, missing = business_gate.check(contract, contract.get("semantic_verdict", ""))
         contract["business_gate_status"] = business_status
         contract["business_gate_missing"] = missing
         if business_status == "PASSED":
-            contract.update({"verdict": "VALIDATED_CANDIDATE", "business_evidence_status": "VALIDATED", "final_review_status": "PENDING_REVIEW"})
+            contract.update({
+                "verdict": "VALIDATED_CANDIDATE",
+                "business_evidence_status": "VALIDATED",
+                "final_review_status": "PENDING_REVIEW",
+            })
             summary["validated_candidate_count"] += 1
         else:
-            contract.update({"verdict": "NEEDS_MORE_EVIDENCE", "business_evidence_status": _pending_status(missing), "final_review_status": "NEEDS_MORE_EVIDENCE"})
+            contract.update({
+                "verdict": "NEEDS_MORE_EVIDENCE",
+                "business_evidence_status": _pending_status(missing),
+                "final_review_status": "NEEDS_MORE_EVIDENCE",
+            })
             summary["needs_more_evidence_count"] += 1
             for reason in missing:
                 summary["by_missing_requirement"][reason] = summary["by_missing_requirement"].get(reason, 0) + 1
