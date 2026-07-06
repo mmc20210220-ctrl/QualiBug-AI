@@ -42,12 +42,15 @@ def test_customer_safe_report_has_no_mojibake(tmp_path: Path) -> None:
     assert not contains_mojibake(html)
 
 
-def test_customer_report_renderer_is_extracted_from_entrypoint() -> None:
+def test_customer_report_renderer_and_patch_are_extracted_from_entrypoint() -> None:
     entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
+    patch_module = Path("ai_test_asset_center/private_pilot_customer_report_patch.py").read_text(encoding="utf-8")
 
-    assert "from ai_test_asset_center.customer_safe_report import" in entrypoint
+    assert "from ai_test_asset_center.private_pilot_customer_report_patch import" in entrypoint
     assert "def render_customer_safe_report_html" not in entrypoint
     assert "MOJIBAKE_MARKERS" not in entrypoint
+    assert "def _render_report_html_clean" not in entrypoint
+    assert "def _render_report_html_clean" in patch_module
 
 
 def test_customer_report_patch_replaces_legacy_renderer() -> None:
