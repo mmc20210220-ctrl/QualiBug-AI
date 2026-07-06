@@ -36,6 +36,9 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_test_data_plan.py').read()); print('enterprise_test_data_plan.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/execution_approvals.py').read()); print('execution_approvals.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_access_policy.py').read()); print('enterprise_access_policy.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/change_impact.py').read()); print('change_impact.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/connector_source_ingestion.py').read()); print('connector_source_ingestion.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_delivery_package.py').read()); print('enterprise_delivery_package.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/release_gate.py').read()); print('release_gate.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/__main__.py').read()); print('__main__.py OK')"
           python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
@@ -67,6 +70,9 @@ jobs:
             tests/test_phase110_scan_execution_approval.py \
             tests/test_phase110_release_gate.py \
             tests/test_phase111_enterprise_access_policy.py \
+            tests/test_phase111_change_impact.py \
+            tests/test_phase111_connector_source_ingestion.py \
+            tests/test_phase111_delivery_package.py \
             -q
 
   frontend-quality:
