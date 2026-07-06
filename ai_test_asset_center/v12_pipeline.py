@@ -1,420 +1,216 @@
+"""V12 source-grounded behavior pipeline.
+
+The existing pipeline keeps its public ``run_v12_pipeline`` entry point, but it
+only executes scenarios that already carry an explicit runtime execution
+contract. Source-derived plans without fixture, actor and cleanup contracts are
+reported as plan-only coverage obligations, never as executed tests.
 """
-V12 Pipeline — Feature-flagged Business State Space Engine adapter.
-
-Enable with: ENABLE_V12_STATE_GRAPH_ENGINE=true
-
-Runs alongside existing V11 pipeline. Does NOT replace or break it.
-Adds state-graph-based scenario generation, multi-step execution,
-snapshot capture, oracle evaluation, and evidence graph packaging.
-"""
-
 from __future__ import annotations
 
 import json
 import os
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-# ── Auto HAR capture (user never touches this) ─────────────────────────
 _v12_har_entries: list[dict[str, Any]] = []
+_SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
 
-def _record_v12_har(method: str, url: str, status: int, resp_body: str,
-                    actor: str = "", elapsed_ms: float = 0) -> None:
-    """Record every V12 probe call into in-memory HAR log.
-    Runs automatically — zero user configuration.
-    """
+
+def _record_v12_har(method: str, url: str, status: int, body: Any, actor: str = "", elapsed_ms: float = 0.0) -> None:
     _v12_har_entries.append({
         "startedDateTime": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         "time": elapsed_ms,
-        "request": {"method": method, "url": url,
-                    "headers": [{"name": "X-QualiBug-Actor", "value": actor}]},
-        "response": {"status": status,
-                     "content": {"mimeType": "application/json",
-                                 "text": str(resp_body)[:5000]}},
+        "request": {"method": method, "url": url},
+        "response": {"status": status, "content": {"mimeType": "application/json", "text": str(body)[:5000]}},
         "_actor": actor,
     })
 
 
 def _v12_har_report() -> dict[str, Any]:
-    """Generate auto HAR report for V12 pipeline results.
-    
-    Now includes full `entries` list so the evidence enricher can
-    link each finding to the actual HTTP request/response that triggered it.
-    """
     if not _v12_har_entries:
         return {"status": "no_traffic"}
-    errors = [e for e in _v12_har_entries if e["response"]["status"] >= 400]
-    status_counts: dict[int, int] = {}
-    for e in _v12_har_entries:
-        s = e["response"]["status"]
-        status_counts[s] = status_counts.get(s, 0) + 1
-    # Build lightweight entries for serialization (strip huge bodies to max 2000 chars)
-    light_entries = []
-    for e in _v12_har_entries:
-        resp = e.get("response", {})
-        content = resp.get("content", {})
-        text = content.get("text", "") if isinstance(content, dict) else str(content)
-        if len(text) > 2000:
-            text = text[:2000] + "...[truncated]"
-        req = e.get("request", {})
-        light_entries.append({
-            "startedDateTime": e.get("startedDateTime", ""),
-            "time": e.get("time", 0),
-            "request": {
-                "method": req.get("method", ""),
-                "url": req.get("url", ""),
-            },
-            "response": {
-                "status": resp.get("status", 0),
-                "body": text,
-            },
-            "_actor": e.get("_actor", ""),
-        })
-    return {
-        "status": "captured",
-        "total_calls": len(_v12_har_entries),
-        "error_responses": len(errors),
-        "status_distribution": status_counts,
-        "entries": light_entries,
-    }
-# ───────────────────────────────────────────────────────────────────────
+    counts: dict[int, int] = {}
+    entries: list[dict[str, Any]] = []
+    for item in _v12_har_entries:
+        status = int(item.get("response", {}).get("status") or 0)
+        counts[status] = counts.get(status, 0) + 1
+        content = item.get("response", {}).get("content", {})
+        text = str(content.get("text") if isinstance(content, dict) else content)[:2000]
+        entries.append({"startedDateTime": item.get("startedDateTime"), "time": item.get("time"), "request": item.get("request"), "response": {"status": status, "body": text}, "_actor": item.get("_actor", "")})
+    return {"status": "captured", "total_calls": len(entries), "error_responses": sum(count for status, count in counts.items() if status >= 400), "status_distribution": counts, "entries": entries}
 
 
 def is_v12_enabled() -> bool:
-    return os.environ.get("ENABLE_V12_STATE_GRAPH_ENGINE", "false").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("ENABLE_V12_STATE_GRAPH_ENGINE", "false").lower() in {"1", "true", "yes", "on"}
 
 
-def run_v12_pipeline(
-    project: str,
-    root: Path,
-    prd_text: str = "",
-    api_spec_text: str = "",
-    db_schema_text: str = "",
-    base_url: str = "",
-    existing_findings: list[dict] | None = None,
-) -> dict[str, Any]:
-    """Execute V12 state space bug discovery engine.
+def _scenario_executable(scenario: Any) -> bool:
+    policy = str(getattr(scenario, "execution_policy", "") or "")
+    steps = getattr(scenario, "steps", []) or []
+    return bool(steps) and policy in {"safe_read_only", "approved_sandbox_write", "runtime_approved"}
 
-    Returns dict compatible with existing pipeline report format.
-    Does NOT modify existing_findings — returns new findings separately.
-    """
-    t0 = time.time()
-    result: dict[str, Any] = {
-        "v12_version": "1.0",
-        "enabled": True,
-        "phases": {},
-        "findings": [],
-        "evidence_graphs": [],
-        "risk_clues_saved": 0,
-    }
 
-    # ── Normalize API spec through universal parser ──
-    # Auto-detect and convert Swagger 2.0, Postman, GraphQL, gRPC, HAR etc.
+def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None) -> dict[str, Any]:
+    global _v12_har_entries
+    _v12_har_entries = []
+    started = time.time()
+    result: dict[str, Any] = {"v12_version": "2.0", "enabled": True, "phases": {}, "findings": [], "evidence_graphs": [], "risk_clues_saved": 0}
     if api_spec_text and not isinstance(api_spec_text, dict):
         try:
-            from .universal_api_parser import parse_to_openapi, detect_format
-            fmt = detect_format(api_spec_text)
-            if fmt not in ("openapi3", "unknown"):
+            from .universal_api_parser import detect_format, parse_to_openapi
+            if detect_format(api_spec_text) not in {"openapi3", "unknown"}:
                 normalized = parse_to_openapi(api_spec_text)
-                if normalized.get("paths"):
-                    api_spec_text = json.dumps(normalized, ensure_ascii=False, default=str)
-                    print(f"  [INFO] v12_pipeline: converted {fmt} → OpenAPI 3.x ({len(normalized['paths'])} paths)", flush=True)
+                if normalized.get("paths"): api_spec_text = json.dumps(normalized, ensure_ascii=False, default=str)
         except Exception:
-            pass  # Fall through: use original text as-is
-
+            pass
     try:
-        # ── Phase 1: Build Business State Graph ──
-        t1 = time.time()
+        graph_started = time.time()
         from .business_state_graph import BusinessStateGraphBuilder
-        builder = BusinessStateGraphBuilder()
-        graphs = builder.build(prd_text, api_spec_text, db_schema_text)
+        graphs = BusinessStateGraphBuilder().build(prd_text, api_spec_text, db_schema_text)
+        result["phases"]["state_graph"] = {"status": "completed", "entities": sorted(graphs), "summary": {name: graph.to_dict()["stats"] for name, graph in graphs.items()}, "duration_ms": int((time.time() - graph_started) * 1000)}
 
-        graph_summary = {entity: g.to_dict()["stats"] for entity, g in graphs.items()}
-        result["phases"]["state_graph"] = {
-            "status": "completed",
-            "entities": list(graphs.keys()),
-            "summary": graph_summary,
-            "duration_ms": int((time.time() - t1) * 1000),
-        }
-
-        # ── Phase 2a: Parameter Fuzzing (high-yield bug discovery) ──
-        t_fuzz = time.time()
-        fuzzer_findings = []
+        fuzz_started = time.time(); fuzzer_findings: list[dict[str, Any]] = []
         if base_url:
             try:
-                from .route_catalog_builder import RouteCatalogBuilder
                 from .parameter_fuzzer import ParameterFuzzer
-                builder2 = RouteCatalogBuilder()
-                entries = builder2.build(api_spec_text)
-                cat = [e.to_dict() for e in entries]
-                fuzzer = ParameterFuzzer(base_url)
-                fuzzer.login()  # Authenticate to test protected endpoints
-                fuzzer_findings = fuzzer.fuzz_all(cat, max_variants=6)  # Per-endpoint
+                from .route_catalog_builder import RouteCatalogBuilder
+                catalog = [entry.to_dict() for entry in RouteCatalogBuilder().build(api_spec_text)]
+                fuzzer_findings = ParameterFuzzer(base_url, allow_write=False).fuzz_all(catalog, max_variants=6)
             except Exception:
                 pass
         result["findings"].extend(fuzzer_findings)
-        result["phases"]["parameter_fuzzer"] = {
-            "status": "completed" if fuzzer_findings else "skipped",
-            "findings": len(fuzzer_findings),
-            "duration_ms": int((time.time() - t_fuzz) * 1000),
-        }
+        result["phases"]["parameter_fuzzer"] = {"status": "completed" if base_url else "skipped", "findings": len(fuzzer_findings), "execution_policy": "documented_read_only_only", "duration_ms": int((time.time() - fuzz_started) * 1000)}
 
-        # ── Phase 2b: Generate Semantic Scenarios ──
-        t2 = time.time()
+        scenario_started = time.time()
         from .semantic_scenario_generator import SemanticScenarioGenerator
-        generator = SemanticScenarioGenerator()
-        scenarios = generator.generate(graphs, api_spec_text)
+        scenarios = SemanticScenarioGenerator().generate(graphs, api_spec_text)
+        executable = [scenario for scenario in scenarios if _scenario_executable(scenario)]
+        plan_only = [scenario for scenario in scenarios if scenario not in executable]
+        result["phases"]["scenario_generation"] = {"status": "completed", "total_scenarios": len(scenarios), "executable_scenarios": len(executable), "plan_only_scenarios": len(plan_only), "by_category": _count_by(scenarios, "category"), "by_severity": _count_by(scenarios, "severity"), "forbidden_paths": sum(1 for scenario in scenarios if getattr(scenario, "is_forbidden_path", False)), "duration_ms": int((time.time() - scenario_started) * 1000)}
+        result["plan_only_scenarios"] = [scenario.to_dict() for scenario in plan_only]
 
-        result["phases"]["scenario_generation"] = {
-            "status": "completed",
-            "total_scenarios": len(scenarios),
-            "by_category": _count_by(scenarios, "category"),
-            "by_severity": _count_by(scenarios, "severity"),
-            "forbidden_paths": sum(1 for s in scenarios if s.is_forbidden_path),
-            "duration_ms": int((time.time() - t2) * 1000),
-        }
-
-        # ── Phase 3: Execute Scenarios (if base_url provided) ──
-        result["phases"]["execution"] = {"status": "skipped", "reason": "no base_url"}
-        traces = []
-        if base_url and scenarios:
-            t3 = time.time()
-            executed = 0; failed = 0
-            # Authenticate to get token for scenario execution
-            scenario_token = ""
-            try:
-                from .parameter_fuzzer import ParameterFuzzer
-                tmp_fuzzer = ParameterFuzzer(base_url)
-                if tmp_fuzzer.login():
-                    scenario_token = tmp_fuzzer._token
-            except Exception:
-                pass
-            for scenario in scenarios:  # Execute all generated scenarios for full coverage
+        traces: list[tuple[Any, dict[str, Any]]] = []
+        if not base_url:
+            result["phases"]["execution"] = {"status": "skipped", "reason": "no_base_url", "planned_only": len(plan_only)}
+        elif not executable:
+            result["phases"]["execution"] = {"status": "plan_only", "reason": "fixture_actor_cleanup_contract_required", "planned_only": len(plan_only), "executed": 0}
+        else:
+            execution_started = time.time(); failed = 0
+            for scenario in executable:
                 try:
-                    if scenario_token:
-                        scenario.actor_token = scenario_token
                     trace = _execute_scenario(scenario, base_url, max_retries=2)
                     traces.append((scenario, trace))
-                    executed += 1
-                        # Quick-find: flag server errors as findings
-                    for step_result in trace.get("steps", []):
-                        status = step_result.get("status", 0)
-                        # ── Status code classification (v12.3 fix) ──
-                        # 401/403 = auth working correctly, NOT permission bug
-                        # 404/405 = route or method mismatch, NOT business bug
-                        # 2xx + wrong actor scenario = candidate for permission testing
-                        # 5xx = server error, flag but don't claim "permission bypass"
-                        if status >= 500:
-                            # 5xx = genuine server error during execution
-                            result["findings"].append({
-                                "severity": "P0",
-                                "title": f"[场景执行错误] {scenario.title[:80]}",
-                                "category": scenario.category,
-                                "source": "v12_scenario_executor",
-                                "description": f"服务端错误 HTTP{status}: {step_result.get('path','')}",
-                                "confidence_score": 0.80,  # 5xx is clear bug signal
-                            })
-                        elif status in (401, 403):
-                            # 401/403 = authentication/authorization working correctly.
-                            # This is expected behaviour when the scenario attempts to
-                            # access a protected endpoint. NOT a bug — the system is
-                            # correctly enforcing access control.
-                            # Log as a security boundary observation for internal audit.
-                            pass
-                        elif status in (404, 405):
-                            # 404 = route does not exist, 405 = method not allowed.
-                            # These are environment/route configuration issues,
-                            # not business logic bugs. Do not generate findings.
-                            pass
+                    for step in trace.get("steps", []):
+                        if int(step.get("status") or 0) >= 500:
+                            result["findings"].append({"severity": "P0", "title": f"[场景执行错误] {str(getattr(scenario, 'title', 'scenario'))[:80]}", "category": getattr(scenario, "category", "scenario_flow"), "source": "v12_scenario_executor", "description": f"服务端错误 HTTP{step.get('status')}: {step.get('path', '')}", "confidence_score": 0.80, "evidence": {"calls": [{"call": f"{step.get('method', '')} {step.get('path', '')}", "results": {"execution": {"status": step.get("status"), "body": step.get("response", {}).get("body", {})}}}]}})
                 except Exception:
                     failed += 1
-            result["phases"]["execution"] = {
-                "status": "completed",
-                "executed": executed,
-                "failed": failed,
-                "duration_ms": int((time.time() - t3) * 1000),
-            }
+            result["phases"]["execution"] = {"status": "completed", "executed": len(traces), "failed": failed, "planned_only": len(plan_only), "duration_ms": int((time.time() - execution_started) * 1000)}
 
-        # ── Phase 4: Oracle Evaluation ──
-        t4 = time.time()
-        from .oracle_engine import OracleEngine, EvidenceGraphBuilder
-        oracle = OracleEngine()
-        evidence_builder = EvidenceGraphBuilder()
-        snapshots = None  # Would be populated by SnapshotEngine in real execution
-
+        oracle_started = time.time()
+        from .oracle_engine import EvidenceGraphBuilder, OracleEngine
+        oracle, evidence_builder = OracleEngine(), EvidenceGraphBuilder()
         for scenario, trace in traces:
-            oracle_results = oracle.evaluate(scenario.to_dict(), trace, snapshots)
-            for oracle_result in oracle_results:
-                if not oracle_result.passed:
-                    evidence = evidence_builder.build(
-                        scenario.to_dict(), trace, snapshots, oracle_results
-                    )
-                    result["evidence_graphs"].append(evidence.to_dict())
-                    result["findings"].append({
-                        "severity": oracle_result.severity,
-                        "title": f"[V12 {oracle_result.oracle_name}] {scenario.title}",
-                        "category": scenario.category,
-                        "source": "v12_state_graph",
-                        "description": oracle_result.explanation,
-                        "confidence_score": oracle_result.confidence,
-                        "evidence_id": evidence.evidence_id,
-                        "oracle": oracle_result.to_dict(),
-                    })
-
-        result["phases"]["oracle"] = {
-            "status": "completed",
-            "total_evaluated": len(traces),
-            "violations_found": len(result["findings"]),
-            "duration_ms": int((time.time() - t4) * 1000),
-        }
-
-        # ── Phase 5: Risk Clue Pool ──
+            for oracle_result in oracle.evaluate(scenario.to_dict(), trace, None):
+                if oracle_result.passed:
+                    continue
+                evidence = evidence_builder.build(scenario.to_dict(), trace, None, [oracle_result])
+                result["evidence_graphs"].append(evidence.to_dict())
+                result["findings"].append({"severity": oracle_result.severity, "title": f"[V12 {oracle_result.oracle_name}] {scenario.title}", "category": scenario.category, "source": "v12_state_graph", "description": oracle_result.explanation, "confidence_score": oracle_result.confidence, "evidence_id": evidence.evidence_id, "oracle": oracle_result.to_dict()})
+        result["phases"]["oracle"] = {"status": "completed", "total_evaluated": len(traces), "violations_found": len(result["findings"]), "duration_ms": int((time.time() - oracle_started) * 1000)}
         try:
             from .risk_clue_pool import save_risk_clues
-            clues = save_risk_clues(project, root, result["findings"])
-            result["risk_clues_saved"] = clues.get("new_this_scan", 0)
+            result["risk_clues_saved"] = save_risk_clues(project, root, result["findings"]).get("new_this_scan", 0)
         except Exception:
             pass
-
-    except Exception as e:
-        result["error"] = str(e)[:500]
-        import logging
-        logging.getLogger("qualibug").error(f"V12 pipeline failed: {e}", exc_info=True)
-
-    result["total_duration_ms"] = int((time.time() - t0) * 1000)
+    except Exception as exc:
+        result["error"] = str(exc)[:500]
+    result["total_duration_ms"] = int((time.time() - started) * 1000)
     result["auto_har"] = _v12_har_report()
     return result
 
 
-def _execute_scenario(scenario, base_url: str, max_retries: int = 2) -> dict:
-    """V12.2: Execute scenario with auto-retry on transient failures."""
-    import time as _time2
-    
+def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2) -> dict[str, Any]:
     for attempt in range(max_retries + 1):
         try:
             return __execute_scenario_once(scenario, base_url)
-        except Exception as e:
+        except Exception as exc:
             if attempt < max_retries:
-                _time2.sleep(0.5 * (attempt + 1))
-                continue
-            return {"scenario_id": getattr(scenario, "id", "?"), "steps": [],
-                    "errors": [f"Failed after {max_retries} retries: {e}"], "duration_ms": 0}
+                time.sleep(0.5 * (attempt + 1)); continue
+            return {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": [f"failed_after_retries:{exc}"], "duration_ms": 0}
     return {"scenario_id": "?", "steps": [], "errors": ["unreachable"], "duration_ms": 0}
 
 
-def __execute_scenario_once(scenario, base_url: str) -> dict:
-    """Execute a scenario's steps sequentially and return execution trace."""
-    trace = {"scenario_id": scenario.id, "steps": [], "errors": []}
-    bindings: dict[str, str] = {}  # Variable binding from responses
-
-    for step in scenario.steps:
-        # Resolve variable references in path
-        path = step.api_path
-        for var, val in bindings.items():
-            path = path.replace(f"{{{var}}}", str(val))
-
-        url = base_url.rstrip("/") + path
-        body = dict(step.body_template)
-        # Resolve bindings in body too
-        for var, val in bindings.items():
-            body = {k: (str(v).replace(f"{{{var}}}", str(val)) if isinstance(v, str) else v)
-                    for k, v in body.items()}
-
-        data = json.dumps(body).encode() if body and step.api_method != "GET" else None
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "QualiBug-V12-ScenarioExecutor/1.0",
-        }
-        if step.actor:
-            headers["X-QualiBug-Actor"] = step.actor
-            # Also try Bearer token from scenario context
-            token = scenario.actor_token if hasattr(scenario, "actor_token") else ""
-            if token:
-                headers["Authorization"] = "Bearer " + token
-
+def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
+    trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}; bindings: dict[str, Any] = {}
+    for step in getattr(scenario, "steps", []) or []:
+        method, path = str(getattr(step, "api_method", "") or "").upper(), str(getattr(step, "api_path", "") or "")
+        if not method or not path.startswith("/"):
+            trace["errors"].append("invalid_source_bound_step"); continue
+        path = _replace(path, bindings); body = _replace(getattr(step, "body_template", {}) or {}, bindings)
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
+        headers = {"Accept": "application/json"}
+        if data is not None: headers["Content-Type"] = "application/json"
+        token = str(getattr(scenario, "actor_token", "") or "")
+        actor = str(getattr(step, "actor", "") or "")
+        if token: headers["Authorization"] = f"Bearer {token}"
+        started = time.time(); url = base_url.rstrip("/") + path
         try:
-            t_req_start = time.time()
-            req = urllib.request.Request(url, method=step.api_method, data=data, headers=headers)
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                resp_body = json.loads(resp.read())
-                _record_v12_har(step.api_method, url, resp.status,
-                                json.dumps(resp_body, ensure_ascii=False)[:5000],
-                                actor=step.actor or "",
-                                elapsed_ms=(time.time() - t_req_start) * 1000)
-                # Capture trace headers for evidence
-                resp_headers = dict(resp.info())
-                trace_ids = {}
-                for h in ("X-Trace-Id", "X-Request-Id", "traceparent", "x-amzn-trace-id", "X-B3-TraceId", "X-Correlation-Id"):
-                    val = resp_headers.get(h) or resp_headers.get(h.lower()) or ""
-                    if val: trace_ids[h] = val
-                if trace_ids:
-                    trace.setdefault("trace_ids", trace_ids)
-            status = resp.status
-        except urllib.error.HTTPError as e:
-            try:
-                resp_body = json.loads(e.read())
-            except Exception:
-                resp_body = {}
-            status = e.code
-            _record_v12_har(step.api_method, url, status,
-                            json.dumps(resp_body, ensure_ascii=False)[:5000],
-                            actor=step.actor or "",
-                            elapsed_ms=(time.time() - t_req_start) * 1000)
-        except Exception as e:
-            _record_v12_har(step.api_method, url, 0, str(e)[:5000],
-                            actor=step.actor or "",
-                            elapsed_ms=(time.time() - t_req_start) * 1000)
-            trace["errors"].append(str(e))
-            trace["steps"].append({
-                "action": step.action, "method": step.api_method, "path": path,
-                "status": 0, "error": str(e),
-            })
-            continue
-
-        # Extract fields for binding (support nested paths like "order.order_id")
-        for field in step.extract_from_response:
-            if isinstance(resp_body, dict):
-                if field in resp_body:
-                    val = resp_body[field]
-                    # If val is a nested dict, extract common ID fields from it
-                    if isinstance(val, dict):
-                        for id_key in ("order_id", "id", "product_id", "user_id", "payment_id"):
-                            if id_key in val:
-                                bindings[id_key] = val[id_key]
-                    else:
-                        bindings[field] = val
-                # Try common nested containers
-                for container in ("order", "data", "result", "product", "user", "payment"):
-                    nested = resp_body.get(container, {})
-                    if isinstance(nested, dict):
-                        for id_key in ("order_id", "id", "product_id", "user_id", "payment_id"):
-                            if id_key in nested:
-                                bindings[id_key] = nested[id_key]
-
-        trace["steps"].append({
-            "action": step.action, "method": step.api_method, "path": path,
-            "status": status, "response": {"status_code": status, "body": _redact(resp_body)},
-            "expected_status": step.expected_status,
-        })
-
+            request = urllib.request.Request(url, method=method, data=data, headers=headers)
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read(300_000).decode("utf-8", errors="replace"); status = int(response.status); response_body = _json_or_text(raw); response_headers = dict(response.headers.items())
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""; status = int(exc.code); response_body = _json_or_text(raw); response_headers = dict(exc.headers.items()) if exc.headers else {}
+        except Exception as exc:
+            status = 0; response_body = {"error": str(exc)}; response_headers = {}; trace["errors"].append(str(exc))
+        _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
+        for field in getattr(step, "extract_from_response", []) or []:
+            value = _extract(response_body, str(field))
+            if value not in (None, "", [], {}): bindings[str(field)] = value
+        trace["steps"].append({"action": getattr(step, "action", ""), "method": method, "path": path, "status": status, "response": {"status_code": status, "headers": _redact(response_headers), "body": _redact(response_body)}, "expected_status": getattr(step, "expected_status", 0)})
     return trace
 
 
-def _count_by(items: list, attr: str) -> dict:
-    counts = defaultdict(int)
-    for item in items:
-        val = getattr(item, attr, "unknown") if hasattr(item, attr) else "unknown"
-        counts[str(val)] += 1
-    return dict(counts)
+def _replace(value: Any, bindings: dict[str, Any]) -> Any:
+    if isinstance(value, dict): return {key: _replace(item, bindings) for key, item in value.items()}
+    if isinstance(value, list): return [_replace(item, bindings) for item in value]
+    text = str(value) if isinstance(value, str) else value
+    if not isinstance(text, str): return text
+    for key, item in bindings.items(): text = text.replace("{" + key + "}", str(item))
+    return text
 
+def _extract(value: Any, field: str) -> Any:
+    if not field: return None
+    current = value
+    if "." in field:
+        for part in field.split("."):
+            if not isinstance(current, dict) or part not in current: current = None; break
+            current = current[part]
+        if current is not None: return current
+    if isinstance(value, dict):
+        if field in value: return value[field]
+        for item in value.values():
+            found = _extract(item, field)
+            if found is not None: return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _extract(item, field)
+            if found is not None: return found
+    return None
 
-def _redact(data: Any, max_len: int = 500) -> Any:
-    """Truncate response data for evidence."""
-    s = json.dumps(data, ensure_ascii=False, default=str)
-    if len(s) > max_len:
-        return s[:max_len] + "...[truncated]"
-    return json.loads(s) if s.startswith("{") else s
+def _json_or_text(raw: str) -> Any:
+    try: return json.loads(raw)
+    except Exception: return raw[:5000]
+def _count_by(items: list[Any], attr: str) -> dict[str, int]:
+    result: dict[str, int] = defaultdict(int)
+    for item in items: result[str(getattr(item, attr, "unknown"))] += 1
+    return dict(result)
+def _redact(value: Any) -> Any:
+    if isinstance(value, dict): return {str(key): ("<REDACTED>" if str(key).lower().replace("-", "_") in _SENSITIVE else _redact(item)) for key, item in value.items()}
+    if isinstance(value, list): return [_redact(item) for item in value[:25]]
+    text = str(value)
+    return text[:1000] + "…" if len(text) > 1000 else value
