@@ -54,7 +54,7 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const runScan = async (): Promise<void> => {
     setScanLoad(true); setScanRes(null); setShowResult(false);
     try {
-      const before = await getFindings(project).catch(() => ({})); const beforeMeta = asRecord(before.scan_meta);
+      const before: JsonRecord = await getFindings(project).catch((): JsonRecord => ({})); const beforeMeta = asRecord(before.scan_meta);
       const beforeRun = asNumber(beforeMeta.run_count); const beforeUpdatedAt = asString(beforeMeta.last_scan_at) || asString(before.updated_at);
       const response = await runV12Scan(project); setScanRes(response); setShowResult(true);
       if (!response.ok) return;
