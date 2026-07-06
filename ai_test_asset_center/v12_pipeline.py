@@ -102,9 +102,7 @@ def _load_persisted_slice_history(root: Path, project: str) -> list[dict[str, An
         payload = json.loads(path.read_text(encoding="utf-8") or "{}")
     except Exception:
         return []
-    if not isinstance(payload, dict):
-        return []
-    return [{"behavior_slice_ledger": payload}]
+    return [{"behavior_slice_ledger": payload}] if isinstance(payload, dict) else []
 
 
 def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> None:
@@ -125,6 +123,24 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _latest_history_round(existing_findings: list[dict[str, Any]] | None) -> int:
+    """Return the latest explicit scheduler round without deriving it from prose."""
+    rounds: list[int] = []
+    for item in existing_findings or []:
+        if not isinstance(item, dict):
+            continue
+        ledger = item.get("behavior_slice_ledger")
+        if not isinstance(ledger, dict):
+            continue
+        try:
+            round_number = int(ledger.get("round") or 0)
+        except (TypeError, ValueError):
+            round_number = 0
+        if round_number > 0:
+            rounds.append(round_number)
+    return max(rounds, default=0)
 
 
 def _slice_history(existing_findings: list[dict[str, Any]] | None) -> tuple[set[str], set[str]]:
@@ -289,6 +305,10 @@ def run_v12_pipeline(
         settings = _behavior_slice_settings()
         history_items = existing_findings if existing_findings is not None else _load_persisted_slice_history(root, project)
         history_source = "explicit_findings" if existing_findings is not None else "persisted_ledger"
+        if existing_findings is None and "QUALIBUG_DISCOVERY_ROUND" not in os.environ:
+            latest_round = _latest_history_round(history_items)
+            if latest_round:
+                settings["round_number"] = latest_round + 1
         selection = _schedule_behavior_slices(behavior_contract["slices"], settings, history_items)
         selected_ids = set(selection["selected_slice_ids"])
         result["behavior_slice_ledger"] = {
