@@ -1,267 +1,260 @@
-"""Phase92A · Evidence Normalizer — Raw Probe Evidence → Normalized Runtime Evidence.
+"""Evidence Normalizer — real call receipts to source-neutral runtime evidence.
 
-Converts Discovery Engine / Executor raw probe calls into structured,
-traceable evidence without losing fidelity.  Every extracted field records
-its source path for auditability.
-
-PHASE92A CRITICAL:
-- Semantic verdict from Stage_verify MUST be preserved
-- Normalizer NEVER changes semantic_verdict
-- Missing evidence becomes PENDING_*, not REJECTED
+The normalizer does not invent tenant, actor, entity or snapshots.  Every
+binding must be visible in the execution receipt; otherwise it remains missing
+and the existing gate keeps the finding out of customer delivery.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
-from .evidence_models import (
-    SourcedValue,
-    RawProbeEvidence,
-    NormalizedRuntimeEvidence,
-    SemanticVerificationEvidence,
-    MISSING_REQUIREMENTS,
-    SEMANTIC_VERDICTS,
-)
+from .evidence_models import RawProbeEvidence, NormalizedRuntimeEvidence, SemanticVerificationEvidence, SourcedValue
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_ID_KEY_RE = re.compile(r"(?:^|_)(?:id|uuid|identifier|key)$|(?:id|uuid)$", re.I)
 
 
-# ── Normalizer ──────────────────────────────────────────────────────────
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _call_text(call: dict[str, Any]) -> str:
+    value = str(call.get("call") or "").strip()
+    if value:
+        return value
+    request = _as_dict(call.get("request"))
+    method = str(request.get("method") or call.get("method") or "").upper()
+    path = str(request.get("path") or request.get("url") or call.get("path") or "")
+    return f"{method} {path}".strip()
+
+
+def _method_path(call: dict[str, Any]) -> tuple[str, str]:
+    text = _call_text(call)
+    parts = text.split(None, 1)
+    if len(parts) == 2:
+        return parts[0].upper(), parts[1]
+    request = _as_dict(call.get("request"))
+    return str(request.get("method") or call.get("method") or "").upper(), str(request.get("path") or request.get("url") or call.get("path") or "")
+
+
+def _iter_scalars(value: Any, prefix: str = "") -> Iterable[tuple[str, Any]]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            yield from _iter_scalars(item, child)
+    elif isinstance(value, list):
+        for index, item in enumerate(value[:50]):
+            yield from _iter_scalars(item, f"{prefix}[{index}]")
+    elif value not in (None, "", [], {}):
+        yield prefix, value
+
+
+def _body_from_result(result: dict[str, Any]) -> dict[str, Any]:
+    body = result.get("body")
+    if isinstance(body, dict):
+        return body
+    response = _as_dict(result.get("response"))
+    return response.get("body") if isinstance(response.get("body"), dict) else {}
+
+
+def _result_rows(call: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    results = _as_dict(call.get("results"))
+    rows = [(str(name), value) for name, value in results.items() if isinstance(value, dict)]
+    if rows:
+        return rows
+    response = _as_dict(call.get("response"))
+    if response:
+        return [(str(call.get("actor") or call.get("actor_id") or "execution"), response)]
+    return []
+
+
+def _primary_result(call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    rows = _result_rows(call)
+    if not rows:
+        return "", {}
+    explicit = str(call.get("primary_actor") or call.get("actor") or call.get("actor_id") or "")
+    for label, row in rows:
+        if explicit and label == explicit:
+            return label, row
+    return rows[0]
+
+
+def _header_value(call: dict[str, Any], *names: str) -> tuple[Any, str]:
+    wanted = {name.lower().replace("-", "_") for name in names}
+    for container_name, container in (("request.headers", _as_dict(_as_dict(call.get("request")).get("headers"))), ("headers", _as_dict(call.get("headers")))):
+        for key, value in container.items():
+            normalized = str(key).lower().replace("-", "_")
+            if normalized in wanted and value not in (None, ""):
+                return value, f"{container_name}.{key}"
+    for label, result in _result_rows(call):
+        headers = _as_dict(result.get("headers"))
+        for key, value in headers.items():
+            normalized = str(key).lower().replace("-", "_")
+            if normalized in wanted and value not in (None, ""):
+                return value, f"results.{label}.headers.{key}"
+    return None, ""
+
+
+def _payload_value(call: dict[str, Any], predicate) -> tuple[Any, str]:
+    request = _as_dict(call.get("request"))
+    containers: list[tuple[str, Any]] = [("request.body", request.get("body")), ("call.body", call.get("body"))]
+    for label, result in _result_rows(call):
+        containers.append((f"results.{label}.body", _body_from_result(result)))
+    for prefix, body in containers:
+        for path, value in _iter_scalars(body):
+            final_key = path.rsplit(".", 1)[-1].split("[", 1)[0]
+            if predicate(final_key, value):
+                return value, f"{prefix}.{path}" if path else prefix
+    return None, ""
+
+
+def _source_value(value: Any, source: str, confidence: str = "evidenced") -> SourcedValue:
+    return SourcedValue(value, source, confidence) if value not in (None, "") else SourcedValue.missing(source or "not_observed")
+
+
+def _resource_entity(path: str) -> str:
+    segments = [item for item in str(path or "").split("?", 1)[0].strip("/").split("/") if item and not item.startswith("{") and not item.startswith(":")]
+    while segments and (segments[0].lower() == "api" or re.fullmatch(r"v\d+", segments[0].lower())):
+        segments.pop(0)
+    return segments[0].rstrip("s") if segments else ""
+
+
+def _snapshot(call: dict[str, Any], label: str, role: str, result: dict[str, Any]) -> dict[str, Any]:
+    method, path = _method_path(call)
+    return {"receipt_ref": _call_text(call), "method": method, "path": path, "observer": role, "status": int(result.get("status") or result.get("status_code") or 0), "body_snapshot": _body_from_result(result), "source": label}
+
+
 class EvidenceNormalizer:
-    """Convert raw Discovery Engine probe calls into NormalizedRuntimeEvidence."""
-
-    ENTITY_PATTERNS = [
-        (r'/api/\w+/([A-Z]{2,3}-?\d+|[A-Z]+\d+|[\w-]+-\d+)', "path_segment"),
-        (r'"([A-Z]{2,3}-\d+)"', "response_body"),
-        (r'"code":\s*"([^"]+)"', "body.code"),
-        (r'"id":\s*"?(\d+)"?', "body.id"),
-        (r'"orderNo":\s*"([^"]+)"', "body.orderNo"),
-        (r'"materialCode":\s*"([^"]+)"', "body.materialCode"),
-        (r'"workOrderNo":\s*"([^"]+)"', "body.workOrderNo"),
-        (r'"inspectionNo":\s*"([^"]+)"', "body.inspectionNo"),
-        (r'"transferNo":\s*"([^"]+)"', "body.transferNo"),
-    ]
-
-    @staticmethod
-    def _extract_value(text: str, patterns: list[tuple[str, str]]) -> SourcedValue:
-        for pat, src in patterns:
-            m = re.search(pat, text)
-            if m:
-                return SourcedValue(m.group(1), src, "evidenced")
-        return SourcedValue.missing("no_pattern_match")
-
-    @staticmethod
-    def _body_text(call_result: dict, role: str = "admin") -> str:
-        try:
-            body = call_result.get("results", {}).get(role, {}).get("body", {})
-            return json.dumps(body, ensure_ascii=False) if body else ""
-        except Exception:
-            return ""
-
-    @staticmethod
-    def _body_dict(call_result: dict, role: str = "admin") -> dict[str, Any]:
-        try:
-            body = call_result.get("results", {}).get(role, {}).get("body", {})
-            return body if isinstance(body, dict) else {}
-        except Exception:
-            return {}
-
-    # ── Map raw Stage_verify verdict to SEMANTIC_VERDICTS ────────────────
     VERDICT_TO_SEMANTIC = {
         "confirmed": "SEMANTIC_CONFIRMED",
         "falsified": "SEMANTIC_FALSIFIED",
         "inconclusive": "SEMANTIC_INCONCLUSIVE",
         "execution_error": "SEMANTIC_ERROR",
         "needs_more_evidence": "SEMANTIC_PENDING",
+        "validated_candidate": "SEMANTIC_CONFIRMED",
     }
 
-    def build_raw_probe_evidences(
-        self, calls: list[dict], run_id: str = "", hypothesis_id: str = "",
-    ) -> list[RawProbeEvidence]:
-        """Build RawProbeEvidence for each call in a finding's evidence."""
-        raw_probes = []
-        for c in calls:
-            rp = RawProbeEvidence.from_call(c, run_id=run_id, hypothesis_id=hypothesis_id)
-            raw_probes.append(rp)
-        return raw_probes
+    def build_raw_probe_evidences(self, calls: list[dict], run_id: str = "", hypothesis_id: str = "") -> list[RawProbeEvidence]:
+        items: list[RawProbeEvidence] = []
+        for index, call in enumerate(calls or []):
+            actor, result = _primary_result(call)
+            method, path = _method_path(call)
+            request = _as_dict(call.get("request"))
+            items.append(RawProbeEvidence(
+                run_id=run_id or str(call.get("run_id") or ""),
+                hypothesis_id=hypothesis_id,
+                flow_id=str(call.get("flow_id") or ""),
+                probe_id=str(call.get("probe_id") or f"receipt_{index + 1}"),
+                request={"method": method, "path": path, "actor_ref": actor, "raw_call": _call_text(call), **request},
+                response=_body_from_result(result),
+                status_code=int(result.get("status") or result.get("status_code") or 0),
+                headers=_as_dict(result.get("headers")),
+                body=_body_from_result(result),
+                timestamp=float(call.get("timestamp") or time.time()),
+                duration_ms=float(call.get("duration_ms") or 0),
+                error=str(result.get("error") or result.get("_error") or call.get("error") or ""),
+                raw_call_refs=[_call_text(call)],
+            ))
+        return items
 
-    def normalize(self, finding: Any, calls: list[dict], hypothesis: dict = None) -> NormalizedRuntimeEvidence:
-        """Normalize a single finding's runtime probe evidence.
-
-        CRITICAL: Parse failures are recorded structurally; they never
-        abort the entire round.  entity = None becomes PENDING_ENTITY_BINDING,
-        never None.lower().
-        """
+    def normalize(self, finding: Any, calls: list[dict], hypothesis: dict | None = None) -> NormalizedRuntimeEvidence:
         ev = NormalizedRuntimeEvidence()
-        hp = hypothesis or {}
-        hid = ""
-        if hasattr(finding, "hypothesis_id"):
-            hid = str(finding.hypothesis_id or "")
-        elif isinstance(finding, dict):
-            hid = str(finding.get("hypothesis_id", ""))
-        ev.raw_evidence_refs = [c.get("call", "") for c in calls[:10]]
+        calls = [item for item in (calls or []) if isinstance(item, dict)]
+        ev.raw_evidence_refs = [_call_text(call) for call in calls[:50] if _call_text(call)]
+        ev.call_chain_refs = list(ev.raw_evidence_refs)
+        first = calls[0] if calls else {}
+        method, path = _method_path(first)
+        ev.method = _source_value(method, "receipt[0].request.method")
+        ev.resource_path = _source_value(path, "receipt[0].request.path")
+        entity_type = _resource_entity(path)
+        ev.entity_type = _source_value(entity_type, "receipt[0].request.path.resource")
 
-        # ── Method & resource path from first meaningful call ──
-        for c in calls:
-            call_str = c.get("call", "")
-            parts = call_str.split(None, 1)
-            if len(parts) >= 2:
-                ev.method = SourcedValue(parts[0], "call.method", "evidenced")
-                ev.resource_path = SourcedValue(parts[1], "call.path", "evidenced")
-                break
+        entity_id, entity_source = _payload_value(first, lambda key, value: bool(_ID_KEY_RE.search(str(key))) and isinstance(value, (str, int)) and not isinstance(value, bool))
+        if entity_id in (None, ""):
+            for call in calls:
+                candidate, source = _payload_value(call, lambda key, value: bool(_ID_KEY_RE.search(str(key))) and isinstance(value, (str, int)) and not isinstance(value, bool))
+                if candidate not in (None, ""):
+                    entity_id, entity_source = candidate, source
+                    break
+        ev.entity_id = _source_value(entity_id, entity_source or "entity_identifier_not_observed")
 
-        # ── Extract entity from path and response bodies ──
-        all_text = " ".join(
-            f"{c.get('call', '')} {self._body_text(c, 'admin')}"
-            for c in calls
-        )
-        ev.entity_id = self._extract_value(all_text, self.ENTITY_PATTERNS)
+        tenant, tenant_source = _payload_value(first, lambda key, value: any(part in str(key).lower() for part in ("tenant", "workspace", "organization", "org")) and isinstance(value, (str, int)))
+        ev.tenant_id = _source_value(tenant, tenant_source or "scope_not_observed")
+        owner, owner_source = _payload_value(first, lambda key, value: "owner" in str(key).lower() and isinstance(value, (str, int)))
+        ev.owner_id = _source_value(owner, owner_source or "owner_not_observed")
+        actor, actor_source = _payload_value(first, lambda key, value: str(key).lower() in {"actor", "actor_id", "actorid", "principal", "principal_id", "subject", "subject_id"} and isinstance(value, (str, int)))
+        if actor in (None, ""):
+            label, _ = _primary_result(first)
+            actor, actor_source = (label, "receipt[0].result_label") if label else (None, "actor_not_observed")
+            ev.actor_id = _source_value(actor, actor_source, "inferred" if actor else "missing")
+        else:
+            ev.actor_id = _source_value(actor, actor_source)
 
-        # Entity type from path segment — safe for None/empty
-        resource = str(ev.resource_path.value or "")
-        path_segments = resource.strip("/").split("/")
-        if len(path_segments) >= 1 and path_segments[0]:
-            et = path_segments[0].rstrip("s")
-            if et:
-                ev.entity_type = SourcedValue(et, "path.root_segment", "evidenced")
+        request_id, request_source = _header_value(first, "x-request-id", "request-id")
+        trace_id, trace_source = _header_value(first, "x-trace-id", "trace-id", "traceparent")
+        correlation_id, correlation_source = _header_value(first, "x-correlation-id", "correlation-id")
+        idem_key, idem_source = _header_value(first, "idempotency-key", "x-idempotency-key")
+        ev.request_id = _source_value(request_id, request_source or "request_id_not_observed")
+        ev.trace_id = _source_value(trace_id, trace_source or "trace_id_not_observed")
+        ev.correlation_id = _source_value(correlation_id, correlation_source or "correlation_id_not_observed")
+        ev.idempotency_key = _source_value(idem_key, idem_source or "idempotency_key_not_observed")
 
-        # ── Tenant/owner from path or headers ──
-        # MES is single-tenant — explicit guard
-        ev.tenant_id = SourcedValue("single-tenant", "environment_config", "evidenced")
-
-        # ── Actor from auth context ──
-        for c in calls:
-            admin_result = c.get("results", {}).get("admin", {})
-            if admin_result:
-                ev.actor_id = SourcedValue("admin", "call.admin_auth", "evidenced")
-                break
-
-        # ── Before/after candidates ──
-        if len(calls) >= 1:
-            ev.before_candidates = [{
-                "call": calls[0].get("call", ""),
-                "body_snapshot": self._body_dict(calls[0], "admin"),
-            }]
-        if len(calls) >= 3:
-            ev.action_ref = SourcedValue(calls[1].get("call", ""), "calls[1]", "evidenced")
-            ev.after_candidates = [{
-                "call": calls[-1].get("call", ""),
-                "body_snapshot": self._body_dict(calls[-1], "admin"),
-            }]
-        elif len(calls) >= 2:
-            ev.action_ref = SourcedValue(calls[1].get("call", ""), "calls[1]", "evidenced")
-            ev.after_candidates = [{
-                "call": calls[-1].get("call", ""),
-                "body_snapshot": self._body_dict(calls[-1], "admin"),
-            }]
-
-        # ── Observer refs ──
-        for i, c in enumerate(calls):
-            results = c.get("results", {})
-            for role in ("admin", "viewer", "no_auth"):
-                r = results.get(role, {})
-                if r:
-                    ev.observer_refs.append({
-                        "index": i,
-                        "role": role,
-                        "status": r.get("status", 0),
-                        "call": c.get("call", ""),
-                    })
-
-        # ── Call chain refs ──
-        ev.call_chain_refs = [c.get("call", "") for c in calls]
-
-        # ── Timing window ──
-        ev.timing_window = {
-            "total_calls": len(calls),
-            "normalized_at": time.time(),
-        }
-
-        # ── Missing requirements — structured, never abortive ──
-        if ev.entity_id.confidence == "missing":
+        action_index = next((index for index, call in enumerate(calls) if _method_path(call)[0] in _WRITE_METHODS), None)
+        if action_index is not None:
+            action = calls[action_index]
+            ev.action_ref = _source_value(_call_text(action), f"receipt[{action_index}]")
+            before = next((calls[index] for index in range(action_index - 1, -1, -1) if _method_path(calls[index])[0] in {"GET", "HEAD"}), None)
+            after = next((calls[index] for index in range(action_index + 1, len(calls)) if _method_path(calls[index])[0] in {"GET", "HEAD"}), None)
+            if before:
+                label, result = _primary_result(before)
+                if result:
+                    ev.before_candidates.append(_snapshot(before, f"receipt[{calls.index(before)}]", label, result))
+            if after:
+                label, result = _primary_result(after)
+                if result:
+                    ev.after_candidates.append(_snapshot(after, f"receipt[{calls.index(after)}]", label, result))
+        for index, call in enumerate(calls):
+            method, path = _method_path(call)
+            for label, result in _result_rows(call):
+                ev.observer_refs.append({"receipt_index": index, "observer": label, "method": method, "path": path, "status": int(result.get("status") or result.get("status_code") or 0), "receipt_ref": _call_text(call)})
+        ev.timing_window = {"total_receipts": len(calls), "write_receipt_index": action_index, "normalized_at": time.time()}
+        if action_index is not None and ev.entity_id.confidence == "missing":
             ev.missing_requirements.append("ENTITY_BINDING_MISSING")
-        if not ev.before_candidates:
+        if action_index is not None and not ev.before_candidates:
             ev.missing_requirements.append("BEFORE_SNAPSHOT_MISSING")
-        if not ev.after_candidates:
+        if action_index is not None and not ev.after_candidates:
             ev.missing_requirements.append("AFTER_SNAPSHOT_MISSING")
-
         return ev
 
     def normalize_semantic(self, finding: Any) -> SemanticVerificationEvidence:
-        """Extract semantic verdict from a DiscoveryFinding.
-
-        CRITICAL: Stage_verify verdict is NEVER changed by this method.
-        We map the raw verdict to the SEMANTIC_VERDICTS namespace for
-        traceability, but preserve the original in _original_verdict.
-        The Gate may NOT overwrite semantic_verdict.
-        """
-        se = SemanticVerificationEvidence()
-
-        raw_verdict = "inconclusive"
-        if hasattr(finding, "verdict"):
-            raw_verdict = str(finding.verdict or "inconclusive")
-        elif isinstance(finding, dict):
-            raw_verdict = str(finding.get("verdict", "inconclusive"))
-
-        # ── Map to semantic namespace (preserves original) ──
-        se.semantic_verdict = self.VERDICT_TO_SEMANTIC.get(raw_verdict, "SEMANTIC_INCONCLUSIVE")
-        se._original_verdict = raw_verdict  # NEVER lost
-
-        if hasattr(finding, "expected"):
-            se.expected_behavior = str(finding.expected or "")
-        elif isinstance(finding, dict):
-            se.expected_behavior = str(finding.get("expected", finding.get("expected_behavior", "")))
-
-        if hasattr(finding, "actual"):
-            se.observed_behavior = str(finding.actual or "")
-        elif isinstance(finding, dict):
-            se.observed_behavior = str(finding.get("actual", ""))
-
-        if hasattr(finding, "confidence"):
-            se.semantic_confidence = float(finding.confidence or 0)
-        elif isinstance(finding, dict):
-            se.semantic_confidence = float(finding.get("confidence", 0))
-
-        # ── Verifier rule from finding evidence ──
-        evidence = {}
-        if hasattr(finding, "evidence"):
-            evidence = finding.evidence or {}
-        elif isinstance(finding, dict):
-            evidence = finding.get("evidence") or {}
-        if isinstance(evidence, dict):
-            se.verifier_rule = str(evidence.get("verifier_rule", ""))
-
-        se.verifier_trace_ref = f"stage_verify:{time.time()}:{raw_verdict}"
-        return se
+        source = finding if isinstance(finding, dict) else finding.__dict__ if hasattr(finding, "__dict__") else {}
+        raw_verdict = str(source.get("verdict") or "inconclusive")
+        evidence = _as_dict(source.get("evidence"))
+        semantic = SemanticVerificationEvidence()
+        semantic.semantic_verdict = self.VERDICT_TO_SEMANTIC.get(raw_verdict, "SEMANTIC_INCONCLUSIVE")
+        semantic._original_verdict = raw_verdict
+        semantic.expected_behavior = str(source.get("expected") or source.get("expected_behavior") or "")
+        semantic.observed_behavior = str(source.get("actual") or source.get("actual_behavior") or "")
+        semantic.violated_invariant = str(evidence.get("violated_invariant") or source.get("violated_invariant") or "")
+        semantic.verifier_rule = str(evidence.get("verifier_rule") or "")
+        try:
+            semantic.semantic_confidence = float(source.get("confidence") or 0)
+        except (TypeError, ValueError):
+            semantic.semantic_confidence = 0.0
+        semantic.verifier_trace_ref = str(evidence.get("verifier_trace_ref") or f"stage_verify:{time.time()}:{raw_verdict}")
+        return semantic
 
 
-# ── Bridge entry point ──────────────────────────────────────────────────
-def normalize_finding_evidence(
-    finding: Any,
-    calls: list[dict] | None = None,
-    hypothesis: dict | None = None,
-) -> dict[str, Any]:
-    """One-shot: normalize runtime + semantic evidence for a single finding.
-
-    Returns both NormalizedRuntimeEvidence and SemanticVerificationEvidence.
-    The semantic verdict is ALWAYS preserved; Gates must not overwrite it.
-    """
+def normalize_finding_evidence(finding: Any, calls: list[dict] | None = None, hypothesis: dict | None = None) -> dict[str, Any]:
     normalizer = EvidenceNormalizer()
     calls = calls or []
+    source = finding if isinstance(finding, dict) else finding.__dict__ if hasattr(finding, "__dict__") else {}
+    hypothesis_id = str(source.get("hypothesis_id") or "")
+    run_id = str(source.get("run_id") or "")
     runtime = normalizer.normalize(finding, calls, hypothesis)
     semantic = normalizer.normalize_semantic(finding)
-    # Also build raw probe evidence for traceability
-    hid = ""
-    if hasattr(finding, "hypothesis_id"):
-        hid = str(finding.hypothesis_id or "")
-    elif isinstance(finding, dict):
-        hid = str(finding.get("hypothesis_id", ""))
-    raw_probes = normalizer.build_raw_probe_evidences(calls, hypothesis_id=hid)
-    return {
-        "runtime": runtime.to_dict(),
-        "semantic": semantic.to_dict(),
-        "raw_probes": [rp.to_dict() for rp in raw_probes],
-        "normalized_at": time.time(),
-    }
+    raw_probes = normalizer.build_raw_probe_evidences(calls, run_id=run_id, hypothesis_id=hypothesis_id)
+    return {"runtime": runtime.to_dict(), "semantic": semantic.to_dict(), "raw_probes": [item.to_dict() for item in raw_probes], "normalized_at": time.time()}
