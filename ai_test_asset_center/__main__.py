@@ -1,12 +1,13 @@
 """QualiBug unified source-grounded scan entry point.
 
-The module keeps the public ``scan`` API while removing fixed-domain probes.
-All discovery flows through V12 source-bound behavior slices and enterprise
-Campaign governance. Results without a complete delivery receipt remain
-candidates or coverage gaps, never confirmed customer defects.
+The public ``scan`` API routes discovery through V12 behavior slices and
+enterprise Campaign governance. No caller can execute a target unless it
+supplies an explicit source, scope and environment contract. Results without a
+complete delivery receipt remain candidates or coverage gaps.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -39,6 +40,10 @@ def _safe_project(value: str) -> str:
     return result or "unscoped"
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _load_schema_assets(root: Path, project: str) -> str:
     input_dir = root / "platform_workspace" / _safe_project(project) / "input"
     blocks: list[str] = []
@@ -51,7 +56,7 @@ def _load_schema_assets(root: Path, project: str) -> str:
 
 
 def _source_catalog(api_doc: str) -> str:
-    """Produce source labels only; do not invent business rules from routes."""
+    """Produce source labels only; never infer rules from a route name."""
     labels: set[str] = set()
     for line in str(api_doc or "").splitlines():
         match = re.search(r"\b(?:GET|POST|PUT|PATCH|DELETE)\s+(/[^\s|`]+)", line, re.I)
@@ -61,6 +66,34 @@ def _source_catalog(api_doc: str) -> str:
         if parts:
             labels.add(parts[0])
     return "\n".join(f"# Source asset: {item}" for item in sorted(labels))
+
+
+def _source_manifest(context: dict[str, Any], api_doc_path: str, api_doc_text: str) -> dict[str, str]:
+    manifest = _as_dict(context.get("source_manifest"))
+    source_id = str(manifest.get("source_id") or "").strip()
+    source_hash = str(manifest.get("source_hash") or "").strip()
+    if api_doc_path and not source_id:
+        source_id = Path(api_doc_path).name
+    if api_doc_path and not source_hash:
+        source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
+    return {"source_id": source_id[:160], "source_hash": source_hash[:128]}
+
+
+def _runtime_contract(context: dict[str, Any], base_url: str, api_doc_path: str, api_doc_text: str) -> tuple[str, list[dict[str, str]], dict[str, Any]]:
+    """Require explicit enterprise authorization before any target call."""
+    if not base_url:
+        return "", [], {"status": "plan_only", "reason": "runtime_target_missing"}
+    manifest = _source_manifest(context, api_doc_path, api_doc_text)
+    gaps: list[dict[str, str]] = []
+    if not manifest["source_id"] or not manifest["source_hash"]:
+        gaps.append(_input_gap("SOURCE_PROVENANCE_MISSING", "A source_id and immutable source_hash are required before runtime probing."))
+    if not str(context.get("scope_id") or "").strip():
+        gaps.append(_input_gap("CAMPAIGN_SCOPE_MISSING", "An explicit campaign scope_id is required before runtime probing."))
+    if not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
+        gaps.append(_input_gap("ENVIRONMENT_REFERENCE_MISSING", "An approved environment_ref is required before runtime probing."))
+    if gaps:
+        return "", gaps, {"status": "blocked", "reason": "runtime_contract_missing", "source_manifest": manifest}
+    return base_url.rstrip("/"), [], {"status": "approved", "source_manifest": manifest}
 
 
 def _classify_v12_findings(items: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -101,9 +134,8 @@ def scan(
 ) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline.
 
-    ``multi_layer`` is retained for API compatibility. Legacy fixed-domain
-    layers are intentionally not invoked; non-source-bound work becomes an
-    explicit testability gap instead of a fabricated defect.
+    ``multi_layer`` is retained only for response compatibility. Fixed-domain
+    legacy probes are never invoked; unsupported work becomes a testability gap.
     """
     root = Path(root or Path.cwd())
     project = str(project or "").strip()
@@ -118,15 +150,18 @@ def scan(
         return {"success": False, "error": "api_doc_text or api_doc_path is required"}
 
     started = time.time()
+    context = dict(campaign_context or {})
     input_gaps: list[dict[str, str]] = []
     if not str(prd_text or "").strip():
         input_gaps.append(_input_gap("PRD_SOURCE_MISSING", "No requirement source was supplied; only API/schema facts can be planned."))
         prd_text = _source_catalog(api_doc_text)
-    if not base_url:
-        input_gaps.append(_input_gap("RUNTIME_TARGET_MISSING", "No approved target environment was supplied; scenarios remain plan-only."))
     schema_text = _load_schema_assets(root, project)
     if not schema_text:
         input_gaps.append(_input_gap("DATABASE_SCHEMA_MISSING", "No project-scoped schema asset is available for data observation planning."))
+    approved_base_url, runtime_gaps, runtime_contract = _runtime_contract(context, base_url, api_doc_path, api_doc_text)
+    input_gaps.extend(runtime_gaps)
+    if runtime_contract.get("source_manifest"):
+        context["source_manifest"] = runtime_contract["source_manifest"]
 
     diagnostics: dict[str, Any] = {"ready": True, "checks": []}
     try:
@@ -143,21 +178,21 @@ def scan(
             prd_text=prd_text,
             api_spec_text=api_doc_text,
             db_schema_text=schema_text,
-            base_url=base_url.rstrip("/"),
-            campaign_context=campaign_context,
+            base_url=approved_base_url,
+            campaign_context=context,
         )
     except Exception as exc:
         return {"success": False, "error": f"v12_pipeline_failed:{type(exc).__name__}:{exc}"}
 
     confirmed, candidates = _classify_v12_findings(v12.get("findings"))
-    state_graph = v12.get("phases", {}).get("state_graph", {}) if isinstance(v12.get("phases"), dict) else {}
-    execution = v12.get("phases", {}).get("execution", {}) if isinstance(v12.get("phases"), dict) else {}
-    graph_gaps = state_graph.get("coverage_gaps", []) if isinstance(state_graph, dict) else []
+    phases = _as_dict(v12.get("phases"))
+    state_graph = _as_dict(phases.get("state_graph"))
+    execution = _as_dict(phases.get("execution"))
+    graph_gaps = state_graph.get("coverage_gaps", []) if isinstance(state_graph.get("coverage_gaps"), list) else []
     coverage_gaps = input_gaps + [item for item in graph_gaps if isinstance(item, dict)]
-    campaign = v12.get("campaign", {}) if isinstance(v12.get("campaign"), dict) else {}
-    execution_status = str(execution.get("status") or "not_executed") if isinstance(execution, dict) else "not_executed"
+    campaign = _as_dict(v12.get("campaign"))
+    execution_status = str(execution.get("status") or "not_executed")
     duration_ms = int((time.time() - started) * 1000)
-
     layers: dict[str, Any] = {
         "source_grounded_discovery": {
             "tool": "V12 enterprise campaign",
@@ -196,19 +231,13 @@ def scan(
         "preflight_diagnostics": diagnostics,
         "input_gaps": input_gaps,
         "coverage_gaps": coverage_gaps,
+        "runtime_contract": runtime_contract,
         "campaign": campaign,
         "behavior_slice_ledger": v12.get("behavior_slice_ledger", {}),
-        "incremental_discovery": v12.get("phases", {}).get("incremental_discovery", {}),
+        "incremental_discovery": phases.get("incremental_discovery", {}),
         "execution_status": execution_status,
-        "db_verification": {
-            "status": "plan_only" if schema_text else "blocked",
-            "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing",
-            "findings": [],
-        },
-        "ci_gate": {
-            "status": "not_evaluated" if ci_gate else "not_requested",
-            "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else "",
-        },
+        "db_verification": {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []},
+        "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
         "auto_har": v12.get("auto_har", {}),
         "v12": v12,
     }
@@ -222,6 +251,7 @@ def scan(
             "risk_clues": candidates,
             "campaign": campaign,
             "coverage_gaps": coverage_gaps,
+            "runtime_contract": runtime_contract,
             "behavior_slice_ledger": result["behavior_slice_ledger"],
             "execution_status": execution_status,
         })
@@ -242,7 +272,8 @@ def main() -> None:
     parser.add_argument("--base-url", default="")
     parser.add_argument("--scope-id", default="")
     parser.add_argument("--environment-ref", default="")
-    parser.add_argument("--source-snapshot-id", default="")
+    parser.add_argument("--source-id", default="")
+    parser.add_argument("--source-hash", default="")
     parser.add_argument("--ci-gate", action="store_true")
     parser.add_argument("--no-multi-layer", action="store_true")
     parser.add_argument("--output-dir")
@@ -252,20 +283,9 @@ def main() -> None:
     context = {
         "scope_id": args.scope_id,
         "environment_ref": args.environment_ref,
-        "source_snapshot_id": args.source_snapshot_id,
+        "source_manifest": {"source_id": args.source_id, "source_hash": args.source_hash},
     }
-    result = scan(
-        project=args.project,
-        api_doc_path=args.api_doc or "",
-        api_doc_text=args.api_doc_text or "",
-        prd_text=args.prd,
-        base_url=args.base_url,
-        ci_gate=args.ci_gate,
-        multi_layer=not args.no_multi_layer,
-        output_dir=Path(args.output_dir) if args.output_dir else None,
-        save_report=not args.no_report,
-        campaign_context=context,
-    )
+    result = scan(project=args.project, api_doc_path=args.api_doc or "", api_doc_text=args.api_doc_text or "", prd_text=args.prd, base_url=args.base_url, ci_gate=args.ci_gate, multi_layer=not args.no_multi_layer, output_dir=Path(args.output_dir) if args.output_dir else None, save_report=not args.no_report, campaign_context=context)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     elif result.get("success"):
