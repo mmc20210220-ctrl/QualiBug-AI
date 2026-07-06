@@ -34,6 +34,8 @@ Completed so far:
 - Added tests proving the chain-aware pilot wrapper installs/restores the patch and delegates `run_next` only after the chain-aware discovery runner is active.
 - Exposed `main_chain_contract` and `main_chain_contract_summary` in Command Center payloads from backend output artifacts.
 - Added tests proving Command Center can surface the first blocked main-chain stage and next action from `main_chain_contract.json`.
+- Added a Command Center readiness guard: when `main_chain_contract.chain_ready` is false, customer-delivery readiness and release-ready flags are forced to false.
+- Added tests proving stale or optimistic payload fields cannot claim customer-delivery readiness while the main enterprise evidence chain is incomplete.
 
 Current commercial rule:
 
@@ -41,6 +43,7 @@ Current commercial rule:
 - Internal clue pages should keep non-ready findings and show the missing evidence reasons.
 - Showing zero defects is acceptable when evidence is incomplete; showing a non-reproducible defect is not acceptable.
 - A project run is not commercially complete until the whole enterprise evidence chain is complete: inputs, parsing, plan, execution, discovery, and evidence.
+- If `main_chain_contract.chain_ready=false`, Command Center must report `MAIN_CHAIN_NOT_READY` and must not claim customer-delivery readiness.
 
 Current service integration:
 
@@ -49,6 +52,7 @@ Current service integration:
 - The wrapper exposes patch status and restore helpers for operational diagnostics and isolated tests.
 - Command-center responses now include `customer_delivery_gate_patch` at the top level and under `data`, `data_contract`, and `delivery_tracks`.
 - Command-center responses now include `main_chain_contract` and `main_chain_contract_summary` loaded from backend output/workspace artifacts.
+- Command-center responses now force readiness fields to false and attach `MAIN_CHAIN_NOT_READY` when the main enterprise evidence chain is not closed.
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
 - `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for automatic chain validation.
@@ -56,7 +60,6 @@ Current service integration:
 
 Next engineering step:
 
-- Add a backend contract test that Command Center must not report customer-delivery readiness when `main_chain_contract.chain_ready` is false.
-- Then surface the main-chain contract in the frontend only after the backend contract remains stable.
+- Surface the main-chain contract in the frontend only after the backend contract remains stable.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
