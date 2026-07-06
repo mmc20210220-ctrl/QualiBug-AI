@@ -57,6 +57,38 @@ def _load_main_chain_contract(payload: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _load_evidence_normalization_report(payload: dict[str, Any]) -> dict[str, Any]:
+    project = _resolve_project_id(payload)
+    paths = config_paths(project, ROOT)
+    for path in (
+        paths["output_dir"] / "evidence_bundle_normalization_report.json",
+        paths["workspace_dir"] / "evidence_bundle_normalization_report.json",
+    ):
+        report = _read_json(path)
+        if report:
+            return report
+    return {}
+
+
+def _evidence_normalization_summary(report: dict[str, Any]) -> dict[str, Any]:
+    items = report.get("items") if isinstance(report.get("items"), list) else []
+    missing_fields: dict[str, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for field in item.get("missing_fields") or []:
+            key = str(field or "").strip()
+            if key:
+                missing_fields[key] = missing_fields.get(key, 0) + 1
+    return {
+        "input_item_count": int(report.get("input_item_count") or 0),
+        "output_item_count": int(report.get("output_item_count") or 0),
+        "fully_normalized_count": int(report.get("fully_normalized_count") or 0),
+        "blocked_item_count": sum(1 for item in items if isinstance(item, dict) and item.get("normalized") is not True),
+        "missing_fields": missing_fields,
+    }
+
+
 def _main_chain_contract_summary(contract: dict[str, Any]) -> dict[str, Any]:
     summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
     return {
@@ -107,6 +139,30 @@ def _apply_main_chain_readiness_guard(data: dict[str, Any], contract_summary: di
         executive_summary["main_chain_first_blocked_stage"] = blocker["stage"]
         executive_summary["main_chain_first_blocked_next_action"] = blocker["next_action"]
         executive_summary["delivery_readiness_label"] = "主链路未闭合，禁止声明客户交付就绪"
+
+
+def _inject_evidence_normalization_report(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+    report = _load_evidence_normalization_report(payload)
+    if not report:
+        return payload
+    summary = _evidence_normalization_summary(report)
+    payload["evidence_bundle_normalization_report"] = report
+    payload["evidence_bundle_normalization_summary"] = summary
+    data = payload.get("data")
+    if isinstance(data, dict):
+        data["evidence_bundle_normalization_report"] = report
+        data["evidence_bundle_normalization_summary"] = summary
+        for key in ("data_contract", "delivery_tracks", "executive_summary"):
+            section = data.get(key)
+            if isinstance(section, dict):
+                section["evidence_bundle_normalization_summary"] = summary
+        executive_summary = data.get("executive_summary")
+        if isinstance(executive_summary, dict):
+            executive_summary["evidence_fully_normalized_count"] = summary["fully_normalized_count"]
+            executive_summary["evidence_blocked_item_count"] = summary["blocked_item_count"]
+    return payload
 
 
 def _inject_main_chain_contract(payload: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +228,7 @@ def install_customer_delivery_gate_patch() -> None:
     def _strict_normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
         normalized = original_normalizer(payload) if callable(original_normalizer) else payload
         normalized = _inject_delivery_gate_patch_status(normalized)
+        normalized = _inject_evidence_normalization_report(normalized)
         return _inject_main_chain_contract(normalized)
 
     _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = original_partition  # type: ignore[attr-defined]
