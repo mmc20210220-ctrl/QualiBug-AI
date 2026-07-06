@@ -23,6 +23,7 @@ _SCAN_CAMPAIGN_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextv
     "qualibug_private_pilot_scan_campaign_context",
     default=None,
 )
+_CONTINUOUS_CAMPAIGN_CONTEXTS: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -41,6 +42,10 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _continuous_context_key(root: Path, project: str) -> tuple[str, str]:
+    return (str(root), str(project))
 
 
 def _resolve_project_id(payload: dict[str, Any]) -> str:
@@ -214,6 +219,7 @@ def _build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, An
         context["source_manifest"] = manifest
 
     for key in (
+        "base_url",
         "scope_id",
         "environment_ref",
         "target_environment",
@@ -358,6 +364,8 @@ def _install_scan_campaign_context_patch() -> None:
 
     original_scan = getattr(scanner_module, "scan")
     original_handler = getattr(_service.PrivatePilotHandler, "_handle_v12_scan")
+    original_continuous_start = getattr(_service.PrivatePilotHandler, "_handle_continuous_start")
+    original_continuous_loop = getattr(_service, "_continuous_scan_loop")
 
     def _scan_with_campaign_context(*args: Any, **kwargs: Any) -> dict[str, Any]:
         pending_context = _SCAN_CAMPAIGN_CONTEXT.get()
@@ -365,9 +373,13 @@ def _install_scan_campaign_context_patch() -> None:
             explicit_context = kwargs.get("campaign_context")
             merged = dict(explicit_context) if isinstance(explicit_context, dict) else {}
             for key, value in pending_context.items():
+                if key == "base_url":
+                    continue
                 if value and (key not in merged or not merged.get(key)):
                     merged[key] = value
             kwargs["campaign_context"] = merged
+            if pending_context.get("base_url") and not kwargs.get("base_url"):
+                kwargs["base_url"] = str(pending_context["base_url"]).rstrip("/")
         return original_scan(*args, **kwargs)
 
     def _handle_v12_scan_with_campaign_context(
@@ -385,10 +397,35 @@ def _install_scan_campaign_context_patch() -> None:
         finally:
             _SCAN_CAMPAIGN_CONTEXT.reset(token)
 
+    def _handle_continuous_start_with_campaign_context(
+        self: Any,
+        project: str,
+        root: Path,
+        actor: dict[str, str],
+        body: dict[str, Any],
+    ) -> Any:
+        prepared_body = _prepare_scan_body_for_campaign(project, root, body)
+        campaign_context = _build_campaign_context_from_scan_body(prepared_body)
+        if campaign_context:
+            _CONTINUOUS_CAMPAIGN_CONTEXTS[_continuous_context_key(root, project)] = campaign_context
+        return original_continuous_start(self, project, root, actor, prepared_body)
+
+    def _continuous_scan_loop_with_campaign_context(root: Path, project: str, tenant_id: str, interval_s: int) -> Any:
+        campaign_context = _CONTINUOUS_CAMPAIGN_CONTEXTS.get(_continuous_context_key(root, project))
+        token = _SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
+        try:
+            return original_continuous_loop(root, project, tenant_id, interval_s)
+        finally:
+            _SCAN_CAMPAIGN_CONTEXT.reset(token)
+
     scanner_module.scan = _scan_with_campaign_context
     _service.PrivatePilotHandler._handle_v12_scan = _handle_v12_scan_with_campaign_context
+    _service.PrivatePilotHandler._handle_continuous_start = _handle_continuous_start_with_campaign_context
+    _service._continuous_scan_loop = _continuous_scan_loop_with_campaign_context
     _service._ORIGINAL_V12_SCAN = original_scan  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = original_handler  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_CONTINUOUS_START = original_continuous_start  # type: ignore[attr-defined]
+    _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = original_continuous_loop  # type: ignore[attr-defined]
     _service._SCAN_CAMPAIGN_CONTEXT_PATCHED = True  # type: ignore[attr-defined]
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
 
@@ -431,11 +468,13 @@ def customer_delivery_gate_patch_status() -> dict[str, Any]:
         "active_normalizer_name": getattr(getattr(_service, "_normalize_command_center_envelope", None), "__name__", ""),
         "scan_campaign_context_patched": bool(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False)),
         "scan_campaign_context_patch_source": str(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE", "")),
+        "continuous_scan_context_patched": bool(getattr(_service, "_ORIGINAL_CONTINUOUS_SCAN_LOOP", None)),
+        "continuous_context_count": len(_CONTINUOUS_CAMPAIGN_CONTEXTS),
     }
 
 
 def restore_customer_delivery_gate_patch() -> None:
-    """Restore the original partition, normalizer, scan and handler functions for tests."""
+    """Restore the original partition, normalizer, scan, handler and loop functions for tests."""
     original_partition = getattr(_service, "_ORIGINAL_PARTITION_DELIVERY_TRACKS", None)
     original_normalizer = getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None)
     if original_partition is not None:
@@ -445,12 +484,18 @@ def restore_customer_delivery_gate_patch() -> None:
 
     original_scan = getattr(_service, "_ORIGINAL_V12_SCAN", None)
     original_handler = getattr(_service, "_ORIGINAL_HANDLE_V12_SCAN", None)
+    original_continuous_start = getattr(_service, "_ORIGINAL_HANDLE_CONTINUOUS_START", None)
+    original_continuous_loop = getattr(_service, "_ORIGINAL_CONTINUOUS_SCAN_LOOP", None)
     if original_scan is not None:
         from ai_test_asset_center import __main__ as scanner_module
 
         scanner_module.scan = original_scan
     if original_handler is not None:
         _service.PrivatePilotHandler._handle_v12_scan = original_handler
+    if original_continuous_start is not None:
+        _service.PrivatePilotHandler._handle_continuous_start = original_continuous_start
+    if original_continuous_loop is not None:
+        _service._continuous_scan_loop = original_continuous_loop
 
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = False  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
@@ -460,6 +505,9 @@ def restore_customer_delivery_gate_patch() -> None:
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = ""  # type: ignore[attr-defined]
     _service._ORIGINAL_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
+    _CONTINUOUS_CAMPAIGN_CONTEXTS.clear()
 
 
 def run_server() -> None:
