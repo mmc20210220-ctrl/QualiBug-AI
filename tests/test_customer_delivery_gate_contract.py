@@ -131,3 +131,21 @@ def test_dashboard_surfaces_evidence_normalization_blockers() -> None:
     assert "actual" in page
     assert "原始 request" in page
     assert "原始 response" in page
+
+
+def test_dashboard_surfaces_per_item_evidence_actions() -> None:
+    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+
+    assert "function getEvidenceNormalizationReport" in page
+    assert "function evidenceNormalizationItems" in page
+    assert "function evidenceItemTitle" in page
+    assert "function evidenceItemAction" in page
+    assert "evidence_bundle_normalization_report" in page
+    assert "blockedEvidenceActionItems" in page
+    assert "evidence_id" in page
+    assert "issue_id" in page
+    assert "probe_id" in page
+    assert "trace_id" in page
+    assert "next_action" in page
+    assert "未命名证据项" in page
+    assert "补齐该证据项缺失字段后重新运行主链路合同" in page
