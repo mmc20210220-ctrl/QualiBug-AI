@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -26,6 +27,7 @@ from .enterprise_campaign import (
 
 _v12_har_entries: list[dict[str, Any]] = []
 _SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _record_v12_har(method: str, url: str, status: int, body: Any, actor: str = "", elapsed_ms: float = 0.0) -> None:
@@ -47,8 +49,20 @@ def _v12_har_report() -> dict[str, Any]:
         status = int(item.get("response", {}).get("status") or 0)
         counts[status] = counts.get(status, 0) + 1
         content = item.get("response", {}).get("content", {})
-        entries.append({"startedDateTime": item.get("startedDateTime"), "time": item.get("time"), "request": item.get("request"), "response": {"status": status, "body": str(content.get("text") if isinstance(content, dict) else content)[:2000]}, "_actor": item.get("_actor", "")})
-    return {"status": "captured", "total_calls": len(entries), "error_responses": sum(count for status, count in counts.items() if status >= 400), "status_distribution": counts, "entries": entries}
+        entries.append({
+            "startedDateTime": item.get("startedDateTime"),
+            "time": item.get("time"),
+            "request": item.get("request"),
+            "response": {"status": status, "body": str(content.get("text") if isinstance(content, dict) else content)[:2000]},
+            "_actor": item.get("_actor", ""),
+        })
+    return {
+        "status": "captured",
+        "total_calls": len(entries),
+        "error_responses": sum(count for status, count in counts.items() if status >= 400),
+        "status_distribution": counts,
+        "entries": entries,
+    }
 
 
 def is_v12_enabled() -> bool:
@@ -56,7 +70,11 @@ def is_v12_enabled() -> bool:
 
 
 def _scenario_executable(scenario: Any) -> bool:
-    return bool(getattr(scenario, "steps", []) or []) and str(getattr(scenario, "execution_policy", "") or "") in {"safe_read_only", "approved_sandbox_write", "runtime_approved"}
+    return bool(getattr(scenario, "steps", []) or []) and str(getattr(scenario, "execution_policy", "") or "") in {
+        "safe_read_only",
+        "approved_sandbox_write",
+        "runtime_approved",
+    }
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -86,21 +104,63 @@ def _behavior_slice_settings() -> dict[str, int]:
     }
 
 
-def _runtime_contract(context: dict[str, Any], base_url: str) -> dict[str, Any]:
-    """Direct callers cannot bypass source/scope/environment approval."""
-    if not base_url:
-        return {"status": "plan_only", "reason": "runtime_target_missing", "approved_base_url": ""}
+def _source_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _source_manifest_details(context: dict[str, Any], source_text: Any) -> tuple[dict[str, str], list[str]]:
     manifest = _dict(context.get("source_manifest"))
-    missing: list[str] = []
-    if not str(manifest.get("source_id") or "").strip() or not str(manifest.get("source_hash") or "").strip():
-        missing.append("SOURCE_PROVENANCE_MISSING")
+    source_id = str(manifest.get("source_id") or "").strip()
+    source_hash = str(manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:").strip()
+    source_origin = str(manifest.get("source_origin") or "declared_manifest").strip()
+    actual_hash = hashlib.sha256(_source_text(source_text).encode("utf-8")).hexdigest()
+    issues: list[str] = []
+    if not source_id or not source_hash:
+        issues.append("SOURCE_PROVENANCE_MISSING")
+    elif not _SHA256_RE.fullmatch(source_hash):
+        issues.append("SOURCE_HASH_INVALID")
+    elif source_hash != actual_hash:
+        issues.append("SOURCE_HASH_MISMATCH")
+    return {
+        "source_id": source_id[:160],
+        "source_hash": source_hash[:128],
+        "source_origin": source_origin[:80],
+    }, issues
+
+
+def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) -> dict[str, Any]:
+    """Direct callers cannot bypass source, scope, environment, or hash approval."""
+    manifest, source_issues = _source_manifest_details(context, source_text)
+    if not base_url:
+        return {
+            "status": "plan_only",
+            "reason": "runtime_target_missing",
+            "approved_base_url": "",
+            "source_manifest": manifest,
+            "source_issues": source_issues,
+        }
+    missing = list(source_issues)
     if not str(context.get("scope_id") or "").strip():
         missing.append("CAMPAIGN_SCOPE_MISSING")
     if not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
         missing.append("ENVIRONMENT_REFERENCE_MISSING")
     if missing:
-        return {"status": "blocked", "reason": "runtime_contract_missing", "missing_requirements": missing, "approved_base_url": ""}
-    return {"status": "approved", "reason": "", "missing_requirements": [], "approved_base_url": str(base_url).rstrip("/")}
+        return {
+            "status": "blocked",
+            "reason": "runtime_contract_missing",
+            "missing_requirements": sorted(set(missing)),
+            "approved_base_url": "",
+            "source_manifest": manifest,
+        }
+    return {
+        "status": "approved",
+        "reason": "",
+        "missing_requirements": [],
+        "approved_base_url": str(base_url).rstrip("/"),
+        "source_manifest": manifest,
+    }
 
 
 def _slice_ledger_path(root: Path, project: str) -> Path:
@@ -138,7 +198,9 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
         "updated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _slice_history(history: list[dict[str, Any]] | None) -> tuple[set[str], set[str]]:
@@ -160,14 +222,26 @@ def _slice_history(history: list[dict[str, Any]] | None) -> tuple[set[str], set[
 
 
 def _selection_result(*, status: str, stop_reason: str, selected: list[dict[str, Any]], pending: list[dict[str, Any]], attempted: set[str], confirmed: set[str], next_round: int | None, selection_mode: str) -> dict[str, Any]:
-    return {"status": status, "stop_reason": stop_reason, "selected": selected, "selected_slice_ids": [str(item.get("slice_id") or "") for item in selected], "next_round": next_round, "remaining_slice_count": max(0, len(pending) - len(selected)), "attempted_slice_ids": sorted(attempted), "confirmed_slice_ids": sorted(confirmed), "selection_mode": selection_mode}
+    return {
+        "status": status,
+        "stop_reason": stop_reason,
+        "selected": selected,
+        "selected_slice_ids": [str(item.get("slice_id") or "") for item in selected],
+        "next_round": next_round,
+        "remaining_slice_count": max(0, len(pending) - len(selected)),
+        "attempted_slice_ids": sorted(attempted),
+        "confirmed_slice_ids": sorted(confirmed),
+        "selection_mode": selection_mode,
+    }
 
 
 def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, int], history: list[dict[str, Any]] | None) -> dict[str, Any]:
     attempted, confirmed = _slice_history(history)
     all_slices = [item for item in slices if isinstance(item, dict) and str(item.get("slice_id") or "")]
     pending = [item for item in all_slices if str(item["slice_id"]) not in confirmed]
-    round_number, round_limit, budget = int(settings["round_number"]), int(settings["round_limit"]), int(settings["slice_budget"])
+    round_number = int(settings["round_number"])
+    round_limit = int(settings["round_limit"])
+    budget = int(settings["slice_budget"])
     if not all_slices:
         return _selection_result(status="stopped", stop_reason="no_source_bound_behavior_slices", selected=[], pending=[], attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="none")
     if not pending:
@@ -197,12 +271,25 @@ def _active_policy_version() -> str:
         return ""
 
 
-def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any], root: Path) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
+def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any], root: Path, submitted_api_spec_text: Any) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
     policy_version = str(context.get("policy_version") or _active_policy_version())[:120]
     scope_id = str(context.get("scope_id") or f"project_scope_{hashlib.sha256(project.encode()).hexdigest()[:12]}")[:160]
     environment_ref = str(context.get("environment_ref") or context.get("target_environment") or (f"target_{hashlib.sha256(base_url.encode()).hexdigest()[:16]}" if base_url else "unbound_environment"))[:160]
     snapshot = source_snapshot_hash(prd_text, api_spec_text, db_schema_text, scope_id, environment_ref)
-    candidate = EnterpriseCampaign.create(project, scope_id, environment_ref, snapshot, policy_version=policy_version, slice_budget=settings["slice_budget"], automatic_round_limit=settings["round_limit"])
+    source_manifest, source_issues = _source_manifest_details(context, submitted_api_spec_text)
+    source_id = source_manifest["source_id"] if not source_issues else ""
+    source_hash = source_manifest["source_hash"] if not source_issues else ""
+    candidate = EnterpriseCampaign.create(
+        project,
+        scope_id,
+        environment_ref,
+        snapshot,
+        source_id=source_id,
+        source_hash=source_hash,
+        policy_version=policy_version,
+        slice_budget=settings["slice_budget"],
+        automatic_round_limit=settings["round_limit"],
+    )
     store = EnterpriseCampaignStore(root, project)
     campaign, mode = store.open_or_create(candidate)
     campaign.slice_budget = min(campaign.slice_budget, settings["slice_budget"], 15)
@@ -215,12 +302,21 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     _v12_har_entries = []
     started = time.time()
     context = _dict(campaign_context)
-    runtime_contract = _runtime_contract(context, base_url)
+    submitted_api_spec_text = api_spec_text
+    runtime_contract = _runtime_contract(context, base_url, submitted_api_spec_text)
     approved_base_url = str(runtime_contract.get("approved_base_url") or "")
-    result: dict[str, Any] = {"v12_version": "2.3", "enabled": True, "phases": {}, "findings": [], "evidence_graphs": [], "risk_clues_saved": 0, "behavior_slice_ledger": {}, "campaign": {}, "runtime_contract": runtime_contract}
+    result: dict[str, Any] = {
+        "v12_version": "2.4",
+        "enabled": True,
+        "phases": {},
+        "findings": [],
+        "evidence_graphs": [],
+        "risk_clues_saved": 0,
+        "behavior_slice_ledger": {},
+        "campaign": {},
+        "runtime_contract": runtime_contract,
+    }
     ledger_for_persistence: dict[str, Any] | None = None
-    campaign: EnterpriseCampaign | None = None
-    campaign_store: EnterpriseCampaignStore | None = None
     if api_spec_text and not isinstance(api_spec_text, dict):
         try:
             from .universal_api_parser import detect_format, parse_to_openapi
@@ -237,7 +333,17 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         graphs = builder.build(prd_text, api_spec_text, db_schema_text)
         behavior_contract = builder.behavior_contract()
         settings = _behavior_slice_settings()
-        campaign, campaign_store, campaign_mode = _campaign_context(project, prd_text, api_spec_text, db_schema_text, approved_base_url, settings, context, root)
+        campaign, campaign_store, campaign_mode = _campaign_context(
+            project,
+            prd_text,
+            api_spec_text,
+            db_schema_text,
+            approved_base_url,
+            settings,
+            context,
+            root,
+            submitted_api_spec_text,
+        )
         if campaign.status in {"coverage_deferred", "completed", "blocked"}:
             selection = _selection_result(status="stopped", stop_reason=f"campaign_{campaign.status}", selected=[], pending=behavior_contract["slices"], attempted=set(campaign.attempted_slice_ids), confirmed=set(campaign.confirmation_receipts), next_round=None, selection_mode="campaign_terminal")
         else:
@@ -253,10 +359,44 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             selection = _schedule_behavior_slices(behavior_contract["slices"], settings, history)
         selected_ids = set(selection["selected_slice_ids"])
         result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
-        result["behavior_slice_ledger"] = {"campaign_id": campaign.campaign_id, "campaign_status": campaign.status, "scope_id": campaign.scope_id, "source_snapshot_hash": campaign.source_snapshot_hash, "project": project, "round": settings["round_number"], "round_limit": settings["round_limit"], "slice_budget": settings["slice_budget"], "selection_mode": selection["selection_mode"], "selected_slice_ids": selection["selected_slice_ids"], "attempted_slice_ids": selection["attempted_slice_ids"], "confirmed_slice_ids": selection["confirmed_slice_ids"], "next_round": selection["next_round"], "stop_reason": selection["stop_reason"]}
+        result["behavior_slice_ledger"] = {
+            "campaign_id": campaign.campaign_id,
+            "campaign_status": campaign.status,
+            "scope_id": campaign.scope_id,
+            "source_snapshot_hash": campaign.source_snapshot_hash,
+            "project": project,
+            "round": settings["round_number"],
+            "round_limit": settings["round_limit"],
+            "slice_budget": settings["slice_budget"],
+            "selection_mode": selection["selection_mode"],
+            "selected_slice_ids": selection["selected_slice_ids"],
+            "attempted_slice_ids": selection["attempted_slice_ids"],
+            "confirmed_slice_ids": selection["confirmed_slice_ids"],
+            "next_round": selection["next_round"],
+            "stop_reason": selection["stop_reason"],
+        }
         ledger_for_persistence = dict(result["behavior_slice_ledger"])
-        result["phases"]["state_graph"] = {"status": "completed", "entities": sorted(graphs), "summary": {name: graph.to_dict()["stats"] for name, graph in graphs.items()}, "behavior_slices": behavior_contract["summary"], "coverage_gaps": behavior_contract["coverage_gaps"], "duration_ms": int((time.time() - graph_started) * 1000)}
-        result["phases"]["incremental_discovery"] = {"status": selection["status"], "round": settings["round_number"], "round_limit": settings["round_limit"], "slice_budget": settings["slice_budget"], "selection_mode": selection["selection_mode"], "selected_slices": selection["selected"], "remaining_slice_count": selection["remaining_slice_count"], "next_round": selection["next_round"], "stop_reason": selection["stop_reason"], "campaign_id": campaign.campaign_id, "campaign_status": campaign.status}
+        result["phases"]["state_graph"] = {
+            "status": "completed",
+            "entities": sorted(graphs),
+            "summary": {name: graph.to_dict()["stats"] for name, graph in graphs.items()},
+            "behavior_slices": behavior_contract["summary"],
+            "coverage_gaps": behavior_contract["coverage_gaps"],
+            "duration_ms": int((time.time() - graph_started) * 1000),
+        }
+        result["phases"]["incremental_discovery"] = {
+            "status": selection["status"],
+            "round": settings["round_number"],
+            "round_limit": settings["round_limit"],
+            "slice_budget": settings["slice_budget"],
+            "selection_mode": selection["selection_mode"],
+            "selected_slices": selection["selected"],
+            "remaining_slice_count": selection["remaining_slice_count"],
+            "next_round": selection["next_round"],
+            "stop_reason": selection["stop_reason"],
+            "campaign_id": campaign.campaign_id,
+            "campaign_status": campaign.status,
+        }
         selected_paths = {str(path) for item in selection["selected"] for path in item.get("endpoints", []) if str(path)}
         fuzz_started = time.time()
         fuzzer_findings: list[dict[str, Any]] = []
@@ -271,24 +411,53 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     if isinstance(finding, dict):
                         matching = next((item for item in selection["selected"] if str(finding.get("path") or "") in item.get("endpoints", [])), None)
                         if matching:
-                            finding.update({"behavior_slice_id": matching["slice_id"], "discovery_round": settings["round_number"], "campaign_id": campaign.campaign_id, "execution_status": "executed", "confirmation_status": "candidate"})
+                            finding.update({
+                                "behavior_slice_id": matching["slice_id"],
+                                "discovery_round": settings["round_number"],
+                                "campaign_id": campaign.campaign_id,
+                                "execution_status": "executed",
+                                "confirmation_status": "candidate",
+                            })
             except Exception:
                 pass
         result["findings"].extend(fuzzer_findings)
         fuzzer_reason = "selected_source_bound_read_routes_only" if selected_paths and approved_base_url else (runtime_contract.get("reason") or "no_selected_source_bound_read_routes")
-        result["phases"]["parameter_fuzzer"] = {"status": "completed" if approved_base_url and selected_paths and selection["status"] == "planned" else "skipped", "reason": fuzzer_reason, "findings": len(fuzzer_findings), "execution_policy": "documented_read_only_only", "slice_scoped": True, "duration_ms": int((time.time() - fuzz_started) * 1000)}
+        result["phases"]["parameter_fuzzer"] = {
+            "status": "completed" if approved_base_url and selected_paths and selection["status"] == "planned" else "skipped",
+            "reason": fuzzer_reason,
+            "findings": len(fuzzer_findings),
+            "execution_policy": "documented_read_only_only",
+            "slice_scoped": True,
+            "duration_ms": int((time.time() - fuzz_started) * 1000),
+        }
         scenario_started = time.time()
         from .semantic_scenario_generator import SemanticScenarioGenerator
         scenarios = SemanticScenarioGenerator().generate(graphs, api_spec_text, active_slice_ids=selected_ids, discovery_round=settings["round_number"])
         executable = [scenario for scenario in scenarios if _scenario_executable(scenario)]
         plan_only = [scenario for scenario in scenarios if scenario not in executable]
-        result["phases"]["scenario_generation"] = {"status": "completed" if selection["status"] == "planned" else "stopped", "total_scenarios": len(scenarios), "executable_scenarios": len(executable), "plan_only_scenarios": len(plan_only), "by_category": _count_by(scenarios, "category"), "by_severity": _count_by(scenarios, "severity"), "forbidden_paths": sum(1 for scenario in scenarios if getattr(scenario, "is_forbidden_path", False)), "selected_slice_ids": selection["selected_slice_ids"], "duration_ms": int((time.time() - scenario_started) * 1000)}
+        result["phases"]["scenario_generation"] = {
+            "status": "completed" if selection["status"] == "planned" else "stopped",
+            "total_scenarios": len(scenarios),
+            "executable_scenarios": len(executable),
+            "plan_only_scenarios": len(plan_only),
+            "by_category": _count_by(scenarios, "category"),
+            "by_severity": _count_by(scenarios, "severity"),
+            "forbidden_paths": sum(1 for scenario in scenarios if getattr(scenario, "is_forbidden_path", False)),
+            "selected_slice_ids": selection["selected_slice_ids"],
+            "duration_ms": int((time.time() - scenario_started) * 1000),
+        }
         result["plan_only_scenarios"] = [scenario.to_dict() for scenario in plan_only]
         traces: list[tuple[Any, dict[str, Any]]] = []
         if selection["status"] != "planned":
             result["phases"]["execution"] = {"status": "stopped", "reason": selection["stop_reason"], "planned_only": 0, "executed": 0}
         elif base_url and not approved_base_url:
-            result["phases"]["execution"] = {"status": "blocked", "reason": "runtime_contract_missing", "missing_requirements": runtime_contract.get("missing_requirements", []), "planned_only": len(plan_only), "executed": 0}
+            result["phases"]["execution"] = {
+                "status": "blocked",
+                "reason": "runtime_contract_missing",
+                "missing_requirements": runtime_contract.get("missing_requirements", []),
+                "planned_only": len(plan_only),
+                "executed": 0,
+            }
         elif not approved_base_url:
             result["phases"]["execution"] = {"status": "skipped", "reason": "no_base_url", "planned_only": len(plan_only), "executed": 0}
         elif not executable:
@@ -301,7 +470,20 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     traces.append((scenario, trace))
                     for step in trace.get("steps", []):
                         if int(step.get("status") or 0) >= 500:
-                            result["findings"].append({"severity": "P0", "title": f"[场景执行错误] {str(getattr(scenario, 'title', 'scenario'))[:80]}", "category": getattr(scenario, "category", "scenario_flow"), "source": "v12_scenario_executor", "description": f"服务端错误 HTTP{step.get('status')}: {step.get('path', '')}", "confidence_score": 0.80, "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""), "discovery_round": settings["round_number"], "campaign_id": campaign.campaign_id, "execution_status": "executed", "confirmation_status": "candidate", "evidence": {"calls": [{"call": f"{step.get('method', '')} {step.get('path', '')}", "results": {"execution": {"status": step.get("status"), "body": step.get("response", {}).get("body", {})}}}]}})
+                            result["findings"].append({
+                                "severity": "P0",
+                                "title": f"[场景执行错误] {str(getattr(scenario, 'title', 'scenario'))[:80]}",
+                                "category": getattr(scenario, "category", "scenario_flow"),
+                                "source": "v12_scenario_executor",
+                                "description": f"服务端错误 HTTP{step.get('status')}: {step.get('path', '')}",
+                                "confidence_score": 0.80,
+                                "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
+                                "discovery_round": settings["round_number"],
+                                "campaign_id": campaign.campaign_id,
+                                "execution_status": "executed",
+                                "confirmation_status": "candidate",
+                                "evidence": {"calls": [{"call": f"{step.get('method', '')} {step.get('path', '')}", "results": {"execution": {"status": step.get("status"), "body": step.get("response", {}).get("body", {})}}}]},
+                            })
                 except Exception:
                     failed += 1
             result["phases"]["execution"] = {"status": "completed", "executed": len(traces), "failed": failed, "planned_only": len(plan_only), "duration_ms": int((time.time() - execution_started) * 1000)}
@@ -314,7 +496,21 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     continue
                 evidence = evidence_builder.build(scenario.to_dict(), trace, None, [oracle_result])
                 result["evidence_graphs"].append(evidence.to_dict())
-                result["findings"].append({"severity": oracle_result.severity, "title": f"[V12 {oracle_result.oracle_name}] {scenario.title}", "category": scenario.category, "source": "v12_state_graph", "description": oracle_result.explanation, "confidence_score": oracle_result.confidence, "evidence_id": evidence.evidence_id, "oracle": oracle_result.to_dict(), "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""), "discovery_round": settings["round_number"], "campaign_id": campaign.campaign_id, "execution_status": "executed", "confirmation_status": "candidate"})
+                result["findings"].append({
+                    "severity": oracle_result.severity,
+                    "title": f"[V12 {oracle_result.oracle_name}] {scenario.title}",
+                    "category": scenario.category,
+                    "source": "v12_state_graph",
+                    "description": oracle_result.explanation,
+                    "confidence_score": oracle_result.confidence,
+                    "evidence_id": evidence.evidence_id,
+                    "oracle": oracle_result.to_dict(),
+                    "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
+                    "discovery_round": settings["round_number"],
+                    "campaign_id": campaign.campaign_id,
+                    "execution_status": "executed",
+                    "confirmation_status": "candidate",
+                })
         result["phases"]["oracle"] = {"status": "completed", "total_evaluated": len(traces), "violations_found": len(result["findings"]), "duration_ms": int((time.time() - oracle_started) * 1000)}
         try:
             from .risk_clue_pool import save_risk_clues
@@ -385,7 +581,14 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
             value = _extract(response_body, str(field))
             if value not in (None, "", [], {}):
                 bindings[str(field)] = value
-        trace["steps"].append({"action": getattr(step, "action", ""), "method": method, "path": path, "status": status, "response": {"status_code": status, "headers": _redact(response_headers), "body": _redact(response_body)}, "expected_status": getattr(step, "expected_status", 0)})
+        trace["steps"].append({
+            "action": getattr(step, "action", ""),
+            "method": method,
+            "path": path,
+            "status": status,
+            "response": {"status_code": status, "headers": _redact(response_headers), "body": _redact(response_body)},
+            "expected_status": getattr(step, "expected_status", 0),
+        })
     return trace
 
 
