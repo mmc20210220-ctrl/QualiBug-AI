@@ -5,6 +5,7 @@ import json
 
 from ai_test_asset_center.__main__ import scan
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from ai_test_asset_center.enterprise_test_data_receipts import issue_test_data_receipt
 from ai_test_asset_center.evidence_artifact_store import verify_evidence_bundle
 from ai_test_asset_center.enterprise_test_data_plan import validate_test_data_contract
 
@@ -76,6 +77,33 @@ def test_registered_source_registry_asset_is_preferred_and_keeps_version_identit
     assert manifest["source_version_id"] == registered["source_version_id"]
     assert manifest["source_origin"] == "registered_source_registry"
     assert result["evidence_bundle"]["status"] == "persisted"
+
+
+def test_scan_validates_test_data_receipts_against_campaign_identity(tmp_path):
+    register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    first = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
+    campaign_id = first["campaign"]["campaign_id"]
+    creation = issue_test_data_receipt("enterprise-project", root=tmp_path, kind="creation", campaign_id=campaign_id, scope_id="service-a", environment_ref="test-a", actor={"name": "qa", "role": "qa_lead"}, data_scope_ref="sandbox-a")
+    cleanup = issue_test_data_receipt("enterprise-project", root=tmp_path, kind="cleanup", campaign_id=campaign_id, scope_id="service-a", environment_ref="test-a", actor={"name": "qa", "role": "qa_lead"}, operation_ref="cleanup-a")
+    second = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        campaign_context={
+            "scope_id": "service-a",
+            "environment_ref": "test-a",
+            "test_data_contract": {
+                "strategy": "create_disposable",
+                "write_approved": True,
+                "disposable_scope_ref": "sandbox-a",
+                "creation_receipt_ref": creation["receipt_id"],
+                "cleanup_receipt_ref": cleanup["receipt_id"],
+            },
+        },
+    )
+    assert second["campaign"]["campaign_id"] == campaign_id
+    assert second["test_data_plan"]["status"] == "ready"
+    assert second["test_data_plan"]["receipt_validation"] == "verified"
 
 
 def test_registered_project_asset_supplies_provenance_without_client_supplied_manifest(tmp_path):
