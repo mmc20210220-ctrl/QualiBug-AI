@@ -49,6 +49,7 @@ jobs:
             tests/test_backend_main_auth.py \
             tests/test_backend_main_enterprise_api.py \
             tests/test_backend_main_access_policy.py \
+            tests/test_backend_main_jwt_identity_policy.py \
             tests/test_phase103s_command_center_api.py \
             tests/test_phase104c_api_contract_acceptance.py \
             tests/test_core_engine_evidence_truthfulness.py \
