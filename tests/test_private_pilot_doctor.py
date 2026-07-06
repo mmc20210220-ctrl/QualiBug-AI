@@ -165,6 +165,10 @@ def test_private_pilot_doctor_report_guide_documents_output_workflow() -> None:
     assert "INVALID_QUALIBUG_PORT" in guide
     assert "CREDENTIAL_KEY_MISSING" in guide
     assert "RUNTIME_PATCHES_NOT_INSTALLED_IN_READONLY_MODE" in guide
+    assert "## Human summary" in guide
+    assert "summary_text" in guide
+    assert "summary_lines" in guide
+    assert "Suggested commands" in guide
     assert "## Readiness levels" in guide
     assert "`ready`" in guide
     assert "`warning`" in guide
