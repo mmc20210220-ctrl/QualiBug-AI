@@ -40,7 +40,20 @@ The JSON report includes:
 - Browser UI Smoke readiness, Playwright availability, and configured target URL environment variables;
 - scan context contract status, including source manifest, scan body preparation, and campaign context helpers;
 - a local `/api/health` payload preview;
-- remediation hints with concrete commands for common environment issues.
+- remediation hints with concrete commands for common environment issues;
+- readiness classification for handoff decisions.
+
+## Readiness levels
+
+The `readiness` object summarizes whether the current environment can move forward:
+
+| Level | Meaning | Handoff decision |
+|-------|---------|------------------|
+| `ready` | Diagnostics are clean | Proceed with service startup and scenario smoke validation |
+| `warning` | Usable for diagnosis but not a clean handoff | Apply `remediation_hints`, rerun `qualibug-doctor --install-patches --output`, then decide |
+| `blocked` | A blocking error exists | Do not claim pilot readiness; fix blockers or send the doctor report to support |
+
+`readiness.blockers` contains stable blocking codes. `readiness.warnings` contains non-blocking but actionable issues. `readiness.next_action` is the recommended next step for the field engineer.
 
 ## Remediation hints
 
