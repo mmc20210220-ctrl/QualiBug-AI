@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from ai_test_asset_center.__main__ import scan
+from ai_test_asset_center.enterprise_test_data_plan import validate_test_data_contract
 
 
 API_SPEC = json.dumps({
@@ -35,6 +36,7 @@ def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_pa
     assert result["campaign"]["scope_id"] == "service-a"
     assert result["campaign"]["environment_ref"] == "test-a"
     assert result["campaign"]["confirmed_slice_count"] == 0
+    assert result["test_data_plan"]["status"] == "blocked_with_testability_gap"
 
 
 def test_runtime_target_is_blocked_without_explicit_enterprise_contract(tmp_path):
@@ -51,3 +53,27 @@ def test_runtime_target_is_blocked_without_explicit_enterprise_contract(tmp_path
     assert {"SOURCE_PROVENANCE_MISSING", "CAMPAIGN_SCOPE_MISSING", "ENVIRONMENT_REFERENCE_MISSING"}.issubset(codes)
     assert result["execution_status"] in {"skipped", "plan_only"}
     assert result["total_findings"] == 0
+
+
+def test_test_data_contract_requires_receipts_for_disposable_setup():
+    blocked = validate_test_data_contract(
+        {"strategy": "create_disposable", "write_approved": True},
+        environment_ref="env-a",
+        scope_id="scope-a",
+    )
+    ready = validate_test_data_contract(
+        {
+            "strategy": "create_disposable",
+            "write_approved": True,
+            "environment_ref": "env-a",
+            "scope_id": "scope-a",
+            "disposable_scope_ref": "isolated-scope",
+            "creation_receipt_ref": "created",
+            "cleanup_receipt_ref": "cleaned",
+        },
+        environment_ref="",
+        scope_id="",
+    )
+    assert blocked["status"] == "blocked_with_testability_gap"
+    assert "DISPOSABLE_SCOPE_MISSING" in blocked["missing_requirements"]
+    assert ready["status"] == "ready"
