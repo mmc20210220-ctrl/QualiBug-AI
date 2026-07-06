@@ -44,12 +44,17 @@ pip install -e .
 cp .env.local.example .env.local
 # 编辑 .env.local 配置你的 LLM API
 
-# 4. 运行测试
+# 4. 私有部署自检（推荐先执行）
+qualibug-doctor
+# 如需验证 runtime patch 实际安装状态：
+qualibug-doctor --install-patches
+
+# 5. 运行测试
 python -m pytest tests/test_phase95_runtime_evidence_scoreboard.py -v
 # 或运行完整测试套件
 python -m pytest tests/ -q
 
-# 5. 启动私有服务
+# 6. 启动私有服务
 # 后端固定端口：8088
 python -m ai_test_asset_center.private_pilot_entrypoint
 # 或使用安装后的脚本入口
@@ -59,6 +64,31 @@ qualibug-server
 cd frontend && npm run dev
 # 或使用 CLI（发布验证、扫描等）
 qualibug verify-release
+```
+
+### 私有部署 Doctor
+
+`qualibug-doctor` 输出 JSON 诊断，便于客户现场安装、自检和交付排障。默认模式为只读诊断，不要求 HTTP 服务已经启动。
+
+诊断范围包括：
+
+- 产品版本、Phase、默认端口、标准 health path；
+- private-pilot patch 模块是否可导入；
+- runtime patch 当前安装状态；
+- 凭证加密 key 来源、前端是否只返回 masked refs；
+- Browser UI Smoke 是否开启、Playwright 是否可用、UI base URL 环境变量；
+- scan context contract 是否完整，包含 source manifest、scan body 准备、campaign context 构造；
+- `/api/health` payload 预览。
+
+```bash
+# 只读自检
+qualibug-doctor
+
+# 紧凑 JSON，便于 CI 或脚本解析
+qualibug-doctor --compact
+
+# 安装 runtime patches 后再报告状态
+qualibug-doctor --install-patches
 ```
 
 ### Docker 部署
@@ -118,152 +148,3 @@ Docker 容器内统一监听 `8088`，`docker-compose.yml` 默认映射为 `5000
 - failed network request；
 - 页面截图；
 - HAR 证据文件。
-
-启用方式：
-
-```bash
-pip install -e .[browser]
-playwright install chromium
-export QUALIBUG_BROWSER_UI_SMOKE=1
-export QUALIBUG_BROWSER_UI_BASE_URL=http://127.0.0.1:5174
-qualibug-server
-```
-
-扫描结果会包含 `browser_ui_health`，并在未启用或缺少浏览器依赖时写入明确的 `coverage_gaps`，不会伪装成已覆盖 UI 缺陷。
-
-### 安全保证
-
-- ✅ **禁止自动确认**: CANDIDATE → CONFIRMED 需人工审核
-- ✅ **生产模式无 HTTP**: `QUALIBUG_PRODUCTION=1` 时零外部请求
-- ✅ **禁止伪造证据**: Evidence enricher 从不创建虚假数据
-- ✅ **禁止绕过门控**: 证据门控不可跳过
-- ✅ **语义裁决保留**: Stage_verify 裁决永不丢弃
-- ✅ **Cleanup 阻塞**: 脏环境阻塞高风险发现
-- ✅ **凭证安全**: 私有服务保存目标系统凭证前自动启用本地加密 key，GET 配置接口只返回 masked/ref，不回传明文密钥。
-- ✅ **UI 覆盖诚实标注**: 浏览器 UI 层未启用、缺 Playwright 或缺 UI 目标时，统一作为 coverage gap 输出，不声称已完成 UI 视觉验证。
-
----
-
-## 命令行工具
-
-```bash
-# 检查本地与 LLM 配置
-qualibug doctor
-
-# 运行发布验证
-qualibug verify-release
-
-# 启动私有服务（统一加载部署补丁、主链路补丁、凭证安全补丁与可选 UI smoke 补丁）
-qualibug-server
-# 或：python -m ai_test_asset_center.private_pilot_entrypoint
-
-# 运行发现引擎（--prd / --api 为必需参数）
-qualibug discover --prd "path/to/prd.md" --api "path/to/api.md"
-```
-
----
-
-## API 端点
-
-私有服务 `private_pilot_entrypoint`（默认端口 8088）：
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/health` | GET | 标准健康检查（返回版本 95.0.0、端口、LLM 连通状态、部署补丁状态与 browser UI smoke 状态） |
-| `/health` | GET | 兼容健康检查别名 |
-| `/api/pilot/status` | GET | 服务状态 |
-| `/api/scan/run` | POST | 运行扫描 |
-| `/api/pilot/config` | GET/POST | 配置管理 |
-| `/api/knowledge/ingest` | POST | 知识导入 |
-| `/api/settings/save` | POST | 系统设置 |
-
-前端联调 API 面（Phase104A，`phase104_command_center_http_api`，默认端口 8088）使用 `/api/v1/*` 前缀，详见 `PHASE104A_COMMAND_CENTER_HTTP_API_README.md`。
-
----
-
-## 项目结构
-
-```
-qualibug-ai/
-├── ai_test_asset_center/     # 核心引擎
-│   ├── discovery_engine.py   # 发现引擎
-│   ├── discovery_finding_gate.py  # 双层门控
-│   ├── evidence_normalizer.py     # 证据归一化
-│   ├── business_evidence_enricher.py  # 业务证据富化
-│   ├── browser_ui_smoke.py        # 浏览器 UI smoke 证据采集
-│   ├── private_pilot_service.py   # 传统私有服务实现
-│   ├── private_pilot_entrypoint.py # 标准部署入口
-│   ├── version.py                 # 单一版本源
-│   ├── product_ui.py              # Web UI
-│   └── ...                        # 其他模块
-├── aitestops/               # CLI 工具
-│   ├── cli.py              # 命令行入口
-│   └── release_verifier.py  # 发布验证
-├── mes_target/              # MES 演示目标
-├── tests/                   # 测试套件
-├── requirements.txt         # 依赖清单
-├── Dockerfile               # Docker 镜像
-├── docker-compose.yml       # Docker 编排
-└── README.md                # 本文档
-```
-
----
-
-## 配置
-
-### 环境变量 (.env.local)
-
-代码只读取 `LLM_*`（OpenAI 风格的 `OPENAI_*` 名称不被读取）。完整参考见 `.env.local.example`。
-
-```bash
-# LLM 配置（必填）— 代码读取 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_API_KEY=your-api-key
-LLM_MODEL=your-deepseek-model
-LLM_TEMPERATURE=0.1
-LLM_TIMEOUT_SECONDS=300
-LLM_THINKING_MODE=disabled
-LLM_RESPONSE_FORMAT=json_object
-
-# 服务配置
-QUALIBUG_PROJECT=real_project_demo
-QUALIBUG_PORT=8088        # 默认 8088
-QUALIBUG_PRODUCTION=0     # 设为 1 时进入生产模式，禁止所有外部 HTTP 写入
-
-# 可选：浏览器 UI smoke，默认关闭
-# QUALIBUG_BROWSER_UI_SMOKE=1
-# QUALIBUG_BROWSER_UI_BASE_URL=http://127.0.0.1:5174
-
-# 可选：显式设置凭证加密主密钥；不设置时私有服务会自动生成本机 key 文件
-# QUALIBUG_CRED_ENC_KEY=<random-local-secret>
-```
-
----
-
-## 测试
-
-```bash
-# 运行核心测试
-python -m pytest tests/test_phase95_runtime_evidence_scoreboard.py -v
-python -m pytest tests/test_real_project_discovery_contract.py -v
-
-# 运行完整测试套件
-python -m pytest tests/ -v --cov=ai_test_asset_center
-
-# 生成 HTML 报告
-python -m pytest tests/ --html=report.html
-```
-
----
-
-## 许可证
-
-Proprietary - QualiBug Team
-
----
-
-## 支持
-
-- 文档: `docs/`
-- 问题: GitHub Issues
-- 邮件: team@qualibug.com
