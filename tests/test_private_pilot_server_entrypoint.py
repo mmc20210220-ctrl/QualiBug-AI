@@ -41,6 +41,8 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     assert 'qualibug-server = "ai_test_asset_center.private_pilot_server:run_server"' in pyproject
     assert "install_customer_delivery_gate_patch" in wrapper
     assert "split_customer_delivery_tracks" in wrapper
+    assert "_ORIGINAL_PARTITION_DELIVERY_TRACKS" in wrapper
+    assert "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE" in wrapper
     assert "_service.run_server()" in wrapper
 
 
@@ -53,3 +55,6 @@ def test_private_pilot_server_patch_routes_legacy_partition_through_strict_gate(
     assert [item["id"] for item in clues] == ["LEGACY-1"]
     assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in clues[0]["customer_delivery_gate_reasons"]
     assert clues[0]["customer_visible"] is False
+    assert private_pilot_service._CUSTOMER_DELIVERY_GATE_PATCHED is True
+    assert private_pilot_service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE == "ai_test_asset_center.private_pilot_server"
+    assert private_pilot_service._ORIGINAL_PARTITION_DELIVERY_TRACKS is not None
