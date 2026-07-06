@@ -49,6 +49,13 @@ def _resolve_root(root: str | Path | None = None) -> Path:
         return Path.cwd().resolve()
 
 
+def _int_env(name: str, fallback: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or fallback)
+    except Exception:
+        return fallback
+
+
 def _module_status(module_name: str) -> dict[str, Any]:
     try:
         module = importlib.import_module(module_name)
@@ -212,7 +219,7 @@ def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: b
             "python_version": sys.version.split()[0],
             "platform": platform.system(),
             "bind_host": os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1"),
-            "port": int(os.environ.get("QUALIBUG_PORT", DEFAULT_PRIVATE_PILOT_PORT) or DEFAULT_PRIVATE_PILOT_PORT),
+            "port": _int_env("QUALIBUG_PORT", DEFAULT_PRIVATE_PILOT_PORT),
             "default_port": DEFAULT_PRIVATE_PILOT_PORT,
             "canonical_health_path": CANONICAL_HEALTH_PATH,
             "legacy_health_path": LEGACY_HEALTH_PATH,
