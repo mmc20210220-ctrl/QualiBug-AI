@@ -1,3 +1,4 @@
+import ai_test_asset_center.stage_reason_all_v2 as stage_reason_all_v2
 from ai_test_asset_center.policy_wiring import (
     _clamp_reasoner_hypothesis_cap,
     _reasoner_hypothesis_cap,
@@ -29,3 +30,12 @@ def test_environment_override_is_still_bounded(monkeypatch):
 def test_environment_override_can_only_reduce_the_cap(monkeypatch):
     monkeypatch.setenv("QUALIBUG_REASONER_MAX_HYPOTHESES_PER_ENGINE", "4")
     assert _reasoner_hypothesis_cap(15, 15) == 4
+
+
+def test_loaded_reasoner_static_limits_are_clamped_by_main_policy_path():
+    stage_reason_all_v2.MAX_HYPOTHESES = 300
+    stage_reason_all_v2.MAX_HYPOTHESES_HARD_LIMIT = 300
+
+    assert _reasoner_hypothesis_cap(300, 15) == 15
+    assert stage_reason_all_v2.MAX_HYPOTHESES == 15
+    assert stage_reason_all_v2.MAX_HYPOTHESES_HARD_LIMIT == 15
