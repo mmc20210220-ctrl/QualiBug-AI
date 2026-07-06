@@ -90,3 +90,25 @@ def test_dashboard_surfaces_delivery_gate_patch_status() -> None:
     assert "严格 Gate 未确认" in page
     assert "active_partition_name" in page
     assert "has_original_partition" in page
+
+
+def test_dashboard_surfaces_main_chain_contract_status() -> None:
+    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+
+    assert "MAIN_CHAIN_STAGE_LABELS" in page
+    assert "function getMainChainContract" in page
+    assert "function getMainChainSummary" in page
+    assert "function getMainChainStages" in page
+    assert "main_chain_contract" in page
+    assert "main_chain_contract_summary" in page
+    assert "主链路闭合状态" in page
+    assert "主链路已闭合" in page
+    assert "主链路未闭合" in page
+    assert "第一断点" in page
+    assert "first_blocked_next_action" in page
+    assert "企业资料" in page
+    assert "解析知识" in page
+    assert "测试计划" in page
+    assert "真实执行" in page
+    assert "Bug 发现" in page
+    assert "证据链" in page
