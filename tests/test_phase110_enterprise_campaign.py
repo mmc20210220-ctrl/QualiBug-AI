@@ -56,6 +56,22 @@ def test_source_identity_is_persisted_and_part_of_campaign_identity(tmp_path):
     assert first.public_contract()["source_hash"] == "hash-api-v1"
 
 
+def test_campaign_defaults_source_identity_to_snapshot_when_single_asset_is_not_supplied():
+    snapshot = source_snapshot_hash("requirements-v1", "api-v1", "schema-v1", "service-scope", "test-environment")
+    campaign = EnterpriseCampaign.create("enterprise-project", "service-scope", "test-environment", snapshot)
+    restored = EnterpriseCampaign.from_dict({
+        "campaign_id": campaign.campaign_id,
+        "project_id": campaign.project_id,
+        "scope_id": campaign.scope_id,
+        "environment_ref": campaign.environment_ref,
+        "source_snapshot_hash": snapshot,
+    })
+    assert campaign.source_hash == snapshot
+    assert campaign.source_id == f"source_snapshot:{snapshot[:24]}"
+    assert restored.source_hash == snapshot
+    assert restored.source_id == f"source_snapshot:{snapshot[:24]}"
+
+
 def test_confirmed_slice_requires_complete_real_receipt():
     incomplete = {
         "behavior_slice_id": "BHV_1",
