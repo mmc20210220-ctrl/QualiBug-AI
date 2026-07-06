@@ -4,6 +4,8 @@ import type { Finding, KnowledgeSource, ReleaseCheck } from '../types';
 import { toWorkspaceOptions } from '../lib/customer';
 
 const SCAN_COMPLETED_EVENT = 'qualibug:scan-completed';
+const CUSTOMER_READY_MIN_EVIDENCE_SCORE = 90;
+
 type JsonRecord = Record<string, unknown>;
 type ScanCompletedDetail = { project: string };
 type ProjectSummary = { resolvedProjectId: string; projectName: string; findingsCount: number; clueCount: number; p0Count: number };
@@ -68,6 +70,35 @@ function campaignBlocksRelease(raw: unknown): { blocked: boolean; status: string
 }
 function buildProjectSummary(raw: unknown, project: string): ProjectSummary { const record = asRecord(raw); const findings = getReportFindings(raw); return { resolvedProjectId: getResolvedProjectId(raw), projectName: (asString(record.project_name) || asString(record.projectName) || project).trim() || '未选择客户', findingsCount: findings.length, clueCount: getReportClues(raw).length, p0Count: findings.filter((finding) => finding.severity === 'P0').length }; }
 
+function hasValidatedEvidenceQuality(finding: Finding): boolean {
+  const quality = finding?.evidence_quality;
+  const level = String(quality?.level || '').toLowerCase();
+  const score = asFiniteNumber(quality?.score);
+  return level === 'validated' && score >= CUSTOMER_READY_MIN_EVIDENCE_SCORE && Boolean(quality?.can_reproduce);
+}
+
+function hasPassedBusinessEvidenceStatus(finding: Finding): boolean {
+  const status = finding?.evidence_status;
+  if (!status) return true;
+  const semantic = String(status.semantic_verdict || '').toUpperCase();
+  const business = String(status.business_evidence_status || '').toUpperCase();
+  const finalReview = String(status.final_review_status || '').toUpperCase();
+  if (semantic && semantic !== 'SEMANTIC_CONFIRMED') return false;
+  if (business && business !== 'VALIDATED') return false;
+  if (finalReview && !['PENDING_REVIEW', 'VALIDATED_CANDIDATE', 'CUSTOMER_READY'].includes(finalReview)) return false;
+  return (status.missing_requirements || []).length === 0;
+}
+
+function hasExplicitFailureAssertion(finding: Finding): boolean {
+  const failedAssertions = finding?.failed_assertions || [];
+  const comparison = finding?.expected_actual_comparison;
+  const diff = String(comparison?.difference || '').trim();
+  if (failedAssertions.length > 0 || diff) return true;
+  const expected = String(finding?.expected || comparison?.expected || '').trim();
+  const actual = String(finding?.actual || comparison?.actual || '').trim();
+  return Boolean(expected && actual && expected !== actual);
+}
+
 /** Require explicit execution and full evidence before customer delivery. */
 export function isCustomerReadyFinding(finding: Finding): boolean {
   if (!finding || finding.customer_delivery_status !== 'defect' || finding.bug_status !== 'reproduced' || !finding.gate_passed || finding.reproduction?.is_synthetic) return false;
@@ -83,14 +114,14 @@ export function isCustomerReadyFinding(finding: Finding): boolean {
   if (['rejected', 'missing'].includes(asString(consistency.verdict).toLowerCase())) return false;
   const lane = `${asString(record.value_lane)} ${asString(record._value_lane)} ${asString(record.execution_block)} ${asString(record.block_reason)}`.toLowerCase();
   if (['route_blocked', 'auth_blocked', 'environment_blocked', 'coverage_gap', 'validation_lead', 'not_reproduced'].some((value) => lane.includes(value))) return false;
-  return hasRealReplayAsset(finding) && hasCustomerFacingHardEvidence(finding);
+  return hasValidatedEvidenceQuality(finding) && hasPassedBusinessEvidenceStatus(finding) && hasRealReplayAsset(finding) && hasCustomerFacingHardEvidence(finding);
 }
 
 export function hasCustomerFacingHardEvidence(finding: Finding): boolean {
   const raw = finding?.raw_evidence; const reproduction = finding?.reproduction;
   const hasRequest = Boolean(raw?.request_raw?.method && raw?.request_raw?.path) || Boolean(reproduction?.method && reproduction?.path);
   const hasResponse = Boolean(raw?.response_raw?.status_code || raw?.response_raw?.body || reproduction?.har_evidence?.status_code || reproduction?.har_evidence?.response_body);
-  const hasAssertion = Boolean((finding?.failed_assertions || []).length || (finding?.expected && finding?.actual) || finding?.expected_actual_comparison?.difference);
+  const hasAssertion = hasExplicitFailureAssertion(finding);
   const hasTimestamp = Boolean(raw?.timestamp || finding?.timestamp);
   return hasRequest && hasResponse && hasAssertion && hasTimestamp && Boolean(raw?.has_real_evidence || reproduction?.har_evidence);
 }
