@@ -1,91 +1,58 @@
-"""Phase92A · Business Evidence Enricher — Normalized Evidence → Business Contract Draft.
+"""Receipt-driven business evidence enrichment.
 
-Enriches normalized runtime evidence with project context, entity bindings,
-snapshot refs, and cleanup status.  Never fabricates evidence.
-
-PHASE92A CRITICAL:
-- Semantic verdict is preserved from SemanticVerificationEvidence
-- Missing business evidence → PENDING_*, not REJECTED
-- Fabricated snapshots/cleanup/entity_bindings → _fabricated=True, caught by gate
-- enrich_finding_evidence() returns four-layer state dict
+This existing bridge turns normalized execution receipts into the typed business
+contract.  It never invents a tenant, actor, entity, snapshot, invariant,
+cleanup or reproduction step when the runtime receipt did not observe one.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import time
-from dataclasses import dataclass, field
 from typing import Any
 
-from .evidence_models import (
-    SourcedValue,
-    RawProbeEvidence,
-    NormalizedRuntimeEvidence,
-    SemanticVerificationEvidence,
-    BusinessEvidenceDraft,
-    BusinessFindingContract,
-    MISSING_REQUIREMENTS,
-    BUSINESS_EVIDENCE_STATUS,
-    FINAL_REVIEW_STATUS,
-)
+from .evidence_models import BusinessEvidenceDraft, MISSING_REQUIREMENTS
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _sourced(runtime: dict[str, Any], name: str) -> dict[str, Any]:
+    value = runtime.get(name)
+    return value if isinstance(value, dict) else {}
+
+
+def _observed(value: dict[str, Any]) -> Any:
+    return value.get("value") if value and value.get("confidence") != "missing" else None
+
+
+def _add_missing(draft: BusinessEvidenceDraft, value: str) -> None:
+    if value in MISSING_REQUIREMENTS and value not in draft.missing_requirements:
+        draft.missing_requirements.append(value)
+
+
+def _snapshot_ref(snapshot: Any) -> str:
+    if snapshot in (None, "", [], {}):
+        return ""
+    raw = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    return "snap:" + hashlib.sha256(raw).hexdigest()[:20]
+
+
+def _finding_value(finding: Any, key: str) -> Any:
+    return finding.get(key) if isinstance(finding, dict) else getattr(finding, key, None)
 
 
 class BusinessEvidenceEnricher:
-    """Enrich normalized evidence into a business evidence contract draft.
-
-    PHASE92A: Never fabricates evidence. Missing requirements become
-    structured PENDING_* states, not REJECTED.
-    """
-
-    @staticmethod
-    def _snapshot_digest(data: dict[str, Any]) -> str:
-        """Create a content-addressable snapshot ref."""
-        if not data:
-            return ""
-        payload = json.dumps(data, sort_keys=True, default=str)
-        return "snap:" + hashlib.sha256(payload.encode()).hexdigest()[:12]
-
-    @staticmethod
-    def _extract_path_from_calls(calls: list[dict]) -> str:
-        """Extract the primary API path from a list of verification calls."""
-        for call in calls:
-            call_str = call.get("call", "")
-            # "POST /api/v1/orders" → "/api/v1/orders"
-            parts = call_str.split()
-            if len(parts) >= 2:
-                return parts[1]
-        return ""
-
-    @staticmethod
-    def _entity_from_path(path: str) -> str:
-        """Derive entity name from API path as a fallback heuristic."""
-        # Strip common prefixes, take the first meaningful segment
-        path = path.strip("/")
-        parts = [p for p in path.split("/") if p and not p.startswith("{")]
-        # Skip common prefixes: api, v1, v2, v3
-        for prefix in ("api", "v1", "v2", "v3", "rest", "public"):
-            if parts and parts[0].lower() == prefix:
-                parts = parts[1:]
-        # Return the first remaining segment as the entity name
-        if parts:
-            return parts[0].replace("-", "_").replace(".", "_")
-        return ""
-        return "snap:" + hashlib.sha256(payload.encode()).hexdigest()[:12]
-
     def _compute_business_evidence_status(self, draft: BusinessEvidenceDraft, semantic_verdict: str) -> str:
-        """Compute business_evidence_status from missing requirements.
-
-        CRITICAL: If semantic_verdict is SEMANTIC_CONFIRMED but business
-        evidence is incomplete, the status MUST be PENDING_*, never REJECTED.
-        """
-        missing = draft.missing_requirements
+        missing = set(draft.missing_requirements)
         if not missing:
             return "VALIDATED"
-
-        # Specific pending states based on what's missing
         if "ENTITY_BINDING_MISSING" in missing:
             return "PENDING_ENTITY_BINDING"
         if "BEFORE_SNAPSHOT_MISSING" in missing:
@@ -98,279 +65,107 @@ class BusinessEvidenceEnricher:
             return "PENDING_OBSERVER_CONSENSUS"
         if "ASYNC_WINDOW_OPEN" in missing:
             return "PENDING_ASYNC_WINDOW"
-        if missing:
-            return "PENDING_ENTITY_BINDING"  # generic pending
-
-        return "NOT_ENRICHED"
+        if "REPRODUCTION_INCOMPLETE" in missing:
+            return "PENDING_REPRODUCTION"
+        if "INVARIANT_REF_MISSING" in missing:
+            return "PENDING_INVARIANT"
+        return "PENDING_ENTITY_BINDING"
 
     def _compute_final_review_status(self, business_status: str, semantic_verdict: str) -> str:
-        """Compute final_review_status from business and semantic state.
+        return "VALIDATED_CANDIDATE" if business_status == "VALIDATED" else "NEEDS_MORE_EVIDENCE"
 
-        CRITICAL: SEMANTIC_CONFIRMED + PENDING evidence → NEEDS_MORE_EVIDENCE
-        NOT REJECTED, FALSIFIED, or INCONCLUSIVE.
-        """
-        if business_status == "VALIDATED":
-            return "VALIDATED_CANDIDATE"
-        if business_status == "BLOCKED_BY_RUNTIME_EVIDENCE":
-            return "BLOCKED"
-        if business_status.startswith("PENDING_"):
-            return "NEEDS_MORE_EVIDENCE"
-        if business_status == "GATE_ERROR":
-            return "BLOCKED"
-        return "NEEDS_MORE_EVIDENCE"
-
-    def enrich(
-        self,
-        normalized: dict[str, Any],
-        semantic: dict[str, Any],
-        finding: Any,
-        calls: list[dict] | None = None,
-        project_id: str = "",
-        policy_version: str = "baseline",
-    ) -> BusinessEvidenceDraft:
-        """Enrich normalized + semantic evidence into a business draft.
-
-        NEVER fabricates snapshots, cleanup, or entity_binding.
-        Missing evidence → structured PENDING_* in missing_requirements.
-        """
-        draft = BusinessEvidenceDraft()
-        calls = calls or []
-        draft.enrichment_trace = []
-
-        # ── Project context ──
-        draft.project_id = project_id
-        draft.policy_version = policy_version
-        draft.environment_id = os.environ.get("QUALIBUG_ENVIRONMENT", "test")
-
-        # ── Hypothesis binding ──
-        hid = ""
-        if hasattr(finding, "hypothesis_id"):
-            hid = str(finding.hypothesis_id or "")
-        elif isinstance(finding, dict):
-            hid = str(finding.get("hypothesis_id", ""))
-        draft.hypothesis_id = hid
-
-        # ── Entity binding from normalized evidence ──
-        n_entity = normalized.get("entity_id", {})
-        n_entity_type = normalized.get("entity_type", {})
-        if isinstance(n_entity, dict) and n_entity.get("confidence") == "evidenced":
+    def enrich(self, normalized: dict[str, Any], semantic: dict[str, Any], finding: Any,
+               calls: list[dict] | None = None, project_id: str = "", policy_version: str = "baseline") -> BusinessEvidenceDraft:
+        normalized = _dict(normalized)
+        runtime = _dict(normalized.get("runtime")) or normalized
+        semantic = _dict(semantic) or _dict(normalized.get("semantic"))
+        draft = BusinessEvidenceDraft(
+            project_id=project_id or _text(_finding_value(finding, "project_id")),
+            environment_id=_text(_finding_value(finding, "environment_id")),
+            run_id=_text(_finding_value(finding, "run_id")),
+            hypothesis_id=_text(_finding_value(finding, "hypothesis_id")),
+            flow_id=_text(_finding_value(finding, "flow_id")),
+            policy_version=policy_version,
+        )
+        entity_id, entity_type = _sourced(runtime, "entity_id"), _sourced(runtime, "entity_type")
+        if _observed(entity_id) not in (None, ""):
             draft.entity_binding = {
-                "entity_id": n_entity.get("value"),
-                "entity_type": n_entity_type.get("value", "") if isinstance(n_entity_type, dict) else "",
-                "entity_alias": n_entity.get("value"),
-                "binding_confidence": 0.9,
-                "source": n_entity.get("source", ""),
+                "entity_id": _observed(entity_id), "entity_type": _observed(entity_type) or "",
+                "source": entity_id.get("source", ""), "confidence": entity_id.get("confidence", "evidenced"),
             }
-            draft.enrichment_trace.append("entity_binding: from runtime evidence")
         else:
-            # MISSING entity binding — record as PENDING, never fabricate
-            draft.entity_binding = {
-                "entity_id": "",
-                "entity_type": "",
-                "entity_alias": "",
-                "binding_confidence": 0.0,
-                "source": "unavailable",
-            }
-            # Fallback: derive entity from API path (when regex patterns don't match)
-            path = self._extract_path_from_calls(calls)
-            if path:
-                entity_from_path = self._entity_from_path(path)
-                if entity_from_path:
-                    draft.entity_binding = {
-                        "entity_id": "",
-                        "entity_type": entity_from_path,
-                        "entity_alias": entity_from_path,
-                        "binding_confidence": 0.3,
-                        "source": "path_heuristic",
-                    }
-                    draft.enrichment_trace.append(f"entity_binding: path heuristic → {entity_from_path}")
-            if not draft.entity_binding.get("entity_alias"):
-                draft.missing_requirements.append("ENTITY_BINDING_MISSING")
-                draft.enrichment_trace.append("entity_binding: missing — recorded as PENDING")
+            draft.entity_binding = {"entity_id": "", "entity_type": _observed(entity_type) or "", "source": entity_id.get("source", "entity_not_observed"), "confidence": "missing"}
+            _add_missing(draft, "ENTITY_BINDING_MISSING")
+        tenant, owner, correlation = _sourced(runtime, "tenant_id"), _sourced(runtime, "owner_id"), _sourced(runtime, "correlation_id")
+        draft.tenant_binding = {"tenant_id": _observed(tenant) or "", "source": tenant.get("source", "scope_not_observed"), "confidence": tenant.get("confidence", "missing")}
+        draft.owner_binding = {"owner_id": _observed(owner) or "", "source": owner.get("source", "owner_not_observed"), "confidence": owner.get("confidence", "missing")}
+        draft.correlation_binding = {"correlation_id": _observed(correlation) or "", "source": correlation.get("source", "correlation_not_observed"), "confidence": correlation.get("confidence", "missing")}
 
-        # ── Tenant binding (single-tenant guard) ──
-        draft.tenant_binding = {
-            "tenant_id": "single-tenant",
-            "source": "environment_config",
-            "confidence": "evidenced",
-        }
-
-        # ── Before/after snapshots from calls ──
-        before_snap = None
-        after_snap = None
-        if len(calls) >= 1:
-            before_body = calls[0].get("results", {}).get("admin", {}).get("body", {})
-            if isinstance(before_body, dict) and before_body:
-                before_snap = before_body
-                draft.before_snapshot_ref = self._snapshot_digest(before_body)
-                draft.before_snapshot_data = before_body  # store actual data for audit
-                draft.enrichment_trace.append("before_snapshot: from calls[0]")
-        if len(calls) >= 3:
-            after_body = calls[-1].get("results", {}).get("admin", {}).get("body", {})
-            if isinstance(after_body, dict) and after_body:
-                after_snap = after_body
-                draft.after_snapshot_ref = self._snapshot_digest(after_body)
-                draft.after_snapshot_data = after_body  # store actual data for audit
-                draft.enrichment_trace.append("after_snapshot: from calls[-1]")
-            action_call = calls[1].get("call", "")
-            draft.action_evidence_ref = f"action:{action_call}" if action_call else ""
-        elif len(calls) >= 2:
-            after_body = calls[-1].get("results", {}).get("admin", {}).get("body", {})
-            if isinstance(after_body, dict) and after_body:
-                after_snap = after_body
-                draft.after_snapshot_ref = self._snapshot_digest(after_body)
-                draft.after_snapshot_data = after_body  # store actual data for audit
-                draft.enrichment_trace.append("after_snapshot: from calls[-1]")
-
-        if not draft.before_snapshot_ref:
-            draft.missing_requirements.append("BEFORE_SNAPSHOT_MISSING")
-        if not draft.after_snapshot_ref:
-            draft.missing_requirements.append("AFTER_SNAPSHOT_MISSING")
-
-        # ── Observer refs ──
-        observer_list = normalized.get("observer_refs", [])
-        draft.observer_refs = [
-            json.dumps(o, default=str)[:300]
-            for o in (observer_list if isinstance(observer_list, list) else [])
-        ]
-
-        # ── Check observer consensus ──
-        if len(calls) >= 3:
-            admin_body = calls[-1].get("results", {}).get("admin", {}).get("body", {})
-            viewer_body = calls[-1].get("results", {}).get("viewer", {}).get("body", {})
-            if isinstance(admin_body, dict) and isinstance(viewer_body, dict) and admin_body and viewer_body:
-                if admin_body != viewer_body:
-                    draft.enrichment_trace.append("observer_consensus: admin/viewer mismatch detected")
-                else:
-                    draft.enrichment_trace.append("observer_consensus: admin/viewer consistent")
-
-        # ── Invariant ref ──
-        draft.invariant_ref = semantic.get("violated_invariant", "")
-
-        # ── Semantic evidence ──
-        draft.semantic_evidence_ref = semantic.get("verifier_trace_ref", "")
-
-        # ── Runtime evidence refs ──
-        draft.runtime_evidence_refs = normalized.get("call_chain_refs", [])
-        if not draft.runtime_evidence_refs:
-            draft.runtime_evidence_refs = normalized.get("raw_evidence_refs", [])
-
-        # ── Cleanup status: check ACTION call (calls[1]) not first call ──
-        # First call is usually GET (before snapshot), action is in calls[1]
-        method = "GET"
-        # 1. Check action_ref from normalized evidence (this is the action call)
-        action_ref = normalized.get("action_ref", {})
-        if isinstance(action_ref, dict):
-            action_call = str(action_ref.get("value", ""))
-            if action_call:
-                # Extract method from action call string like "POST /api/materials"
-                method = action_call.split()[0] if action_call.split() else "GET"
-        # 2. Fallback: check calls directly
-        if method == "GET" and len(calls) >= 2:
-            action_call = calls[1].get("call", "")
-            if action_call:
-                method = action_call.split()[0] if action_call.split() else "GET"
-        # 3. Fallback: normalized method (first call)
-        if method == "GET":
-            method_val = normalized.get("method", {})
-            if isinstance(method_val, dict):
-                method = str(method_val.get("value", "GET"))
-            elif method_val:
-                method = str(method_val)
-                
-        if method in ("POST", "PUT", "DELETE", "PATCH"):
-            draft.cleanup_status = "PENDING"
-            draft.missing_requirements.append("CLEANUP_PENDING")
-            draft.enrichment_trace.append(f"cleanup: PENDING for write operation ({method})")
+        action = _sourced(runtime, "action_ref")
+        draft.action_evidence_ref = _text(_observed(action))
+        before = next((item for item in runtime.get("before_candidates") or [] if isinstance(item, dict) and item.get("body_snapshot") not in (None, "", [], {})), None)
+        after = next((item for item in runtime.get("after_candidates") or [] if isinstance(item, dict) and item.get("body_snapshot") not in (None, "", [], {})), None)
+        if before:
+            draft.before_snapshot_data = _dict(before.get("body_snapshot"))
+            draft.before_snapshot_ref = _snapshot_ref(draft.before_snapshot_data)
+        if after:
+            draft.after_snapshot_data = _dict(after.get("body_snapshot"))
+            draft.after_snapshot_ref = _snapshot_ref(draft.after_snapshot_data)
+        method = _text(_observed(_sourced(runtime, "method"))).upper()
+        if method in _WRITE_METHODS:
+            if not draft.before_snapshot_ref:
+                _add_missing(draft, "BEFORE_SNAPSHOT_MISSING")
+            if not draft.after_snapshot_ref:
+                _add_missing(draft, "AFTER_SNAPSHOT_MISSING")
+            raw_evidence = _dict(_finding_value(finding, "evidence"))
+            cleanup = _dict(raw_evidence.get("cleanup"))
+            cleanup_status = _text(cleanup.get("status")).lower()
+            if cleanup_status in {"completed", "verified"}:
+                draft.cleanup_status = "COMPLETED"
+                draft.cleanup_evidence_ref = _text(cleanup.get("receipt_ref") or cleanup.get("evidence_ref"))
+            else:
+                draft.cleanup_status = "PENDING"
+                _add_missing(draft, "CLEANUP_PENDING")
         else:
             draft.cleanup_status = "NOT_APPLICABLE"
-            draft.enrichment_trace.append("cleanup: NOT_APPLICABLE (read-only probe)")
 
-        # ── Impact assessment ──
-        sev = ""
-        if hasattr(finding, "severity"):
-            sev = str(finding.severity or "")
-        elif isinstance(finding, dict):
-            sev = str(finding.get("severity", ""))
-        title = ""
-        if hasattr(finding, "title"):
-            title = str(finding.title or "")
-        elif isinstance(finding, dict):
-            title = str(finding.get("title", ""))
-        draft.impact_assessment = f"[{sev}] {title}"[:300]
-
-        # ── Reproduction flow ──
-        if calls:
-            first_call = calls[0].get("call", "")
-            draft.reproduction_flow_ref = f"discovery_probe::{first_call}"
-
-        # ── Merge normalized missing requirements ──
-        for mr in normalized.get("missing_requirements", []):
-            if mr not in draft.missing_requirements and mr in MISSING_REQUIREMENTS:
-                draft.missing_requirements.append(mr)
-
-        # ── Safety: never fabricated ──
+        draft.observer_refs = [json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)[:500] for item in runtime.get("observer_refs") or [] if isinstance(item, dict)]
+        draft.runtime_evidence_refs = [_text(value) for value in runtime.get("call_chain_refs") or runtime.get("raw_evidence_refs") or [] if _text(value)]
+        if draft.runtime_evidence_refs:
+            draft.reproduction_flow_ref = "receipt_chain::" + " -> ".join(draft.runtime_evidence_refs[:12])
+        else:
+            _add_missing(draft, "REPRODUCTION_INCOMPLETE")
+        draft.invariant_ref = _text(semantic.get("violated_invariant") or semantic.get("verifier_rule"))
+        if not draft.invariant_ref:
+            _add_missing(draft, "INVARIANT_REF_MISSING")
+        draft.semantic_evidence_ref = _text(semantic.get("verifier_trace_ref"))
+        title = _text(_finding_value(finding, "title"))
+        severity = _text(_finding_value(finding, "severity")) or "P2"
+        draft.impact_assessment = f"[{severity}] {title}"[:300]
+        if not title:
+            _add_missing(draft, "IMPACT_ASSESSMENT_MISSING")
+        for item in runtime.get("missing_requirements") or []:
+            _add_missing(draft, _text(item))
         draft._fabricated = False
-
         return draft
 
 
-def enrich_finding_evidence(
-    finding: Any,
-    calls: list[dict] | None = None,
-    normalized: dict[str, Any] | None = None,
-    semantic: dict[str, Any] | None = None,
-    project_id: str = "",
-    policy_version: str = "baseline",
-) -> dict[str, Any]:
-    """One-shot: enrich a finding into a business evidence draft.
-
-    Returns the BusinessEvidenceDraft plus four-layer state:
-    - raw_runtime_verdict: from original Stage_verify verdict
-    - semantic_verdict: mapped to SEMANTIC_VERDICTS
-    - business_evidence_status: PENDING_* if incomplete
-    - final_review_status: NEEDS_MORE_EVIDENCE if business evidence incomplete
-
-    CRITICAL: semantic confirmed + missing business evidence →
-    SEMANTIC_CONFIRMED_PENDING_EVIDENCE, NOT rejected.
-    """
+def enrich_finding_evidence(finding: Any, calls: list[dict] | None = None,
+                             normalized: dict[str, Any] | None = None,
+                             semantic: dict[str, Any] | None = None,
+                             project_id: str = "", policy_version: str = "baseline") -> dict[str, Any]:
     enricher = BusinessEvidenceEnricher()
-    normalized = normalized or {}
-    semantic = semantic or {}
-    draft = enricher.enrich(
-        normalized, semantic, finding, calls or [],
-        project_id=project_id, policy_version=policy_version,
-    )
-
-    # ── Compute four-layer state ──
-    raw_runtime_verdict = "inconclusive"
-    if hasattr(finding, "verdict"):
-        raw_runtime_verdict = str(finding.verdict or "inconclusive")
-    elif isinstance(finding, dict):
-        raw_runtime_verdict = str(finding.get("verdict", "inconclusive"))
-
-    # Preserve original raw verdict from Stage_verify
-    original = semantic.get("_original_verdict", raw_runtime_verdict)
-    if original and original != "inconclusive":
-        raw_runtime_verdict = original
-
-    semantic_verdict = semantic.get("semantic_verdict", "SEMANTIC_INCONCLUSIVE")
+    normalized, semantic = normalized or {}, semantic or {}
+    draft = enricher.enrich(normalized, semantic, finding, calls, project_id, policy_version)
+    raw = _text(_finding_value(finding, "verdict")) or "inconclusive"
+    semantic_verdict = _text(semantic.get("semantic_verdict") or _dict(normalized.get("semantic")).get("semantic_verdict")) or "SEMANTIC_INCONCLUSIVE"
     business_status = enricher._compute_business_evidence_status(draft, semantic_verdict)
-    final_status = enricher._compute_final_review_status(business_status, semantic_verdict)
-
     result = draft.to_dict()
-    result["raw_runtime_verdict"] = raw_runtime_verdict
-    result["semantic_verdict"] = semantic_verdict
-    result["business_evidence_status"] = business_status
-    result["final_review_status"] = final_status
-
-    # If SEMANTIC_CONFIRMED but business evidence incomplete:
-    # Record the compound state explicitly
-    if semantic_verdict == "SEMANTIC_CONFIRMED" and business_status.startswith("PENDING_"):
-        result["compound_status"] = "SEMANTIC_CONFIRMED_PENDING_EVIDENCE"
-    elif semantic_verdict == "SEMANTIC_CONFIRMED" and business_status == "VALIDATED":
-        result["compound_status"] = "VALIDATED_CANDIDATE"
-    else:
-        result["compound_status"] = final_status
-
+    result.update({
+        "raw_runtime_verdict": _text(semantic.get("_original_verdict")) or raw,
+        "semantic_verdict": semantic_verdict,
+        "business_evidence_status": business_status,
+        "final_review_status": enricher._compute_final_review_status(business_status, semantic_verdict),
+    })
+    result["compound_status"] = "VALIDATED_CANDIDATE" if semantic_verdict == "SEMANTIC_CONFIRMED" and business_status == "VALIDATED" else ("SEMANTIC_CONFIRMED_PENDING_EVIDENCE" if semantic_verdict == "SEMANTIC_CONFIRMED" else result["final_review_status"])
     return result
