@@ -6,17 +6,34 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   python-guardrails:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Normalize reasoner guardrails
+        if: github.event_name == 'push'
+        run: |
+          python tools/fix_reasoner_guardrails.py || true
+          if ! git diff --quiet -- ai_test_asset_center/stage_reason_all_v2.py; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add ai_test_asset_center/stage_reason_all_v2.py
+            git commit -m "Fix reasoner static hypothesis caps"
+            git push
+          fi
 
       - name: Syntax check Python files
         run: |
