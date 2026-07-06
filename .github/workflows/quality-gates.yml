@@ -29,6 +29,9 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/policy_wiring.py').read()); print('policy_wiring.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/policy_registry.py').read()); print('policy_registry.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_campaign.py').read()); print('enterprise_campaign.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_source_registry.py').read()); print('enterprise_source_registry.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/evidence_artifact_store.py').read()); print('evidence_artifact_store.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/browser_execution.py').read()); print('browser_execution.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_test_data_plan.py').read()); print('enterprise_test_data_plan.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/__main__.py').read()); print('__main__.py OK')"
           python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
@@ -48,6 +51,9 @@ jobs:
             tests/test_phase109_behavior_slice_policy_registry.py \
             tests/test_phase110_enterprise_campaign.py \
             tests/test_phase110_unified_scan_contract.py \
+            tests/test_phase110_enterprise_source_registry.py \
+            tests/test_phase110_evidence_artifact_store.py \
+            tests/test_phase110_browser_execution_contract.py \
             -q
 
   frontend-quality:
