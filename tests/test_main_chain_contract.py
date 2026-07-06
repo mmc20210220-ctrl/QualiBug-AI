@@ -73,7 +73,7 @@ def test_main_chain_contract_does_not_mark_candidates_as_customer_ready(tmp_path
 
     assert contract["chain_ready"] is False
     assert contract["customer_defect_delivery_ready"] is False
-    assert contract["summary"]["first_blocked_stage"] == "enterprise_inputs"
+    assert contract["summary"]["first_blocked_stage"] == "bug_discovery"
     bug_stage = next(stage for stage in contract["stages"] if stage["stage"] == "bug_discovery")
     assert bug_stage["status"] == "partial"
     assert "no_validated_bug" in bug_stage["blockers"]
