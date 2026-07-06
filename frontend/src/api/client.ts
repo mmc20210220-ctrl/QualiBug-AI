@@ -306,7 +306,7 @@ export async function getKnowledgeAsset(projectId: string): Promise<unknown> {
 }
 
 export function getKnowledgePreview(sourceId: string): Promise<unknown> {
-  return fetchJSON<unknown>(`${API_BASE}/knowledge/preview?sourceId=${encodeURIComponent(sourceId)}`);
+  return fetchJSON<unknown>(`${API_BASE}/knowledge/preview?source_id=${encodeURIComponent(sourceId)}`);
 }
 
 export function saveSettings(body: JsonRecord): Promise<unknown> {
