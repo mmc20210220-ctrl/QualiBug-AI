@@ -173,33 +173,101 @@ def _bug_stage(output_dir: Path, discovery_data: dict[str, Any]) -> dict[str, An
     )
 
 
+def _has_raw_request(item: dict[str, Any]) -> bool:
+    return isinstance(item.get("request"), dict) or isinstance(item.get("request_raw"), dict) or isinstance(item.get("raw_request"), dict)
+
+
+def _has_raw_response(item: dict[str, Any]) -> bool:
+    return isinstance(item.get("response"), dict) or isinstance(item.get("response_raw"), dict) or isinstance(item.get("raw_response"), dict)
+
+
+def _has_expected_actual(item: dict[str, Any]) -> bool:
+    return item.get("expected") is not None and item.get("actual") is not None
+
+
+def _is_synthetic_evidence(item: dict[str, Any]) -> bool:
+    if item.get("is_synthetic") is True or item.get("synthetic") is True:
+        return True
+    reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+    replay = item.get("replay") if isinstance(item.get("replay"), dict) else {}
+    proof = item.get("proof") if isinstance(item.get("proof"), dict) else {}
+    return bool(reproduction.get("is_synthetic") is True or replay.get("is_synthetic") is True or proof.get("is_synthetic") is True)
+
+
+def _has_replay_or_reproduction(item: dict[str, Any]) -> bool:
+    reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+    replay = item.get("replay") if isinstance(item.get("replay"), dict) else {}
+    proof = item.get("proof") if isinstance(item.get("proof"), dict) else {}
+    return any((
+        bool(reproduction) and reproduction.get("is_synthetic") is not True,
+        bool(replay) and replay.get("is_synthetic") is not True,
+        proof.get("can_reproduce") is True,
+        proof.get("repro_rate") not in (None, 0, "0", "0%"),
+        item.get("can_reproduce") is True,
+    ))
+
+
+def _has_execution_receipt(item: dict[str, Any]) -> bool:
+    return any((
+        item.get("execution_id"),
+        item.get("probe_id"),
+        item.get("trace_id"),
+        item.get("timestamp"),
+        item.get("captured_at"),
+        item.get("duration_seconds") is not None,
+        item.get("response_status") is not None,
+    ))
+
+
+def _strict_evidence_items(evidence_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item for item in evidence_items
+        if item.get("issue_id")
+        and _has_raw_request(item)
+        and _has_raw_response(item)
+        and _has_expected_actual(item)
+        and _has_replay_or_reproduction(item)
+        and _has_execution_receipt(item)
+        and not _is_synthetic_evidence(item)
+    ]
+
+
 def _evidence_stage(output_dir: Path) -> dict[str, Any]:
     evidence_bundle = _read_json(output_dir / "evidence_bundle.json", {})
     evidence_items = _items(evidence_bundle)
     issue_ids = {str(item.get("issue_id") or "") for item in _items(_read_json(output_dir / "discovered_issues.json", {})) if item.get("issue_id")}
     evidence_issue_ids = {str(item.get("issue_id") or "") for item in evidence_items if item.get("issue_id")}
-    linked = sorted(issue_ids & evidence_issue_ids)
-    hard_evidence = [
-        item for item in evidence_items
-        if isinstance(item.get("request"), dict)
-        and isinstance(item.get("response"), dict)
-        and (item.get("expected") is not None or item.get("actual") is not None)
-    ]
-    status = "passed" if evidence_items and len(linked) == len(issue_ids) and hard_evidence else "partial" if evidence_items else "missing"
+    strict_items = _strict_evidence_items(evidence_items)
+    strict_issue_ids = {str(item.get("issue_id") or "") for item in strict_items if item.get("issue_id")}
     blockers: list[str] = []
     if not evidence_items:
         blockers.append("no_evidence_bundle_items")
-    if issue_ids and len(linked) < len(issue_ids):
+    if not evidence_issue_ids:
+        blockers.append("missing_stable_issue_link")
+    if issue_ids and len(issue_ids & evidence_issue_ids) < len(issue_ids):
         blockers.append("evidence_not_linked_to_all_issues")
-    if evidence_items and not hard_evidence:
-        blockers.append("missing_request_response_expected_actual")
+    if evidence_items and not any(_has_raw_request(item) for item in evidence_items):
+        blockers.append("missing_raw_request")
+    if evidence_items and not any(_has_raw_response(item) for item in evidence_items):
+        blockers.append("missing_raw_response")
+    if evidence_items and not any(_has_expected_actual(item) for item in evidence_items):
+        blockers.append("missing_expected_actual_pair")
+    if evidence_items and not any(_has_replay_or_reproduction(item) for item in evidence_items):
+        blockers.append("missing_replay_or_reproduction")
+    if evidence_items and not any(_has_execution_receipt(item) for item in evidence_items):
+        blockers.append("missing_execution_receipt")
+    if evidence_items and any(_is_synthetic_evidence(item) for item in evidence_items):
+        blockers.append("synthetic_evidence_present")
+    if issue_ids and len(issue_ids & strict_issue_ids) < len(issue_ids):
+        blockers.append("strict_evidence_not_linked_to_all_issues")
+    status = "passed" if evidence_items and issue_ids and len(issue_ids & strict_issue_ids) == len(issue_ids) and not blockers else "partial" if evidence_items else "missing"
     return _stage(
         "evidence_chain",
         status,
         count=len(evidence_items),
-        message="证据包已和缺陷关联，具备请求/响应/期望/实际信息" if status == "passed" else "证据包存在但关联或字段不完整" if status == "partial" else "未产出证据包",
+        message="证据包已和缺陷稳定关联，具备原始请求/响应、期望/实际、复现回放和真实执行回执" if status == "passed" else "证据包存在但严格证据链字段不完整" if status == "partial" else "未产出证据包",
         blockers=blockers,
-        next_action="为每个 issue_id 绑定 request、response、expected、actual、复现信息和原始回执。",
+        next_action="为每个 issue_id 绑定原始 request/response、expected、actual、reproduction/replay、非 synthetic 标记和真实执行回执。",
     )
 
 
