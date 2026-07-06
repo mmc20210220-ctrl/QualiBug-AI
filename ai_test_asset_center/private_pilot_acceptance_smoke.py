@@ -289,6 +289,80 @@ def _classify_acceptance(checks: dict[str, Any], doctor_payload: dict[str, Any])
     }
 
 
+def _customer_summary_commands(acceptance: dict[str, Any], checks: dict[str, Any]) -> list[str]:
+    commands: list[str] = []
+    if acceptance.get("level") == "blocked":
+        commands.append("qualibug-acceptance-smoke --output")
+    scenario = checks.get("scenario_readiness", {}) if isinstance(checks.get("scenario_readiness"), dict) else {}
+    if scenario.get("missing"):
+        commands.append(
+            "qualibug-acceptance-smoke --project <project> --scan-base-url <url> --scope-id <scope> --environment-ref <env> --test-data-strategy <strategy> --require-scenario-ready --output"
+        )
+    health = checks.get("http_health", {}) if isinstance(checks.get("http_health"), dict) else {}
+    if health.get("enabled") and not health.get("ok"):
+        commands.append("python -m ai_test_asset_center.private_pilot_entrypoint")
+        commands.append("qualibug-acceptance-smoke --server-url http://localhost:8088 --output")
+    if not commands:
+        commands.append("Proceed to customer scenario smoke validation.")
+    deduped: list[str] = []
+    for command in commands:
+        if command not in deduped:
+            deduped.append(command)
+    return deduped[:4]
+
+
+def _customer_acceptance_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    acceptance = payload.get("acceptance", {}) if isinstance(payload.get("acceptance"), dict) else {}
+    checks = payload.get("checks", {}) if isinstance(payload.get("checks"), dict) else {}
+    scenario = checks.get("scenario_readiness", {}) if isinstance(checks.get("scenario_readiness"), dict) else {}
+    report_paths = [
+        str(default_acceptance_report_path(payload.get("root"))),
+        str(Path(str(payload.get("doctor_report_default") or "")).expanduser()),
+    ]
+    commands = _customer_summary_commands(acceptance, checks)
+    level = _as_text(acceptance.get("level") or "unknown")
+    accepted = bool(acceptance.get("accepted"))
+    blockers = [str(item) for item in acceptance.get("blockers", []) or []]
+    warnings = [str(item) for item in acceptance.get("warnings", []) or []]
+    missing = [str(item) for item in scenario.get("missing", []) or []]
+
+    zh_lines = [
+        f"客户验收结果：{level}（{'通过' if accepted else '未通过'}）。",
+        f"产品版本：{PRODUCT_VERSION}。",
+        "可安全发回支持的报告：" + "；".join(report_paths),
+    ]
+    en_lines = [
+        f"Customer acceptance result: {level} ({'accepted' if accepted else 'not accepted'}).",
+        f"Product version: {PRODUCT_VERSION}.",
+        "Safe reports to share with support: " + "; ".join(report_paths),
+    ]
+    if blockers:
+        zh_lines.append("阻断项：" + "，".join(blockers[:6]))
+        en_lines.append("Blockers: " + ", ".join(blockers[:6]))
+    if warnings:
+        zh_lines.append("待处理事项：" + "，".join(warnings[:6]))
+        en_lines.append("Action items: " + ", ".join(warnings[:6]))
+    if missing:
+        zh_lines.append("真实扫描前置缺失：" + "，".join(missing))
+        en_lines.append("Missing real-scan preflight items: " + ", ".join(missing))
+    zh_lines.append("下一步：" + _as_text(acceptance.get("next_action")))
+    en_lines.append("Next action: " + _as_text(acceptance.get("next_action")))
+    zh_lines.append("建议命令：" + " && ".join(commands))
+    en_lines.append("Suggested commands: " + " && ".join(commands))
+
+    return {
+        "schema_version": "customer-acceptance-summary-v1",
+        "accepted": accepted,
+        "level": level,
+        "safe_report_paths": report_paths,
+        "next_commands": commands,
+        "zh_lines": zh_lines,
+        "zh_text": "\n".join(zh_lines),
+        "en_lines": en_lines,
+        "en_text": "\n".join(en_lines),
+    }
+
+
 def run_acceptance_smoke(
     root: str | Path | None = None,
     *,
@@ -326,7 +400,7 @@ def run_acceptance_smoke(
         ),
     }
     acceptance = _classify_acceptance(checks, doctor_payload)
-    return {
+    payload = {
         "schema_version": "private-pilot-acceptance-smoke-v1",
         "ok": bool(acceptance.get("accepted")) and acceptance.get("level") != "blocked",
         "product_version": PRODUCT_VERSION,
@@ -338,6 +412,8 @@ def run_acceptance_smoke(
         "doctor_summary_text": doctor_payload.get("summary_text", ""),
         "support_bundle_manifest": doctor_payload.get("support_bundle_manifest", {}),
     }
+    payload["customer_acceptance_summary"] = _customer_acceptance_summary(payload)
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
