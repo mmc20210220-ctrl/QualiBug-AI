@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
+    from ai_test_asset_center.private_pilot_server import _build_campaign_context_from_scan_body
+
+    context = _build_campaign_context_from_scan_body(
+        {
+            "source_manifest": {
+                "source_id": "openapi-main",
+                "source_hash": "a" * 64,
+                "source_version_id": "srcv_1",
+                "source_origin": "registered_source_registry",
+            },
+            "scope_id": "checkout-scope",
+            "environment_ref": "staging-env",
+            "execution_approval_id": "approval-001",
+            "execution_mode": "safe_read_only",
+            "test_data_contract": {"strategy": "blocked_with_testability_gap"},
+            "release_policy": {"block_on_p0": True},
+        }
+    )
+
+    assert context["source_manifest"]["source_id"] == "openapi-main"
+    assert context["source_manifest"]["source_hash"] == "a" * 64
+    assert context["scope_id"] == "checkout-scope"
+    assert context["environment_ref"] == "staging-env"
+    assert context["execution_approval_id"] == "approval-001"
+    assert context["execution_mode"] == "safe_read_only"
+    assert context["test_data_contract"] == {"strategy": "blocked_with_testability_gap"}
+    assert context["release_policy"] == {"block_on_p0": True}
+
+
+def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp_path: Path) -> None:
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+    from ai_test_asset_center.private_pilot_server import _build_campaign_context_from_scan_body, _prepare_scan_body_for_campaign
+
+    content = "openapi: 3.0.0\npaths:\n  /api/orders:\n    get:\n      responses:\n        '200': {description: ok}\n"
+    manifest = register_source_asset(
+        "demo",
+        "openapi-main",
+        content,
+        source_type="openapi",
+        root=tmp_path,
+        actor={"name": "tester", "role": "qa_lead"},
+    )
+
+    prepared = _prepare_scan_body_for_campaign(
+        "demo",
+        tmp_path,
+        {
+            "source_manifest": {
+                "source_id": manifest["source_id"],
+                "source_hash": manifest["source_hash"],
+                "source_version_id": manifest["source_version_id"],
+            },
+            "base_url": "http://127.0.0.1:8000",
+            "scope_id": "checkout-scope",
+            "environment_ref": "staging-env",
+        },
+    )
+    context = _build_campaign_context_from_scan_body(prepared)
+
+    assert prepared["api_doc"] == content
+    assert prepared["source_manifest"]["source_id"] == "openapi-main"
+    assert context["source_manifest"]["source_hash"] == manifest["source_hash"]
+    assert context["scope_id"] == "checkout-scope"
+    assert context["environment_ref"] == "staging-env"
+
+
+def test_scan_body_can_auto_select_latest_registered_source_when_frontend_omits_manifest(tmp_path: Path) -> None:
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+    from ai_test_asset_center.private_pilot_server import _build_campaign_context_from_scan_body, _prepare_scan_body_for_campaign
+
+    content = "GET /api/products\n"
+    manifest = register_source_asset(
+        "demo",
+        "api-doc",
+        content,
+        source_type="openapi",
+        root=tmp_path,
+        actor={"name": "tester", "role": "qa_lead"},
+    )
+
+    prepared = _prepare_scan_body_for_campaign(
+        "demo",
+        tmp_path,
+        {
+            "scope_id": "catalog-scope",
+            "environment_ref": "qa-env",
+            "test_data_strategy": "blocked_with_testability_gap",
+        },
+    )
+    context = _build_campaign_context_from_scan_body(prepared)
+
+    assert prepared["api_doc"] == content
+    assert context["source_manifest"]["source_id"] == manifest["source_id"]
+    assert context["source_manifest"]["source_hash"] == manifest["source_hash"]
+    assert context["scope_id"] == "catalog-scope"
+    assert context["environment_ref"] == "qa-env"
+    assert context["test_data_contract"] == {"strategy": "blocked_with_testability_gap"}
