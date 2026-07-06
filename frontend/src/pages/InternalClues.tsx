@@ -4,7 +4,6 @@ import { useFindingsData } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
 import { formatBeijingDateTime } from '../lib/time';
 import { useProjectNavigation } from '../lib/project-navigation';
-import type { Finding } from '../types';
 
 type ClueFilter = 'all' | 'suspected' | 'risk_clue' | 'not_reproduced' | 'P0' | 'P1' | 'P2';
 
@@ -37,8 +36,8 @@ export function InternalClues() {
     { label: `风险线索 (${riskClueCount})`, value: 'risk_clue' },
     { label: `未复现 (${notReproducedCount})`, value: 'not_reproduced' },
     { label: `P0 (${p0Count})`, value: 'P0' },
-    { label: `P1`, value: 'P1' },
-    { label: `P2`, value: 'P2' },
+    { label: 'P1', value: 'P1' },
+    { label: 'P2', value: 'P2' },
   ];
 
   const displayData = clues.filter((item) => {
@@ -74,107 +73,33 @@ export function InternalClues() {
           { label: '未复现', value: notReproducedCount, note: '建议安排定向复测', tone: 'danger' },
           { label: 'P0 线索', value: p0Count, note: '优先补证闭环', tone: 'primary' },
         ].map((item) => (
-          <article key={item.label} className={`findings-stat-card tone-${item.tone}`}>
-            <strong>{item.value}</strong>
-            <span>{item.label}</span>
-            <small>{item.note}</small>
-          </article>
+          <article key={item.label} className={`findings-stat-card tone-${item.tone}`}><strong>{item.value}</strong><span>{item.label}</span><small>{item.note}</small></article>
         ))}
       </div>
 
       <div className="filters behavior-filters mb-4">
-        {filters.map((item) => (
-          <button key={item.value} onClick={() => setFilter(item.value)} className={`filter${filter === item.value ? ' active' : ''}`}>
-            {item.label}
-          </button>
-        ))}
+        {filters.map((item) => <button key={item.value} onClick={() => setFilter(item.value)} className={`filter${filter === item.value ? ' active' : ''}`}>{item.label}</button>)}
       </div>
 
-      {loading && (
-        <section className="findings-empty-state compact">
-          <div className="spinner spinner-centered" />
-          <p>正在整理待验证线索...</p>
-        </section>
-      )}
-
-      {!loading && error && displayData.length === 0 && (
-        <section className="findings-empty-state danger">
-          <span className="findings-empty-kicker">连接异常</span>
-          <h3>线索数据暂时不可用</h3>
-          <p>{error}</p>
-          <button className="btn btn-primary" onClick={refetch}>重新连接</button>
-        </section>
-      )}
-
-      {!loading && !error && displayData.length === 0 && (
-        <section className="findings-empty-state">
-          <span className="findings-empty-kicker">当前空态</span>
-          <h3>{filter === 'all' ? '暂无待验证线索' : `暂无 ${getClueStatusLabel(filter)}`}</h3>
-          <p>{filter === 'all' ? '当前项目没有待验证线索，说明本轮结果已基本收敛到客户可交付缺陷。' : '当前筛选条件下没有匹配线索。'}</p>
-        </section>
-      )}
+      {loading && <section className="findings-empty-state compact"><div className="spinner spinner-centered" /><p>正在整理待验证线索...</p></section>}
+      {!loading && error && displayData.length === 0 && <section className="findings-empty-state danger"><span className="findings-empty-kicker">连接异常</span><h3>线索数据暂时不可用</h3><p>{error}</p><button className="btn btn-primary" onClick={refetch}>重新连接</button></section>}
+      {!loading && !error && displayData.length === 0 && <section className="findings-empty-state"><span className="findings-empty-kicker">当前空态</span><h3>{filter === 'all' ? '暂无待验证线索' : `暂无 ${getClueStatusLabel(filter)}`}</h3><p>{filter === 'all' ? '当前项目没有待验证线索，说明本轮结果已基本收敛到客户可交付缺陷。' : '当前筛选条件下没有匹配线索。'}</p></section>}
 
       {displayData.map((item) => {
         const isOpen = expandedId === item.id;
         const missing = item.evidence_quality?.missing || [];
         const nextActions = item.evidence_quality?.next_actions || [];
-        const repro = item.reproduction || { method: '', path: '', steps: [], is_synthetic: false };
-        const inv = item.investigation_guidance || { relevant_apis: [], relevant_tables: [], log_search: '', sql_verify: '' };
-
-        return (
-          <div key={item.id} className={`evidence-item findings-item ${item.severity.toLowerCase()}${isOpen ? ' open' : ''}`}>
-            <div className="evidence-head" onClick={() => setExpandedId(isOpen ? null : item.id)}>
-              <span className={`severity ${item.severity.toLowerCase()}`}>{item.severity}</span>
-              <span className={`bug-status-badge bug-status-${item.bug_status || 'risk_clue'}`}>{item.bug_status_label || '待验证'}</span>
-              <span className="evidence-title">{item.title}</span>
-              <span className="evidence-meta">
-                <span className="evidence-quality-score-chip">{item.evidence_quality?.score ?? 0}/100</span>
-                <time>{formatBeijingDateTime(item.timestamp)}</time>
-              </span>
-              <span className="evidence-expand">{isOpen ? '▲' : '▼'}</span>
-            </div>
-            <div className="evidence-one-liner" onClick={() => setExpandedId(isOpen ? null : item.id)}>
-              <span className="evidence-one-liner-label">内部判断</span>
-              <span className="evidence-one-liner-text">{item.business_summary || item.actual || item.evidence_quality?.summary || '需要补充更多证据后再确认。'}</span>
-            </div>
-            <div className="evidence-body">
-              <div className="findings-compare-grid">
-                <div className="findings-compare-card">
-                  <span className="findings-compare-label">当前掌握</span>
-                  <p>{item.actual || item.evidence_quality?.summary || '暂未形成稳定异常结论'}</p>
-                </div>
-                <div className="findings-compare-card danger">
-                  <span className="findings-compare-label">仍缺证据</span>
-                  <p>{missing.length > 0 ? missing.join('；') : '暂无明确缺口，建议继续复验确认'}</p>
-                </div>
-              </div>
-
-              {nextActions.length > 0 && (
-                <div className="findings-investigation-card">
-                  <div className="findings-panel-kicker warning">下一步建议</div>
-                  <div className="findings-investigation-body">
-                    <ol className="findings-steps">
-                      {nextActions.map((step, index) => <li key={index}>{step}</li>)}
-                    </ol>
-                  </div>
-                </div>
-              )}
-
-              {(repro.path || inv.log_search || inv.sql_verify || inv.relevant_tables?.length || inv.relevant_apis?.length) && (
-                <div className="findings-investigation-card">
-                  <div className="findings-panel-kicker">补证入口</div>
-                  <div className="findings-investigation-body">
-                    {repro.path && <div>优先复验：<code>{repro.method} {repro.path}</code></div>}
-                    {inv.relevant_apis?.length > 0 && <div>关联接口：{inv.relevant_apis.join('、')}</div>}
-                    {inv.relevant_tables?.length > 0 && <div>关联数据表：{inv.relevant_tables.join('、')}</div>}
-                    {inv.log_search && <div><code>{inv.log_search}</code></div>}
-                    {inv.sql_verify && <div><code>{inv.sql_verify}</code></div>}
-                  </div>
-                </div>
-              )}
-            </div>
+        const reproduction = item.reproduction || { method: '', path: '', steps: [], is_synthetic: false };
+        const investigation = item.investigation_guidance || { relevant_apis: [], relevant_tables: [], log_search: '', sql_verify: '' };
+        return <div key={item.id} className={`evidence-item findings-item ${item.severity.toLowerCase()}${isOpen ? ' open' : ''}`}>
+          <div className="evidence-head" onClick={() => setExpandedId(isOpen ? null : item.id)}><span className={`severity ${item.severity.toLowerCase()}`}>{item.severity}</span><span className={`bug-status-badge bug-status-${item.bug_status || 'risk_clue'}`}>{item.bug_status_label || '待验证'}</span><span className="evidence-title">{item.title}</span><span className="evidence-meta"><span className="evidence-quality-score-chip">{item.evidence_quality?.score ?? 0}/100</span><time>{formatBeijingDateTime(item.timestamp)}</time></span><span className="evidence-expand">{isOpen ? '▲' : '▼'}</span></div>
+          <div className="evidence-one-liner" onClick={() => setExpandedId(isOpen ? null : item.id)}><span className="evidence-one-liner-label">内部判断</span><span className="evidence-one-liner-text">{item.business_summary || item.actual || item.evidence_quality?.summary || '需要补充更多证据后再确认。'}</span></div>
+          <div className="evidence-body">
+            <div className="findings-compare-grid"><div className="findings-compare-card"><span className="findings-compare-label">当前掌握</span><p>{item.actual || item.evidence_quality?.summary || '暂未形成稳定异常结论'}</p></div><div className="findings-compare-card danger"><span className="findings-compare-label">仍缺证据</span><p>{missing.length > 0 ? missing.join('；') : '暂无明确缺口，建议继续复验确认'}</p></div></div>
+            {nextActions.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">下一步建议</div><div className="findings-investigation-body"><ol className="findings-steps">{nextActions.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ol></div></div>}
+            {(reproduction.path || investigation.log_search || investigation.sql_verify || investigation.relevant_tables?.length || investigation.relevant_apis?.length) && <div className="findings-investigation-card"><div className="findings-panel-kicker">补证入口</div><div className="findings-investigation-body">{reproduction.path && <div>优先复验：<code>{reproduction.method} {reproduction.path}</code></div>}{investigation.relevant_apis?.length > 0 && <div>关联接口：{investigation.relevant_apis.join('、')}</div>}{investigation.relevant_tables?.length > 0 && <div>关联数据表：{investigation.relevant_tables.join('、')}</div>}{investigation.log_search && <div><code>{investigation.log_search}</code></div>}{investigation.sql_verify && <div><code>{investigation.sql_verify}</code></div>}</div></div>}
           </div>
-        );
+        </div>;
       })}
     </div>
   );
