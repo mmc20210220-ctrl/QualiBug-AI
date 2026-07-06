@@ -82,6 +82,45 @@ def test_backend_gate_rejects_synthetic_or_blocked_findings() -> None:
     assert is_customer_deliverable_defect(blocked) is False
 
 
+def test_backend_gate_rejects_auth_route_and_coverage_blockers() -> None:
+    for marker in ("auth_blocked", "route_blocked", "coverage_gap", "not_reproduced"):
+        finding = _ready_finding()
+        finding["block_reason"] = marker
+        assert is_customer_deliverable_defect(finding) is False, marker
+
+
+def test_backend_gate_rejects_non_executed_or_unconfirmed_results() -> None:
+    not_executed = _ready_finding()
+    not_executed["execution_status"] = "planned"
+
+    not_confirmed = _ready_finding()
+    not_confirmed["confirmation_status"] = "needs_review"
+
+    assert is_customer_deliverable_defect(not_executed) is False
+    assert is_customer_deliverable_defect(not_confirmed) is False
+
+
+def test_backend_gate_rejects_missing_real_request_response_or_failure_assertion() -> None:
+    no_request = _ready_finding()
+    no_request["raw_evidence"]["request_raw"] = {}
+    no_request["reproduction"]["method"] = ""
+    no_request["reproduction"]["path"] = ""
+
+    no_response = _ready_finding()
+    no_response["raw_evidence"]["response_raw"] = {}
+    no_response["reproduction"]["har_evidence"] = {}
+
+    no_assertion = _ready_finding()
+    no_assertion["expected"] = ""
+    no_assertion["actual"] = ""
+    no_assertion["failed_assertions"] = []
+    no_assertion["expected_actual_comparison"] = {"difference": ""}
+
+    assert is_customer_deliverable_defect(no_request) is False
+    assert is_customer_deliverable_defect(no_response) is False
+    assert is_customer_deliverable_defect(no_assertion) is False
+
+
 def test_backend_gate_splits_non_ready_items_into_internal_clues() -> None:
     ready = _ready_finding()
     clue = _ready_finding()
