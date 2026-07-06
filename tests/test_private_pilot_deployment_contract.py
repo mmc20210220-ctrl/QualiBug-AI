@@ -33,6 +33,16 @@ def test_health_payload_uses_product_version_and_canonical_port(tmp_path: Path, 
     assert payload["llm_available"] is True
 
 
+def test_health_contract_is_extracted_from_entrypoint() -> None:
+    entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
+    health_module = Path("ai_test_asset_center/private_pilot_health_contract.py").read_text(encoding="utf-8")
+
+    assert "from ai_test_asset_center.private_pilot_health_contract import build_private_pilot_health_payload" in entrypoint
+    assert "def build_private_pilot_health_payload" in health_module
+    assert "def _pattern_library_count" not in entrypoint
+    assert "def _browser_ui_status" not in entrypoint
+
+
 def test_qualibug_server_script_uses_patched_entrypoint() -> None:
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
     assert 'qualibug-server = "ai_test_asset_center.private_pilot_entrypoint:run_server"' in pyproject
