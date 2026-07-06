@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+"""Private-pilot scan campaign context contract helpers.
+
+This module owns the pure contract-building layer for private-pilot scans:
+source manifest normalization, immutable source loading, scan body preparation,
+and campaign_context construction. Runtime patch installation lives in
+``private_pilot_scan_context_patch``.
+"""
+
+import contextvars
+from pathlib import Path
+from typing import Any
+
+SCAN_CAMPAIGN_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "qualibug_private_pilot_scan_campaign_context",
+    default=None,
+)
+CONTINUOUS_CAMPAIGN_CONTEXTS: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def as_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def continuous_context_key(root: Path, project: str) -> tuple[str, str]:
+    return (str(root), str(project))
+
+
+def current_scan_campaign_context() -> dict[str, Any] | None:
+    return SCAN_CAMPAIGN_CONTEXT.get()
+
+
+def source_manifest_from_body(body: dict[str, Any]) -> dict[str, str]:
+    manifest = as_dict(body.get("source_manifest"))
+    for key in ("source_id", "source_hash", "source_version_id", "source_origin"):
+        value = as_text(body.get(key))
+        if value and not as_text(manifest.get(key)):
+            manifest[key] = value
+    cleaned: dict[str, str] = {}
+    for key in ("source_id", "source_hash", "source_version_id", "source_origin", "source_type"):
+        value = as_text(manifest.get(key))
+        if value:
+            cleaned[key] = value
+    return cleaned
+
+
+def load_source_content_from_manifest(project: str, root: Path, manifest: dict[str, str]) -> str:
+    source_hash = as_text(manifest.get("source_hash")).lower().removeprefix("sha256:")
+    if not source_hash:
+        return ""
+    try:
+        from ai_test_asset_center.enterprise_source_registry import load_source_content
+
+        return load_source_content(project, source_hash, root=root)
+    except Exception:
+        return ""
+
+
+def latest_registered_source(project: str, root: Path) -> tuple[str, dict[str, str]]:
+    try:
+        from ai_test_asset_center.enterprise_source_registry import list_source_assets, load_source_content
+
+        assets = list_source_assets(project, root=root)
+    except Exception:
+        return "", {}
+    if not assets:
+        return "", {}
+
+    def _sort_key(item: dict[str, Any]) -> tuple[str, str]:
+        return (as_text(item.get("updated_at_utc")), as_text(item.get("source_id")))
+
+    latest = max((item for item in assets if isinstance(item, dict)), key=_sort_key, default={})
+    source_hash = as_text(latest.get("latest_source_hash")).lower().removeprefix("sha256:")
+    source_id = as_text(latest.get("source_id"))
+    if not source_id or not source_hash:
+        return "", {}
+    try:
+        content = load_source_content(project, source_hash, root=root)
+    except Exception:
+        return "", {}
+    manifest = {
+        "source_id": source_id,
+        "source_hash": source_hash,
+        "source_version_id": as_text(latest.get("latest_version_id")),
+        "source_origin": "registered_source_registry",
+        "source_type": as_text(latest.get("source_type")),
+    }
+    return content, {key: value for key, value in manifest.items() if value}
+
+
+def prepare_scan_body_for_campaign(project: str, root: Path, body: dict[str, Any]) -> dict[str, Any]:
+    """Fill scan body gaps from the immutable source registry before legacy routing."""
+    prepared = dict(body or {})
+    api_doc = as_text(prepared.get("api_doc") or prepared.get("api_doc_text"))
+    manifest = source_manifest_from_body(prepared)
+
+    if not api_doc and manifest:
+        content = load_source_content_from_manifest(project, root, manifest)
+        if content:
+            prepared["api_doc"] = content
+            prepared["source_manifest"] = manifest
+            return prepared
+
+    if not api_doc and not manifest:
+        content, latest_manifest = latest_registered_source(project, root)
+        if content and latest_manifest:
+            prepared["api_doc"] = content
+            prepared["source_manifest"] = latest_manifest
+            return prepared
+
+    if manifest:
+        prepared["source_manifest"] = manifest
+    return prepared
+
+
+def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Build the V12 campaign_context from the frontend scan contract."""
+    context: dict[str, Any] = {}
+    manifest = source_manifest_from_body(body)
+    if manifest:
+        context["source_manifest"] = manifest
+
+    for key in (
+        "base_url",
+        "scope_id",
+        "environment_ref",
+        "target_environment",
+        "execution_approval_id",
+        "execution_mode",
+    ):
+        value = as_text(body.get(key))
+        if value:
+            context[key] = value
+
+    if "execution_mode" not in context:
+        context["execution_mode"] = "safe_read_only"
+
+    test_data_contract = as_dict(body.get("test_data_contract"))
+    if test_data_contract:
+        context["test_data_contract"] = test_data_contract
+    elif as_text(body.get("test_data_strategy")):
+        context["test_data_contract"] = {"strategy": as_text(body.get("test_data_strategy"))}
+
+    release_policy = as_dict(body.get("release_policy"))
+    if release_policy:
+        context["release_policy"] = release_policy
+    return context
