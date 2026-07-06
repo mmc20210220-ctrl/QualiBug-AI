@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
 from ai_test_asset_center.policy_wiring import _behavior_slice_execution_value
 from ai_test_asset_center.v12_pipeline import (
     _behavior_slice_settings,
+    _runtime_contract,
     _schedule_behavior_slices,
     run_v12_pipeline,
 )
@@ -46,6 +48,12 @@ CLOSED -> DRAFT by reopen
 # Value constraint
 aggregate_value must equal reconciled_value
 """
+
+SOURCE_MANIFEST = {
+    "source_id": "uploaded:case-api-v1",
+    "source_hash": hashlib.sha256(API_SPEC.encode("utf-8")).hexdigest(),
+    "source_origin": "declared_manifest",
+}
 
 
 def test_builder_outputs_only_source_bound_slices_and_explicit_unbound_gap():
@@ -178,6 +186,57 @@ def test_direct_v12_target_execution_is_blocked_without_enterprise_contract(tmp_
     assert result["phases"]["execution"]["status"] == "blocked"
     assert result["auto_har"]["status"] == "no_traffic"
     assert result["campaign"]["confirmed_slice_count"] == 0
+
+
+def test_direct_runtime_contract_accepts_verified_manifest_without_network_access():
+    contract = _runtime_contract(
+        {"scope_id": "case-lifecycle", "environment_ref": "approved-test", "source_manifest": SOURCE_MANIFEST},
+        "https://example.invalid",
+        API_SPEC,
+    )
+    assert contract["status"] == "approved"
+    assert contract["approved_base_url"] == "https://example.invalid"
+    assert contract["source_manifest"]["source_id"] == "uploaded:case-api-v1"
+
+
+def test_direct_v12_rejects_hash_mismatch_before_any_execution(tmp_path):
+    result = run_v12_pipeline(
+        project="enterprise-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+        base_url="https://example.invalid",
+        campaign_context={
+            "scope_id": "case-lifecycle",
+            "environment_ref": "approved-test",
+            "source_manifest": {"source_id": "uploaded:case-api-v1", "source_hash": "0" * 64},
+        },
+    )
+    assert result["runtime_contract"]["status"] == "blocked"
+    assert "SOURCE_HASH_MISMATCH" in result["runtime_contract"]["missing_requirements"]
+    assert result["phases"]["execution"]["status"] == "blocked"
+    assert result["auto_har"]["status"] == "no_traffic"
+
+
+def test_campaign_persists_verified_source_identity_for_plan_only_runs(tmp_path):
+    result = run_v12_pipeline(
+        project="enterprise-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+        campaign_context={
+            "scope_id": "case-lifecycle",
+            "environment_ref": "approved-test",
+            "source_manifest": SOURCE_MANIFEST,
+        },
+    )
+    assert "error" not in result
+    assert result["runtime_contract"]["status"] == "plan_only"
+    assert result["campaign"]["source_id"] == "uploaded:case-api-v1"
+    assert result["campaign"]["source_hash"] == SOURCE_MANIFEST["source_hash"]
+    assert result["campaign"]["source_snapshot_hash"] != SOURCE_MANIFEST["source_hash"]
 
 
 def test_pipeline_selects_different_source_slices_across_explicit_rounds(monkeypatch, tmp_path):
