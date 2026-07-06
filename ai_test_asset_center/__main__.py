@@ -229,7 +229,12 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
         "confirmed_slice_count": 0, "coverage_deferred_reason": first_code.lower(),
         "next_campaign_reason": "supply_registered_immutable_source" if first_code == "SOURCE_PROVENANCE_MISSING" else "correct_source_manifest_or_runtime_contract",
     }
-    test_data_plan = build_campaign_test_data_plan(campaign, [], _as_dict(context.get("test_data_contract")))
+    test_data_plan = build_campaign_test_data_plan(
+        campaign,
+        [],
+        _as_dict(context.get("test_data_contract")),
+        receipt_verifier=_test_data_receipt_verifier(root, project),
+    )
     result: dict[str, Any] = {
         "success": True, "scan_id": f"scan_{_safe_project(project)}_{int(started * 1000)}", "project": project,
         "grade": "blocked", "score": 0.0, "coverage": 0.0, "total_findings": 0, "total_candidates": 0,
@@ -258,6 +263,25 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
         result["report_path"] = str(report_path)
     _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
     return result
+
+
+def _test_data_receipt_verifier(root: Path, project: str):
+    def verify(kind: str, receipt_id: str, campaign_id: str, scope_id: str, environment_ref: str) -> bool:
+        try:
+            from .enterprise_test_data_receipts import verify_test_data_receipt
+            verdict = verify_test_data_receipt(
+                project,
+                receipt_id,
+                root=root,
+                kind=kind,
+                campaign_id=campaign_id,
+                scope_id=scope_id,
+                environment_ref=environment_ref,
+            )
+            return bool(verdict.get("valid"))
+        except Exception:
+            return False
+    return verify
 
 
 def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign: dict[str, Any], runtime_contract: dict[str, Any], execution_status: str, v12: dict[str, Any]) -> dict[str, Any]:
@@ -357,7 +381,12 @@ def scan(
         input_gaps.append(_gap("EVIDENCE_BUNDLE_PERSISTENCE_FAILED", "Runtime evidence could not be persisted with integrity guarantees; customer-deliverable confirmation is blocked."))
 
     graph_gaps = state_graph.get("coverage_gaps", []) if isinstance(state_graph.get("coverage_gaps"), list) else []
-    test_data_plan = build_campaign_test_data_plan(campaign, incremental.get("selected_slices") if isinstance(incremental.get("selected_slices"), list) else [], _as_dict(context.get("test_data_contract")))
+    test_data_plan = build_campaign_test_data_plan(
+        campaign,
+        incremental.get("selected_slices") if isinstance(incremental.get("selected_slices"), list) else [],
+        _as_dict(context.get("test_data_contract")),
+        receipt_verifier=_test_data_receipt_verifier(root, project),
+    )
     coverage_gaps = input_gaps + [item for item in graph_gaps if isinstance(item, dict)] + list(test_data_plan.get("coverage_gaps") or [])
     duration_ms = int((time.time() - started) * 1000)
     result: dict[str, Any] = {
