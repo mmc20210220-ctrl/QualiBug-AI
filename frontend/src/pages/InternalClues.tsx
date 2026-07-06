@@ -6,6 +6,7 @@ import { formatBeijingDateTime } from '../lib/time';
 import { useProjectNavigation } from '../lib/project-navigation';
 
 type ClueFilter = 'all' | 'suspected' | 'risk_clue' | 'not_reproduced' | 'P0' | 'P1' | 'P2';
+type GateExplanation = { code?: string; label?: string; detail?: string; next_action?: string };
 
 const GATE_REASON_LABELS: Record<string, string> = {
   INVALID_FINDING_PAYLOAD: '结果结构异常，无法作为客户缺陷交付',
@@ -38,6 +39,14 @@ function getClueStatusLabel(status: ClueFilter) {
 
 function explainGateReason(reason: string): string {
   return GATE_REASON_LABELS[reason] || reason.replace(/_/g, ' ').toLowerCase();
+}
+
+function getGateExplanations(item: unknown, reasonCodes: string[]): GateExplanation[] {
+  const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+  const explanations = Array.isArray(record.customer_delivery_gate_explanations) ? record.customer_delivery_gate_explanations : [];
+  const valid = explanations.filter((value): value is GateExplanation => Boolean(value && typeof value === 'object'));
+  if (valid.length > 0) return valid;
+  return reasonCodes.map((reason) => ({ code: reason, label: explainGateReason(reason), detail: '', next_action: '' }));
 }
 
 export function InternalClues() {
@@ -114,6 +123,7 @@ export function InternalClues() {
         const isOpen = expandedId === item.id;
         const missing = item.evidence_quality?.missing || [];
         const gateReasons = item.customer_delivery_gate_reasons || [];
+        const gateExplanations = getGateExplanations(item, gateReasons);
         const nextActions = item.evidence_quality?.next_actions || [];
         const reproduction = item.reproduction || { method: '', path: '', steps: [], is_synthetic: false };
         const investigation = item.investigation_guidance || { relevant_apis: [], relevant_tables: [], log_search: '', sql_verify: '' };
@@ -122,7 +132,7 @@ export function InternalClues() {
           <div className="evidence-one-liner" onClick={() => setExpandedId(isOpen ? null : item.id)}><span className="evidence-one-liner-label">内部判断</span><span className="evidence-one-liner-text">{item.business_summary || item.actual || item.evidence_quality?.summary || '需要补充更多证据后再确认。'}</span></div>
           <div className="evidence-body">
             <div className="findings-compare-grid"><div className="findings-compare-card"><span className="findings-compare-label">当前掌握</span><p>{item.actual || item.evidence_quality?.summary || '暂未形成稳定异常结论'}</p></div><div className="findings-compare-card danger"><span className="findings-compare-label">仍缺证据</span><p>{missing.length > 0 ? missing.join('；') : '暂无明确缺口，建议继续复验确认'}</p></div></div>
-            {gateReasons.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">未进入客户缺陷的原因</div><div className="findings-investigation-body"><ul className="findings-steps">{gateReasons.map((reason, index) => <li key={`${reason}-${index}`}>{explainGateReason(reason)}</li>)}</ul></div></div>}
+            {gateExplanations.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">未进入客户缺陷的原因</div><div className="findings-investigation-body"><ul className="findings-steps">{gateExplanations.map((reason, index) => <li key={`${reason.code || reason.label}-${index}`}><strong>{reason.label || explainGateReason(reason.code || '')}</strong>{reason.detail ? <span>：{reason.detail}</span> : null}{reason.next_action ? <small>下一步：{reason.next_action}</small> : null}</li>)}</ul></div></div>}
             {nextActions.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">下一步建议</div><div className="findings-investigation-body"><ol className="findings-steps">{nextActions.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ol></div></div>}
             {(reproduction.path || investigation.log_search || investigation.sql_verify || investigation.relevant_tables?.length || investigation.relevant_apis?.length) && <div className="findings-investigation-card"><div className="findings-panel-kicker">补证入口</div><div className="findings-investigation-body">{reproduction.path && <div>优先复验：<code>{reproduction.method} {reproduction.path}</code></div>}{investigation.relevant_apis?.length > 0 && <div>关联接口：{investigation.relevant_apis.join('、')}</div>}{investigation.relevant_tables?.length > 0 && <div>关联数据表：{investigation.relevant_tables.join('、')}</div>}{investigation.log_search && <div><code>{investigation.log_search}</code></div>}{investigation.sql_verify && <div><code>{investigation.sql_verify}</code></div>}</div></div>}
           </div>
