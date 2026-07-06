@@ -26,8 +26,45 @@ def test_inline_source_without_provenance_is_blocked_before_campaign_planning(tm
     assert result["success"] is True
     assert result["grade"] == "blocked"
     assert result["campaign"]["campaign_status"] == "blocked"
+    assert result["campaign"]["coverage_deferred_reason"] == "source_provenance_missing"
     assert any(gap["code"] == "SOURCE_PROVENANCE_MISSING" for gap in result["input_gaps"])
     assert result["execution_status"] == "blocked"
+
+
+def test_external_api_doc_path_without_manifest_is_not_implicitly_trusted(tmp_path):
+    external_path = tmp_path / "supplier_export.json"
+    external_path.write_text(API_SPEC, encoding="utf-8")
+
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_path=str(external_path),
+        campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
+    )
+
+    assert result["grade"] == "blocked"
+    assert result["runtime_contract"]["source_manifest"]["source_origin"] == "external_path_unregistered"
+    assert any(gap["code"] == "SOURCE_PROVENANCE_MISSING" for gap in result["input_gaps"])
+
+
+def test_external_api_doc_path_is_allowed_with_complete_explicit_manifest(tmp_path):
+    external_path = tmp_path / "supplier_export.json"
+    external_path.write_text(API_SPEC, encoding="utf-8")
+
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_path=str(external_path),
+        campaign_context={
+            "scope_id": "service-a",
+            "environment_ref": "test-a",
+            "source_manifest": SOURCE_MANIFEST,
+        },
+    )
+
+    assert result["grade"] == "inconclusive"
+    assert result["runtime_contract"]["source_manifest"]["source_id"] == "api-spec-v1"
+    assert result["runtime_contract"]["source_manifest"]["source_origin"] == "declared_manifest"
 
 
 def test_declared_source_hash_must_match_submitted_content(tmp_path):
@@ -39,6 +76,17 @@ def test_declared_source_hash_must_match_submitted_content(tmp_path):
     )
     assert result["grade"] == "blocked"
     assert any(gap["code"] == "SOURCE_HASH_MISMATCH" for gap in result["input_gaps"])
+
+
+def test_declared_source_hash_must_use_sha256_format(tmp_path):
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        campaign_context={"source_manifest": {"source_id": "api-spec-v1", "source_hash": "not-a-sha256"}},
+    )
+    assert result["grade"] == "blocked"
+    assert any(gap["code"] == "SOURCE_HASH_INVALID" for gap in result["input_gaps"])
 
 
 def test_registered_project_asset_supplies_provenance_without_client_supplied_manifest(tmp_path):
@@ -53,7 +101,25 @@ def test_registered_project_asset_supplies_provenance_without_client_supplied_ma
     )
     assert result["grade"] == "inconclusive"
     assert result["runtime_contract"]["source_manifest"]["source_id"].startswith("project_asset:")
+    assert result["runtime_contract"]["source_manifest"]["source_origin"] == "registered_project_asset"
     assert result["campaign"]["confirmed_slice_count"] == 0
+
+
+def test_registered_project_api_doc_path_is_identified_by_its_content_hash(tmp_path):
+    input_dir = tmp_path / "platform_workspace" / "enterprise-project" / "input"
+    input_dir.mkdir(parents=True)
+    asset_path = input_dir / "api_spec.json"
+    asset_path.write_text(API_SPEC, encoding="utf-8")
+
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_path=str(asset_path),
+        campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
+    )
+
+    assert result["grade"] == "inconclusive"
+    assert result["runtime_contract"]["source_manifest"]["source_id"].endswith("platform_workspace/enterprise-project/input/api_spec.json")
 
 
 def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_path):
