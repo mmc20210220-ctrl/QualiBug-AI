@@ -21,6 +21,7 @@ _BEHAVIOR_SLICE_EXECUTION_ENV: dict[str, str] = {
     "incremental_discovery_round": "QUALIBUG_DISCOVERY_ROUND",
     "incremental_discovery_round_limit": "QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT",
 }
+_REASONER_GUARDRAIL_LIMIT_NAMES = ("MAX_HYPOTHESES", "MAX_HYPOTHESES_HARD_LIMIT")
 
 
 def _enforce_stage_reasoner_static_cap() -> None:
@@ -33,9 +34,27 @@ def _enforce_stage_reasoner_static_cap() -> None:
     module = sys.modules.get(f"{__package__}.stage_reason_all_v2")
     if module is None:
         return
-    for name in ("MAX_HYPOTHESES", "MAX_HYPOTHESES_HARD_LIMIT"):
+    for name in _REASONER_GUARDRAIL_LIMIT_NAMES:
         if hasattr(module, name):
             setattr(module, name, _REASONER_MAX_HYPOTHESES_PER_ENGINE)
+
+
+def assert_reasoner_guardrails() -> None:
+    """Fail fast if runtime reasoner guardrails drift below/above policy.
+
+    This is intentionally a runtime assertion rather than a health badge: it only
+    validates in-process configuration after code is imported. It does not claim
+    external LLM connectivity or product readiness.
+    """
+    _enforce_stage_reasoner_static_cap()
+    module = sys.modules.get(f"{__package__}.stage_reason_all_v2")
+    if module is not None:
+        for name in _REASONER_GUARDRAIL_LIMIT_NAMES:
+            if hasattr(module, name):
+                value = getattr(module, name)
+                assert value == _REASONER_MAX_HYPOTHESES_PER_ENGINE, (
+                    f"{name} must remain {_REASONER_MAX_HYPOTHESES_PER_ENGINE}, got {value}"
+                )
 
 
 def _clamp_reasoner_hypothesis_cap(value: Any, fallback: Any) -> int:
