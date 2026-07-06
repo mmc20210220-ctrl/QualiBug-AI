@@ -7,12 +7,93 @@ large HTTP entrypoint. This wrapper installs the stricter backend customer
 delivery gate before delegating to the original server runner.
 """
 
+import json
+from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
 from ai_test_asset_center.customer_delivery_gate import split_customer_delivery_tracks
+from ai_test_asset_center.real_project_onboarding import ROOT, _safe_project_id, config_paths
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_server"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8") or "{}")
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _resolve_project_id(payload: dict[str, Any]) -> str:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    candidates = [
+        payload.get("project_id"),
+        payload.get("project"),
+        data.get("project_id") if isinstance(data, dict) else None,
+        data.get("project") if isinstance(data, dict) else None,
+    ]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return _safe_project_id(text)
+    return "real_project_demo"
+
+
+def _load_main_chain_contract(payload: dict[str, Any]) -> dict[str, Any]:
+    project = _resolve_project_id(payload)
+    paths = config_paths(project, ROOT)
+    for path in (
+        paths["output_dir"] / "main_chain_contract.json",
+        paths["workspace_dir"] / "main_chain_contract.json",
+    ):
+        contract = _read_json(path)
+        if contract:
+            return contract
+    return {}
+
+
+def _main_chain_contract_summary(contract: dict[str, Any]) -> dict[str, Any]:
+    summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
+    return {
+        "chain_ready": bool(contract.get("chain_ready")),
+        "customer_defect_delivery_ready": bool(contract.get("customer_defect_delivery_ready")),
+        "first_blocked_stage": str(summary.get("first_blocked_stage") or ""),
+        "first_blocked_next_action": str(summary.get("first_blocked_next_action") or ""),
+        "passed_stage_count": int(summary.get("passed_stage_count") or 0),
+        "partial_stage_count": int(summary.get("partial_stage_count") or 0),
+        "missing_stage_count": int(summary.get("missing_stage_count") or 0),
+    }
+
+
+def _inject_main_chain_contract(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+    contract = _load_main_chain_contract(payload)
+    if not contract:
+        return payload
+    contract_summary = _main_chain_contract_summary(contract)
+    payload["main_chain_contract"] = contract
+    payload["main_chain_contract_summary"] = contract_summary
+    data = payload.get("data")
+    if isinstance(data, dict):
+        data["main_chain_contract"] = contract
+        data["main_chain_contract_summary"] = contract_summary
+        data_contract = data.get("data_contract")
+        if isinstance(data_contract, dict):
+            data_contract["main_chain_contract"] = contract_summary
+        delivery_tracks = data.get("delivery_tracks")
+        if isinstance(delivery_tracks, dict):
+            delivery_tracks["main_chain_contract"] = contract_summary
+        executive_summary = data.get("executive_summary")
+        if isinstance(executive_summary, dict):
+            executive_summary["main_chain_ready"] = contract_summary["chain_ready"]
+            executive_summary["main_chain_first_blocked_stage"] = contract_summary["first_blocked_stage"]
+            executive_summary["main_chain_first_blocked_next_action"] = contract_summary["first_blocked_next_action"]
+    return payload
 
 
 def _inject_delivery_gate_patch_status(payload: dict[str, Any]) -> dict[str, Any]:
@@ -46,7 +127,8 @@ def install_customer_delivery_gate_patch() -> None:
 
     def _strict_normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
         normalized = original_normalizer(payload) if callable(original_normalizer) else payload
-        return _inject_delivery_gate_patch_status(normalized)
+        normalized = _inject_delivery_gate_patch_status(normalized)
+        return _inject_main_chain_contract(normalized)
 
     _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = original_partition  # type: ignore[attr-defined]
     _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = original_normalizer  # type: ignore[attr-defined]
