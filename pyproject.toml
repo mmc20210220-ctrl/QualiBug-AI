@@ -1,14 +1,29 @@
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "qualibug-ai"
 version = "95.0.0"
-description = "Enterprise Business-Quality Assurance Platform — AI-powered bug discovery across any industry"
+description = "Enterprise business-quality assurance platform"
 readme = "README.md"
 license = {text = "Proprietary"}
 requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.8.0",
+    "click>=8.0.0",
+    "fastapi>=0.115.0,<1.0.0",
+    "httpx>=0.27.0,<1.0.0",
+    "jsonschema>=4.0.0",
+    "openpyxl>=3.1.0",
+    "pypdf>=4.0.0",
+    "python-docx>=0.8.11",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "requests>=2.28.0",
+    "rich>=13.0.0",
+    "uvicorn>=0.30.0,<1.0.0",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -20,21 +35,34 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-llm = []
-dev = ["pytest>=7.4", "pytest-cov>=4.1"]
-pdf = ["pypdf>=4.0"]
-browser = ["playwright>=1.40"]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-html>=4.1.0",
+    "pytest-metadata>=3.1.0",
+]
+llm = ["anthropic>=0.18.0", "openai>=1.0.0"]
+pdf = ["pypdf>=4.0.0", "python-docx>=0.8.11"]
+browser = ["playwright>=1.40.0"]
+all = [
+    "anthropic>=0.18.0",
+    "openai>=1.0.0",
+    "playwright>=1.40.0",
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-html>=4.1.0",
+    "pytest-metadata>=3.1.0",
+]
 
 [project.scripts]
 qualibug = "aitestops.cli:main"
+qualibug-server = "ai_test_asset_center.private_pilot_service:run_server"
 
 [tool.setuptools.packages.find]
-include = ["aitestops*", "ai_test_asset_center*", "benchmark_evaluator*", "demo_system*", "enterprise_bug_factory*"]
+include = ["aitestops*", "ai_test_asset_center*", "benchmark_evaluator*", "demo_system*", "enterprise_bug_factory*", "backend*", "core*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
-# basetemp is pinned to a repo-local dir by conftest.py (pytest_configure) to
-# avoid Windows OS-temp concurrency races with the deep nested build fixtures.
 tmp_path_retention_policy = "failed"
 tmp_path_retention_count = 3
