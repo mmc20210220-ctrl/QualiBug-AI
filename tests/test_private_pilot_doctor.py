@@ -193,6 +193,14 @@ def test_private_pilot_doctor_report_guide_documents_output_workflow() -> None:
     assert "summary_text" in guide
     assert "summary_lines" in guide
     assert "Suggested commands" in guide
+    assert "## Support bundle manifest" in guide
+    assert "support_bundle_manifest" in guide
+    assert "safe_to_share" in guide
+    assert "requires_review" in guide
+    assert "do_not_send" in guide
+    assert ".secrets" in guide
+    assert "multi_service_config.json" in guide
+    assert "source_registry" in guide
     assert "## Readiness levels" in guide
     assert "`ready`" in guide
     assert "`warning`" in guide
