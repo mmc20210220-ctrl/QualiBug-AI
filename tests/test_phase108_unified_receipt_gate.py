@@ -42,3 +42,14 @@ def test_gate_keeps_missing_runtime_evidence_out_of_customer_candidates():
     assert summary["blocked_runtime_count"] == 1
     assert contracts[0]["verdict"] == "NEEDS_MORE_EVIDENCE"
     assert contracts[0]["business_evidence_status"] == "BLOCKED_BY_RUNTIME_EVIDENCE"
+
+
+def test_gate_requires_after_snapshot_when_write_is_not_the_first_receipt():
+    finding = _complete_write_finding()
+    finding["evidence"]["calls"] = finding["evidence"]["calls"][:2]
+
+    contracts, summary = gate_discovery_findings([finding], project_id="generic_case_project")
+
+    assert summary["validated_candidate_count"] == 0
+    assert contracts[0]["verdict"] == "NEEDS_MORE_EVIDENCE"
+    assert "AFTER_SNAPSHOT_MISSING" in contracts[0]["business_gate_missing"]
