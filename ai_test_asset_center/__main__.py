@@ -2,8 +2,8 @@
 
 The public ``scan`` API routes discovery through V12 behavior slices and
 enterprise Campaign governance. No caller can execute a target unless it
-supplies an explicit source, scope and environment contract. Results without a
-complete delivery receipt remain candidates or coverage gaps.
+supplies an explicit source, scope, environment and approved test-data contract.
+Results without a complete delivery receipt remain candidates or coverage gaps.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .enterprise_campaign import has_real_confirmation_receipt
+from .enterprise_test_data_plan import build_campaign_test_data_plan
 
 
 def _configure_console_encoding() -> None:
@@ -91,6 +92,9 @@ def _runtime_contract(context: dict[str, Any], base_url: str, api_doc_path: str,
         gaps.append(_input_gap("CAMPAIGN_SCOPE_MISSING", "An explicit campaign scope_id is required before runtime probing."))
     if not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
         gaps.append(_input_gap("ENVIRONMENT_REFERENCE_MISSING", "An approved environment_ref is required before runtime probing."))
+    data_contract = _as_dict(context.get("test_data_contract"))
+    if data_contract.get("strategy") in {"create_disposable", "approved_fixture_setup"} and data_contract.get("write_approved") is not True:
+        gaps.append(_input_gap("WRITE_APPROVAL_MISSING", "Write-capable test-data strategies require explicit write approval."))
     if gaps:
         return "", gaps, {"status": "blocked", "reason": "runtime_contract_missing", "source_manifest": manifest}
     return base_url.rstrip("/"), [], {"status": "approved", "source_manifest": manifest}
@@ -132,11 +136,7 @@ def scan(
     save_report: bool = True,
     campaign_context: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Run the single enterprise-safe discovery and evidence pipeline.
-
-    ``multi_layer`` is retained only for response compatibility. Fixed-domain
-    legacy probes are never invoked; unsupported work becomes a testability gap.
-    """
+    """Run the single enterprise-safe discovery and evidence pipeline."""
     root = Path(root or Path.cwd())
     project = str(project or "").strip()
     if not project:
@@ -189,8 +189,14 @@ def scan(
     state_graph = _as_dict(phases.get("state_graph"))
     execution = _as_dict(phases.get("execution"))
     graph_gaps = state_graph.get("coverage_gaps", []) if isinstance(state_graph.get("coverage_gaps"), list) else []
-    coverage_gaps = input_gaps + [item for item in graph_gaps if isinstance(item, dict)]
     campaign = _as_dict(v12.get("campaign"))
+    incremental = _as_dict(phases.get("incremental_discovery"))
+    test_data_plan = build_campaign_test_data_plan(
+        campaign,
+        incremental.get("selected_slices") if isinstance(incremental.get("selected_slices"), list) else [],
+        _as_dict(context.get("test_data_contract")),
+    )
+    coverage_gaps = input_gaps + [item for item in graph_gaps if isinstance(item, dict)] + list(test_data_plan.get("coverage_gaps") or [])
     execution_status = str(execution.get("status") or "not_executed")
     duration_ms = int((time.time() - started) * 1000)
     layers: dict[str, Any] = {
@@ -232,9 +238,10 @@ def scan(
         "input_gaps": input_gaps,
         "coverage_gaps": coverage_gaps,
         "runtime_contract": runtime_contract,
+        "test_data_plan": test_data_plan,
         "campaign": campaign,
         "behavior_slice_ledger": v12.get("behavior_slice_ledger", {}),
-        "incremental_discovery": phases.get("incremental_discovery", {}),
+        "incremental_discovery": incremental,
         "execution_status": execution_status,
         "db_verification": {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []},
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
@@ -252,6 +259,7 @@ def scan(
             "campaign": campaign,
             "coverage_gaps": coverage_gaps,
             "runtime_contract": runtime_contract,
+            "test_data_plan": test_data_plan,
             "behavior_slice_ledger": result["behavior_slice_ledger"],
             "execution_status": execution_status,
         })
@@ -274,6 +282,7 @@ def main() -> None:
     parser.add_argument("--environment-ref", default="")
     parser.add_argument("--source-id", default="")
     parser.add_argument("--source-hash", default="")
+    parser.add_argument("--test-data-strategy", default="blocked_with_testability_gap")
     parser.add_argument("--ci-gate", action="store_true")
     parser.add_argument("--no-multi-layer", action="store_true")
     parser.add_argument("--output-dir")
@@ -284,6 +293,7 @@ def main() -> None:
         "scope_id": args.scope_id,
         "environment_ref": args.environment_ref,
         "source_manifest": {"source_id": args.source_id, "source_hash": args.source_hash},
+        "test_data_contract": {"strategy": args.test_data_strategy},
     }
     result = scan(project=args.project, api_doc_path=args.api_doc or "", api_doc_text=args.api_doc_text or "", prd_text=args.prd, base_url=args.base_url, ci_gate=args.ci_gate, multi_layer=not args.no_multi_layer, output_dir=Path(args.output_dir) if args.output_dir else None, save_report=not args.no_report, campaign_context=context)
     if args.json:
