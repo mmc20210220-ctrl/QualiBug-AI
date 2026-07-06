@@ -89,6 +89,44 @@ def _behavior_slice_settings() -> dict[str, int]:
     return {"slice_budget": budget, "round_number": round_number, "round_limit": round_limit}
 
 
+def _slice_ledger_path(root: Path, project: str) -> Path:
+    return root / "platform_workspace" / str(project) / "defect_discovery" / "v12_behavior_slice_ledger.json"
+
+
+def _load_persisted_slice_history(root: Path, project: str) -> list[dict[str, Any]]:
+    """Restore only the small, source-free scheduling ledger for this project."""
+    path = _slice_ledger_path(root, project)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    return [{"behavior_slice_ledger": payload}]
+
+
+def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> None:
+    """Persist scheduler state; it contains IDs and outcomes, never raw evidence."""
+    path = _slice_ledger_path(root, project)
+    safe = {
+        "project": str(project),
+        "round": int(ledger.get("round") or 0),
+        "round_limit": int(ledger.get("round_limit") or 0),
+        "slice_budget": int(ledger.get("slice_budget") or 0),
+        "selection_mode": str(ledger.get("selection_mode") or ""),
+        "selected_slice_ids": [str(value) for value in ledger.get("selected_slice_ids", []) if str(value)],
+        "attempted_slice_ids": [str(value) for value in ledger.get("attempted_slice_ids", []) if str(value)],
+        "confirmed_slice_ids": [str(value) for value in ledger.get("confirmed_slice_ids", []) if str(value)],
+        "next_round": ledger.get("next_round"),
+        "stop_reason": str(ledger.get("stop_reason") or ""),
+        "updated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _slice_history(existing_findings: list[dict[str, Any]] | None) -> tuple[set[str], set[str]]:
     """Read only explicit slice identities; never infer completion from prose."""
     attempted: set[str] = set()
@@ -99,6 +137,7 @@ def _slice_history(existing_findings: list[dict[str, Any]] | None) -> tuple[set[
         ledger = item.get("behavior_slice_ledger")
         if isinstance(ledger, dict):
             attempted.update(str(value) for value in ledger.get("selected_slice_ids", []) if str(value))
+            attempted.update(str(value) for value in ledger.get("attempted_slice_ids", []) if str(value))
             confirmed.update(str(value) for value in ledger.get("confirmed_slice_ids", []) if str(value))
         slice_id = str(item.get("behavior_slice_id") or item.get("source_slice_id") or item.get("slice_id") or "").strip()
         if not slice_id:
@@ -229,6 +268,7 @@ def run_v12_pipeline(
         "risk_clues_saved": 0,
         "behavior_slice_ledger": {},
     }
+    ledger_for_persistence: dict[str, Any] | None = None
     if api_spec_text and not isinstance(api_spec_text, dict):
         try:
             from .universal_api_parser import detect_format, parse_to_openapi
@@ -247,10 +287,13 @@ def run_v12_pipeline(
         graphs = builder.build(prd_text, api_spec_text, db_schema_text)
         behavior_contract = builder.behavior_contract()
         settings = _behavior_slice_settings()
-        selection = _schedule_behavior_slices(behavior_contract["slices"], settings, existing_findings)
+        history_items = existing_findings if existing_findings is not None else _load_persisted_slice_history(root, project)
+        history_source = "explicit_findings" if existing_findings is not None else "persisted_ledger"
+        selection = _schedule_behavior_slices(behavior_contract["slices"], settings, history_items)
         selected_ids = set(selection["selected_slice_ids"])
         result["behavior_slice_ledger"] = {
             "project": project,
+            "history_source": history_source,
             "round": settings["round_number"],
             "round_limit": settings["round_limit"],
             "slice_budget": settings["slice_budget"],
@@ -261,6 +304,7 @@ def run_v12_pipeline(
             "next_round": selection["next_round"],
             "stop_reason": selection["stop_reason"],
         }
+        ledger_for_persistence = dict(result["behavior_slice_ledger"])
         result["phases"]["state_graph"] = {
             "status": "completed",
             "entities": sorted(graphs),
@@ -413,6 +457,11 @@ def run_v12_pipeline(
             pass
     except Exception as exc:
         result["error"] = str(exc)[:500]
+    if ledger_for_persistence is not None and not result.get("error"):
+        try:
+            _persist_slice_ledger(root, project, ledger_for_persistence)
+        except Exception:
+            pass
     result["total_duration_ms"] = int((time.time() - started) * 1000)
     result["auto_har"] = _v12_har_report()
     return result
