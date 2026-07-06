@@ -38,6 +38,22 @@ def test_configured_bearer_token_reaches_engine_without_guest_fallback(monkeypat
     payload = response.json()
     assert payload["tenant"] == "tenant_enterprise"
     assert payload["tenant"] != "tenant_guest"
+    assert payload["metrics"]["confirmed_bugs"] == 0
+    assert payload["summary"]["simulated"] == payload["trace_count"]
+
+
+def test_health_never_marks_unchecked_integrations_as_healthy(monkeypatch):
+    monkeypatch.setenv("QUALIBUG_API_TOKEN", "configured-secret")
+    client = TestClient(main.app)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["components"]["api"]["status"] == "healthy"
+    assert body["components"]["authentication"]["status"] == "configured_unverified"
+    assert body["components"]["execution_engine"]["status"] == "configured_unverified"
+    assert body["components"]["llm"]["status"] == "not_configured"
 
 
 def test_engine_auth_rejects_invalid_tokens_in_direct_use(monkeypatch):
