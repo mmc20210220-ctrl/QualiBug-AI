@@ -1,9 +1,9 @@
 """V12 source-grounded behavior pipeline with enterprise Campaign governance.
 
 The public ``run_v12_pipeline`` entry point remains compatible. A Campaign is
-now the bounded enterprise unit for a project scope, environment reference and
-source snapshot. The pipeline never invents routes, actors, fixtures or cleanup
-contracts; missing prerequisites remain plan-only coverage obligations.
+an auditable project scope, environment reference and source snapshot. Both the
+unified scanner and direct callers must supply an approved runtime contract
+before V12 can contact a target.
 """
 from __future__ import annotations
 
@@ -47,20 +47,8 @@ def _v12_har_report() -> dict[str, Any]:
         status = int(item.get("response", {}).get("status") or 0)
         counts[status] = counts.get(status, 0) + 1
         content = item.get("response", {}).get("content", {})
-        entries.append({
-            "startedDateTime": item.get("startedDateTime"),
-            "time": item.get("time"),
-            "request": item.get("request"),
-            "response": {"status": status, "body": str(content.get("text") if isinstance(content, dict) else content)[:2000]},
-            "_actor": item.get("_actor", ""),
-        })
-    return {
-        "status": "captured",
-        "total_calls": len(entries),
-        "error_responses": sum(count for status, count in counts.items() if status >= 400),
-        "status_distribution": counts,
-        "entries": entries,
-    }
+        entries.append({"startedDateTime": item.get("startedDateTime"), "time": item.get("time"), "request": item.get("request"), "response": {"status": status, "body": str(content.get("text") if isinstance(content, dict) else content)[:2000]}, "_actor": item.get("_actor", "")})
+    return {"status": "captured", "total_calls": len(entries), "error_responses": sum(count for status, count in counts.items() if status >= 400), "status_distribution": counts, "entries": entries}
 
 
 def is_v12_enabled() -> bool:
@@ -68,9 +56,7 @@ def is_v12_enabled() -> bool:
 
 
 def _scenario_executable(scenario: Any) -> bool:
-    policy = str(getattr(scenario, "execution_policy", "") or "")
-    steps = getattr(scenario, "steps", []) or []
-    return bool(steps) and policy in {"safe_read_only", "approved_sandbox_write", "runtime_approved"}
+    return bool(getattr(scenario, "steps", []) or []) and str(getattr(scenario, "execution_policy", "") or "") in {"safe_read_only", "approved_sandbox_write", "runtime_approved"}
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -81,8 +67,11 @@ def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(parsed, maximum))
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _behavior_slice_settings() -> dict[str, int]:
-    """Resolve policy/env settings without widening Campaign safety limits."""
     try:
         from .policy_wiring import get_policy_value
         budget = get_policy_value("execution", "max_behavior_slices_per_round", 15)
@@ -95,6 +84,23 @@ def _behavior_slice_settings() -> dict[str, int]:
         "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 12),
         "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 3, 1, 12),
     }
+
+
+def _runtime_contract(context: dict[str, Any], base_url: str) -> dict[str, Any]:
+    """Direct callers cannot bypass source/scope/environment approval."""
+    if not base_url:
+        return {"status": "plan_only", "reason": "runtime_target_missing", "approved_base_url": ""}
+    manifest = _dict(context.get("source_manifest"))
+    missing: list[str] = []
+    if not str(manifest.get("source_id") or "").strip() or not str(manifest.get("source_hash") or "").strip():
+        missing.append("SOURCE_PROVENANCE_MISSING")
+    if not str(context.get("scope_id") or "").strip():
+        missing.append("CAMPAIGN_SCOPE_MISSING")
+    if not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
+        missing.append("ENVIRONMENT_REFERENCE_MISSING")
+    if missing:
+        return {"status": "blocked", "reason": "runtime_contract_missing", "missing_requirements": missing, "approved_base_url": ""}
+    return {"status": "approved", "reason": "", "missing_requirements": [], "approved_base_url": str(base_url).rstrip("/")}
 
 
 def _slice_ledger_path(root: Path, project: str) -> Path:
@@ -126,7 +132,6 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
         "selection_mode": str(ledger.get("selection_mode") or ""),
         "selected_slice_ids": [str(value) for value in ledger.get("selected_slice_ids", []) if str(value)],
         "attempted_slice_ids": [str(value) for value in ledger.get("attempted_slice_ids", []) if str(value)],
-        # Compatibility ledger intentionally stores no trusted confirmed IDs.
         "confirmed_slice_ids": [],
         "next_round": ledger.get("next_round"),
         "stop_reason": str(ledger.get("stop_reason") or ""),
@@ -136,20 +141,7 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
     path.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _latest_history_round(history: list[dict[str, Any]] | None) -> int:
-    rounds: list[int] = []
-    for item in history or []:
-        ledger = item.get("behavior_slice_ledger") if isinstance(item, dict) else None
-        if isinstance(ledger, dict):
-            try:
-                rounds.append(max(0, int(ledger.get("round") or 0)))
-            except (TypeError, ValueError):
-                pass
-    return max(rounds, default=0)
-
-
 def _slice_history(history: list[dict[str, Any]] | None) -> tuple[set[str], set[str]]:
-    """Only receipt-complete outcomes close slices; ledgers are attempt-only."""
     attempted: set[str] = set()
     confirmed: set[str] = set()
     for item in history or []:
@@ -168,17 +160,7 @@ def _slice_history(history: list[dict[str, Any]] | None) -> tuple[set[str], set[
 
 
 def _selection_result(*, status: str, stop_reason: str, selected: list[dict[str, Any]], pending: list[dict[str, Any]], attempted: set[str], confirmed: set[str], next_round: int | None, selection_mode: str) -> dict[str, Any]:
-    return {
-        "status": status,
-        "stop_reason": stop_reason,
-        "selected": selected,
-        "selected_slice_ids": [str(item.get("slice_id") or "") for item in selected],
-        "next_round": next_round,
-        "remaining_slice_count": max(0, len(pending) - len(selected)),
-        "attempted_slice_ids": sorted(attempted),
-        "confirmed_slice_ids": sorted(confirmed),
-        "selection_mode": selection_mode,
-    }
+    return {"status": status, "stop_reason": stop_reason, "selected": selected, "selected_slice_ids": [str(item.get("slice_id") or "") for item in selected], "next_round": next_round, "remaining_slice_count": max(0, len(pending) - len(selected)), "attempted_slice_ids": sorted(attempted), "confirmed_slice_ids": sorted(confirmed), "selection_mode": selection_mode}
 
 
 def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, int], history: list[dict[str, Any]] | None) -> dict[str, Any]:
@@ -210,14 +192,12 @@ def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, 
 def _active_policy_version() -> str:
     try:
         from .policy_registry import get_policy_registry
-        active = get_policy_registry().get_active()
-        return str(getattr(active, "policy_version", "") or "")
+        return str(getattr(get_policy_registry().get_active(), "policy_version", "") or "")
     except Exception:
         return ""
 
 
-def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any] | None, root: Path) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
-    context = context if isinstance(context, dict) else {}
+def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any], root: Path) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
     policy_version = str(context.get("policy_version") or _active_policy_version())[:120]
     scope_id = str(context.get("scope_id") or f"project_scope_{hashlib.sha256(project.encode()).hexdigest()[:12]}")[:160]
     environment_ref = str(context.get("environment_ref") or context.get("target_environment") or (f"target_{hashlib.sha256(base_url.encode()).hexdigest()[:16]}" if base_url else "unbound_environment"))[:160]
@@ -234,7 +214,10 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     global _v12_har_entries
     _v12_har_entries = []
     started = time.time()
-    result: dict[str, Any] = {"v12_version": "2.2", "enabled": True, "phases": {}, "findings": [], "evidence_graphs": [], "risk_clues_saved": 0, "behavior_slice_ledger": {}, "campaign": {}}
+    context = _dict(campaign_context)
+    runtime_contract = _runtime_contract(context, base_url)
+    approved_base_url = str(runtime_contract.get("approved_base_url") or "")
+    result: dict[str, Any] = {"v12_version": "2.3", "enabled": True, "phases": {}, "findings": [], "evidence_graphs": [], "risk_clues_saved": 0, "behavior_slice_ledger": {}, "campaign": {}, "runtime_contract": runtime_contract}
     ledger_for_persistence: dict[str, Any] | None = None
     campaign: EnterpriseCampaign | None = None
     campaign_store: EnterpriseCampaignStore | None = None
@@ -254,7 +237,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         graphs = builder.build(prd_text, api_spec_text, db_schema_text)
         behavior_contract = builder.behavior_contract()
         settings = _behavior_slice_settings()
-        campaign, campaign_store, campaign_mode = _campaign_context(project, prd_text, api_spec_text, db_schema_text, base_url, settings, campaign_context, root)
+        campaign, campaign_store, campaign_mode = _campaign_context(project, prd_text, api_spec_text, db_schema_text, approved_base_url, settings, context, root)
         if campaign.status in {"coverage_deferred", "completed", "blocked"}:
             selection = _selection_result(status="stopped", stop_reason=f"campaign_{campaign.status}", selected=[], pending=behavior_contract["slices"], attempted=set(campaign.attempted_slice_ids), confirmed=set(campaign.confirmation_receipts), next_round=None, selection_mode="campaign_terminal")
         else:
@@ -270,46 +253,30 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             selection = _schedule_behavior_slices(behavior_contract["slices"], settings, history)
         selected_ids = set(selection["selected_slice_ids"])
         result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
-        result["behavior_slice_ledger"] = {
-            "campaign_id": campaign.campaign_id,
-            "campaign_status": campaign.status,
-            "scope_id": campaign.scope_id,
-            "source_snapshot_hash": campaign.source_snapshot_hash,
-            "project": project,
-            "round": settings["round_number"],
-            "round_limit": settings["round_limit"],
-            "slice_budget": settings["slice_budget"],
-            "selection_mode": selection["selection_mode"],
-            "selected_slice_ids": selection["selected_slice_ids"],
-            "attempted_slice_ids": selection["attempted_slice_ids"],
-            "confirmed_slice_ids": selection["confirmed_slice_ids"],
-            "next_round": selection["next_round"],
-            "stop_reason": selection["stop_reason"],
-        }
+        result["behavior_slice_ledger"] = {"campaign_id": campaign.campaign_id, "campaign_status": campaign.status, "scope_id": campaign.scope_id, "source_snapshot_hash": campaign.source_snapshot_hash, "project": project, "round": settings["round_number"], "round_limit": settings["round_limit"], "slice_budget": settings["slice_budget"], "selection_mode": selection["selection_mode"], "selected_slice_ids": selection["selected_slice_ids"], "attempted_slice_ids": selection["attempted_slice_ids"], "confirmed_slice_ids": selection["confirmed_slice_ids"], "next_round": selection["next_round"], "stop_reason": selection["stop_reason"]}
         ledger_for_persistence = dict(result["behavior_slice_ledger"])
         result["phases"]["state_graph"] = {"status": "completed", "entities": sorted(graphs), "summary": {name: graph.to_dict()["stats"] for name, graph in graphs.items()}, "behavior_slices": behavior_contract["summary"], "coverage_gaps": behavior_contract["coverage_gaps"], "duration_ms": int((time.time() - graph_started) * 1000)}
         result["phases"]["incremental_discovery"] = {"status": selection["status"], "round": settings["round_number"], "round_limit": settings["round_limit"], "slice_budget": settings["slice_budget"], "selection_mode": selection["selection_mode"], "selected_slices": selection["selected"], "remaining_slice_count": selection["remaining_slice_count"], "next_round": selection["next_round"], "stop_reason": selection["stop_reason"], "campaign_id": campaign.campaign_id, "campaign_status": campaign.status}
         selected_paths = {str(path) for item in selection["selected"] for path in item.get("endpoints", []) if str(path)}
         fuzz_started = time.time()
         fuzzer_findings: list[dict[str, Any]] = []
-        if base_url and selected_paths and selection["status"] == "planned":
+        if approved_base_url and selected_paths and selection["status"] == "planned":
             try:
                 from .parameter_fuzzer import ParameterFuzzer
                 from .route_catalog_builder import RouteCatalogBuilder
                 catalog = [entry.to_dict() for entry in RouteCatalogBuilder().build(api_spec_text)]
                 scoped_catalog = [entry for entry in catalog if str(entry.get("path") or "") in selected_paths]
-                fuzzer_findings = ParameterFuzzer(base_url, allow_write=False).fuzz_all(scoped_catalog, max_variants=6)
+                fuzzer_findings = ParameterFuzzer(approved_base_url, allow_write=False).fuzz_all(scoped_catalog, max_variants=6)
                 for finding in fuzzer_findings:
                     if isinstance(finding, dict):
                         matching = next((item for item in selection["selected"] if str(finding.get("path") or "") in item.get("endpoints", [])), None)
                         if matching:
-                            finding["behavior_slice_id"] = matching["slice_id"]
-                            finding["discovery_round"] = settings["round_number"]
-                            finding["campaign_id"] = campaign.campaign_id
+                            finding.update({"behavior_slice_id": matching["slice_id"], "discovery_round": settings["round_number"], "campaign_id": campaign.campaign_id, "execution_status": "executed", "confirmation_status": "candidate"})
             except Exception:
                 pass
         result["findings"].extend(fuzzer_findings)
-        result["phases"]["parameter_fuzzer"] = {"status": "completed" if base_url and selected_paths and selection["status"] == "planned" else "skipped", "reason": "selected_source_bound_read_routes_only" if selected_paths else "no_selected_source_bound_read_routes", "findings": len(fuzzer_findings), "execution_policy": "documented_read_only_only", "slice_scoped": True, "duration_ms": int((time.time() - fuzz_started) * 1000)}
+        fuzzer_reason = "selected_source_bound_read_routes_only" if selected_paths and approved_base_url else (runtime_contract.get("reason") or "no_selected_source_bound_read_routes")
+        result["phases"]["parameter_fuzzer"] = {"status": "completed" if approved_base_url and selected_paths and selection["status"] == "planned" else "skipped", "reason": fuzzer_reason, "findings": len(fuzzer_findings), "execution_policy": "documented_read_only_only", "slice_scoped": True, "duration_ms": int((time.time() - fuzz_started) * 1000)}
         scenario_started = time.time()
         from .semantic_scenario_generator import SemanticScenarioGenerator
         scenarios = SemanticScenarioGenerator().generate(graphs, api_spec_text, active_slice_ids=selected_ids, discovery_round=settings["round_number"])
@@ -320,16 +287,17 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         traces: list[tuple[Any, dict[str, Any]]] = []
         if selection["status"] != "planned":
             result["phases"]["execution"] = {"status": "stopped", "reason": selection["stop_reason"], "planned_only": 0, "executed": 0}
-        elif not base_url:
+        elif base_url and not approved_base_url:
+            result["phases"]["execution"] = {"status": "blocked", "reason": "runtime_contract_missing", "missing_requirements": runtime_contract.get("missing_requirements", []), "planned_only": len(plan_only), "executed": 0}
+        elif not approved_base_url:
             result["phases"]["execution"] = {"status": "skipped", "reason": "no_base_url", "planned_only": len(plan_only), "executed": 0}
         elif not executable:
             result["phases"]["execution"] = {"status": "plan_only", "reason": "fixture_actor_cleanup_contract_required", "planned_only": len(plan_only), "executed": 0}
         else:
-            execution_started = time.time()
-            failed = 0
+            execution_started, failed = time.time(), 0
             for scenario in executable:
                 try:
-                    trace = _execute_scenario(scenario, base_url, max_retries=2)
+                    trace = _execute_scenario(scenario, approved_base_url, max_retries=2)
                     traces.append((scenario, trace))
                     for step in trace.get("steps", []):
                         if int(step.get("status") or 0) >= 500:
@@ -353,12 +321,12 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             result["risk_clues_saved"] = save_risk_clues(project, root, result["findings"]).get("new_this_scan", 0)
         except Exception:
             pass
-        coverage_gaps = behavior_contract["coverage_gaps"]
         execution_status = str(result["phases"]["execution"].get("status") or "")
-        campaign.record_cycle(round_number=settings["round_number"], selection=selection, findings=result["findings"], coverage_gap_count=len(coverage_gaps), execution_status=execution_status)
+        campaign.record_cycle(round_number=settings["round_number"], selection=selection, findings=result["findings"], coverage_gap_count=len(behavior_contract["coverage_gaps"]), execution_status=execution_status)
         campaign_store.save(campaign)
         result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
         result["behavior_slice_ledger"]["campaign_status"] = campaign.status
+        result["phases"]["incremental_discovery"]["campaign_status"] = campaign.status
     except Exception as exc:
         result["error"] = str(exc)[:500]
     if ledger_for_persistence is not None and not result.get("error"):
@@ -392,8 +360,7 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
         if not method or not path.startswith("/"):
             trace["errors"].append("invalid_source_bound_step")
             continue
-        path = _replace(path, bindings)
-        body = _replace(getattr(step, "body_template", {}) or {}, bindings)
+        path, body = _replace(path, bindings), _replace(getattr(step, "body_template", {}) or {}, bindings)
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
         headers = {"Accept": "application/json"}
         if data is not None:
@@ -401,8 +368,7 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
         token, actor = str(getattr(scenario, "actor_token", "") or ""), str(getattr(step, "actor", "") or "")
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        started = time.time()
-        url = base_url.rstrip("/") + path
+        started, url = time.time(), base_url.rstrip("/") + path
         try:
             request = urllib.request.Request(url, method=method, data=data, headers=headers)
             with urllib.request.urlopen(request, timeout=10) as response:
