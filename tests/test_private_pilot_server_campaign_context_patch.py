@@ -4,9 +4,9 @@ from pathlib import Path
 
 
 def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
-    from ai_test_asset_center.private_pilot_server import _build_campaign_context_from_scan_body
+    from ai_test_asset_center.private_pilot_scan_context_contract import build_campaign_context_from_scan_body
 
-    context = _build_campaign_context_from_scan_body(
+    context = build_campaign_context_from_scan_body(
         {
             "source_manifest": {
                 "source_id": "openapi-main",
@@ -37,7 +37,7 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
 
 def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp_path: Path) -> None:
     from ai_test_asset_center.enterprise_source_registry import register_source_asset
-    from ai_test_asset_center.private_pilot_server import _build_campaign_context_from_scan_body, _prepare_scan_body_for_campaign
+    from ai_test_asset_center.private_pilot_scan_context_contract import build_campaign_context_from_scan_body, prepare_scan_body_for_campaign
 
     content = "openapi: 3.0.0\npaths:\n  /api/orders:\n    get:\n      responses:\n        '200': {description: ok}\n"
     manifest = register_source_asset(
@@ -49,7 +49,7 @@ def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp
         actor={"name": "tester", "role": "qa_lead"},
     )
 
-    prepared = _prepare_scan_body_for_campaign(
+    prepared = prepare_scan_body_for_campaign(
         "demo",
         tmp_path,
         {
@@ -63,7 +63,7 @@ def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp
             "environment_ref": "staging-env",
         },
     )
-    context = _build_campaign_context_from_scan_body(prepared)
+    context = build_campaign_context_from_scan_body(prepared)
 
     assert prepared["api_doc"] == content
     assert prepared["source_manifest"]["source_id"] == "openapi-main"
@@ -75,7 +75,7 @@ def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp
 
 def test_scan_body_can_auto_select_latest_registered_source_when_frontend_omits_manifest(tmp_path: Path) -> None:
     from ai_test_asset_center.enterprise_source_registry import register_source_asset
-    from ai_test_asset_center.private_pilot_server import _build_campaign_context_from_scan_body, _prepare_scan_body_for_campaign
+    from ai_test_asset_center.private_pilot_scan_context_contract import build_campaign_context_from_scan_body, prepare_scan_body_for_campaign
 
     content = "GET /api/products\n"
     manifest = register_source_asset(
@@ -87,7 +87,7 @@ def test_scan_body_can_auto_select_latest_registered_source_when_frontend_omits_
         actor={"name": "tester", "role": "qa_lead"},
     )
 
-    prepared = _prepare_scan_body_for_campaign(
+    prepared = prepare_scan_body_for_campaign(
         "demo",
         tmp_path,
         {
@@ -96,7 +96,7 @@ def test_scan_body_can_auto_select_latest_registered_source_when_frontend_omits_
             "test_data_strategy": "blocked_with_testability_gap",
         },
     )
-    context = _build_campaign_context_from_scan_body(prepared)
+    context = build_campaign_context_from_scan_body(prepared)
 
     assert prepared["api_doc"] == content
     assert context["source_manifest"]["source_id"] == manifest["source_id"]
@@ -129,6 +129,18 @@ def test_install_patch_replaces_continuous_loop_and_reports_status() -> None:
     restore_customer_delivery_gate_patch()
     assert service._continuous_scan_loop is original_loop
     assert service.PrivatePilotHandler._handle_continuous_start is original_start
+
+
+def test_scan_context_patch_uses_extracted_contract_helpers() -> None:
+    patch_text = Path("ai_test_asset_center/private_pilot_scan_context_patch.py").read_text(encoding="utf-8")
+    contract_text = Path("ai_test_asset_center/private_pilot_scan_context_contract.py").read_text(encoding="utf-8")
+
+    assert "from ai_test_asset_center.private_pilot_scan_context_contract import" in patch_text
+    assert "private_pilot_server" not in patch_text
+    assert "def prepare_scan_body_for_campaign" in contract_text
+    assert "def build_campaign_context_from_scan_body" in contract_text
+    assert "SCAN_CAMPAIGN_CONTEXT" in contract_text
+    assert "CONTINUOUS_CAMPAIGN_CONTEXTS" in contract_text
 
 
 def test_service_credentials_are_masked_for_frontend() -> None:
