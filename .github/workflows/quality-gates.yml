@@ -29,6 +29,9 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/policy_wiring.py').read()); print('policy_wiring.py OK')"
           python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/stage_reason_all_v2.py').read()); print('stage_reason_all_v2.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/business_state_graph.py').read()); print('business_state_graph.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/semantic_scenario_generator.py').read()); print('semantic_scenario_generator.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/v12_pipeline.py').read()); print('v12_pipeline.py OK')"
       - name: Run backend and evidence truthfulness gates
         run: |
           python -m pytest \
@@ -37,6 +40,7 @@ jobs:
             tests/test_phase104c_api_contract_acceptance.py \
             tests/test_core_engine_evidence_truthfulness.py \
             tests/test_reasoner_hypothesis_guardrail.py \
+            tests/test_phase109_incremental_behavior_slices.py \
             -q
 
   frontend-quality:
