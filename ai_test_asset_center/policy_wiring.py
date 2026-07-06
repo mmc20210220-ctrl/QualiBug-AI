@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from typing import Any
@@ -24,14 +25,28 @@ _BEHAVIOR_SLICE_EXECUTION_ENV: dict[str, str] = {
 _REASONER_GUARDRAIL_LIMIT_NAMES = ("MAX_HYPOTHESES", "MAX_HYPOTHESES_HARD_LIMIT")
 
 
-def _enforce_stage_reasoner_static_cap() -> None:
-    """Harden the already-loaded main Reasoner module against legacy defaults.
+def _loaded_stage_reasoner_module() -> Any | None:
+    """Return the stage Reasoner module when it can be safely reached."""
+    module_name = f"{__package__}.stage_reason_all_v2"
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    try:
+        return importlib.import_module(module_name)
+    except Exception:
+        return None
 
-    ``stage_reason_all_v2`` historically exposed a larger module-level default.
+
+def _enforce_stage_reasoner_static_cap() -> None:
+    """Harden the main Reasoner module against legacy widened defaults.
+
+    ``stage_reason_all_v2`` historically exposed larger module-level defaults.
     Product calls resolve policy through this module, so enforce the canonical
-    cap on the actual loaded module before returning a reasoner budget.
+    cap on the actual module before returning a reasoner budget. Import failures
+    are deliberately ignored because this guardrail must not mask unrelated
+    startup errors; explicit assertions below catch drift once the module loads.
     """
-    module = sys.modules.get(f"{__package__}.stage_reason_all_v2")
+    module = _loaded_stage_reasoner_module()
     if module is None:
         return
     for name in _REASONER_GUARDRAIL_LIMIT_NAMES:
@@ -47,7 +62,7 @@ def assert_reasoner_guardrails() -> None:
     external LLM connectivity or product readiness.
     """
     _enforce_stage_reasoner_static_cap()
-    module = sys.modules.get(f"{__package__}.stage_reason_all_v2")
+    module = _loaded_stage_reasoner_module()
     if module is not None:
         for name in _REASONER_GUARDRAIL_LIMIT_NAMES:
             if hasattr(module, name):
