@@ -16,6 +16,7 @@ from .enterprise_test_data_plan import build_campaign_test_data_plan
 _SOURCE_EXTENSIONS = {".json", ".yaml", ".yml", ".md", ".txt"}
 _MAX_SOURCE_BYTES = 5_000_000
 _MAX_SOURCE_FILES = 200
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _configure_console_encoding() -> None:
@@ -88,36 +89,58 @@ def _find_registered_asset(root: Path, project: str, content_hash: str) -> dict[
             continue
         if _sha256(content) != content_hash:
             continue
-        return {"source_id": f"project_asset:{path.relative_to(root).as_posix()}", "source_hash": content_hash}
+        return {
+            "source_id": f"project_asset:{path.relative_to(root).as_posix()}",
+            "source_hash": content_hash,
+            "source_origin": "registered_project_asset",
+        }
     return {}
 
 
 def _source_manifest(root: Path, project: str, context: dict[str, Any], api_doc_path: str, api_doc_text: str) -> dict[str, str]:
+    """Resolve provenance without treating an arbitrary local path as registered input."""
     manifest = _as_dict(context.get("source_manifest"))
     source_id = str(manifest.get("source_id") or "").strip()
-    source_hash = str(manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:")
+    source_hash = str(manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:").strip()
     actual_hash = _sha256(api_doc_text)
-    if api_doc_path and not source_id:
-        source_id = Path(api_doc_path).name
-    if api_doc_path and not source_hash:
-        source_hash = actual_hash
+    source_origin = "declared_manifest" if source_id or source_hash else ""
+
+    # An uploaded/registered project asset may be recognized by exact content only.
+    # A caller-owned external file must carry its own complete source manifest.
     if not source_id and not source_hash:
         registered = _find_registered_asset(root, project, actual_hash)
         source_id = registered.get("source_id", "")
         source_hash = registered.get("source_hash", "")
-    return {"source_id": source_id[:160], "source_hash": source_hash[:128], "actual_hash": actual_hash}
+        source_origin = registered.get("source_origin", "external_path_unregistered" if api_doc_path else "inline_unregistered")
+
+    return {
+        "source_id": source_id[:160],
+        "source_hash": source_hash[:128],
+        "actual_hash": actual_hash,
+        "source_origin": source_origin,
+    }
 
 
 def _source_contract(manifest: dict[str, str]) -> list[dict[str, str]]:
-    if not manifest["source_id"] or not manifest["source_hash"]:
-        return [_gap("SOURCE_PROVENANCE_MISSING", "Every enterprise scan requires a registered source_id and immutable source_hash.")]
+    missing = [name for name in ("source_id", "source_hash") if not manifest.get(name)]
+    if missing:
+        return [_gap(
+            "SOURCE_PROVENANCE_MISSING",
+            "Every enterprise scan requires a registered project asset or an explicit source_id and immutable SHA-256 source_hash.",
+        )]
+    if not _SHA256_RE.fullmatch(manifest["source_hash"]):
+        return [_gap("SOURCE_HASH_INVALID", "source_hash must be a lowercase SHA-256 digest for the submitted source content.")]
     if manifest["source_hash"] != manifest["actual_hash"]:
         return [_gap("SOURCE_HASH_MISMATCH", "The source_hash does not match submitted source content.")]
     return []
 
 
 def _runtime_contract(context: dict[str, Any], base_url: str, manifest: dict[str, str]) -> tuple[str, list[dict[str, str]], dict[str, Any]]:
-    public_manifest = {"source_id": manifest.get("source_id", ""), "source_hash": manifest.get("source_hash", "")}
+    public_manifest = {
+        "source_id": manifest.get("source_id", ""),
+        "source_hash": manifest.get("source_hash", ""),
+        "source_origin": manifest.get("source_origin", ""),
+    }
     if not base_url:
         return "", [], {"status": "plan_only", "reason": "runtime_target_missing", "source_manifest": public_manifest}
     missing: list[dict[str, str]] = []
@@ -164,7 +187,20 @@ def _classify_findings(items: Any) -> tuple[list[dict[str, Any]], list[dict[str,
 
 
 def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[str, str]], runtime_contract: dict[str, Any], context: dict[str, Any], save_report: bool, output_dir: Optional[Path]) -> dict[str, Any]:
-    campaign = {"campaign_id": "", "campaign_status": "blocked", "scope_id": str(context.get("scope_id") or ""), "environment_ref": str(context.get("environment_ref") or context.get("target_environment") or ""), "confirmed_slice_count": 0, "coverage_deferred_reason": "source_provenance_missing", "next_campaign_reason": "supply_registered_immutable_source"}
+    manifest = _as_dict(runtime_contract.get("source_manifest"))
+    first_code = str(_as_dict(gaps[0]).get("code") or "SOURCE_CONTRACT_BLOCKED") if gaps else "SOURCE_CONTRACT_BLOCKED"
+    campaign = {
+        "campaign_id": "",
+        "campaign_status": "blocked",
+        "scope_id": str(context.get("scope_id") or ""),
+        "environment_ref": str(context.get("environment_ref") or context.get("target_environment") or ""),
+        "source_id": str(manifest.get("source_id") or ""),
+        "source_hash": str(manifest.get("source_hash") or ""),
+        "source_origin": str(manifest.get("source_origin") or ""),
+        "confirmed_slice_count": 0,
+        "coverage_deferred_reason": first_code.lower(),
+        "next_campaign_reason": "supply_registered_immutable_source" if first_code == "SOURCE_PROVENANCE_MISSING" else "correct_source_manifest_or_runtime_contract",
+    }
     test_data_plan = build_campaign_test_data_plan(campaign, [], _as_dict(context.get("test_data_contract")))
     result: dict[str, Any] = {
         "success": True,
@@ -176,25 +212,43 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
         "total_findings": 0,
         "total_candidates": 0,
         "total_ms": int((time.time() - started) * 1000),
-        "layers": {"source_grounded_discovery": {"tool": "blocked", "findings": 0, "candidates": 0, "ms": 0, "execution_status": "blocked"}, "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required"}},
-        "findings": [], "candidate_findings": [], "db_findings": [], "e2e_findings": [], "ui_findings": [], "deep_findings": [], "spectrum": {},
+        "layers": {
+            "source_grounded_discovery": {"tool": "blocked", "findings": 0, "candidates": 0, "ms": 0, "execution_status": "blocked"},
+            "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required"},
+        },
+        "findings": [],
+        "candidate_findings": [],
+        "db_findings": [],
+        "e2e_findings": [],
+        "ui_findings": [],
+        "deep_findings": [],
+        "spectrum": {},
         "input_gaps": gaps,
         "coverage_gaps": gaps + list(test_data_plan.get("coverage_gaps") or []),
         "runtime_contract": runtime_contract,
         "test_data_plan": test_data_plan,
         "campaign": campaign,
-        "behavior_slice_ledger": {"stop_reason": "source_provenance_missing", "selected_slice_ids": [], "confirmed_slice_ids": []},
-        "incremental_discovery": {"status": "blocked", "stop_reason": "source_provenance_missing"},
+        "behavior_slice_ledger": {"stop_reason": first_code.lower(), "selected_slice_ids": [], "confirmed_slice_ids": []},
+        "incremental_discovery": {"status": "blocked", "stop_reason": first_code.lower()},
         "execution_status": "blocked",
-        "db_verification": {"status": "blocked", "reason": "source_provenance_missing", "findings": []},
-        "ci_gate": {"status": "not_evaluated", "reason": "source_provenance_missing"},
+        "db_verification": {"status": "blocked", "reason": first_code.lower(), "findings": []},
+        "ci_gate": {"status": "not_evaluated", "reason": first_code.lower()},
         "auto_har": {"status": "no_traffic"},
         "v12": {},
     }
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {"project": project, "real_findings": [], "risk_clues": [], "campaign": campaign, "coverage_gaps": result["coverage_gaps"], "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "execution_status": "blocked"})
+        _write_json(report_path, {
+            "project": project,
+            "real_findings": [],
+            "risk_clues": [],
+            "campaign": campaign,
+            "coverage_gaps": result["coverage_gaps"],
+            "runtime_contract": runtime_contract,
+            "test_data_plan": test_data_plan,
+            "execution_status": "blocked",
+        })
         result["report_path"] = str(report_path)
     _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
     return result
@@ -230,7 +284,11 @@ def scan(
     started = time.time()
     context = dict(campaign_context or {})
     manifest = _source_manifest(root, project, context, api_doc_path, api_doc_text)
-    context["source_manifest"] = {"source_id": manifest["source_id"], "source_hash": manifest["source_hash"]}
+    context["source_manifest"] = {
+        "source_id": manifest["source_id"],
+        "source_hash": manifest["source_hash"],
+        "source_origin": manifest["source_origin"],
+    }
     provenance_gaps = _source_contract(manifest)
     approved_base_url, runtime_gaps, runtime_contract = _runtime_contract(context, base_url, manifest)
     if provenance_gaps:
@@ -254,7 +312,15 @@ def scan(
 
     try:
         from .v12_pipeline import run_v12_pipeline
-        v12 = run_v12_pipeline(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, campaign_context=context)
+        v12 = run_v12_pipeline(
+            project=project,
+            root=root,
+            prd_text=prd_text,
+            api_spec_text=api_doc_text,
+            db_schema_text=schema_text,
+            base_url=approved_base_url,
+            campaign_context=context,
+        )
     except Exception as exc:
         return {"success": False, "error": f"v12_pipeline_failed:{type(exc).__name__}:{exc}"}
 
@@ -265,7 +331,11 @@ def scan(
     graph_gaps = state_graph.get("coverage_gaps", []) if isinstance(state_graph.get("coverage_gaps"), list) else []
     campaign = _as_dict(v12.get("campaign"))
     incremental = _as_dict(phases.get("incremental_discovery"))
-    test_data_plan = build_campaign_test_data_plan(campaign, incremental.get("selected_slices") if isinstance(incremental.get("selected_slices"), list) else [], _as_dict(context.get("test_data_contract")))
+    test_data_plan = build_campaign_test_data_plan(
+        campaign,
+        incremental.get("selected_slices") if isinstance(incremental.get("selected_slices"), list) else [],
+        _as_dict(context.get("test_data_contract")),
+    )
     coverage_gaps = input_gaps + [item for item in graph_gaps if isinstance(item, dict)] + list(test_data_plan.get("coverage_gaps") or [])
     execution_status = str(execution.get("status") or "not_executed")
     duration_ms = int((time.time() - started) * 1000)
@@ -280,10 +350,29 @@ def scan(
         "total_candidates": len(candidates),
         "total_ms": duration_ms,
         "layers": {
-            "source_grounded_discovery": {"tool": "V12 enterprise campaign", "findings": len(confirmed), "candidates": len(candidates), "ms": int(v12.get("total_duration_ms") or duration_ms), "execution_status": execution_status, "campaign_id": campaign.get("campaign_id", "")},
-            "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required" if multi_layer else "not_requested"},
+            "source_grounded_discovery": {
+                "tool": "V12 enterprise campaign",
+                "findings": len(confirmed),
+                "candidates": len(candidates),
+                "ms": int(v12.get("total_duration_ms") or duration_ms),
+                "execution_status": execution_status,
+                "campaign_id": campaign.get("campaign_id", ""),
+            },
+            "legacy_domain_layers": {
+                "tool": "disabled",
+                "findings": 0,
+                "candidates": 0,
+                "ms": 0,
+                "reason": "source_bound_scope_fixture_actor_cleanup_contract_required" if multi_layer else "not_requested",
+            },
         },
-        "findings": confirmed, "candidate_findings": candidates, "db_findings": [], "e2e_findings": [], "ui_findings": [], "deep_findings": [], "spectrum": {},
+        "findings": confirmed,
+        "candidate_findings": candidates,
+        "db_findings": [],
+        "e2e_findings": [],
+        "ui_findings": [],
+        "deep_findings": [],
+        "spectrum": {},
         "preflight_diagnostics": diagnostics,
         "input_gaps": input_gaps,
         "coverage_gaps": coverage_gaps,
@@ -293,15 +382,33 @@ def scan(
         "behavior_slice_ledger": v12.get("behavior_slice_ledger", {}),
         "incremental_discovery": incremental,
         "execution_status": execution_status,
-        "db_verification": {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []},
-        "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
+        "db_verification": {
+            "status": "plan_only" if schema_text else "blocked",
+            "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing",
+            "findings": [],
+        },
+        "ci_gate": {
+            "status": "not_evaluated" if ci_gate else "not_requested",
+            "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else "",
+        },
         "auto_har": v12.get("auto_har", {}),
         "v12": v12,
     }
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "risk_clues": candidates, "campaign": campaign, "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status})
+        _write_json(report_path, {
+            "project": project,
+            "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "real_findings": confirmed,
+            "risk_clues": candidates,
+            "campaign": campaign,
+            "coverage_gaps": coverage_gaps,
+            "runtime_contract": runtime_contract,
+            "test_data_plan": test_data_plan,
+            "behavior_slice_ledger": result["behavior_slice_ledger"],
+            "execution_status": execution_status,
+        })
         result["report_path"] = str(report_path)
     _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
     return result
