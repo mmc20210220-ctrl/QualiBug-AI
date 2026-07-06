@@ -124,7 +124,14 @@ class EnterpriseCampaign:
         )
 
     def history_item(self) -> dict[str, Any]:
-        return {"behavior_slice_ledger": {"campaign_id": self.campaign_id, "selected_slice_ids": list(self.attempted_slice_ids), "attempted_slice_ids": list(self.attempted_slice_ids), "round": self.round_count}}
+        return {
+            "behavior_slice_ledger": {
+                "campaign_id": self.campaign_id,
+                "selected_slice_ids": list(self.attempted_slice_ids),
+                "attempted_slice_ids": list(self.attempted_slice_ids),
+                "round": self.round_count,
+            }
+        }
 
     def record_cycle(self, *, round_number: int, selection: dict[str, Any], findings: Iterable[Any], coverage_gap_count: int, execution_status: str) -> None:
         selected = [_text(value) for value in selection.get("selected_slice_ids", []) if _text(value)]
@@ -153,7 +160,17 @@ class EnterpriseCampaign:
             self.next_campaign_reason = "source_assets_or_runtime_observation_required"
         else:
             self.status = "active"
-        self.audit_events.append({"at_utc": _now(), "event": "cycle", "round": self.round_count, "selected": len(selected), "confirmed": len(self.confirmation_receipts), "remaining": remaining, "execution_status": _text(execution_status, 80), "reason": reason, "status": self.status})
+        self.audit_events.append({
+            "at_utc": _now(),
+            "event": "cycle",
+            "round": self.round_count,
+            "selected": len(selected),
+            "confirmed": len(self.confirmation_receipts),
+            "remaining": remaining,
+            "execution_status": _text(execution_status, 80),
+            "reason": reason,
+            "status": self.status,
+        })
         self.audit_events = self.audit_events[-200:]
         self.updated_at_utc = _now()
 
@@ -179,7 +196,14 @@ class EnterpriseCampaign:
         }
 
     def to_dict(self) -> dict[str, Any]:
-        return {**self.public_contract(), "attempted_slice_ids": self.attempted_slice_ids, "confirmation_receipts": self.confirmation_receipts, "audit_events": self.audit_events, "created_at_utc": self.created_at_utc, "updated_at_utc": self.updated_at_utc}
+        return {
+            **self.public_contract(),
+            "attempted_slice_ids": self.attempted_slice_ids,
+            "confirmation_receipts": self.confirmation_receipts,
+            "audit_events": self.audit_events,
+            "created_at_utc": self.created_at_utc,
+            "updated_at_utc": self.updated_at_utc,
+        }
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EnterpriseCampaign":
@@ -212,7 +236,9 @@ class EnterpriseCampaign:
 
 class EnterpriseCampaignStore:
     def __init__(self, root: Path, project_id: str):
-        self.path = Path(root) / "platform_workspace" / _safe(project_id) / "defect_discovery" / "campaigns"
+        self.root = Path(root)
+        self.project_id = _text(project_id)
+        self.path = self.root / "platform_workspace" / _safe(self.project_id) / "defect_discovery" / "campaigns"
 
     def open_or_create(self, campaign: EnterpriseCampaign) -> tuple[EnterpriseCampaign, str]:
         path = self.path / f"{_safe(campaign.campaign_id)}.json"
@@ -229,4 +255,51 @@ class EnterpriseCampaignStore:
 
     def save(self, campaign: EnterpriseCampaign) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
-        (self.path / f"{_safe(campaign.campaign_id)}.json").write_text(json.dumps(campaign.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        (self.path / f"{_safe(campaign.campaign_id)}.json").write_text(
+            json.dumps(campaign.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._persist_command_center_projection(campaign)
+
+    def _persist_command_center_projection(self, campaign: EnterpriseCampaign) -> None:
+        """Publish only safe governance facts to the existing command-center channel."""
+        path = self.root / "platform_outputs" / _safe(self.project_id) / "real_project" / "real_project_defect_data.json"
+        payload: dict[str, Any] = {}
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8") or "{}")
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except Exception:
+                payload = {}
+        latest = campaign.audit_events[-1] if campaign.audit_events else {}
+        current_run = {
+            "status": _text(latest.get("execution_status"), 80) or campaign.status,
+            "campaign_status": campaign.status,
+            "round": campaign.round_count,
+            "stop_reason": _text(latest.get("reason"), 240),
+            "selected_slice_count": max(0, int(latest.get("selected") or 0)),
+            "confirmed_slice_count": len(campaign.confirmation_receipts),
+            "remaining_slice_count": max(0, int(latest.get("remaining") or 0)),
+            "finished_at": campaign.updated_at_utc,
+        }
+        existing = _as_dict(payload.get("continuous_discovery_campaign"))
+        payload["continuous_discovery_campaign"] = {
+            **existing,
+            "schema_version": "enterprise-campaign-projection-v1",
+            "campaign": campaign.public_contract(),
+            "summary": {
+                "campaign_state": campaign.status,
+                "campaign_id": campaign.campaign_id,
+                "coverage_deferred_reason": campaign.coverage_deferred_reason,
+                "next_campaign_reason": campaign.next_campaign_reason,
+                "attempted_slice_count": len(campaign.attempted_slice_ids),
+                "confirmed_slice_count": len(campaign.confirmation_receipts),
+            },
+            "current_run": current_run,
+            "updated_at_utc": campaign.updated_at_utc,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        temporary.replace(path)
