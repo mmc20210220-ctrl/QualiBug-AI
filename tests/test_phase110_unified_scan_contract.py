@@ -33,6 +33,8 @@ def test_inline_source_without_provenance_is_blocked_before_campaign_planning(tm
     assert any(gap["code"] == "SOURCE_PROVENANCE_MISSING" for gap in result["input_gaps"])
     assert result["execution_status"] == "blocked"
     assert result["evidence_bundle"]["status"] == "not_created"
+    assert result["release_gate"]["verdict"] == "fail"
+    assert result["release_gate"]["status"] == "blocked"
 
 
 def test_external_api_doc_path_without_manifest_is_not_implicitly_trusted(tmp_path):
@@ -53,6 +55,7 @@ def test_external_api_doc_path_is_allowed_with_complete_explicit_manifest(tmp_pa
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "declared_manifest"
     assert result["evidence_bundle"]["status"] == "persisted"
     assert verify_evidence_bundle("enterprise-project", result["evidence_bundle"]["bundle_id"], root=tmp_path)["valid"] is True
+    assert result["release_gate"]["verdict"] == "not_ready"
 
 
 def test_declared_source_hash_must_match_submitted_content(tmp_path):
@@ -104,6 +107,7 @@ def test_scan_validates_test_data_receipts_against_campaign_identity(tmp_path):
     assert second["campaign"]["campaign_id"] == campaign_id
     assert second["test_data_plan"]["status"] == "ready"
     assert second["test_data_plan"]["receipt_validation"] == "verified"
+    assert second["release_gate"]["verdict"] == "not_ready"
 
 
 def test_registered_project_asset_supplies_provenance_without_client_supplied_manifest(tmp_path):
