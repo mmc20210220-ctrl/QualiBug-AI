@@ -1,5 +1,5 @@
 # QualiBug AI Enterprise Edition - Dockerfile
-# Phase92A Evidence Bridge
+# Version 95.0.0 private-pilot deployment
 
 FROM python:3.12-slim
 
@@ -7,7 +7,7 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV QUALIBUG_PRODUCTION=1
-ENV QUALIBUG_PORT=5000
+ENV QUALIBUG_PORT=8088
 
 # Set working directory
 WORKDIR /app
@@ -38,12 +38,12 @@ COPY .env.local.example .env.local.example
 RUN useradd --create-home --shell /bin/bash qualibug
 USER qualibug
 
-# Health check
+# Health check: canonical API health path. /health remains a legacy alias.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+    CMD curl -f http://localhost:8088/api/health || exit 1
 
-# Expose port
-EXPOSE 5000
+# Expose the canonical private-pilot container port
+EXPOSE 8088
 
-# Default command - run private pilot service
-CMD ["python", "-m", "ai_test_asset_center.private_pilot_service"]
+# Default command - run patched private pilot deployment entrypoint
+CMD ["python", "-m", "ai_test_asset_center.private_pilot_entrypoint"]
