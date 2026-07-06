@@ -27,6 +27,8 @@ def test_private_pilot_doctor_reports_delivery_contract(tmp_path: Path, monkeypa
     assert payload["health_payload_preview"]["version"] == PRODUCT_VERSION
     assert isinstance(payload["remediation_hints"], list)
     assert payload["readiness"]["level"] in {"ready", "warning", "blocked"}
+    assert isinstance(payload["summary_lines"], list)
+    assert payload["summary_text"].startswith("QualiBug private-pilot doctor:")
 
 
 def test_private_pilot_doctor_tolerates_invalid_port_env(tmp_path: Path, monkeypatch) -> None:
@@ -42,6 +44,7 @@ def test_private_pilot_doctor_tolerates_invalid_port_env(tmp_path: Path, monkeyp
     assert "INVALID_QUALIBUG_PORT" in _hint_codes(payload)
     assert payload["readiness"]["level"] == "warning"
     assert "INVALID_QUALIBUG_PORT" in payload["readiness"]["warnings"]
+    assert "INVALID_QUALIBUG_PORT" in payload["summary_text"]
 
 
 def test_private_pilot_doctor_remediates_readonly_patch_status_and_missing_key(tmp_path: Path, monkeypatch) -> None:
@@ -56,6 +59,7 @@ def test_private_pilot_doctor_remediates_readonly_patch_status_and_missing_key(t
     assert payload["readiness"]["level"] == "warning"
     assert payload["readiness"]["blocked"] is False
     assert any("qualibug-doctor --install-patches --output" in command for item in payload["remediation_hints"] for command in item.get("commands", []))
+    assert "Suggested commands:" in payload["summary_text"]
 
 
 def test_private_pilot_doctor_readiness_blocks_error_hints() -> None:
@@ -76,6 +80,30 @@ def test_private_pilot_doctor_readiness_blocks_error_hints() -> None:
     assert readiness["level"] == "blocked"
     assert readiness["blocked"] is True
     assert readiness["blockers"] == ["PRIVATE_PILOT_MODULE_IMPORT_FAILED"]
+
+
+def test_private_pilot_doctor_human_summary_mentions_blockers() -> None:
+    from ai_test_asset_center.private_pilot_doctor import _collect_summary
+
+    payload = {
+        "product": {"version": "95.0.0"},
+        "environment": {"port": 8088},
+        "readiness": {
+            "level": "blocked",
+            "label": "Blocked - fix required before customer pilot",
+            "blockers": ["PRIVATE_PILOT_MODULE_IMPORT_FAILED"],
+            "warnings": ["CREDENTIAL_KEY_MISSING"],
+            "next_action": "Reinstall the package.",
+        },
+        "remediation_hints": [
+            {"code": "PRIVATE_PILOT_MODULE_IMPORT_FAILED", "commands": ["pip install -e .", "qualibug-doctor --output"]}
+        ],
+    }
+    summary = _collect_summary(payload)
+
+    assert "Blocked - fix required before customer pilot" in summary["summary_text"]
+    assert "PRIVATE_PILOT_MODULE_IMPORT_FAILED" in summary["summary_text"]
+    assert "pip install -e ." in summary["summary_text"]
 
 
 def test_private_pilot_doctor_checks_patch_modules(tmp_path: Path) -> None:
@@ -100,6 +128,7 @@ def test_private_pilot_doctor_writes_default_report(tmp_path: Path) -> None:
     assert saved["product"]["version"] == payload["product"]["version"]
     assert isinstance(saved["remediation_hints"], list)
     assert saved["readiness"]["level"] in {"ready", "warning", "blocked"}
+    assert saved["summary_text"] == payload["summary_text"]
 
 
 def test_private_pilot_doctor_cli_writes_custom_report(tmp_path: Path, capsys) -> None:
@@ -116,6 +145,7 @@ def test_private_pilot_doctor_cli_writes_custom_report(tmp_path: Path, capsys) -
     assert '"doctor_report_file"' in captured
     assert '"remediation_hints"' in captured
     assert '"readiness"' in captured
+    assert '"summary_text"' in captured
 
 
 def test_private_pilot_doctor_cli_script_is_registered() -> None:
@@ -153,3 +183,4 @@ def test_private_pilot_doctor_main_prints_json(tmp_path: Path, capsys) -> None:
     assert '"scan_context_contract"' in captured
     assert '"remediation_hints"' in captured
     assert '"readiness"' in captured
+    assert '"summary_text"' in captured
