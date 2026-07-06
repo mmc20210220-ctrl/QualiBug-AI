@@ -18,7 +18,6 @@ from typing import Any, Optional
 from .enterprise_campaign import has_real_confirmation_receipt
 from .enterprise_test_data_plan import build_campaign_test_data_plan
 
-
 _SOURCE_EXTENSIONS = {".json", ".yaml", ".yml", ".md", ".txt"}
 _MAX_SOURCE_BYTES = 5_000_000
 _MAX_SOURCE_FILES = 200
@@ -218,66 +217,11 @@ def _classify_findings(items: Any) -> tuple[list[dict[str, Any]], list[dict[str,
     return confirmed, candidates
 
 
-def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[str, str]], runtime_contract: dict[str, Any], context: dict[str, Any], save_report: bool, output_dir: Optional[Path]) -> dict[str, Any]:
-    manifest = _as_dict(runtime_contract.get("source_manifest"))
-    first_code = str(_as_dict(gaps[0]).get("code") or "SOURCE_CONTRACT_BLOCKED") if gaps else "SOURCE_CONTRACT_BLOCKED"
-    campaign = {
-        "campaign_id": "", "campaign_status": "blocked", "scope_id": str(context.get("scope_id") or ""),
-        "environment_ref": str(context.get("environment_ref") or context.get("target_environment") or ""),
-        "source_id": str(manifest.get("source_id") or ""), "source_hash": str(manifest.get("source_hash") or ""),
-        "source_version_id": str(manifest.get("source_version_id") or ""), "source_origin": str(manifest.get("source_origin") or ""),
-        "confirmed_slice_count": 0, "coverage_deferred_reason": first_code.lower(),
-        "next_campaign_reason": "supply_registered_immutable_source" if first_code == "SOURCE_PROVENANCE_MISSING" else "correct_source_manifest_or_runtime_contract",
-    }
-    test_data_plan = build_campaign_test_data_plan(
-        campaign,
-        [],
-        _as_dict(context.get("test_data_contract")),
-        receipt_verifier=_test_data_receipt_verifier(root, project),
-    )
-    result: dict[str, Any] = {
-        "success": True, "scan_id": f"scan_{_safe_project(project)}_{int(started * 1000)}", "project": project,
-        "grade": "blocked", "score": 0.0, "coverage": 0.0, "total_findings": 0, "total_candidates": 0,
-        "total_ms": int((time.time() - started) * 1000),
-        "layers": {
-            "source_grounded_discovery": {"tool": "blocked", "findings": 0, "candidates": 0, "ms": 0, "execution_status": "blocked"},
-            "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required"},
-        },
-        "findings": [], "candidate_findings": [], "db_findings": [], "e2e_findings": [], "ui_findings": [], "deep_findings": [], "spectrum": {},
-        "input_gaps": gaps, "coverage_gaps": gaps + list(test_data_plan.get("coverage_gaps") or []),
-        "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "campaign": campaign,
-        "behavior_slice_ledger": {"stop_reason": first_code.lower(), "selected_slice_ids": [], "confirmed_slice_ids": []},
-        "incremental_discovery": {"status": "blocked", "stop_reason": first_code.lower()}, "execution_status": "blocked",
-        "db_verification": {"status": "blocked", "reason": first_code.lower(), "findings": []},
-        "ci_gate": {"status": "not_evaluated", "reason": first_code.lower()}, "auto_har": {"status": "no_traffic"},
-        "evidence_bundle": {"status": "not_created", "reason": "scan_blocked"}, "v12": {},
-    }
-    if save_report:
-        output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
-        report_path = output / "intelligence_report.json"
-        _write_json(report_path, {
-            "project": project, "real_findings": [], "risk_clues": [], "campaign": campaign,
-            "coverage_gaps": result["coverage_gaps"], "runtime_contract": runtime_contract,
-            "test_data_plan": test_data_plan, "execution_status": "blocked", "evidence_bundle": result["evidence_bundle"],
-        })
-        result["report_path"] = str(report_path)
-    _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
-    return result
-
-
 def _test_data_receipt_verifier(root: Path, project: str):
     def verify(kind: str, receipt_id: str, campaign_id: str, scope_id: str, environment_ref: str) -> bool:
         try:
             from .enterprise_test_data_receipts import verify_test_data_receipt
-            verdict = verify_test_data_receipt(
-                project,
-                receipt_id,
-                root=root,
-                kind=kind,
-                campaign_id=campaign_id,
-                scope_id=scope_id,
-                environment_ref=environment_ref,
-            )
+            verdict = verify_test_data_receipt(project, receipt_id, root=root, kind=kind, campaign_id=campaign_id, scope_id=scope_id, environment_ref=environment_ref)
             return bool(verdict.get("valid"))
         except Exception:
             return False
@@ -297,6 +241,97 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
         evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
         findings=v12.get("findings") if isinstance(v12.get("findings"), list) else [],
     )
+
+
+def _evaluate_release_gate(
+    *,
+    project: str,
+    root: Path,
+    campaign: dict[str, Any],
+    execution_status: str,
+    runtime_contract: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+    test_data_plan: dict[str, Any],
+    findings: list[dict[str, Any]],
+    coverage_gaps: list[dict[str, Any]],
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from .release_gate import evaluate_release_gate
+    verification: dict[str, Any] = {}
+    if str(evidence_bundle.get("status") or "") == "persisted" and str(evidence_bundle.get("bundle_id") or ""):
+        try:
+            from .evidence_artifact_store import verify_evidence_bundle
+            verification = verify_evidence_bundle(project, str(evidence_bundle["bundle_id"]), root=root)
+        except Exception as exc:
+            verification = {"valid": False, "code": f"EVIDENCE_BUNDLE_VERIFICATION_ERROR:{type(exc).__name__}"}
+    return evaluate_release_gate(
+        campaign=campaign,
+        execution_status=execution_status,
+        runtime_contract=runtime_contract,
+        evidence_bundle=evidence_bundle,
+        evidence_bundle_verification=verification,
+        test_data_plan=test_data_plan,
+        findings=findings,
+        coverage_gaps=coverage_gaps,
+        policy=policy,
+    )
+
+
+def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[str, str]], runtime_contract: dict[str, Any], context: dict[str, Any], save_report: bool, output_dir: Optional[Path]) -> dict[str, Any]:
+    manifest = _as_dict(runtime_contract.get("source_manifest"))
+    first_code = str(_as_dict(gaps[0]).get("code") or "SOURCE_CONTRACT_BLOCKED") if gaps else "SOURCE_CONTRACT_BLOCKED"
+    campaign = {
+        "campaign_id": "", "campaign_status": "blocked", "scope_id": str(context.get("scope_id") or ""),
+        "environment_ref": str(context.get("environment_ref") or context.get("target_environment") or ""),
+        "source_id": str(manifest.get("source_id") or ""), "source_hash": str(manifest.get("source_hash") or ""),
+        "source_version_id": str(manifest.get("source_version_id") or ""), "source_origin": str(manifest.get("source_origin") or ""),
+        "confirmed_slice_count": 0, "coverage_deferred_reason": first_code.lower(),
+        "next_campaign_reason": "supply_registered_immutable_source" if first_code == "SOURCE_PROVENANCE_MISSING" else "correct_source_manifest_or_runtime_contract",
+    }
+    test_data_plan = build_campaign_test_data_plan(campaign, [], _as_dict(context.get("test_data_contract")), receipt_verifier=_test_data_receipt_verifier(root, project))
+    coverage_gaps = gaps + list(test_data_plan.get("coverage_gaps") or [])
+    evidence_bundle = {"status": "not_created", "reason": "scan_blocked"}
+    release_gate = _evaluate_release_gate(
+        project=project,
+        root=root,
+        campaign=campaign,
+        execution_status="blocked",
+        runtime_contract=runtime_contract,
+        evidence_bundle=evidence_bundle,
+        test_data_plan=test_data_plan,
+        findings=[],
+        coverage_gaps=coverage_gaps,
+        policy=_as_dict(context.get("release_policy")),
+    )
+    result: dict[str, Any] = {
+        "success": True, "scan_id": f"scan_{_safe_project(project)}_{int(started * 1000)}", "project": project,
+        "grade": "blocked", "score": 0.0, "coverage": 0.0, "total_findings": 0, "total_candidates": 0,
+        "total_ms": int((time.time() - started) * 1000),
+        "layers": {
+            "source_grounded_discovery": {"tool": "blocked", "findings": 0, "candidates": 0, "ms": 0, "execution_status": "blocked"},
+            "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required"},
+        },
+        "findings": [], "candidate_findings": [], "db_findings": [], "e2e_findings": [], "ui_findings": [], "deep_findings": [], "spectrum": {},
+        "input_gaps": gaps, "coverage_gaps": coverage_gaps,
+        "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "campaign": campaign,
+        "behavior_slice_ledger": {"stop_reason": first_code.lower(), "selected_slice_ids": [], "confirmed_slice_ids": []},
+        "incremental_discovery": {"status": "blocked", "stop_reason": first_code.lower()}, "execution_status": "blocked",
+        "db_verification": {"status": "blocked", "reason": first_code.lower(), "findings": []},
+        "ci_gate": {"status": "not_evaluated", "reason": first_code.lower()}, "auto_har": {"status": "no_traffic"},
+        "evidence_bundle": evidence_bundle, "release_gate": release_gate, "v12": {},
+    }
+    if save_report:
+        output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
+        report_path = output / "intelligence_report.json"
+        _write_json(report_path, {
+            "project": project, "real_findings": [], "risk_clues": [], "campaign": campaign,
+            "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract,
+            "test_data_plan": test_data_plan, "execution_status": "blocked",
+            "evidence_bundle": evidence_bundle, "release_gate": release_gate,
+        })
+        result["report_path"] = str(report_path)
+    _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
+    return result
 
 
 def scan(
@@ -388,6 +423,18 @@ def scan(
         receipt_verifier=_test_data_receipt_verifier(root, project),
     )
     coverage_gaps = input_gaps + [item for item in graph_gaps if isinstance(item, dict)] + list(test_data_plan.get("coverage_gaps") or [])
+    release_gate = _evaluate_release_gate(
+        project=project,
+        root=root,
+        campaign=campaign,
+        execution_status=execution_status,
+        runtime_contract=runtime_contract,
+        evidence_bundle=evidence_bundle,
+        test_data_plan=test_data_plan,
+        findings=confirmed,
+        coverage_gaps=coverage_gaps,
+        policy=_as_dict(context.get("release_policy")),
+    )
     duration_ms = int((time.time() - started) * 1000)
     result: dict[str, Any] = {
         "success": True, "scan_id": scan_id, "project": project,
@@ -404,7 +451,7 @@ def scan(
         "execution_status": execution_status,
         "db_verification": {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []},
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
-        "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "v12": v12,
+        "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "release_gate": release_gate, "v12": v12,
     }
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
@@ -414,7 +461,7 @@ def scan(
             "real_findings": confirmed, "risk_clues": candidates, "campaign": campaign,
             "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract,
             "test_data_plan": test_data_plan, "behavior_slice_ledger": result["behavior_slice_ledger"],
-            "execution_status": execution_status, "evidence_bundle": evidence_bundle,
+            "execution_status": execution_status, "evidence_bundle": evidence_bundle, "release_gate": release_gate,
         })
         result["report_path"] = str(report_path)
     _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
@@ -455,6 +502,7 @@ def main() -> None:
         campaign = result.get("campaign", {})
         print(f"QualiBug scan: {result['project']}")
         print(f"Confirmed: {result['total_findings']} | Candidates: {result['total_candidates']} | Execution: {result['execution_status']}")
+        print(f"Release gate: {result.get('release_gate', {}).get('verdict', 'not_ready')}")
         print(f"Campaign: {campaign.get('campaign_id', 'n/a')} ({campaign.get('campaign_status', 'n/a')})")
     else:
         print(f"Error: {result.get('error', 'scan failed')}", file=sys.stderr)
