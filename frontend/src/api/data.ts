@@ -79,14 +79,15 @@ function hasValidatedEvidenceQuality(finding: Finding): boolean {
 
 function hasPassedBusinessEvidenceStatus(finding: Finding): boolean {
   const status = finding?.evidence_status;
-  if (!status) return true;
+  if (!status) return false;
   const semantic = String(status.semantic_verdict || '').toUpperCase();
   const business = String(status.business_evidence_status || '').toUpperCase();
   const finalReview = String(status.final_review_status || '').toUpperCase();
-  if (semantic && semantic !== 'SEMANTIC_CONFIRMED') return false;
-  if (business && business !== 'VALIDATED') return false;
-  if (finalReview && !['PENDING_REVIEW', 'VALIDATED_CANDIDATE', 'CUSTOMER_READY'].includes(finalReview)) return false;
-  return (status.missing_requirements || []).length === 0;
+  if (semantic !== 'SEMANTIC_CONFIRMED') return false;
+  if (business !== 'VALIDATED') return false;
+  if (!['PENDING_REVIEW', 'VALIDATED_CANDIDATE', 'CUSTOMER_READY'].includes(finalReview)) return false;
+  const missing = Array.isArray(status.missing_requirements) ? status.missing_requirements : [];
+  return missing.length === 0;
 }
 
 function hasExplicitFailureAssertion(finding: Finding): boolean {
