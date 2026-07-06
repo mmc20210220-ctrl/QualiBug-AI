@@ -98,13 +98,16 @@ class EnterpriseCampaign:
         slice_budget: int = 15,
         automatic_round_limit: int = 3,
     ) -> "EnterpriseCampaign":
+        resolved_snapshot = _text(snapshot, 80)
+        resolved_source_hash = _text(source_hash, 128) or resolved_snapshot
+        resolved_source_id = _text(source_id) or f"source_snapshot:{resolved_source_hash[:24]}"
         campaign_id = "CMP_" + _hash({
             "project": project_id,
             "scope": scope_id,
             "environment": environment_ref,
-            "snapshot": snapshot,
-            "source_id": source_id,
-            "source_hash": source_hash,
+            "snapshot": resolved_snapshot,
+            "source_id": resolved_source_id,
+            "source_hash": resolved_source_hash,
             "policy": policy_version,
         })
         return cls(
@@ -112,9 +115,9 @@ class EnterpriseCampaign:
             project_id=_text(project_id),
             scope_id=_text(scope_id),
             environment_ref=_text(environment_ref),
-            source_snapshot_hash=_text(snapshot, 80),
-            source_id=_text(source_id),
-            source_hash=_text(source_hash, 128),
+            source_snapshot_hash=resolved_snapshot,
+            source_id=resolved_source_id,
+            source_hash=resolved_source_hash,
             policy_version=_text(policy_version, 120),
             slice_budget=max(1, min(int(slice_budget or 1), MAX_SLICES_PER_ROUND)),
             automatic_round_limit=max(1, min(int(automatic_round_limit or 1), MAX_AUTOMATIC_ROUNDS)),
@@ -180,14 +183,17 @@ class EnterpriseCampaign:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EnterpriseCampaign":
+        snapshot = _text(value.get("source_snapshot_hash"), 80)
+        source_hash = _text(value.get("source_hash"), 128) or snapshot
+        source_id = _text(value.get("source_id")) or f"source_snapshot:{source_hash[:24]}"
         return cls(
             campaign_id=_text(value.get("campaign_id"), 80),
             project_id=_text(value.get("project_id")),
             scope_id=_text(value.get("scope_id")),
             environment_ref=_text(value.get("environment_ref")),
-            source_snapshot_hash=_text(value.get("source_snapshot_hash"), 80),
-            source_id=_text(value.get("source_id")),
-            source_hash=_text(value.get("source_hash"), 128),
+            source_snapshot_hash=snapshot,
+            source_id=source_id,
+            source_hash=source_hash,
             policy_version=_text(value.get("policy_version"), 120),
             status=_text(value.get("campaign_status") or value.get("status"), 80) or "active",
             run_count=max(0, int(value.get("run_count") or 0)),
