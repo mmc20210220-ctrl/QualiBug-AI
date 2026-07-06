@@ -49,6 +49,8 @@ Completed so far:
 - Added a frontend contract test so dashboard evidence-normalization blockers cannot be silently removed.
 - Expanded per-item evidence normalization reports with `evidence_id`, `issue_id`, `probe_id`, `execution_id`, `trace_id`, matched issue/execution flags, missing-field details, and next actions.
 - Added tests proving each blocked evidence item now tells operators which proof field is missing and how to fix it.
+- Surfaced per-item evidence normalization actions on the dashboard so operators can see the exact evidence/issue/probe and next action for blocked proof items.
+- Added a frontend contract test so per-item evidence actions cannot be silently removed from the dashboard.
 
 Current commercial rule:
 
@@ -73,12 +75,13 @@ Current service integration:
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - Dashboard displays the main enterprise evidence chain status, six-stage progress, first blocked stage, and next action from the backend contract.
 - Dashboard displays evidence normalization blockers and missing proof fields from the backend summary.
+- Dashboard displays per-item evidence next actions for blocked evidence items.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
 - `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for discovery, evidence normalization, and automatic chain validation.
 - `enterprise_pilot_runtime_with_chain.py` provides the safe pilot-runtime entrypoint that routes `real_project_discovery` tasks through the chain-aware runner.
 
 Next engineering step:
 
-- Surface per-item evidence normalization actions in Command Center/Dashboard so operators can click from a blocked evidence item to its exact next action.
+- Move the per-item evidence actions into the dedicated evidence page so operators can review the full blocked-evidence list, not only the dashboard top three.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
