@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai_test_asset_center.customer_delivery_gate import (
+    customer_delivery_rejection_reasons,
     is_customer_deliverable_defect,
     split_customer_delivery_tracks,
 )
@@ -44,6 +45,7 @@ def _ready_finding() -> dict:
 
 def test_backend_gate_accepts_only_fully_validated_replayable_defect() -> None:
     assert is_customer_deliverable_defect(_ready_finding()) is True
+    assert customer_delivery_rejection_reasons(_ready_finding()) == []
 
 
 def test_backend_gate_rejects_missing_business_evidence_status() -> None:
@@ -51,6 +53,7 @@ def test_backend_gate_rejects_missing_business_evidence_status() -> None:
     finding.pop("evidence_status")
 
     assert is_customer_deliverable_defect(finding) is False
+    assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in customer_delivery_rejection_reasons(finding)
 
 
 def test_backend_gate_rejects_missing_requirements() -> None:
@@ -58,6 +61,7 @@ def test_backend_gate_rejects_missing_requirements() -> None:
     finding["evidence_status"]["missing_requirements"] = ["AFTER_SNAPSHOT_MISSING"]
 
     assert is_customer_deliverable_defect(finding) is False
+    assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in customer_delivery_rejection_reasons(finding)
 
 
 def test_backend_gate_rejects_low_quality_or_non_replayable_evidence() -> None:
@@ -69,6 +73,8 @@ def test_backend_gate_rejects_low_quality_or_non_replayable_evidence() -> None:
 
     assert is_customer_deliverable_defect(low_score) is False
     assert is_customer_deliverable_defect(cannot_reproduce) is False
+    assert "EVIDENCE_QUALITY_NOT_VALIDATED" in customer_delivery_rejection_reasons(low_score)
+    assert "EVIDENCE_QUALITY_NOT_VALIDATED" in customer_delivery_rejection_reasons(cannot_reproduce)
 
 
 def test_backend_gate_rejects_synthetic_or_blocked_findings() -> None:
@@ -80,13 +86,17 @@ def test_backend_gate_rejects_synthetic_or_blocked_findings() -> None:
 
     assert is_customer_deliverable_defect(synthetic) is False
     assert is_customer_deliverable_defect(blocked) is False
+    assert "MISSING_REAL_REPLAY_ASSET" in customer_delivery_rejection_reasons(synthetic)
+    assert "BLOCKED_ENVIRONMENT_BLOCKED" in customer_delivery_rejection_reasons(blocked)
 
 
 def test_backend_gate_rejects_auth_route_and_coverage_blockers() -> None:
     for marker in ("auth_blocked", "route_blocked", "coverage_gap", "not_reproduced"):
         finding = _ready_finding()
         finding["block_reason"] = marker
+        reasons = customer_delivery_rejection_reasons(finding)
         assert is_customer_deliverable_defect(finding) is False, marker
+        assert f"BLOCKED_{marker.upper()}" in reasons
 
 
 def test_backend_gate_rejects_non_executed_or_unconfirmed_results() -> None:
@@ -98,6 +108,8 @@ def test_backend_gate_rejects_non_executed_or_unconfirmed_results() -> None:
 
     assert is_customer_deliverable_defect(not_executed) is False
     assert is_customer_deliverable_defect(not_confirmed) is False
+    assert "NOT_EXECUTED" in customer_delivery_rejection_reasons(not_executed)
+    assert "NOT_CONFIRMED" in customer_delivery_rejection_reasons(not_confirmed)
 
 
 def test_backend_gate_rejects_missing_real_request_response_or_failure_assertion() -> None:
@@ -119,6 +131,9 @@ def test_backend_gate_rejects_missing_real_request_response_or_failure_assertion
     assert is_customer_deliverable_defect(no_request) is False
     assert is_customer_deliverable_defect(no_response) is False
     assert is_customer_deliverable_defect(no_assertion) is False
+    assert "MISSING_REAL_REPLAY_ASSET" in customer_delivery_rejection_reasons(no_request)
+    assert "MISSING_CUSTOMER_FACING_HARD_EVIDENCE" in customer_delivery_rejection_reasons(no_response)
+    assert "MISSING_CUSTOMER_FACING_HARD_EVIDENCE" in customer_delivery_rejection_reasons(no_assertion)
 
 
 def test_backend_gate_splits_non_ready_items_into_internal_clues() -> None:
@@ -135,3 +150,5 @@ def test_backend_gate_splits_non_ready_items_into_internal_clues() -> None:
     assert clues[0]["customer_visible"] is False
     assert defects[0]["customer_delivery_status"] == "defect"
     assert clues[0]["customer_delivery_status"] == "clue"
+    assert defects[0]["customer_delivery_gate_reasons"] == []
+    assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in clues[0]["customer_delivery_gate_reasons"]
