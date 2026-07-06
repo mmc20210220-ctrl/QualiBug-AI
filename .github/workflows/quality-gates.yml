@@ -1,0 +1,60 @@
+name: Quality Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-contracts:
+    name: Backend contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install runtime and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Parse modified Python entry points
+        run: |
+          python -c "import ast; ast.parse(open('core/engine.py').read()); print('core/engine.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/policy_wiring.py').read()); print('policy_wiring.py OK')"
+          python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/stage_reason_all_v2.py').read()); print('stage_reason_all_v2.py OK')"
+      - name: Run backend and evidence truthfulness gates
+        run: |
+          python -m pytest \
+            tests/test_backend_main_auth.py \
+            tests/test_phase103s_command_center_api.py \
+            tests/test_phase104c_api_contract_acceptance.py \
+            tests/test_core_engine_evidence_truthfulness.py \
+            tests/test_reasoner_hypothesis_guardrail.py \
+            -q
+
+  frontend-quality:
+    name: Frontend typecheck and lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
