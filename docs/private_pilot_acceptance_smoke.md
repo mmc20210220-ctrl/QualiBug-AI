@@ -2,7 +2,7 @@
 
 `qualibug-acceptance-smoke` is the customer handoff command for private-pilot deployments. It wraps doctor diagnostics into an acceptance-oriented report and can optionally verify a running service through `/api/health`.
 
-The command does not execute enterprise scans or read customer documents. It validates deployment readiness, runtime patch wiring, scan context contract, credential safety, support bundle guidance, and optional health reachability.
+The command does not execute enterprise scans or read customer documents. It validates deployment readiness, runtime patch wiring, scan context contract, credential safety, support bundle guidance, scenario-readiness metadata, and optional health reachability.
 
 ## Quick start
 
@@ -12,6 +12,16 @@ qualibug-acceptance-smoke --output
 
 # Also check a running service
 qualibug-acceptance-smoke --server-url http://localhost:8088 --output
+
+# Check whether a real customer scenario is ready to run
+qualibug-acceptance-smoke \
+  --project demo \
+  --scan-base-url http://staging.example.internal \
+  --scope-id checkout-scope \
+  --environment-ref staging \
+  --test-data-strategy synthetic_only \
+  --require-scenario-ready \
+  --output
 
 # Compact JSON for CI or scripts
 qualibug-acceptance-smoke --compact
@@ -42,8 +52,48 @@ The report contains:
 - `checks.runtime_patches`: delivery gate, scan context, credential safety, browser UI smoke, customer report, and deployment health patches;
 - `checks.scan_context_contract`: source manifest and campaign context helper completeness;
 - `checks.credential_safety`: masked-ref policy and plaintext-return guard;
+- `checks.scenario_readiness`: source registry asset count and required scan metadata readiness;
 - `checks.http_health`: optional live `/api/health` result when `--server-url` is supplied;
 - `support_bundle_manifest`: safe-to-share and do-not-send guidance inherited from doctor.
+
+## Scenario-readiness preflight
+
+Scenario readiness checks only metadata. It does not read customer source contents or execute scans.
+
+The check verifies:
+
+- project id;
+- at least one immutable source registry asset for the project;
+- base URL for the target environment;
+- approved scope id;
+- environment reference;
+- test data strategy.
+
+By default, missing scenario metadata creates a warning so infrastructure handoff can still complete. Use `--require-scenario-ready` when the handoff must prove that a real customer scenario is ready to run; missing metadata then blocks acceptance.
+
+Useful parameters:
+
+```bash
+--project demo
+--scan-base-url http://staging.example.internal
+--scope-id checkout-scope
+--environment-ref staging
+--test-data-strategy synthetic_only
+--require-scenario-ready
+```
+
+Environment variable fallbacks are supported for automation:
+
+```text
+QUALIBUG_PROJECT
+QUALIBUG_TARGET_BASE_URL
+QUALIBUG_TARGET_UI_BASE_URL
+QUALIBUG_BROWSER_UI_BASE_URL
+QUALIBUG_SCOPE_ID
+QUALIBUG_ENVIRONMENT_REF
+QUALIBUG_TARGET_ENVIRONMENT
+QUALIBUG_TEST_DATA_STRATEGY
+```
 
 ## Recommended handoff flow
 
@@ -53,6 +103,7 @@ qualibug-doctor --output
 qualibug-acceptance-smoke --output
 python -m ai_test_asset_center.private_pilot_entrypoint
 qualibug-acceptance-smoke --server-url http://localhost:8088 --output ./platform_outputs/private_pilot_acceptance_smoke_live_report.json
+qualibug-acceptance-smoke --project demo --scan-base-url http://staging.example.internal --scope-id checkout-scope --environment-ref staging --test-data-strategy synthetic_only --require-scenario-ready --output ./platform_outputs/private_pilot_acceptance_smoke_scenario_report.json
 ```
 
 A clean handoff should have no blockers. If `acceptance.level` is `blocked`, fix the blockers or send the doctor and acceptance smoke reports to support.
