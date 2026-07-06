@@ -62,6 +62,33 @@ def test_builder_outputs_only_source_bound_slices_and_explicit_unbound_gap():
     assert all("case" not in gap["title"].lower() for gap in contract["coverage_gaps"])
 
 
+def test_unique_schema_field_overlap_binds_invariant_without_inventing_state():
+    db_schema = """
+    CREATE TABLE reconciliations (
+      id TEXT PRIMARY KEY,
+      aggregate_value NUMERIC,
+      reconciled_value NUMERIC
+    );
+    """
+    prd = """
+    # Reconciliation constraint
+    aggregate_value must equal reconciled_value
+    """
+
+    builder = BusinessStateGraphBuilder()
+    graphs = builder.build(prd, "", db_schema)
+    contract = builder.behavior_contract()
+
+    assert set(graphs) == {"reconciliation"}
+    assert contract["summary"]["source_field_bound_invariant_count"] == 1
+    invariant_slices = [item for item in contract["slices"] if item["kind"] == "invariant"]
+    assert len(invariant_slices) == 1
+    assert invariant_slices[0]["entity"] == "reconciliation"
+    assert invariant_slices[0]["states"] == []
+    assert "STATE_ANCHOR_NOT_SOURCE_BOUND" in invariant_slices[0]["evidence_gaps"]
+    assert not contract["coverage_gaps"]
+
+
 def test_slice_budget_is_hard_capped_at_fifteen(monkeypatch):
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "999")
     settings = _behavior_slice_settings()
