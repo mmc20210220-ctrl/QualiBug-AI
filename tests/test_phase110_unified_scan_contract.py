@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from ai_test_asset_center.__main__ import scan
+from ai_test_asset_center.enterprise_source_registry import register_source_asset
 from ai_test_asset_center.enterprise_test_data_plan import validate_test_data_contract
 
 
@@ -34,14 +35,7 @@ def test_inline_source_without_provenance_is_blocked_before_campaign_planning(tm
 def test_external_api_doc_path_without_manifest_is_not_implicitly_trusted(tmp_path):
     external_path = tmp_path / "supplier_export.json"
     external_path.write_text(API_SPEC, encoding="utf-8")
-
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_path=str(external_path),
-        campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
-    )
-
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_path=str(external_path), campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
     assert result["grade"] == "blocked"
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "external_path_unregistered"
     assert any(gap["code"] == "SOURCE_PROVENANCE_MISSING" for gap in result["input_gaps"])
@@ -50,55 +44,40 @@ def test_external_api_doc_path_without_manifest_is_not_implicitly_trusted(tmp_pa
 def test_external_api_doc_path_is_allowed_with_complete_explicit_manifest(tmp_path):
     external_path = tmp_path / "supplier_export.json"
     external_path.write_text(API_SPEC, encoding="utf-8")
-
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_path=str(external_path),
-        campaign_context={
-            "scope_id": "service-a",
-            "environment_ref": "test-a",
-            "source_manifest": SOURCE_MANIFEST,
-        },
-    )
-
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_path=str(external_path), campaign_context={"scope_id": "service-a", "environment_ref": "test-a", "source_manifest": SOURCE_MANIFEST})
     assert result["grade"] == "inconclusive"
     assert result["runtime_contract"]["source_manifest"]["source_id"] == "api-spec-v1"
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "declared_manifest"
 
 
 def test_declared_source_hash_must_match_submitted_content(tmp_path):
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_text=API_SPEC,
-        campaign_context={"source_manifest": {"source_id": "api-spec-v1", "source_hash": "0" * 64}},
-    )
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"source_manifest": {"source_id": "api-spec-v1", "source_hash": "0" * 64}})
     assert result["grade"] == "blocked"
     assert any(gap["code"] == "SOURCE_HASH_MISMATCH" for gap in result["input_gaps"])
 
 
 def test_declared_source_hash_must_use_sha256_format(tmp_path):
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_text=API_SPEC,
-        campaign_context={"source_manifest": {"source_id": "api-spec-v1", "source_hash": "not-a-sha256"}},
-    )
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"source_manifest": {"source_id": "api-spec-v1", "source_hash": "not-a-sha256"}})
     assert result["grade"] == "blocked"
     assert any(gap["code"] == "SOURCE_HASH_INVALID" for gap in result["input_gaps"])
+
+
+def test_registered_source_registry_asset_is_preferred_and_keeps_version_identity(tmp_path):
+    registered = register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
+    manifest = result["runtime_contract"]["source_manifest"]
+    assert result["grade"] == "inconclusive"
+    assert manifest["source_id"] == "api-contract"
+    assert manifest["source_hash"] == registered["source_hash"]
+    assert manifest["source_version_id"] == registered["source_version_id"]
+    assert manifest["source_origin"] == "registered_source_registry"
 
 
 def test_registered_project_asset_supplies_provenance_without_client_supplied_manifest(tmp_path):
     input_dir = tmp_path / "platform_workspace" / "enterprise-project" / "input"
     input_dir.mkdir(parents=True)
     (input_dir / "api_spec.json").write_text(API_SPEC, encoding="utf-8")
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_text=API_SPEC,
-        campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
-    )
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
     assert result["grade"] == "inconclusive"
     assert result["runtime_contract"]["source_manifest"]["source_id"].startswith("project_asset:")
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "registered_project_asset"
@@ -110,29 +89,13 @@ def test_registered_project_api_doc_path_is_identified_by_its_content_hash(tmp_p
     input_dir.mkdir(parents=True)
     asset_path = input_dir / "api_spec.json"
     asset_path.write_text(API_SPEC, encoding="utf-8")
-
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_path=str(asset_path),
-        campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
-    )
-
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_path=str(asset_path), campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
     assert result["grade"] == "inconclusive"
     assert result["runtime_contract"]["source_manifest"]["source_id"].endswith("platform_workspace/enterprise-project/input/api_spec.json")
 
 
 def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_path):
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_text=API_SPEC,
-        campaign_context={
-            "scope_id": "service-a",
-            "environment_ref": "test-a",
-            "source_manifest": SOURCE_MANIFEST,
-        },
-    )
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"scope_id": "service-a", "environment_ref": "test-a", "source_manifest": SOURCE_MANIFEST})
     assert result["success"] is True
     assert result["grade"] == "inconclusive"
     assert result["total_findings"] == 0
@@ -148,13 +111,7 @@ def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_pa
 
 
 def test_runtime_target_is_blocked_without_explicit_enterprise_contract(tmp_path):
-    result = scan(
-        project="enterprise-project",
-        root=tmp_path,
-        api_doc_text=API_SPEC,
-        base_url="https://example.invalid",
-        campaign_context={},
-    )
+    result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, base_url="https://example.invalid", campaign_context={})
     codes = {gap["code"] for gap in result["input_gaps"]}
     assert result["success"] is True
     assert result["runtime_contract"]["status"] == "blocked"
@@ -164,24 +121,8 @@ def test_runtime_target_is_blocked_without_explicit_enterprise_contract(tmp_path
 
 
 def test_test_data_contract_requires_receipts_for_disposable_setup():
-    blocked = validate_test_data_contract(
-        {"strategy": "create_disposable", "write_approved": True},
-        environment_ref="env-a",
-        scope_id="scope-a",
-    )
-    ready = validate_test_data_contract(
-        {
-            "strategy": "create_disposable",
-            "write_approved": True,
-            "environment_ref": "env-a",
-            "scope_id": "scope-a",
-            "disposable_scope_ref": "isolated-scope",
-            "creation_receipt_ref": "created",
-            "cleanup_receipt_ref": "cleaned",
-        },
-        environment_ref="",
-        scope_id="",
-    )
+    blocked = validate_test_data_contract({"strategy": "create_disposable", "write_approved": True}, environment_ref="env-a", scope_id="scope-a")
+    ready = validate_test_data_contract({"strategy": "create_disposable", "write_approved": True, "environment_ref": "env-a", "scope_id": "scope-a", "disposable_scope_ref": "isolated-scope", "creation_receipt_ref": "created", "cleanup_receipt_ref": "cleaned"}, environment_ref="", scope_id="")
     assert blocked["status"] == "blocked_with_testability_gap"
     assert "DISPOSABLE_SCOPE_MISSING" in blocked["missing_requirements"]
     assert ready["status"] == "ready"
