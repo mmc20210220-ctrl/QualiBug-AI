@@ -48,6 +48,19 @@ def test_health_contract_and_deployment_patch_are_extracted_from_entrypoint() ->
     assert "def _browser_ui_status" not in entrypoint
 
 
+def test_entrypoint_uses_extracted_credential_safety_patch() -> None:
+    entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
+    credential_patch = Path("ai_test_asset_center/private_pilot_credentials_patch.py").read_text(encoding="utf-8")
+
+    assert "from ai_test_asset_center.private_pilot_credentials_patch import" in entrypoint
+    assert "def install_extracted_credential_safety_patch" in entrypoint
+    assert "install_extracted_credential_safety_patch()" in entrypoint
+    assert "install_customer_delivery_gate_patch()" in entrypoint
+    assert entrypoint.index("install_customer_delivery_gate_patch()") < entrypoint.index("install_extracted_credential_safety_patch()")
+    assert "def install_service_credentials_patch" in credential_patch
+    assert "def restore_service_credentials_patch" in credential_patch
+
+
 def test_qualibug_server_script_uses_patched_entrypoint() -> None:
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
     assert 'qualibug-server = "ai_test_asset_center.private_pilot_entrypoint:run_server"' in pyproject
