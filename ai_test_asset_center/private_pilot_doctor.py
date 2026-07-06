@@ -41,6 +41,8 @@ PRIVATE_PILOT_PATCH_MODULES = [
     "ai_test_asset_center.private_pilot_health_contract",
 ]
 
+NON_BLOCKING_READY_HINT_CODES = {"RUNTIME_PATCHES_READY"}
+
 
 def _resolve_root(root: str | Path | None = None) -> Path:
     if root:
@@ -354,6 +356,43 @@ def _collect_remediation_hints(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return hints
 
 
+def _collect_readiness(payload: dict[str, Any], hints: list[dict[str, Any]]) -> dict[str, Any]:
+    blocking_hints = [hint for hint in hints if hint.get("severity") == "error"]
+    actionable_hints = [
+        hint for hint in hints if hint.get("code") not in NON_BLOCKING_READY_HINT_CODES and hint.get("severity") != "error"
+    ]
+    warnings = [str(item) for item in payload.get("warnings", [])]
+
+    if blocking_hints:
+        return {
+            "level": "blocked",
+            "blocked": True,
+            "label": "Blocked - fix required before customer pilot",
+            "blockers": [str(hint.get("code")) for hint in blocking_hints],
+            "warnings": warnings + [str(hint.get("code")) for hint in actionable_hints],
+            "next_action": blocking_hints[0].get("action", "Fix blocking issues and rerun qualibug-doctor --output."),
+        }
+
+    if warnings or actionable_hints:
+        return {
+            "level": "warning",
+            "blocked": False,
+            "label": "Warning - usable for diagnosis, not clean handoff",
+            "blockers": [],
+            "warnings": warnings + [str(hint.get("code")) for hint in actionable_hints],
+            "next_action": "Review remediation_hints, apply recommended commands, then rerun qualibug-doctor --install-patches --output.",
+        }
+
+    return {
+        "level": "ready",
+        "blocked": False,
+        "label": "Ready - private pilot diagnostics are clean",
+        "blockers": [],
+        "warnings": [],
+        "next_action": "Proceed with private-pilot service startup and scenario smoke validation.",
+    }
+
+
 def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: bool = False) -> dict[str, Any]:
     resolved_root = _resolve_root(root)
     if install_patches:
@@ -394,9 +433,8 @@ def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: b
     }
     payload["warnings"] = _collect_warnings(payload)
     payload["remediation_hints"] = _collect_remediation_hints(payload)
-    payload["ok"] = not any(name for name, item in payload["modules"].items() if not item.get("ok")) and not any(
-        warning.endswith("_incomplete") for warning in payload["warnings"]
-    )
+    payload["readiness"] = _collect_readiness(payload, payload["remediation_hints"])
+    payload["ok"] = payload["readiness"]["level"] != "blocked"
     return payload
 
 
