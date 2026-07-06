@@ -51,7 +51,22 @@ def _resolve_root(root: str | Path | None = None) -> Path:
         return Path.cwd().resolve()
 
 
+def _port_env_status() -> dict[str, Any]:
+    raw = os.environ.get("QUALIBUG_PORT", "").strip()
+    if not raw:
+        return {"raw": "", "valid": True, "effective": DEFAULT_PRIVATE_PILOT_PORT, "fallback": DEFAULT_PRIVATE_PILOT_PORT}
+    try:
+        value = int(raw)
+        if 1 <= value <= 65535:
+            return {"raw": raw, "valid": True, "effective": value, "fallback": DEFAULT_PRIVATE_PILOT_PORT}
+    except Exception:
+        pass
+    return {"raw": raw, "valid": False, "effective": DEFAULT_PRIVATE_PILOT_PORT, "fallback": DEFAULT_PRIVATE_PILOT_PORT}
+
+
 def _int_env(name: str, fallback: int) -> int:
+    if name == "QUALIBUG_PORT":
+        return int(_port_env_status()["effective"])
     try:
         return int(os.environ.get(name, "") or fallback)
     except Exception:
@@ -209,6 +224,10 @@ def _collect_warnings(payload: dict[str, Any]) -> list[str]:
     missing_modules = [name for name, item in modules.items() if isinstance(item, dict) and not item.get("ok")]
     if missing_modules:
         warnings.append("missing_private_pilot_modules:" + ",".join(missing_modules))
+    env = payload.get("environment", {})
+    port_env = env.get("port_env") if isinstance(env, dict) else {}
+    if isinstance(port_env, dict) and not port_env.get("valid", True):
+        warnings.append("invalid_qualibug_port_env")
     credential = payload.get("credential_security", {})
     if credential.get("key_source") == "missing_until_first_save":
         warnings.append("credential_key_missing_until_first_save")
@@ -222,6 +241,119 @@ def _collect_warnings(payload: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def _hint(code: str, severity: str, title: str, action: str, commands: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "code": code,
+        "severity": severity,
+        "title": title,
+        "action": action,
+        "commands": commands or [],
+    }
+
+
+def _collect_remediation_hints(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    env = payload.get("environment", {})
+    port_env = env.get("port_env") if isinstance(env, dict) else {}
+    if isinstance(port_env, dict) and not port_env.get("valid", True):
+        hints.append(
+            _hint(
+                "INVALID_QUALIBUG_PORT",
+                "warning",
+                "QUALIBUG_PORT is not a valid TCP port.",
+                "Unset QUALIBUG_PORT or set it to the private-pilot default port 8088 before starting the service.",
+                ["unset QUALIBUG_PORT", "export QUALIBUG_PORT=8088"],
+            )
+        )
+
+    credential = payload.get("credential_security", {})
+    if isinstance(credential, dict) and credential.get("key_source") == "missing_until_first_save":
+        hints.append(
+            _hint(
+                "CREDENTIAL_KEY_MISSING",
+                "info",
+                "Credential encryption key has not been created yet.",
+                "Run the patched entrypoint or install patches once before saving service credentials so the local key file is provisioned.",
+                ["qualibug-doctor --install-patches --output", "qualibug-server"],
+            )
+        )
+
+    browser = payload.get("browser_ui_smoke", {})
+    if isinstance(browser, dict) and browser.get("enabled") and not browser.get("playwright_available"):
+        hints.append(
+            _hint(
+                "BROWSER_UI_PLAYWRIGHT_MISSING",
+                "warning",
+                "Browser UI Smoke is enabled but Playwright is unavailable.",
+                "Install the browser optional dependencies and Chromium browser runtime, or disable QUALIBUG_BROWSER_UI_SMOKE.",
+                ["pip install -e '.[browser]'", "python -m playwright install chromium", "export QUALIBUG_BROWSER_UI_SMOKE=0"],
+            )
+        )
+
+    modules = payload.get("modules", {})
+    missing_modules = [name for name, item in modules.items() if isinstance(item, dict) and not item.get("ok")]
+    if missing_modules:
+        hints.append(
+            _hint(
+                "PRIVATE_PILOT_MODULE_IMPORT_FAILED",
+                "error",
+                "One or more private-pilot modules failed to import.",
+                "Reinstall the package in editable mode and rerun doctor. If it still fails, send the doctor report to support.",
+                ["pip install -e .", "qualibug-doctor --output"],
+            )
+        )
+
+    runtime = payload.get("runtime_patches", {})
+    install_patches = bool((payload.get("doctor") or {}).get("install_patches"))
+    patch_items = [item for item in runtime.values() if isinstance(item, dict)] if isinstance(runtime, dict) else []
+    missing_patch_names = [name for name, item in runtime.items() if isinstance(item, dict) and not item.get("patched")]
+    if missing_patch_names and not install_patches:
+        hints.append(
+            _hint(
+                "RUNTIME_PATCHES_NOT_INSTALLED_IN_READONLY_MODE",
+                "info",
+                "Runtime patches are not installed in the current read-only doctor run.",
+                "Run doctor with --install-patches to verify production patch wiring before handoff.",
+                ["qualibug-doctor --install-patches --output"],
+            )
+        )
+    elif missing_patch_names and install_patches:
+        hints.append(
+            _hint(
+                "RUNTIME_PATCH_INSTALL_INCOMPLETE",
+                "error",
+                "Some runtime patches are still not installed after --install-patches.",
+                "Send the doctor report to support and avoid claiming the private-pilot runtime is ready.",
+                ["qualibug-doctor --install-patches --output"],
+            )
+        )
+    elif patch_items and install_patches:
+        hints.append(
+            _hint(
+                "RUNTIME_PATCHES_READY",
+                "info",
+                "Runtime patches are installed.",
+                "Proceed with private-pilot service startup and scenario smoke validation.",
+                ["qualibug-server"],
+            )
+        )
+
+    scan_contract = payload.get("scan_context_contract", {})
+    helpers = scan_contract.get("helpers") if isinstance(scan_contract, dict) else {}
+    if not scan_contract.get("ok") or not all(bool(value) for value in helpers.values()):
+        hints.append(
+            _hint(
+                "SCAN_CONTEXT_CONTRACT_INCOMPLETE",
+                "error",
+                "Scan context contract helpers are incomplete.",
+                "Reinstall the package and rerun doctor before running enterprise scans.",
+                ["pip install -e .", "qualibug-doctor --output"],
+            )
+        )
+
+    return hints
+
+
 def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: bool = False) -> dict[str, Any]:
     resolved_root = _resolve_root(root)
     if install_patches:
@@ -229,8 +361,13 @@ def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: b
 
         install_runtime_patches()
 
+    port_status = _port_env_status()
     payload: dict[str, Any] = {
         "ok": True,
+        "doctor": {
+            "install_patches": install_patches,
+            "report_default_relative_path": str(DEFAULT_DOCTOR_REPORT_RELATIVE_PATH),
+        },
         "product": {
             "name": PRODUCT_NAME,
             "version": PRODUCT_VERSION,
@@ -242,7 +379,8 @@ def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: b
             "python_version": sys.version.split()[0],
             "platform": platform.system(),
             "bind_host": os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1"),
-            "port": _int_env("QUALIBUG_PORT", DEFAULT_PRIVATE_PILOT_PORT),
+            "port": int(port_status["effective"]),
+            "port_env": port_status,
             "default_port": DEFAULT_PRIVATE_PILOT_PORT,
             "canonical_health_path": CANONICAL_HEALTH_PATH,
             "legacy_health_path": LEGACY_HEALTH_PATH,
@@ -255,6 +393,7 @@ def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: b
         "health_payload_preview": _health_payload_preview(resolved_root),
     }
     payload["warnings"] = _collect_warnings(payload)
+    payload["remediation_hints"] = _collect_remediation_hints(payload)
     payload["ok"] = not any(name for name, item in payload["modules"].items() if not item.get("ok")) and not any(
         warning.endswith("_incomplete") for warning in payload["warnings"]
     )
