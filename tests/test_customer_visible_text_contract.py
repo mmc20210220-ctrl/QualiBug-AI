@@ -11,7 +11,7 @@ def test_frontend_knowledge_preview_uses_source_id_query_param() -> None:
 
 
 def test_customer_safe_report_has_no_mojibake(tmp_path: Path) -> None:
-    from ai_test_asset_center.private_pilot_entrypoint import contains_mojibake, render_customer_safe_report_html
+    from ai_test_asset_center.customer_safe_report import contains_mojibake, render_customer_safe_report_html
 
     report_dir = tmp_path / "platform_outputs" / "demo" / "pipeline_reports"
     report_dir.mkdir(parents=True)
@@ -40,6 +40,14 @@ def test_customer_safe_report_has_no_mojibake(tmp_path: Path) -> None:
     assert "订单金额跨视图不一致" in html
     assert "客户可交付缺陷" in html
     assert not contains_mojibake(html)
+
+
+def test_customer_report_renderer_is_extracted_from_entrypoint() -> None:
+    entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
+
+    assert "from ai_test_asset_center.customer_safe_report import" in entrypoint
+    assert "def render_customer_safe_report_html" not in entrypoint
+    assert "MOJIBAKE_MARKERS" not in entrypoint
 
 
 def test_customer_report_patch_replaces_legacy_renderer() -> None:
