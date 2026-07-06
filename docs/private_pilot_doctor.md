@@ -42,7 +42,8 @@ The JSON report includes:
 - a local `/api/health` payload preview;
 - remediation hints with concrete commands for common environment issues;
 - readiness classification for handoff decisions;
-- human-readable `summary_text` and `summary_lines` for customer-facing handoff notes.
+- human-readable `summary_text` and `summary_lines` for customer-facing handoff notes;
+- `support_bundle_manifest` with safe-to-share, review-required, and do-not-send artifact guidance.
 
 ## Human summary
 
@@ -66,6 +67,37 @@ Warnings/action items: CREDENTIAL_KEY_MISSING, RUNTIME_PATCHES_NOT_INSTALLED_IN_
 Next action: Review remediation_hints, apply recommended commands, then rerun qualibug-doctor --install-patches --output.
 Suggested commands: qualibug-doctor --install-patches --output && qualibug-server
 ```
+
+## Support bundle manifest
+
+`support_bundle_manifest` tells field engineers what can be shared with support without exposing customer data.
+
+The manifest has four sections:
+
+| Section | Meaning |
+|---------|---------|
+| `safe_to_share` | Low-risk diagnostics, mainly `private_pilot_doctor_report.json` and the patched doctor report |
+| `requires_review` | Logs, browser UI artifacts, HAR files, screenshots, and pipeline reports that may contain customer context |
+| `do_not_send` | `.env*`, `.secrets`, `multi_service_config.json`, and enterprise source registry content |
+| `redaction_rules` | Rules for removing keys, tokens, cookies, session IDs, screenshots, HAR headers, and customer identifiers |
+
+Default safe files:
+
+```text
+platform_outputs/private_pilot_doctor_report.json
+platform_outputs/private_pilot_doctor_patched_report.json
+```
+
+Do not send these paths without explicit customer approval and redaction:
+
+```text
+.env*
+platform_workspace/.secrets/**
+platform_workspace/**/multi_service_config.json
+platform_workspace/**/source_registry/**
+```
+
+When in doubt, send only the doctor report and the `support_bundle_manifest` section.
 
 ## Readiness levels
 
