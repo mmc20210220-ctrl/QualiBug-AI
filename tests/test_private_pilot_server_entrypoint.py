@@ -54,6 +54,8 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     assert "restore_customer_delivery_gate_patch" in wrapper
     assert "split_customer_delivery_tracks" in wrapper
     assert "_inject_delivery_gate_patch_status" in wrapper
+    assert "_inject_evidence_normalization_report" in wrapper
+    assert "evidence_bundle_normalization_report" in wrapper
     assert "_inject_main_chain_contract" in wrapper
     assert "_apply_main_chain_readiness_guard" in wrapper
     assert "MAIN_CHAIN_NOT_READY" in wrapper
@@ -105,6 +107,45 @@ def test_private_pilot_server_patch_exposes_status_in_command_center_payload() -
     assert payload["data"]["delivery_tracks"]["customer_delivery_gate_patch"] == status
 
 
+def test_private_pilot_server_patch_exposes_evidence_normalization_report(monkeypatch, tmp_path: Path) -> None:
+    project = "demo"
+    output_dir = tmp_path / "platform_outputs" / project / "real_project"
+    report = {
+        "phase": "evidence_bundle_normalization",
+        "project_id": project,
+        "input_item_count": 2,
+        "output_item_count": 2,
+        "fully_normalized_count": 1,
+        "items": [
+            {"issue_id": "I1", "normalized": True, "missing_fields": []},
+            {"issue_id": "I2", "normalized": False, "missing_fields": ["actual", "execution_receipt"]},
+        ],
+    }
+    _write_json(output_dir / "evidence_bundle_normalization_report.json", report)
+    monkeypatch.setattr(private_pilot_server, "ROOT", tmp_path)
+    restore_customer_delivery_gate_patch()
+    install_customer_delivery_gate_patch()
+
+    payload = private_pilot_service._normalize_command_center_envelope({
+        "ok": True,
+        "project_id": project,
+        "data": {"project_id": project, "risks": [], "data_contract": {}, "delivery_tracks": {}, "executive_summary": {}},
+    })
+    summary = payload["evidence_bundle_normalization_summary"]
+
+    assert payload["evidence_bundle_normalization_report"] == report
+    assert payload["data"]["evidence_bundle_normalization_report"] == report
+    assert payload["data"]["evidence_bundle_normalization_summary"] == summary
+    assert payload["data"]["data_contract"]["evidence_bundle_normalization_summary"] == summary
+    assert payload["data"]["delivery_tracks"]["evidence_bundle_normalization_summary"] == summary
+    assert payload["data"]["executive_summary"]["evidence_bundle_normalization_summary"] == summary
+    assert payload["data"]["executive_summary"]["evidence_fully_normalized_count"] == 1
+    assert payload["data"]["executive_summary"]["evidence_blocked_item_count"] == 1
+    assert summary["fully_normalized_count"] == 1
+    assert summary["blocked_item_count"] == 1
+    assert summary["missing_fields"] == {"actual": 1, "execution_receipt": 1}
+
+
 def test_private_pilot_server_patch_exposes_main_chain_contract_in_command_center_payload(monkeypatch, tmp_path: Path) -> None:
     project = "demo"
     output_dir = tmp_path / "platform_outputs" / project / "real_project"
@@ -129,13 +170,7 @@ def test_private_pilot_server_patch_exposes_main_chain_contract_in_command_cente
     payload = private_pilot_service._normalize_command_center_envelope({
         "ok": True,
         "project_id": project,
-        "data": {
-            "project_id": project,
-            "risks": [],
-            "data_contract": {},
-            "delivery_tracks": {},
-            "executive_summary": {},
-        },
+        "data": {"project_id": project, "risks": [], "data_contract": {}, "delivery_tracks": {}, "executive_summary": {}},
     })
     summary = payload["main_chain_contract_summary"]
 
