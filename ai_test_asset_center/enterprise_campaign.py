@@ -14,6 +14,10 @@ MAX_SLICES_PER_ROUND = 15
 MAX_AUTOMATIC_ROUNDS = 12
 
 
+class CampaignPersistenceError(RuntimeError):
+    """Campaign state cannot be safely resumed or persisted."""
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -33,6 +37,20 @@ def _safe(value: str) -> str:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 
 def source_snapshot_hash(prd_text: str, api_spec_text: str, db_schema_text: str, scope_id: str, environment_ref: str) -> str:
@@ -141,7 +159,11 @@ class EnterpriseCampaign:
             if has_real_confirmation_receipt(item):
                 slice_id = _text(_as_dict(item).get("behavior_slice_id") or _as_dict(item).get("slice_id"))
                 if slice_id:
-                    self.confirmation_receipts[slice_id] = _hash({"slice": slice_id, "evidence": _as_dict(item).get("evidence_id"), "time": _as_dict(item).get("timestamp")}, 32)
+                    self.confirmation_receipts[slice_id] = _hash({
+                        "slice": slice_id,
+                        "evidence": _as_dict(item).get("evidence_id"),
+                        "time": _as_dict(item).get("timestamp"),
+                    }, 32)
         reason = _text(selection.get("stop_reason"), 240)
         remaining = max(0, int(selection.get("remaining_slice_count") or 0))
         if reason.startswith("campaign_") and self.status in {"coverage_deferred", "completed", "blocked"}:
@@ -150,7 +172,11 @@ class EnterpriseCampaign:
             self.status = "completed"
             self.coverage_deferred_reason = ""
             self.next_campaign_reason = ""
-        elif reason in {"configured_round_limit_reached", "all_pending_slices_attempted_needs_new_evidence_or_policy", "no_remaining_slice_in_configured_round"} or (remaining > 0 and not selection.get("next_round")):
+        elif reason in {
+            "configured_round_limit_reached",
+            "all_pending_slices_attempted_needs_new_evidence_or_policy",
+            "no_remaining_slice_in_configured_round",
+        } or (remaining > 0 and not selection.get("next_round")):
             self.status = "coverage_deferred"
             self.coverage_deferred_reason = reason or "automatic_campaign_budget_exhausted"
             self.next_campaign_reason = "source_binding_or_runtime_evidence_required" if coverage_gap_count else "new_runtime_evidence_fixture_actor_or_policy_required"
@@ -240,25 +266,41 @@ class EnterpriseCampaignStore:
         self.project_id = _text(project_id)
         self.path = self.root / "platform_workspace" / _safe(self.project_id) / "defect_discovery" / "campaigns"
 
+    @staticmethod
+    def _assert_identity(stored: EnterpriseCampaign, expected: EnterpriseCampaign) -> None:
+        keys = (
+            "campaign_id",
+            "project_id",
+            "scope_id",
+            "environment_ref",
+            "source_snapshot_hash",
+            "source_id",
+            "source_hash",
+        )
+        mismatches = [key for key in keys if getattr(stored, key) != getattr(expected, key)]
+        if mismatches:
+            raise CampaignPersistenceError("campaign_state_identity_mismatch:" + ",".join(mismatches))
+
     def open_or_create(self, campaign: EnterpriseCampaign) -> tuple[EnterpriseCampaign, str]:
         path = self.path / f"{_safe(campaign.campaign_id)}.json"
         if path.exists():
             try:
-                restored = EnterpriseCampaign.from_dict(json.loads(path.read_text(encoding="utf-8")))
-                restored.run_count += 1
-                restored.updated_at_utc = _now()
-                return restored, "resumed"
-            except Exception:
-                pass
+                payload = json.loads(path.read_text(encoding="utf-8") or "null")
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CampaignPersistenceError(f"campaign_state_unreadable:{path.name}") from exc
+            if not isinstance(payload, dict):
+                raise CampaignPersistenceError(f"campaign_state_invalid:{path.name}")
+            stored = EnterpriseCampaign.from_dict(payload)
+            self._assert_identity(stored, campaign)
+            stored.run_count += 1
+            stored.updated_at_utc = _now()
+            return stored, "resumed"
         campaign.run_count = 1
         return campaign, "created"
 
     def save(self, campaign: EnterpriseCampaign) -> None:
-        self.path.mkdir(parents=True, exist_ok=True)
-        (self.path / f"{_safe(campaign.campaign_id)}.json").write_text(
-            json.dumps(campaign.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        path = self.path / f"{_safe(campaign.campaign_id)}.json"
+        _atomic_write_json(path, campaign.to_dict())
         self._persist_command_center_projection(campaign)
 
     def _persist_command_center_projection(self, campaign: EnterpriseCampaign) -> None:
@@ -270,9 +312,10 @@ class EnterpriseCampaignStore:
                 loaded = json.loads(path.read_text(encoding="utf-8") or "{}")
                 if isinstance(loaded, dict):
                     payload = loaded
-            except Exception:
-                payload = {}
-        latest = campaign.audit_events[-1] if campaign.audit_events else {}
+            except (OSError, json.JSONDecodeError):
+                # Do not replace a corrupted command-center artifact with a partial snapshot.
+                raise CampaignPersistenceError(f"command_center_snapshot_unreadable:{path.name}")
+        latest = _as_dict(campaign.audit_events[-1]) if campaign.audit_events else {}
         current_run = {
             "status": _text(latest.get("execution_status"), 80) or campaign.status,
             "campaign_status": campaign.status,
@@ -299,7 +342,4 @@ class EnterpriseCampaignStore:
             "current_run": current_run,
             "updated_at_utc": campaign.updated_at_utc,
         }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        temporary.replace(path)
+        _atomic_write_json(path, payload)
