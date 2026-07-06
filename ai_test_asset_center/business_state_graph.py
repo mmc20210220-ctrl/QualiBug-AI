@@ -68,49 +68,29 @@ class BusinessStateGraph:
             self.states[name] = StateNode(self.entity, name, list(invariants or []), list(conditions or []), [], float(risk_score or 0), [], [], observed_from_api, observed_from_doc, _refs(source_refs or []))
             return
         node = self.states[name]
-        node.invariants = _unique(node.invariants + list(invariants or []))
-        node.conditions = _unique(node.conditions + list(conditions or []))
-        node.source_refs = _refs(node.source_refs + list(source_refs or []))
-        node.risk_score = max(node.risk_score, float(risk_score or 0))
-        node.observed_from_api = node.observed_from_api or observed_from_api
-        node.observed_from_doc = node.observed_from_doc or observed_from_doc
+        node.invariants = _unique(node.invariants + list(invariants or [])); node.conditions = _unique(node.conditions + list(conditions or [])); node.source_refs = _refs(node.source_refs + list(source_refs or [])); node.risk_score = max(node.risk_score, float(risk_score or 0)); node.observed_from_api |= observed_from_api; node.observed_from_doc |= observed_from_doc
 
     def add_transition(self, item: StateTransition) -> None:
         key = (item.from_state, item.to_state, item.action, item.api_endpoint, item.is_forbidden)
         if any((row.from_state, row.to_state, row.action, row.api_endpoint, row.is_forbidden) == key for row in self.transitions):
             return
-        self.transitions.append(item)
-        self.add_state(item.from_state, source_refs=item.source_refs)
-        self.add_state(item.to_state, source_refs=item.source_refs)
-        if item.is_forbidden:
-            self.states[item.to_state].risk_score = max(self.states[item.to_state].risk_score, 0.9)
-        elif item.is_boundary:
-            self.states[item.to_state].risk_score = max(self.states[item.to_state].risk_score, 0.5)
+        self.transitions.append(item); self.add_state(item.from_state, source_refs=item.source_refs); self.add_state(item.to_state, source_refs=item.source_refs)
+        if item.is_forbidden: self.states[item.to_state].risk_score = max(self.states[item.to_state].risk_score, 0.9)
+        elif item.is_boundary: self.states[item.to_state].risk_score = max(self.states[item.to_state].risk_score, 0.5)
 
     def add_edge(self, source_entity: str, source_state: str, target_entity: str, target_state: str, relation: str = "depends_on", condition: str = "") -> None:
         edge = StateEdge(source_entity, source_state, target_entity, target_state, relation, condition, 0.7 if relation == "conflicts" else 0.4)
-        if edge not in self.edges:
-            self.edges.append(edge)
-
+        if edge not in self.edges: self.edges.append(edge)
     def conflict_states(self) -> list[StateTransition]:
-        grouped: dict[tuple[str, str], list[StateTransition]] = defaultdict(list)
-        for item in self.transitions:
-            grouped[(item.from_state, item.action)].append(item)
-        return [item for rows in grouped.values() if len(rows) > 1 for item in rows]
-
+        groups: dict[tuple[str, str], list[StateTransition]] = defaultdict(list)
+        for item in self.transitions: groups[(item.from_state, item.action)].append(item)
+        return [item for values in groups.values() if len(values) > 1 for item in values]
     def top_risk_states(self, n: int = 5) -> list[StateNode]: return sorted(self.states.values(), key=lambda item: item.risk_score, reverse=True)[:n]
     def forbidden_paths(self) -> list[StateTransition]: return [item for item in self.transitions if item.is_forbidden]
     def normal_paths(self) -> list[StateTransition]: return [item for item in self.transitions if item.is_normal and not item.is_forbidden]
     def boundary_paths(self) -> list[StateTransition]: return [item for item in self.transitions if item.is_boundary]
-
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "entity": self.entity, "source_refs": self.source_refs,
-            "states": {name: {"state": node.state, "invariants": node.invariants, "conditions": node.conditions, "constraints": node.constraints, "risk_score": node.risk_score, "depends_on": node.depends_on, "conflicts_with": node.conflicts_with, "observed_from_api": node.observed_from_api, "observed_from_doc": node.observed_from_doc, "source_refs": node.source_refs} for name, node in self.states.items()},
-            "transitions": [{"from": item.from_state, "to": item.to_state, "action": item.action, "endpoint": item.api_endpoint, "normal": item.is_normal, "forbidden": item.is_forbidden, "boundary": item.is_boundary, "risk_score": item.risk_score, "triggers": item.trigger_conditions, "depends_on": f"{item.depends_on_entity}/{item.depends_on_state}" if item.depends_on_entity else "", "source_refs": item.source_refs} for item in self.transitions],
-            "edges": [{"source": f"{item.source_entity}/{item.source_state}", "target": f"{item.target_entity}/{item.target_state}", "relation": item.relation, "condition": item.condition} for item in self.edges],
-            "stats": {"total_states": len(self.states), "total_transitions": len(self.transitions), "cross_entity_edges": len(self.edges), "forbidden_paths": len(self.forbidden_paths()), "conflict_paths": len(self.conflict_states()), "top_risk": [(item.state, item.risk_score) for item in self.top_risk_states(5)]},
-        }
+        return {"entity": self.entity, "source_refs": self.source_refs, "states": {name: {"state": node.state, "invariants": node.invariants, "conditions": node.conditions, "constraints": node.constraints, "risk_score": node.risk_score, "depends_on": node.depends_on, "conflicts_with": node.conflicts_with, "observed_from_api": node.observed_from_api, "observed_from_doc": node.observed_from_doc, "source_refs": node.source_refs} for name, node in self.states.items()}, "transitions": [{"from": item.from_state, "to": item.to_state, "action": item.action, "endpoint": item.api_endpoint, "normal": item.is_normal, "forbidden": item.is_forbidden, "boundary": item.is_boundary, "risk_score": item.risk_score, "triggers": item.trigger_conditions, "depends_on": f"{item.depends_on_entity}/{item.depends_on_state}" if item.depends_on_entity else "", "source_refs": item.source_refs} for item in self.transitions], "edges": [{"source": f"{item.source_entity}/{item.source_state}", "target": f"{item.target_entity}/{item.target_state}", "relation": item.relation, "condition": item.condition} for item in self.edges], "stats": {"total_states": len(self.states), "total_transitions": len(self.transitions), "cross_entity_edges": len(self.edges), "forbidden_paths": len(self.forbidden_paths()), "conflict_paths": len(self.conflict_states()), "top_risk": [(item.state, item.risk_score) for item in self.top_risk_states(5)]}}
 
 
 class BusinessStateGraphBuilder:
@@ -120,59 +100,45 @@ class BusinessStateGraphBuilder:
     _state_field = re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I)
 
     def __init__(self) -> None: self.graphs: dict[str, BusinessStateGraph] = {}
-
     def build(self, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "") -> dict[str, BusinessStateGraph]:
-        api_entities, api_states, endpoints = _api_facts(api_spec_text, self._state_field)
-        schema_entities, schema_states, dependencies = _schema_facts(db_schema_text, self._state_field)
-        sources: dict[str, list[dict[str, str]]] = defaultdict(list)
-        for records in (api_entities, schema_entities):
-            for entity, refs in records.items(): sources[entity].extend(refs)
-        self.graphs = {entity: BusinessStateGraph(entity, source_refs=_refs(refs)) for entity, refs in sources.items()}
+        api_entities, api_states, endpoints = _api_facts(api_spec_text, self._state_field); db_entities, db_states, dependencies = _schema_facts(db_schema_text, self._state_field)
+        source_map: dict[str, list[dict[str, str]]] = defaultdict(list)
+        for source in (api_entities, db_entities):
+            for entity, refs in source.items(): source_map[entity].extend(refs)
+        self.graphs = {entity: BusinessStateGraph(entity, source_refs=_refs(refs)) for entity, refs in source_map.items()}
         for entity, graph in self.graphs.items():
             for name, refs in api_states.get(entity, {}).items(): graph.add_state(name, source_refs=refs, observed_from_api=True)
-            for name, refs in schema_states.get(entity, {}).items(): graph.add_state(name, source_refs=refs, observed_from_api=True)
-        known_states = {entity: set(api_states.get(entity, {})) | set(schema_states.get(entity, {})) for entity in self.graphs}
+            for name, refs in db_states.get(entity, {}).items(): graph.add_state(name, source_refs=refs, observed_from_api=True)
+        known = {entity: set(api_states.get(entity, {})) | set(db_states.get(entity, {})) for entity in self.graphs}
         for section in self._sections(prd_text):
-            entity = _best_entity(section["states"], known_states)
-            if not entity:
-                continue
+            entity = _best_entity(section["states"], known)
+            if not entity: continue
             graph = self.graphs[entity]
-            for transition in section["transitions"]:
-                action, endpoint = _source_action(transition["line"], entity, endpoints)
-                graph.add_transition(StateTransition(transition["before"], transition["after"], action, endpoint, [section["title"]] if section["forbidden"] else [], [], not section["forbidden"], section["forbidden"], False, False, 0.9 if section["forbidden"] else 0.2, "", "", [transition["ref"]]))
+            for row in section["transitions"]:
+                action, endpoint = _source_action(row["line"], entity, endpoints)
+                graph.add_transition(StateTransition(row["before"], row["after"], action, endpoint, [section["title"]] if section["forbidden"] else [], [], not section["forbidden"], section["forbidden"], False, False, 0.9 if section["forbidden"] else 0.2, "", "", [row["ref"]]))
             for invariant, ref in section["invariants"]:
-                for name in list(graph.states) or ["*"]:
-                    graph.add_state(name, invariants=[invariant], source_refs=[ref], observed_from_doc=True)
+                for name in list(graph.states) or ["*"]: graph.add_state(name, invariants=[invariant], source_refs=[ref], observed_from_doc=True)
         for child, parent, ref in dependencies:
-            if child in self.graphs and parent in self.graphs:
-                self.graphs[child].add_edge(child, "*", parent, "*", "depends_on", ref["quote"])
+            if child in self.graphs and parent in self.graphs: self.graphs[child].add_edge(child, "*", parent, "*", "depends_on", ref["quote"])
         return self.graphs
 
     def _sections(self, text: str) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []; current: dict[str, Any] | None = None
+        result: list[dict[str, Any]] = []; current: dict[str, Any] | None = None
         for number, raw in enumerate(str(text or "").splitlines(), 1):
             line = raw.strip()
-            if not line:
-                continue
-            is_heading = line.startswith("#")
-            is_forbidden_header = bool(self._forbidden.search(line) and not self._transition.search(line))
-            if is_heading or is_forbidden_header:
-                title = line.lstrip("#").strip().rstrip("：:")
-                current = {"title": title, "forbidden": bool(self._forbidden.search(title)), "states": set(), "transitions": [], "invariants": []}
-                items.append(current)
-                continue
-            if current is None:
-                continue
+            if not line: continue
+            header = line.startswith("#") or (bool(self._forbidden.search(line)) and line.endswith((":", "：")) and not self._transition.search(line))
+            if header:
+                title = line.lstrip("#").strip().rstrip("：:"); current = {"title": title, "forbidden": bool(self._forbidden.search(title)), "states": set(), "transitions": [], "invariants": []}; result.append(current); continue
+            if current is None: continue
             ref = _ref("requirement", f"line:{number}", line)
             for match in self._transition.finditer(line):
                 before, after = _state(match.group("before")), _state(match.group("after"))
-                if before and after:
-                    current["states"].update((before, after))
-                    current["transitions"].append({"before": before, "after": after, "line": line, "ref": ref})
+                if before and after: current["states"].update((before, after)); current["transitions"].append({"before": before, "after": after, "line": line, "ref": ref})
             if self._modal.search(line): current["invariants"].append((line, ref))
-        return [item for item in items if item["states"] or item["invariants"]]
+        return [item for item in result if item["states"] or item["invariants"]]
 
-    # Compatibility helpers now expose only current-project source facts.
     def _extract_entities(self, prd: str) -> list[str]: return sorted({_entity(line.lstrip("#").strip()) for line in str(prd or "").splitlines() if line.startswith("#")} - {""})
     def _extract_api_actions(self, api_spec: str) -> dict[str, set[str]]:
         _, _, endpoints = _api_facts(api_spec, self._state_field); result: dict[str, set[str]] = defaultdict(set)
@@ -195,7 +161,7 @@ def _entity(value: Any) -> str:
     if text.endswith("ies") and len(text) > 4: text = text[:-3] + "y"
     elif text.endswith("s") and len(text) > 3 and not text.endswith("ss"): text = text[:-1]
     return text[:80]
-def _ref(source_type: str, locator: str, quote: str) -> dict[str, str]: return {"source_type": source_type, "locator": locator, "quote": str(quote)[:500]}
+def _ref(kind: str, locator: str, quote: str) -> dict[str, str]: return {"source_type": kind, "locator": locator, "quote": str(quote)[:500]}
 def _unique(values: list[str]) -> list[str]: return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
 def _refs(values: list[dict[str, str]]) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []; seen: set[tuple[str, str, str]] = set()
@@ -205,7 +171,7 @@ def _refs(values: list[dict[str, str]]) -> list[dict[str, str]]:
             if key not in seen: seen.add(key); result.append(item)
     return result
 def _dict(value: Any) -> dict[str, Any]: return value if isinstance(value, dict) else {}
-def _path_parts(path: str, operation: str) -> tuple[str, str]:
+def _path(path: str, operation: str) -> tuple[str, str]:
     parts = [part for part in str(path or "").strip("/").split("/") if part and not part.startswith(":") and not part.startswith("{")]
     while parts and (parts[0].lower() == "api" or re.fullmatch(r"v\d+", parts[0].lower())): parts.pop(0)
     entity = _entity(parts[0]) if parts else ""; action = _entity(parts[-1]) if len(parts) > 1 else _entity(operation)
@@ -220,7 +186,7 @@ def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dic
             if isinstance(operations, dict):
                 for method, operation in operations.items():
                     if str(method).lower() in {"get", "post", "put", "patch", "delete", "head", "options"}:
-                        operation = _dict(operation); entity, action = _path_parts(str(path), str(operation.get("operationId") or ""))
+                        operation = _dict(operation); entity, action = _path(str(path), str(operation.get("operationId") or ""))
                         if entity:
                             ref = _ref("openapi", f"paths.{path}.{method}", str(operation.get("summary") or operation.get("operationId") or path)); entities[entity].append(ref); endpoints.append({"entity": entity, "action": action, "path": str(path)})
         for name, schema in _dict(_dict(spec.get("components")).get("schemas")).items():
@@ -232,7 +198,7 @@ def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dic
                             if token: states[_entity(name)][token].append(_ref("openapi", f"components.schemas.{name}.properties.{field}", token))
         return entities, states, endpoints
     for match in re.finditer(r"(?im)^###\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/[A-Za-z0-9_:\-{}./]+)", str(text or "")):
-        entity, action = _path_parts(match.group(2), "")
+        entity, action = _path(match.group(2), "")
         if entity:
             ref = _ref("api_document", f"line:{str(text).count(chr(10), 0, match.start()) + 1}", match.group(0)); entities[entity].append(ref); endpoints.append({"entity": entity, "action": action, "path": match.group(2)})
     return entities, states, endpoints
@@ -250,8 +216,8 @@ def _schema_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[
     return entities, states, deps
 
 def _best_entity(values: set[str], known: dict[str, set[str]]) -> str:
-    ranked = sorted(((len(values & states) / len(values | states), entity) for entity, states in known.items() if values and states and values & states), key=lambda row: (-row[0], row[1]))
-    return ranked[0][1] if ranked and ranked[0][0] >= 0.15 else ""
+    candidates = [(len(values & states) / len(values | states), entity) for entity, states in known.items() if values and states and values & states]
+    candidates.sort(key=lambda row: (-row[0], row[1])); return candidates[0][1] if candidates and candidates[0][0] >= 0.15 else ""
 def _source_action(line: str, entity: str, endpoints: list[dict[str, str]]) -> tuple[str, str]:
     for item in endpoints:
         if item["entity"] == entity and item["action"] and re.search(rf"\b{re.escape(item['action'])}\b", line, re.I): return item["action"], item["path"]
