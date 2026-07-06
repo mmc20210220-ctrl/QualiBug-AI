@@ -132,7 +132,7 @@ def test_install_patch_replaces_continuous_loop_and_reports_status() -> None:
 
 
 def test_service_credentials_are_masked_for_frontend() -> None:
-    from ai_test_asset_center.private_pilot_server import _MASKED_SECRET, _mask_service_credentials_for_frontend
+    from ai_test_asset_center.private_pilot_credentials_patch import MASKED_SECRET, mask_service_credentials_for_frontend
 
     services = [
         {
@@ -150,7 +150,7 @@ def test_service_credentials_are_masked_for_frontend() -> None:
         }
     ]
 
-    masked = _mask_service_credentials_for_frontend("demo", services)
+    masked = mask_service_credentials_for_frontend("demo", services)
     rendered = repr(masked)
 
     assert "legacy-admin-secret" not in rendered
@@ -159,20 +159,29 @@ def test_service_credentials_are_masked_for_frontend() -> None:
     assert "bearer-secret" not in rendered
     assert "api-secret" not in rendered
     assert "db-secret" not in rendered
-    assert masked[0]["admin_pass"] == _MASKED_SECRET
-    assert masked[0]["auth"]["admin"]["password"] == _MASKED_SECRET
-    assert masked[0]["auth"]["bearer_token"] == _MASKED_SECRET
-    assert masked[0]["db"]["password"] == _MASKED_SECRET
+    assert masked[0]["admin_pass"] == MASKED_SECRET
+    assert masked[0]["auth"]["admin"]["password"] == MASKED_SECRET
+    assert masked[0]["auth"]["bearer_token"] == MASKED_SECRET
+    assert masked[0]["db"]["password"] == MASKED_SECRET
     assert masked[0]["auth"]["admin"]["password_ref"].startswith("qualibug://credentials/demo/order-service/")
 
 
 def test_local_credential_key_is_created_when_missing(tmp_path: Path, monkeypatch) -> None:
-    from ai_test_asset_center.private_pilot_server import _CREDENTIAL_KEY_ENV, _ensure_local_credential_encryption_key
+    from ai_test_asset_center.private_pilot_credentials_patch import CREDENTIAL_KEY_ENV, ensure_local_credential_encryption_key
 
-    monkeypatch.delenv(_CREDENTIAL_KEY_ENV, raising=False)
-    source = _ensure_local_credential_encryption_key(tmp_path)
+    monkeypatch.delenv(CREDENTIAL_KEY_ENV, raising=False)
+    source = ensure_local_credential_encryption_key(tmp_path)
     key_path = tmp_path / "platform_workspace" / ".secrets" / "credential_encryption.key"
 
     assert source == "local_private_key_file"
     assert key_path.exists()
     assert key_path.read_text(encoding="utf-8").strip()
+
+
+def test_credential_patch_module_owns_handler_installation() -> None:
+    module_text = Path("ai_test_asset_center/private_pilot_credentials_patch.py").read_text(encoding="utf-8")
+
+    assert "def install_service_credentials_patch" in module_text
+    assert "def restore_service_credentials_patch" in module_text
+    assert "_handle_get_service_credentials_masked" in module_text
+    assert "_handle_save_service_credentials_secure" in module_text
