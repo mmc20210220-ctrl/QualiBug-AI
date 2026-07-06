@@ -83,6 +83,7 @@ jobs:
             tests/test_render_reasoner_quality_report.py \
             tests/test_enforce_reasoner_quality_threshold.py \
             tests/test_execution_evidence_report.py \
+            tests/test_enforce_execution_evidence_threshold.py \
             tests/test_reasoner_hypothesis_quality.py \
             tests/test_discovery_execution_chain.py \
             tests/test_discovery_verifier_evidence.py
