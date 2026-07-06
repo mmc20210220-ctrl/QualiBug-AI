@@ -1,8 +1,8 @@
 """Source-derived behavior graph and incremental slice contract for V12.
 
-The builder does not infer business domains.  It only turns source-bound state
-transitions, invariants and schema dependencies into behavior slices.  Rules
-without a defensible entity binding are explicitly emitted as coverage gaps.
+The builder does not infer business domains. It turns only source-bound state
+transitions, invariants and schema dependencies into behavior slices. Rules
+without a defensible entity binding are emitted as coverage gaps.
 """
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ class BehaviorSlice:
 
 
 def behavior_slice_id(kind: str, entity: str, *parts: Any) -> str:
-    """Deterministic identity that never contains project data or raw evidence."""
+    """Deterministic identity that excludes project data and raw evidence."""
     canonical = "|".join([str(kind or ""), _entity(entity), *(str(item or "") for item in parts)])
     return "BHV_" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
 
@@ -256,6 +256,7 @@ class BusinessStateGraphBuilder:
         self.graphs: dict[str, BusinessStateGraph] = {}
         self.behavior_slices: list[BehaviorSlice] = []
         self.coverage_gaps: list[dict[str, Any]] = []
+        self.bound_invariants: list[dict[str, Any]] = []
 
     def build(self, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "") -> dict[str, BusinessStateGraph]:
         api_entities, api_states, endpoints = _api_facts(api_spec_text, self._state_field)
@@ -267,6 +268,7 @@ class BusinessStateGraphBuilder:
         self.graphs = {entity: BusinessStateGraph(entity, source_refs=_refs(refs)) for entity, refs in source_map.items()}
         self.behavior_slices = []
         self.coverage_gaps = []
+        self.bound_invariants = []
         for entity, graph in self.graphs.items():
             for name, refs in api_states.get(entity, {}).items():
                 graph.add_state(name, source_refs=refs, observed_from_api=True)
@@ -274,8 +276,9 @@ class BusinessStateGraphBuilder:
                 graph.add_state(name, source_refs=refs, observed_from_doc=True)
 
         known = {entity: set(api_states.get(entity, {})) | set(db_states.get(entity, {})) for entity in self.graphs}
+        source_fields = _source_field_index(api_spec_text, db_schema_text)
         for section in self._sections(prd_text):
-            entity = _best_entity(section["states"], known)
+            entity, binding_mode = _best_entity_for_section(section, known, source_fields)
             if not entity:
                 self._record_unbound_section(section)
                 continue
@@ -309,8 +312,16 @@ class BusinessStateGraphBuilder:
                 )
                 graph.add_transition(transition)
             for invariant, ref in section["invariants"]:
-                for name in list(graph.states) or ["*"]:
-                    graph.add_state(name, invariants=[invariant], source_refs=[ref], observed_from_doc=True)
+                if graph.states:
+                    for name in list(graph.states):
+                        graph.add_state(name, invariants=[invariant], source_refs=[ref], observed_from_doc=True)
+                else:
+                    self.bound_invariants.append({
+                        "entity": entity,
+                        "invariant": invariant,
+                        "source_refs": _refs([ref] + graph.source_refs),
+                        "binding_mode": binding_mode,
+                    })
 
         for child, parent, ref in dependencies:
             if child in self.graphs and parent in self.graphs:
@@ -333,7 +344,7 @@ class BusinessStateGraphBuilder:
         })
 
     def build_slices(self) -> list[BehaviorSlice]:
-        """Create deterministic, source-bound slices without inventing routes or actors."""
+        """Create deterministic source-bound slices without routes or actors."""
         slices: list[BehaviorSlice] = []
         for entity, graph in sorted(self.graphs.items()):
             for transition in graph.transitions:
@@ -379,6 +390,17 @@ class BusinessStateGraphBuilder:
                     source_refs=_refs(edge.source_refs or graph.source_refs),
                     evidence_gaps=["CROSS_ENTITY_OBSERVATION_CONTRACT_MISSING"],
                 ))
+        for item in self.bound_invariants:
+            slices.append(BehaviorSlice(
+                slice_id=behavior_slice_id("invariant", item["entity"], item["invariant"]),
+                entity=item["entity"],
+                kind="invariant",
+                states=[],
+                endpoints=[],
+                priority=0.55,
+                source_refs=_refs(item["source_refs"]),
+                evidence_gaps=["OBSERVATION_ROUTE_NOT_SOURCE_BOUND", "STATE_ANCHOR_NOT_SOURCE_BOUND"],
+            ))
         deduped: dict[str, BehaviorSlice] = {}
         for item in slices:
             existing = deduped.get(item.slice_id)
@@ -401,6 +423,7 @@ class BusinessStateGraphBuilder:
                 "total_slices": len(self.behavior_slices),
                 "by_kind": dict(sorted(by_kind.items())),
                 "coverage_gap_count": len(self.coverage_gaps),
+                "source_field_bound_invariant_count": len(self.bound_invariants),
             },
         }
 
@@ -561,6 +584,67 @@ def _schema_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[
             for parent in re.findall(r"(?i)REFERENCES\s+[\"`]?([A-Za-z_][A-Za-z0-9_]*)", line):
                 deps.append((entity, _entity(parent), _ref("database_schema", entity, line.strip())))
     return entities, states, deps
+
+
+def _source_field_index(api_spec_text: str, db_schema_text: str) -> dict[str, set[str]]:
+    """Index source-declared field identifiers without attaching business semantics."""
+    result: dict[str, set[str]] = defaultdict(set)
+    try:
+        spec = json.loads(api_spec_text) if str(api_spec_text or "").lstrip().startswith("{") else {}
+    except Exception:
+        spec = {}
+    for name, schema in _dict(_dict(spec.get("components")).get("schemas")).items():
+        if not isinstance(schema, dict):
+            continue
+        entity = _entity(name)
+        for field_name in _dict(schema.get("properties")).keys():
+            result[entity].update(_identifier_tokens(str(field_name)))
+    for match in re.finditer(r"(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"`]?([A-Za-z_][A-Za-z0-9_]*)[\"`]?\s*\((.*?)\);", str(db_schema_text or "")):
+        entity, body = _entity(match.group(1)), match.group(2)
+        for line in body.splitlines():
+            field_match = re.match(r"\s*[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)", line)
+            if field_match:
+                result[entity].update(_identifier_tokens(field_match.group(1)))
+    return result
+
+
+def _identifier_tokens(value: str) -> set[str]:
+    raw = {token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{1,63}", str(value or ""))}
+    parts = {part for token in raw for part in token.split("_") if len(part) >= 4}
+    return raw | parts
+
+
+def _invariant_tokens(section: dict[str, Any]) -> set[str]:
+    ignored = {"must", "shall", "cannot", "equal", "only", "true", "false", "with", "from", "that", "this", "where", "when", "then", "status", "state", "type", "name", "code", "date", "time", "value", "count", "total", "amount", "identifier"}
+    tokens: set[str] = set()
+    for invariant, _ in section.get("invariants", []):
+        for token in _identifier_tokens(str(invariant)):
+            if token not in ignored and ("_" in token or len(token) >= 8):
+                tokens.add(token)
+    return tokens
+
+
+def _best_entity_for_section(section: dict[str, Any], known: dict[str, set[str]], source_fields: dict[str, set[str]]) -> tuple[str, str]:
+    state_entity = _best_entity(section.get("states", set()), known)
+    if state_entity:
+        return state_entity, "state_overlap"
+    tokens = _invariant_tokens(section)
+    if not tokens:
+        return "", ""
+    candidates: list[tuple[int, int, str]] = []
+    for entity, fields in source_fields.items():
+        overlap = tokens & fields
+        weighted = sum(2 if "_" in token else 1 for token in overlap)
+        if weighted:
+            candidates.append((weighted, len(overlap), entity))
+    candidates.sort(key=lambda row: (-row[0], -row[1], row[2]))
+    if not candidates:
+        return "", ""
+    best_weight, best_count, entity = candidates[0]
+    second_weight = candidates[1][0] if len(candidates) > 1 else 0
+    if best_weight >= 2 and best_weight > second_weight and best_count >= 1:
+        return entity, "source_field_overlap"
+    return "", ""
 
 
 def _best_entity(values: set[str], known: dict[str, set[str]]) -> str:
