@@ -118,44 +118,53 @@ def has_customer_replay_asset(item: dict[str, Any]) -> bool:
     return bool(har.get("status_code") or har.get("response_body"))
 
 
-def is_customer_deliverable_defect(item: dict[str, Any]) -> bool:
+def customer_delivery_rejection_reasons(item: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
     if not isinstance(item, dict):
-        return False
+        return ["INVALID_FINDING_PAYLOAD"]
     if item.get("customer_delivery_status") not in {None, "defect"}:
-        return False
+        reasons.append("NOT_MARKED_FOR_DEFECT_DELIVERY")
     if _text(item.get("bug_status")) != "reproduced":
-        return False
+        reasons.append("BUG_STATUS_NOT_REPRODUCED")
     if not bool(item.get("gate_passed")):
-        return False
+        reasons.append("GATE_NOT_PASSED")
 
     execution_status = _lower(item.get("execution_status"))
     confirmation_status = _lower(item.get("confirmation_status"))
     evidence_level = _lower(item.get("evidence_level"))
     execution_source = _lower(item.get("execution_source"))
     if any(marker in evidence_level or marker in execution_source for marker in _SYNTHETIC_MARKERS):
-        return False
+        reasons.append("SYNTHETIC_OR_DEMO_EVIDENCE")
     if execution_status and execution_status != "executed":
-        return False
+        reasons.append("NOT_EXECUTED")
     if confirmation_status and confirmation_status not in {"confirmed", "validated_candidate"}:
-        return False
+        reasons.append("NOT_CONFIRMED")
 
     consistency = _dict(item.get("evidence_consistency"))
     if _lower(consistency.get("verdict")) in {"rejected", "missing"}:
-        return False
+        reasons.append("EVIDENCE_CONSISTENCY_REJECTED")
 
     lane = " ".join(
         _lower(item.get(key))
         for key in ("value_lane", "_value_lane", "execution_block", "block_reason")
     )
-    if any(marker in lane for marker in _BLOCKED_LANE_MARKERS):
-        return False
+    for marker in sorted(_BLOCKED_LANE_MARKERS):
+        if marker in lane:
+            reasons.append(f"BLOCKED_{marker.upper()}")
 
-    return (
-        has_validated_evidence_quality(item)
-        and has_passed_business_evidence_status(item)
-        and has_customer_replay_asset(item)
-        and has_customer_facing_hard_evidence(item)
-    )
+    if not has_validated_evidence_quality(item):
+        reasons.append("EVIDENCE_QUALITY_NOT_VALIDATED")
+    if not has_passed_business_evidence_status(item):
+        reasons.append("BUSINESS_EVIDENCE_NOT_VALIDATED")
+    if not has_customer_replay_asset(item):
+        reasons.append("MISSING_REAL_REPLAY_ASSET")
+    if not has_customer_facing_hard_evidence(item):
+        reasons.append("MISSING_CUSTOMER_FACING_HARD_EVIDENCE")
+    return reasons
+
+
+def is_customer_deliverable_defect(item: dict[str, Any]) -> bool:
+    return not customer_delivery_rejection_reasons(item)
 
 
 def split_customer_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -164,13 +173,15 @@ def split_customer_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[di
     for item in items:
         if not isinstance(item, dict):
             continue
-        if is_customer_deliverable_defect(item):
+        rejection_reasons = customer_delivery_rejection_reasons(item)
+        if not rejection_reasons:
             defects.append({
                 **item,
                 "delivery_track": "defect",
                 "customer_delivery_status": "defect",
                 "customer_delivery_label": "客户可交付缺陷",
                 "customer_visible": True,
+                "customer_delivery_gate_reasons": [],
             })
         else:
             clues.append({
@@ -179,5 +190,6 @@ def split_customer_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[di
                 "customer_delivery_status": "clue",
                 "customer_delivery_label": "内部待验证线索",
                 "customer_visible": False,
+                "customer_delivery_gate_reasons": rejection_reasons,
             })
     return defects, clues
