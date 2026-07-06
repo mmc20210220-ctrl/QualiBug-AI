@@ -110,7 +110,10 @@ class EnterpriseCampaign:
                     self.confirmation_receipts[slice_id] = _hash({"slice": slice_id, "evidence": _as_dict(item).get("evidence_id"), "time": _as_dict(item).get("timestamp")}, 32)
         reason = _text(selection.get("stop_reason"), 240)
         remaining = max(0, int(selection.get("remaining_slice_count") or 0))
-        if reason == "all_source_bound_slices_confirmed":
+        if reason.startswith("campaign_") and self.status in {"coverage_deferred", "completed", "blocked"}:
+            # Terminal Campaigns can be observed again but cannot silently reopen.
+            pass
+        elif reason == "all_source_bound_slices_confirmed":
             self.status = "completed"
             self.coverage_deferred_reason = ""
             self.next_campaign_reason = ""
