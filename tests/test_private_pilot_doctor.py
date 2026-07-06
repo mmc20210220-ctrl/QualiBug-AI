@@ -22,6 +22,16 @@ def test_private_pilot_doctor_reports_delivery_contract(tmp_path: Path, monkeypa
     assert payload["health_payload_preview"]["version"] == PRODUCT_VERSION
 
 
+def test_private_pilot_doctor_tolerates_invalid_port_env(tmp_path: Path, monkeypatch) -> None:
+    from ai_test_asset_center.private_pilot_doctor import diagnose_private_pilot
+    from ai_test_asset_center.version import DEFAULT_PRIVATE_PILOT_PORT
+
+    monkeypatch.setenv("QUALIBUG_PORT", "not-a-port")
+    payload = diagnose_private_pilot(root=tmp_path)
+
+    assert payload["environment"]["port"] == DEFAULT_PRIVATE_PILOT_PORT
+
+
 def test_private_pilot_doctor_checks_patch_modules(tmp_path: Path) -> None:
     from ai_test_asset_center.private_pilot_doctor import PRIVATE_PILOT_PATCH_MODULES, diagnose_private_pilot
 
