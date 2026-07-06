@@ -12,6 +12,8 @@ from typing import Any
 from ai_test_asset_center import private_pilot_service as _service
 from ai_test_asset_center.customer_delivery_gate import split_customer_delivery_tracks
 
+PATCH_SOURCE = "ai_test_asset_center.private_pilot_server"
+
 
 def install_customer_delivery_gate_patch() -> None:
     """Route legacy delivery-track partitioning through the backend gate."""
@@ -27,7 +29,27 @@ def install_customer_delivery_gate_patch() -> None:
     _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = original_partition  # type: ignore[attr-defined]
     _service._partition_delivery_tracks = _strict_partition_delivery_tracks  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = True  # type: ignore[attr-defined]
-    _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = "ai_test_asset_center.private_pilot_server"  # type: ignore[attr-defined]
+    _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
+
+
+def customer_delivery_gate_patch_status() -> dict[str, Any]:
+    """Return runtime diagnostics for the delivery-gate patch."""
+    return {
+        "patched": bool(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False)),
+        "source": str(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE", "")),
+        "has_original_partition": bool(getattr(_service, "_ORIGINAL_PARTITION_DELIVERY_TRACKS", None)),
+        "active_partition_name": getattr(getattr(_service, "_partition_delivery_tracks", None), "__name__", ""),
+    }
+
+
+def restore_customer_delivery_gate_patch() -> None:
+    """Restore the original partition function for isolated tests or diagnostics."""
+    original_partition = getattr(_service, "_ORIGINAL_PARTITION_DELIVERY_TRACKS", None)
+    if original_partition is not None:
+        _service._partition_delivery_tracks = original_partition  # type: ignore[attr-defined]
+    _service._CUSTOMER_DELIVERY_GATE_PATCHED = False  # type: ignore[attr-defined]
+    _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = None  # type: ignore[attr-defined]
 
 
 def run_server() -> None:
