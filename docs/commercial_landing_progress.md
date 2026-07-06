@@ -8,9 +8,13 @@ Completed so far:
 - Added backend tests for ready findings and internal clues.
 - Expanded rejection coverage for auth, route, coverage, execution, confirmation, request, response, and assertion gaps.
 - Added structured rejection reasons so internal clue pages can explain why an item is not yet a customer-deliverable defect.
+- Added backend explanation contracts for rejection reasons with label, detail, and next action.
 - Exposed `customer_delivery_gate_reasons` in the frontend finding type.
 - Updated the internal clue page to display readable reasons for why a clue is not customer-deliverable.
+- Updated the internal clue page to prefer backend structured explanations when available and fall back to reason codes for older data.
 - Added a frontend contract test to keep the internal clue explanation panel from regressing.
+- Added a command-center delivery normalization adapter that rechecks legacy `defects`, `risks`, and `findings` through the backend gate.
+- Added tests proving legacy non-ready `defects` are downgraded into internal clues.
 
 Current commercial rule:
 
@@ -20,5 +24,5 @@ Current commercial rule:
 
 Next engineering step:
 
-- Wire the command center service to use the backend gate module as its single promotion point.
+- Wire the command center service to call `normalize_command_center_delivery()` as the final response step.
 - Make formatter/service output populate `customer_delivery_gate_reasons` for every clue produced from legacy or display-ready sources.
