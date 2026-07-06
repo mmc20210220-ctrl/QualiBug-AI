@@ -23,9 +23,11 @@ def test_acceptance_smoke_generates_report_and_checks_contract(tmp_path: Path) -
     assert payload["customer_acceptance_summary"]["schema_version"] == "customer-acceptance-summary-v1"
     assert payload["customer_acceptance_summary"]["zh_text"]
     assert payload["customer_acceptance_summary"]["en_text"]
+    assert payload["acceptance_artifact_manifest"]["schema_version"] == "acceptance-artifact-manifest-v1"
     assert saved["acceptance_report_file"] == str(report_path)
     assert saved["support_bundle_manifest"]["policy"] == "diagnostics_only_no_customer_data"
     assert saved["customer_acceptance_summary"]["en_text"] == payload["customer_acceptance_summary"]["en_text"]
+    assert saved["acceptance_artifact_manifest"]["safe_to_share_paths"][0] == str(report_path)
     assert (tmp_path / "platform_outputs" / "private_pilot_doctor_report.json").exists()
 
 
@@ -105,6 +107,27 @@ def test_acceptance_summary_contains_bilingual_copyable_text(tmp_path: Path) -> 
     assert summary["next_commands"]
 
 
+def test_acceptance_artifact_manifest_lists_handoff_artifacts(tmp_path: Path) -> None:
+    from ai_test_asset_center.private_pilot_acceptance_smoke import run_acceptance_smoke, write_acceptance_report
+
+    payload = run_acceptance_smoke(root=tmp_path, install_patches=True, write_doctor=False)
+    report_path = tmp_path / "custom" / "acceptance.json"
+    write_acceptance_report(payload, output=report_path, root=tmp_path)
+    manifest = payload["acceptance_artifact_manifest"]
+    artifact_ids = {item["id"] for item in manifest["artifacts"]}
+
+    assert manifest["schema_version"] == "acceptance-artifact-manifest-v1"
+    assert manifest["policy"] == "handoff_artifacts_only_no_customer_source_data"
+    assert "acceptance_smoke_report" in artifact_ids
+    assert "private_pilot_doctor_report" in artifact_ids
+    assert "customer_acceptance_summary_zh" in artifact_ids
+    assert "customer_acceptance_summary_en" in artifact_ids
+    assert "support_bundle_manifest" in artifact_ids
+    assert str(report_path) in manifest["safe_to_share_paths"][0]
+    assert "acceptance_smoke_report" in manifest["required_artifact_ids"]
+    assert manifest["inherited_do_not_send"]
+
+
 def test_acceptance_smoke_blocks_when_runtime_patches_are_skipped(tmp_path: Path) -> None:
     from ai_test_asset_center.private_pilot_acceptance_smoke import run_acceptance_smoke
     from ai_test_asset_center.private_pilot_entrypoint import restore_deployment_contract_patch
@@ -152,6 +175,7 @@ def test_acceptance_smoke_cli_writes_custom_report(tmp_path: Path, capsys) -> No
     assert '"checks"' in captured
     assert '"scenario_readiness"' in captured
     assert '"customer_acceptance_summary"' in captured
+    assert '"acceptance_artifact_manifest"' in captured
 
 
 def test_acceptance_smoke_cli_script_is_registered() -> None:
