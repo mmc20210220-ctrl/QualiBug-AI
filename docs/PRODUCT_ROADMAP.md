@@ -1,6 +1,6 @@
 # QualiBug-AI Product Roadmap
 
-Version: 1.1  
+Version: 1.2  
 Status: Active  
 Product Boundary: Discover → Prove → Report → Regression Validate
 
@@ -106,7 +106,7 @@ These items are mandatory before expanding the product into higher abstraction l
 
 ## P0-1 Behavior Registry
 
-Status: `MINIMUM COMPLETE / ENTERPRISE IN PROGRESS`
+Status: `COMPLETED`
 
 Purpose:
 
@@ -137,10 +137,10 @@ Minimum completion criteria:
 
 Enterprise completion criteria:
 
-- [ ] validation history
-- [ ] risk trend by behavior
-- [ ] regression history
-- [ ] behavior status lifecycle
+- [x] validation history
+- [x] risk trend by behavior
+- [x] regression history
+- [x] behavior status lifecycle
 
 ---
 
