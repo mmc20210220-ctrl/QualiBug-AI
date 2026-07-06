@@ -1,0 +1,32 @@
+name: Enterprise Pilot Contracts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  source-evolution-and-connectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Validate enterprise extension contracts
+        run: |
+          python -c "import ast; ast.parse(open('ai_test_asset_center/change_impact.py').read()); print('change_impact.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/connector_source_ingestion.py').read()); print('connector_source_ingestion.py OK')"
+          python -m pytest \
+            tests/test_phase111_change_impact.py \
+            tests/test_phase111_connector_source_ingestion.py \
+            -q
