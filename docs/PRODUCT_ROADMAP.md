@@ -1,6 +1,6 @@
 # QualiBug-AI Product Roadmap
 
-Version: 1.0  
+Version: 1.1  
 Status: Active  
 Product Boundary: Discover → Prove → Report → Regression Validate
 
@@ -106,7 +106,7 @@ These items are mandatory before expanding the product into higher abstraction l
 
 ## P0-1 Behavior Registry
 
-Status: `IN PROGRESS`
+Status: `MINIMUM COMPLETE / ENTERPRISE IN PROGRESS`
 
 Purpose:
 
@@ -118,21 +118,29 @@ Target module:
 ai_test_asset_center/behavior_registry.py
 ```
 
+Target renderer:
+
+```text
+tools/render_behavior_registry_report.py
+```
+
 Minimum completion criteria:
 
-- behavior ID
-- behavior name
-- behavior category
-- linked violations
-- linked evidence
-- deterministic registry report
+- [x] behavior ID
+- [x] behavior name
+- [x] behavior category
+- [x] linked violations
+- [x] linked evidence
+- [x] deterministic registry report
+- [x] CLI report renderer
+- [x] guardrail test preventing fix/recommendation/repair language
 
 Enterprise completion criteria:
 
-- validation history
-- risk trend by behavior
-- regression history
-- behavior status lifecycle
+- [ ] validation history
+- [ ] risk trend by behavior
+- [ ] regression history
+- [ ] behavior status lifecycle
 
 ---
 
@@ -152,18 +160,18 @@ ai_test_asset_center/evidence_package.py
 
 Minimum completion criteria:
 
-- violation metadata
-- runtime evidence
-- reproduction steps
-- severity/risk context
+- [ ] violation metadata
+- [ ] runtime evidence
+- [ ] reproduction steps
+- [ ] severity/risk context
 
 Enterprise completion criteria:
 
-- request/response evidence
-- traceability
-- risk assessment
-- complete audit package
-- customer-ready export format
+- [ ] request/response evidence
+- [ ] traceability
+- [ ] risk assessment
+- [ ] complete audit package
+- [ ] customer-ready export format
 
 ---
 
@@ -183,16 +191,16 @@ ai_test_asset_center/regression_asset_library.py
 
 Minimum completion criteria:
 
-- regression asset generation
-- confirmed violation linkage
-- behavior linkage
+- [ ] regression asset generation
+- [ ] confirmed violation linkage
+- [ ] behavior linkage
 
 Enterprise completion criteria:
 
-- automatic execution
-- automatic comparison
-- automatic validation report
-- proof that a customer fix resolved the behavior violation
+- [ ] automatic execution
+- [ ] automatic comparison
+- [ ] automatic validation report
+- [ ] proof that a customer fix resolved the behavior violation
 
 ---
 
@@ -223,14 +231,14 @@ Behavior
 
 Minimum completion criteria:
 
-- Behavior ↔ Violation mapping
+- [ ] Behavior ↔ Violation mapping
 
 Enterprise completion criteria:
 
-- full chain report
-- validation history
-- regression history
-- status lifecycle
+- [ ] full chain report
+- [ ] validation history
+- [ ] regression history
+- [ ] status lifecycle
 
 ---
 
