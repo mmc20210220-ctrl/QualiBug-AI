@@ -73,8 +73,24 @@ function isContinuousDiscoveryActive(raw: unknown): boolean {
   const campaign = asRecord(record.continuous_discovery_campaign || record.continuousDiscoveryCampaign);
   const summary = asRecord(campaign.summary || campaign.campaign);
   const currentRun = asRecord(campaign.current_run);
-  const state = (asString(summary.campaign_state) || asString(summary.state) || asString(currentRun.status)).toLowerCase();
+  const state = (asString(summary.campaign_state) || asString(summary.campaign_status) || asString(summary.state) || asString(currentRun.status)).toLowerCase();
   return ['running', 'scanning', 'active', 'in_progress'].includes(state) || Boolean(currentRun.started_at) && !currentRun.finished_at;
+}
+function normalizeCampaignSnapshot(raw: unknown): JsonRecord {
+  const record = asRecord(raw);
+  const directCampaign = asRecord(record.campaign);
+  if (Object.keys(directCampaign).length > 0) return record;
+  const continuous = asRecord(record.continuous_discovery_campaign || record.continuousDiscoveryCampaign);
+  const campaign = asRecord(continuous.campaign || continuous.summary);
+  if (Object.keys(campaign).length === 0) return record;
+  const currentRun = asRecord(continuous.current_run);
+  const coverageGaps = Array.isArray(record.coverage_gaps) ? record.coverage_gaps : [];
+  return {
+    ...record,
+    campaign,
+    coverage_gaps: coverageGaps,
+    scan_meta: { ...asRecord(record.scan_meta), run_count: asFiniteNumber(campaign.round_count), total_ms: asFiniteNumber(currentRun.duration_ms) },
+  };
 }
 function buildProjectSummary(raw: unknown, project: string): ProjectSummary {
   const record = asRecord(raw);
@@ -142,8 +158,13 @@ export function useProjectSummary(project: string) {
 }
 
 export function usePipelineData(project: string) {
-  const [data, setData] = useState<unknown>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = useCallback(() => { setLoading(true); setError(''); setData(null); getFindings(project).then(setData).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : '加载失败')).finally(() => setLoading(false)); }, [project]);
+  const [data, setData] = useState<unknown>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    setLoading(true); setError(''); setData(null);
+    getFindings(project).then((raw) => setData(normalizeCampaignSnapshot(raw))).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : '加载失败')).finally(() => setLoading(false));
+  }, [project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
   return { data, loading, error, refetch: load };
 }
