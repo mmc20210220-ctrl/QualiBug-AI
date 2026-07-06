@@ -7,12 +7,37 @@ import { useProjectNavigation } from '../lib/project-navigation';
 
 type ClueFilter = 'all' | 'suspected' | 'risk_clue' | 'not_reproduced' | 'P0' | 'P1' | 'P2';
 
+const GATE_REASON_LABELS: Record<string, string> = {
+  INVALID_FINDING_PAYLOAD: '结果结构异常，无法作为客户缺陷交付',
+  NOT_MARKED_FOR_DEFECT_DELIVERY: '后端未标记为客户缺陷交付轨道',
+  BUG_STATUS_NOT_REPRODUCED: '缺陷状态不是已复现',
+  GATE_NOT_PASSED: '证据门控未通过',
+  SYNTHETIC_OR_DEMO_EVIDENCE: '证据来源包含模拟、演示或 mock 信号',
+  NOT_EXECUTED: '尚未真实执行',
+  NOT_CONFIRMED: '尚未形成确认结论',
+  EVIDENCE_CONSISTENCY_REJECTED: '声明与证据不一致或证据缺失',
+  EVIDENCE_QUALITY_NOT_VALIDATED: '证据质量未达到可交付标准',
+  BUSINESS_EVIDENCE_NOT_VALIDATED: '业务证据状态未验证通过',
+  MISSING_REAL_REPLAY_ASSET: '缺少真实复现资产',
+  MISSING_CUSTOMER_FACING_HARD_EVIDENCE: '缺少客户可核验的请求、响应、断言或时间戳',
+  BLOCKED_AUTH_BLOCKED: '认证或权限配置阻断，不能证明业务缺陷',
+  BLOCKED_ROUTE_BLOCKED: '路由或网关阻断，不能证明目标业务缺陷',
+  BLOCKED_ENVIRONMENT_BLOCKED: '环境不可达或被拦截，不能作为已复现缺陷',
+  BLOCKED_COVERAGE_GAP: '覆盖缺口，需继续补跑场景',
+  BLOCKED_NOT_REPRODUCED: '已执行但未复现',
+  BLOCKED_VALIDATION_LEAD: '仍是验证线索，未达到交付标准',
+};
+
 function getClueStatusLabel(status: ClueFilter) {
   if (status === 'all') return '全部线索';
   if (status === 'suspected') return '疑似问题';
   if (status === 'risk_clue') return '风险线索';
   if (status === 'not_reproduced') return '未复现';
   return status;
+}
+
+function explainGateReason(reason: string): string {
+  return GATE_REASON_LABELS[reason] || reason.replace(/_/g, ' ').toLowerCase();
 }
 
 export function InternalClues() {
@@ -28,7 +53,7 @@ export function InternalClues() {
   const riskClueCount = clues.filter((f) => f.bug_status === 'risk_clue').length;
   const notReproducedCount = clues.filter((f) => f.bug_status === 'not_reproduced').length;
   const p0Count = clues.filter((f) => f.severity === 'P0').length;
-  const missingEvidenceCount = clues.filter((f) => (f.evidence_quality?.missing?.length || 0) > 0).length;
+  const missingEvidenceCount = clues.filter((f) => (f.evidence_quality?.missing?.length || 0) > 0 || (f.customer_delivery_gate_reasons?.length || 0) > 0).length;
 
   const filters: Array<{ label: string; value: ClueFilter }> = [
     { label: `全部 (${clues.length})`, value: 'all' },
@@ -88,6 +113,7 @@ export function InternalClues() {
       {displayData.map((item) => {
         const isOpen = expandedId === item.id;
         const missing = item.evidence_quality?.missing || [];
+        const gateReasons = item.customer_delivery_gate_reasons || [];
         const nextActions = item.evidence_quality?.next_actions || [];
         const reproduction = item.reproduction || { method: '', path: '', steps: [], is_synthetic: false };
         const investigation = item.investigation_guidance || { relevant_apis: [], relevant_tables: [], log_search: '', sql_verify: '' };
@@ -96,6 +122,7 @@ export function InternalClues() {
           <div className="evidence-one-liner" onClick={() => setExpandedId(isOpen ? null : item.id)}><span className="evidence-one-liner-label">内部判断</span><span className="evidence-one-liner-text">{item.business_summary || item.actual || item.evidence_quality?.summary || '需要补充更多证据后再确认。'}</span></div>
           <div className="evidence-body">
             <div className="findings-compare-grid"><div className="findings-compare-card"><span className="findings-compare-label">当前掌握</span><p>{item.actual || item.evidence_quality?.summary || '暂未形成稳定异常结论'}</p></div><div className="findings-compare-card danger"><span className="findings-compare-label">仍缺证据</span><p>{missing.length > 0 ? missing.join('；') : '暂无明确缺口，建议继续复验确认'}</p></div></div>
+            {gateReasons.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">未进入客户缺陷的原因</div><div className="findings-investigation-body"><ul className="findings-steps">{gateReasons.map((reason, index) => <li key={`${reason}-${index}`}>{explainGateReason(reason)}</li>)}</ul></div></div>}
             {nextActions.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">下一步建议</div><div className="findings-investigation-body"><ol className="findings-steps">{nextActions.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ol></div></div>}
             {(reproduction.path || investigation.log_search || investigation.sql_verify || investigation.relevant_tables?.length || investigation.relevant_apis?.length) && <div className="findings-investigation-card"><div className="findings-panel-kicker">补证入口</div><div className="findings-investigation-body">{reproduction.path && <div>优先复验：<code>{reproduction.method} {reproduction.path}</code></div>}{investigation.relevant_apis?.length > 0 && <div>关联接口：{investigation.relevant_apis.join('、')}</div>}{investigation.relevant_tables?.length > 0 && <div>关联数据表：{investigation.relevant_tables.join('、')}</div>}{investigation.log_search && <div><code>{investigation.log_search}</code></div>}{investigation.sql_verify && <div><code>{investigation.sql_verify}</code></div>}</div></div>}
           </div>
