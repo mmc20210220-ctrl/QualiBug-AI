@@ -129,3 +129,50 @@ def test_install_patch_replaces_continuous_loop_and_reports_status() -> None:
     restore_customer_delivery_gate_patch()
     assert service._continuous_scan_loop is original_loop
     assert service.PrivatePilotHandler._handle_continuous_start is original_start
+
+
+def test_service_credentials_are_masked_for_frontend() -> None:
+    from ai_test_asset_center.private_pilot_server import _MASKED_SECRET, _mask_service_credentials_for_frontend
+
+    services = [
+        {
+            "name": "order-service",
+            "base_url": "https://orders.internal",
+            "admin_pass": "legacy-admin-secret",
+            "auth": {
+                "type": "password_login",
+                "admin": {"username": "admin", "password": "admin-secret"},
+                "qa": {"username": "qa", "password": "qa-secret"},
+                "bearer_token": "bearer-secret",
+                "api_key": "api-secret",
+            },
+            "db": {"host": "db.internal", "user": "orders", "password": "db-secret"},
+        }
+    ]
+
+    masked = _mask_service_credentials_for_frontend("demo", services)
+    rendered = repr(masked)
+
+    assert "legacy-admin-secret" not in rendered
+    assert "admin-secret" not in rendered
+    assert "qa-secret" not in rendered
+    assert "bearer-secret" not in rendered
+    assert "api-secret" not in rendered
+    assert "db-secret" not in rendered
+    assert masked[0]["admin_pass"] == _MASKED_SECRET
+    assert masked[0]["auth"]["admin"]["password"] == _MASKED_SECRET
+    assert masked[0]["auth"]["bearer_token"] == _MASKED_SECRET
+    assert masked[0]["db"]["password"] == _MASKED_SECRET
+    assert masked[0]["auth"]["admin"]["password_ref"].startswith("qualibug://credentials/demo/order-service/")
+
+
+def test_local_credential_key_is_created_when_missing(tmp_path: Path, monkeypatch) -> None:
+    from ai_test_asset_center.private_pilot_server import _CREDENTIAL_KEY_ENV, _ensure_local_credential_encryption_key
+
+    monkeypatch.delenv(_CREDENTIAL_KEY_ENV, raising=False)
+    source = _ensure_local_credential_encryption_key(tmp_path)
+    key_path = tmp_path / "platform_workspace" / ".secrets" / "credential_encryption.key"
+
+    assert source == "local_private_key_file"
+    assert key_path.exists()
+    assert key_path.read_text(encoding="utf-8").strip()
