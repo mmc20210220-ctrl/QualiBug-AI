@@ -8,6 +8,9 @@ Completed so far:
 - Added backend tests for ready findings and internal clues.
 - Expanded rejection coverage for auth, route, coverage, execution, confirmation, request, response, and assertion gaps.
 - Added structured rejection reasons so internal clue pages can explain why an item is not yet a customer-deliverable defect.
+- Exposed `customer_delivery_gate_reasons` in the frontend finding type.
+- Updated the internal clue page to display readable reasons for why a clue is not customer-deliverable.
+- Added a frontend contract test to keep the internal clue explanation panel from regressing.
 
 Current commercial rule:
 
@@ -18,4 +21,4 @@ Current commercial rule:
 Next engineering step:
 
 - Wire the command center service to use the backend gate module as its single promotion point.
-- Surface `customer_delivery_gate_reasons` on the internal clue detail view.
+- Make formatter/service output populate `customer_delivery_gate_reasons` for every clue produced from legacy or display-ready sources.
