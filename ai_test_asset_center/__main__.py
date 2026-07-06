@@ -97,6 +97,18 @@ def _registry_manifest(root: Path, project: str, api_doc_text: str) -> dict[str,
     }
 
 
+def _load_registered_source(project: str, root: Path, context: dict[str, Any]) -> str:
+    manifest = _as_dict(context.get("source_manifest"))
+    source_hash = str(manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:")
+    if not _SHA256_RE.fullmatch(source_hash):
+        return ""
+    try:
+        from .enterprise_source_registry import SourceRegistryError, load_source_content
+        return load_source_content(project, source_hash, root=root)
+    except (ImportError, OSError, ValueError, SourceRegistryError):
+        return ""
+
+
 def _find_project_asset(root: Path, project: str, content_hash: str) -> dict[str, str]:
     """Migration resolver for an exact project-owned input asset."""
     project_root = root / "platform_workspace" / _safe_project(project) / "input"
@@ -243,19 +255,7 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
     )
 
 
-def _evaluate_release_gate(
-    *,
-    project: str,
-    root: Path,
-    campaign: dict[str, Any],
-    execution_status: str,
-    runtime_contract: dict[str, Any],
-    evidence_bundle: dict[str, Any],
-    test_data_plan: dict[str, Any],
-    findings: list[dict[str, Any]],
-    coverage_gaps: list[dict[str, Any]],
-    policy: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+def _evaluate_release_gate(*, project: str, root: Path, campaign: dict[str, Any], execution_status: str, runtime_contract: dict[str, Any], evidence_bundle: dict[str, Any], test_data_plan: dict[str, Any], findings: list[dict[str, Any]], coverage_gaps: list[dict[str, Any]], policy: dict[str, Any] | None = None) -> dict[str, Any]:
     from .release_gate import evaluate_release_gate
     verification: dict[str, Any] = {}
     if str(evidence_bundle.get("status") or "") == "persisted" and str(evidence_bundle.get("bundle_id") or ""):
@@ -291,29 +291,14 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
     test_data_plan = build_campaign_test_data_plan(campaign, [], _as_dict(context.get("test_data_contract")), receipt_verifier=_test_data_receipt_verifier(root, project))
     coverage_gaps = gaps + list(test_data_plan.get("coverage_gaps") or [])
     evidence_bundle = {"status": "not_created", "reason": "scan_blocked"}
-    release_gate = _evaluate_release_gate(
-        project=project,
-        root=root,
-        campaign=campaign,
-        execution_status="blocked",
-        runtime_contract=runtime_contract,
-        evidence_bundle=evidence_bundle,
-        test_data_plan=test_data_plan,
-        findings=[],
-        coverage_gaps=coverage_gaps,
-        policy=_as_dict(context.get("release_policy")),
-    )
+    release_gate = _evaluate_release_gate(project=project, root=root, campaign=campaign, execution_status="blocked", runtime_contract=runtime_contract, evidence_bundle=evidence_bundle, test_data_plan=test_data_plan, findings=[], coverage_gaps=coverage_gaps, policy=_as_dict(context.get("release_policy")))
     result: dict[str, Any] = {
         "success": True, "scan_id": f"scan_{_safe_project(project)}_{int(started * 1000)}", "project": project,
         "grade": "blocked", "score": 0.0, "coverage": 0.0, "total_findings": 0, "total_candidates": 0,
         "total_ms": int((time.time() - started) * 1000),
-        "layers": {
-            "source_grounded_discovery": {"tool": "blocked", "findings": 0, "candidates": 0, "ms": 0, "execution_status": "blocked"},
-            "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required"},
-        },
+        "layers": {"source_grounded_discovery": {"tool": "blocked", "findings": 0, "candidates": 0, "ms": 0, "execution_status": "blocked"}, "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required"}},
         "findings": [], "candidate_findings": [], "db_findings": [], "e2e_findings": [], "ui_findings": [], "deep_findings": [], "spectrum": {},
-        "input_gaps": gaps, "coverage_gaps": coverage_gaps,
-        "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "campaign": campaign,
+        "input_gaps": gaps, "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "campaign": campaign,
         "behavior_slice_ledger": {"stop_reason": first_code.lower(), "selected_slice_ids": [], "confirmed_slice_ids": []},
         "incremental_discovery": {"status": "blocked", "stop_reason": first_code.lower()}, "execution_status": "blocked",
         "db_verification": {"status": "blocked", "reason": first_code.lower(), "findings": []},
@@ -323,55 +308,36 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {
-            "project": project, "real_findings": [], "risk_clues": [], "campaign": campaign,
-            "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract,
-            "test_data_plan": test_data_plan, "execution_status": "blocked",
-            "evidence_bundle": evidence_bundle, "release_gate": release_gate,
-        })
+        _write_json(report_path, {"project": project, "real_findings": [], "risk_clues": [], "campaign": campaign, "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "execution_status": "blocked", "evidence_bundle": evidence_bundle, "release_gate": release_gate})
         result["report_path"] = str(report_path)
     _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
     return result
 
 
-def scan(
-    project: str,
-    root: Optional[Path] = None,
-    *,
-    prd_text: str = "",
-    api_doc_path: str = "",
-    api_doc_text: str = "",
-    base_url: str = "",
-    ci_gate: bool = False,
-    multi_layer: bool = True,
-    output_dir: Optional[Path] = None,
-    save_report: bool = True,
-    campaign_context: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
+def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline."""
     root = Path(root or Path.cwd())
     project = str(project or "").strip()
     if not project:
         return {"success": False, "error": "project is required"}
+    context = dict(campaign_context or {})
     if api_doc_path and not api_doc_text:
         try:
             api_doc_text = Path(api_doc_path).read_text(encoding="utf-8")
         except OSError as exc:
             return {"success": False, "error": f"api_doc_path is unreadable: {exc}"}
     if not str(api_doc_text or "").strip():
-        return {"success": False, "error": "api_doc_text or api_doc_path is required"}
+        api_doc_text = _load_registered_source(project, root, context)
+    if not str(api_doc_text or "").strip():
+        return {"success": False, "error": "api_doc_text, api_doc_path, or a registered source_manifest is required"}
 
     started = time.time()
-    context = dict(campaign_context or {})
     manifest = _source_manifest(root, project, context, api_doc_path, api_doc_text)
-    context["source_manifest"] = {
-        "source_id": manifest["source_id"], "source_hash": manifest["source_hash"],
-        "source_version_id": manifest["source_version_id"], "source_origin": manifest["source_origin"],
-    }
+    context["source_manifest"] = {"source_id": manifest["source_id"], "source_hash": manifest["source_hash"], "source_version_id": manifest["source_version_id"], "source_origin": manifest["source_origin"]}
     provenance_gaps = _source_contract(manifest)
-    approved_base_url, runtime_gaps, runtime_contract = _runtime_contract(context, base_url, manifest)
+    approved_base_url, runtime_gaps, initial_runtime_contract = _runtime_contract(context, base_url, manifest)
     if provenance_gaps:
-        return _blocked_result(project, root, started, provenance_gaps + runtime_gaps, runtime_contract, context, save_report, output_dir)
+        return _blocked_result(project, root, started, provenance_gaps + runtime_gaps, initial_runtime_contract, context, save_report, output_dir)
 
     input_gaps: list[dict[str, str]] = []
     if not str(prd_text or "").strip():
@@ -395,6 +361,7 @@ def scan(
     except Exception as exc:
         return {"success": False, "error": f"v12_pipeline_failed:{type(exc).__name__}:{exc}"}
 
+    runtime_contract = _as_dict(v12.get("runtime_contract")) or initial_runtime_contract
     confirmed, candidates = _classify_findings(v12.get("findings"))
     phases = _as_dict(v12.get("phases"))
     state_graph = _as_dict(phases.get("state_graph"))
@@ -415,30 +382,19 @@ def scan(
             confirmed = []
         input_gaps.append(_gap("EVIDENCE_BUNDLE_PERSISTENCE_FAILED", "Runtime evidence could not be persisted with integrity guarantees; customer-deliverable confirmation is blocked."))
 
+    if str(runtime_contract.get("status") or "") == "blocked":
+        requirements = runtime_contract.get("missing_requirements") if isinstance(runtime_contract.get("missing_requirements"), list) else []
+        for code in requirements:
+            if not any(gap.get("code") == str(code) for gap in input_gaps):
+                input_gaps.append(_gap(str(code), "Runtime execution approval or contract requirement is not satisfied."))
     graph_gaps = state_graph.get("coverage_gaps", []) if isinstance(state_graph.get("coverage_gaps"), list) else []
-    test_data_plan = build_campaign_test_data_plan(
-        campaign,
-        incremental.get("selected_slices") if isinstance(incremental.get("selected_slices"), list) else [],
-        _as_dict(context.get("test_data_contract")),
-        receipt_verifier=_test_data_receipt_verifier(root, project),
-    )
+    test_data_plan = build_campaign_test_data_plan(campaign, incremental.get("selected_slices") if isinstance(incremental.get("selected_slices"), list) else [], _as_dict(context.get("test_data_contract")), receipt_verifier=_test_data_receipt_verifier(root, project))
     coverage_gaps = input_gaps + [item for item in graph_gaps if isinstance(item, dict)] + list(test_data_plan.get("coverage_gaps") or [])
-    release_gate = _evaluate_release_gate(
-        project=project,
-        root=root,
-        campaign=campaign,
-        execution_status=execution_status,
-        runtime_contract=runtime_contract,
-        evidence_bundle=evidence_bundle,
-        test_data_plan=test_data_plan,
-        findings=confirmed,
-        coverage_gaps=coverage_gaps,
-        policy=_as_dict(context.get("release_policy")),
-    )
+    release_gate = _evaluate_release_gate(project=project, root=root, campaign=campaign, execution_status=execution_status, runtime_contract=runtime_contract, evidence_bundle=evidence_bundle, test_data_plan=test_data_plan, findings=confirmed, coverage_gaps=coverage_gaps, policy=_as_dict(context.get("release_policy")))
+    grade = "blocked" if str(runtime_contract.get("status") or "") == "blocked" or execution_status == "blocked" else ("inconclusive" if not confirmed else "evidence_ready")
     duration_ms = int((time.time() - started) * 1000)
     result: dict[str, Any] = {
-        "success": True, "scan_id": scan_id, "project": project,
-        "grade": "inconclusive" if not confirmed else "evidence_ready", "score": 0.0, "coverage": 0.0,
+        "success": True, "scan_id": scan_id, "project": project, "grade": grade, "score": 0.0, "coverage": 0.0,
         "total_findings": len(confirmed), "total_candidates": len(candidates), "total_ms": duration_ms,
         "layers": {
             "source_grounded_discovery": {"tool": "V12 enterprise campaign", "findings": len(confirmed), "candidates": len(candidates), "ms": int(v12.get("total_duration_ms") or duration_ms), "execution_status": execution_status, "campaign_id": campaign.get("campaign_id", "")},
@@ -456,13 +412,7 @@ def scan(
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {
-            "project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "real_findings": confirmed, "risk_clues": candidates, "campaign": campaign,
-            "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract,
-            "test_data_plan": test_data_plan, "behavior_slice_ledger": result["behavior_slice_ledger"],
-            "execution_status": execution_status, "evidence_bundle": evidence_bundle, "release_gate": release_gate,
-        })
+        _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "risk_clues": candidates, "campaign": campaign, "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status, "evidence_bundle": evidence_bundle, "release_gate": release_gate})
         result["report_path"] = str(report_path)
     _write_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json", result)
     return result
@@ -483,6 +433,8 @@ def main() -> None:
     parser.add_argument("--source-id", default="")
     parser.add_argument("--source-hash", default="")
     parser.add_argument("--source-version-id", default="")
+    parser.add_argument("--execution-approval-id", default="")
+    parser.add_argument("--execution-mode", default="safe_read_only")
     parser.add_argument("--test-data-strategy", default="blocked_with_testability_gap")
     parser.add_argument("--ci-gate", action="store_true")
     parser.add_argument("--no-multi-layer", action="store_true")
@@ -493,6 +445,7 @@ def main() -> None:
     context = {
         "scope_id": args.scope_id, "environment_ref": args.environment_ref,
         "source_manifest": {"source_id": args.source_id, "source_hash": args.source_hash, "source_version_id": args.source_version_id},
+        "execution_approval_id": args.execution_approval_id, "execution_mode": args.execution_mode,
         "test_data_contract": {"strategy": args.test_data_strategy},
     }
     result = scan(project=args.project, api_doc_path=args.api_doc or "", api_doc_text=args.api_doc_text or "", prd_text=args.prd, base_url=args.base_url, ci_gate=args.ci_gate, multi_layer=not args.no_multi_layer, output_dir=Path(args.output_dir) if args.output_dir else None, save_report=not args.no_report, campaign_context=context)
