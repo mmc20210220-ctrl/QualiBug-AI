@@ -10,6 +10,7 @@ no customer documents are read.
 
 import argparse
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -24,12 +25,25 @@ from ai_test_asset_center.private_pilot_doctor import (
 from ai_test_asset_center.version import CANONICAL_HEALTH_PATH, PRODUCT_VERSION
 
 DEFAULT_ACCEPTANCE_REPORT_RELATIVE_PATH = Path("platform_outputs") / "private_pilot_acceptance_smoke_report.json"
+DEFAULT_PROJECT = "real_project_demo"
 
 
 def _resolve_root(root: str | Path | None = None) -> Path:
     if root:
         return Path(root).expanduser().resolve()
     return Path.cwd().resolve()
+
+
+def _as_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _as_text(value)
+        if text:
+            return text
+    return ""
 
 
 def default_acceptance_report_path(root: str | Path | None = None) -> Path:
@@ -103,6 +117,81 @@ def _check_http_health(server_url: str, *, timeout_s: float = 3.0) -> dict[str, 
         }
 
 
+def _source_registry_status(project: str, root: Path) -> dict[str, Any]:
+    if not _as_text(project):
+        return {"ok": False, "asset_count": 0, "assets": [], "reason": "project_not_configured"}
+    try:
+        from ai_test_asset_center.enterprise_source_registry import list_source_assets
+
+        assets = list_source_assets(project, root=root)
+    except Exception as exc:
+        return {"ok": False, "asset_count": 0, "assets": [], "reason": str(exc)[:300]}
+    summarized = [
+        {
+            "source_id": _as_text(item.get("source_id")),
+            "source_type": _as_text(item.get("source_type")),
+            "latest_version_id": _as_text(item.get("latest_version_id")),
+            "updated_at_utc": _as_text(item.get("updated_at_utc")),
+        }
+        for item in assets[:20]
+        if isinstance(item, dict)
+    ]
+    return {"ok": bool(summarized), "asset_count": len(assets), "assets": summarized, "reason": "" if summarized else "source_registry_empty"}
+
+
+def _scenario_readiness_preflight(
+    root: Path,
+    *,
+    project: str = "",
+    scan_base_url: str = "",
+    scope_id: str = "",
+    environment_ref: str = "",
+    test_data_strategy: str = "",
+    require_ready: bool = False,
+) -> dict[str, Any]:
+    resolved_project = _first_text(project, os.environ.get("QUALIBUG_PROJECT"), DEFAULT_PROJECT)
+    resolved_base_url = _first_text(
+        scan_base_url,
+        os.environ.get("QUALIBUG_TARGET_BASE_URL"),
+        os.environ.get("QUALIBUG_TARGET_UI_BASE_URL"),
+        os.environ.get("QUALIBUG_BROWSER_UI_BASE_URL"),
+    )
+    resolved_scope_id = _first_text(scope_id, os.environ.get("QUALIBUG_SCOPE_ID"))
+    resolved_environment_ref = _first_text(environment_ref, os.environ.get("QUALIBUG_ENVIRONMENT_REF"), os.environ.get("QUALIBUG_TARGET_ENVIRONMENT"))
+    resolved_test_data_strategy = _first_text(test_data_strategy, os.environ.get("QUALIBUG_TEST_DATA_STRATEGY"))
+    source_registry = _source_registry_status(resolved_project, root)
+
+    missing: list[str] = []
+    if not resolved_project:
+        missing.append("project")
+    if not source_registry.get("ok"):
+        missing.append("source_registry_asset")
+    if not resolved_base_url:
+        missing.append("base_url")
+    if not resolved_scope_id:
+        missing.append("scope_id")
+    if not resolved_environment_ref:
+        missing.append("environment_ref")
+    if not resolved_test_data_strategy:
+        missing.append("test_data_strategy")
+
+    ready = not missing
+    return {
+        "ok": ready,
+        "ready": ready,
+        "required": require_ready,
+        "status": "ready" if ready else ("blocked" if require_ready else "warning"),
+        "missing": missing,
+        "project": resolved_project,
+        "base_url_configured": bool(resolved_base_url),
+        "scope_id_configured": bool(resolved_scope_id),
+        "environment_ref_configured": bool(resolved_environment_ref),
+        "test_data_strategy_configured": bool(resolved_test_data_strategy),
+        "source_registry": source_registry,
+        "next_action": "Register an enterprise source asset and provide base_url, scope_id, environment_ref, and test_data_strategy before real scans." if missing else "Proceed to customer scenario scan setup.",
+    }
+
+
 def _check_runtime_patches(doctor_payload: dict[str, Any]) -> dict[str, Any]:
     runtime = doctor_payload.get("runtime_patches", {}) if isinstance(doctor_payload.get("runtime_patches"), dict) else {}
     required = [
@@ -164,6 +253,13 @@ def _classify_acceptance(checks: dict[str, Any], doctor_payload: dict[str, Any])
     health = checks.get("http_health", {})
     if health.get("enabled") and not health.get("ok"):
         blockers.append("http_health_check_failed")
+    scenario = checks.get("scenario_readiness", {})
+    if isinstance(scenario, dict) and not scenario.get("ready"):
+        code = "scenario_readiness_missing:" + ",".join(scenario.get("missing", []) or [])
+        if scenario.get("required"):
+            blockers.append(code)
+        else:
+            warnings.append(code)
 
     if blockers:
         return {
@@ -181,7 +277,7 @@ def _classify_acceptance(checks: dict[str, Any], doctor_payload: dict[str, Any])
             "label": "Warning - acceptance passed with action items",
             "blockers": [],
             "warnings": warnings,
-            "next_action": "Review warnings and remediation hints before claiming a clean handoff.",
+            "next_action": "Review warnings and scenario_readiness before claiming a clean handoff.",
         }
     return {
         "level": "accepted",
@@ -200,6 +296,12 @@ def run_acceptance_smoke(
     install_patches: bool = True,
     write_doctor: bool = True,
     doctor_output: str | Path | None = None,
+    project: str = "",
+    scan_base_url: str = "",
+    scope_id: str = "",
+    environment_ref: str = "",
+    test_data_strategy: str = "",
+    require_scenario_ready: bool = False,
 ) -> dict[str, Any]:
     resolved_root = _resolve_root(root)
     doctor_payload = diagnose_private_pilot(root=resolved_root, install_patches=install_patches)
@@ -213,6 +315,15 @@ def run_acceptance_smoke(
         "credential_safety": _check_credential_safety(doctor_payload),
         "browser_ui_smoke": doctor_payload.get("browser_ui_smoke", {}),
         "http_health": _check_http_health(server_url),
+        "scenario_readiness": _scenario_readiness_preflight(
+            resolved_root,
+            project=project,
+            scan_base_url=scan_base_url,
+            scope_id=scope_id,
+            environment_ref=environment_ref,
+            test_data_strategy=test_data_strategy,
+            require_ready=require_scenario_ready,
+        ),
     }
     acceptance = _classify_acceptance(checks, doctor_payload)
     return {
@@ -233,6 +344,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run QualiBug private-pilot customer acceptance smoke checks.")
     parser.add_argument("--root", default=None, help="Private pilot root/workspace directory.")
     parser.add_argument("--server-url", default="", help="Optional running server base URL, for example http://localhost:8088.")
+    parser.add_argument("--project", default="", help="Project id used for source-registry preflight.")
+    parser.add_argument("--scan-base-url", default="", help="Target API/UI base URL used for scenario-readiness preflight.")
+    parser.add_argument("--scope-id", default="", help="Customer-approved scan scope id.")
+    parser.add_argument("--environment-ref", default="", help="Customer environment reference, such as staging or qa.")
+    parser.add_argument("--test-data-strategy", default="", help="Customer-approved test data strategy.")
+    parser.add_argument("--require-scenario-ready", action="store_true", help="Block acceptance when scenario-readiness preflight is incomplete.")
     parser.add_argument("--skip-install-patches", action="store_true", help="Do not install runtime patches before acceptance checks.")
     parser.add_argument("--skip-doctor-report", action="store_true", help="Do not write the companion doctor report.")
     parser.add_argument("--doctor-output", default=None, help="Optional path for the companion doctor report.")
@@ -252,6 +369,12 @@ def main(argv: list[str] | None = None) -> int:
         install_patches=not args.skip_install_patches,
         write_doctor=not args.skip_doctor_report,
         doctor_output=args.doctor_output,
+        project=args.project,
+        scan_base_url=args.scan_base_url,
+        scope_id=args.scope_id,
+        environment_ref=args.environment_ref,
+        test_data_strategy=args.test_data_strategy,
+        require_scenario_ready=args.require_scenario_ready,
     )
     if args.output is not None:
         write_acceptance_report(payload, output=args.output, root=args.root)
