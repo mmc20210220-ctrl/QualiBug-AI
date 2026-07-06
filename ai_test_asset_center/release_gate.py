@@ -42,7 +42,11 @@ def evaluate_release_gate(
     coverage_gaps: list[dict[str, Any]] | None,
     policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return an auditable release decision from actual execution artifacts."""
+    """Return an auditable release decision from actual execution artifacts.
+
+    A plan-only run is incomplete rather than failed. A blocked contract, a
+    deferred/blocked Campaign, or a confirmed P0 finding is an explicit block.
+    """
     campaign_value = _record(campaign)
     runtime = _record(runtime_contract)
     bundle = _record(evidence_bundle)
@@ -81,7 +85,7 @@ def evaluate_release_gate(
     if p1 and not allow_p1:
         reasons.append({"code": "CONFIRMED_P1_FINDINGS", "detail": str(len(p1))})
 
-    hard_block = any(reason["code"] in {"CAMPAIGN_NOT_CLOSED", "RUNTIME_CONTRACT_NOT_APPROVED", "CONFIRMED_P0_FINDINGS"} for reason in reasons)
+    hard_block = any(reason["code"] in {"CAMPAIGN_NOT_CLOSED", "CONFIRMED_P0_FINDINGS"} for reason in reasons) or runtime_status == "blocked"
     if not reasons:
         verdict, status = "pass", "release_ready"
     elif hard_block:
@@ -95,6 +99,7 @@ def evaluate_release_gate(
         "campaign_id": _text(campaign_value.get("campaign_id")),
         "campaign_status": campaign_status,
         "execution_status": execution,
+        "runtime_contract_status": runtime_status,
         "confirmed_finding_count": len(confirmed),
         "confirmed_p0_count": len(p0),
         "confirmed_p1_count": len(p1),
