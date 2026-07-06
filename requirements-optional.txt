@@ -1,4 +1,4 @@
-# Optional enhancement dependencies. They are not required for the local private
-# operations center to start.
-pypdf>=4.0.0
-playwright>=1.40.0
+# Optional enhancement dependency groups are declared in pyproject.toml.
+# Install one or more groups with, for example:
+#   pip install .[llm,browser]
+# This compatibility file intentionally has no duplicate package pins.
