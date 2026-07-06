@@ -5,19 +5,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: qualibug:v11
+    image: qualibug-ai:95.0.0-private-pilot
     ports:
-      - "5000:5000"
+      # Host 5000 is kept for local demos; container port stays canonical 8088.
+      - "5000:8088"
     environment:
       QUALIBUG_PROJECT: default
       QUALIBUG_PRODUCTION: "1"
-      QUALIBUG_PORT: "5000"
+      QUALIBUG_PORT: "8088"
     volumes:
       - qualibug-platform-outputs:/app/platform_outputs
       - qualibug-platform-workspace:/app/platform_workspace
       - qualibug-logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8088/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
