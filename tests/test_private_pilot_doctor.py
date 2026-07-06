@@ -75,6 +75,15 @@ def test_private_pilot_doctor_cli_script_is_registered() -> None:
     assert 'qualibug-doctor = "ai_test_asset_center.private_pilot_doctor:main"' in pyproject
 
 
+def test_private_pilot_doctor_report_guide_documents_output_workflow() -> None:
+    guide = Path("docs/private_pilot_doctor.md").read_text(encoding="utf-8")
+
+    assert "qualibug-doctor --output" in guide
+    assert "platform_outputs/private_pilot_doctor_report.json" in guide
+    assert "qualibug-doctor --install-patches --output" in guide
+    assert "masked refs" in guide
+
+
 def test_private_pilot_doctor_main_prints_json(tmp_path: Path, capsys) -> None:
     from ai_test_asset_center.private_pilot_doctor import main
 
