@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -40,6 +41,32 @@ def test_private_pilot_doctor_checks_patch_modules(tmp_path: Path) -> None:
     assert "ai_test_asset_center.private_pilot_scan_context_contract" in PRIVATE_PILOT_PATCH_MODULES
     assert "ai_test_asset_center.private_pilot_credentials_patch" in PRIVATE_PILOT_PATCH_MODULES
     assert all(item["ok"] for item in payload["modules"].values())
+
+
+def test_private_pilot_doctor_writes_default_report(tmp_path: Path) -> None:
+    from ai_test_asset_center.private_pilot_doctor import diagnose_private_pilot, write_doctor_report
+
+    payload = diagnose_private_pilot(root=tmp_path)
+    report_path = write_doctor_report(payload, root=tmp_path)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report_path == tmp_path / "platform_outputs" / "private_pilot_doctor_report.json"
+    assert saved["doctor_report_file"] == str(report_path)
+    assert saved["product"]["version"] == payload["product"]["version"]
+
+
+def test_private_pilot_doctor_cli_writes_custom_report(tmp_path: Path, capsys) -> None:
+    from ai_test_asset_center.private_pilot_doctor import main
+
+    report_path = tmp_path / "artifacts" / "doctor.json"
+    code = main(["--root", str(tmp_path), "--output", str(report_path), "--compact"])
+    captured = capsys.readouterr().out
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert code == 0
+    assert report_path.exists()
+    assert saved["doctor_report_file"] == str(report_path)
+    assert '"doctor_report_file"' in captured
 
 
 def test_private_pilot_doctor_cli_script_is_registered() -> None:
