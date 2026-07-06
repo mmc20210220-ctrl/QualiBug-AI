@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
 from ai_test_asset_center.private_pilot_service import _normalize_command_center_envelope
 
 
@@ -10,6 +11,17 @@ def _legacy_ready_item() -> dict:
         "severity": "P1",
         "bug_status": "reproduced",
         "gate_passed": True,
+        "execution_status": "executed",
+        "confirmation_status": "validated_candidate",
+        "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
+        "evidence_status": {
+            "semantic_verdict": "SEMANTIC_CONFIRMED",
+            "business_evidence_status": "VALIDATED",
+            "final_review_status": "VALIDATED_CANDIDATE",
+            "missing_requirements": [],
+        },
+        "expected": "订单金额应等于支付金额",
+        "actual": "订单金额 100，支付金额 1",
         "raw_evidence": {
             "has_real_evidence": True,
             "timestamp": "2026-07-06T12:00:00Z",
@@ -25,7 +37,15 @@ def _legacy_ready_item() -> dict:
     }
 
 
-def test_private_pilot_command_center_envelope_splits_legacy_risks() -> None:
+def _legacy_light_gate_only_item() -> dict:
+    item = _legacy_ready_item()
+    item["id"] = "LEGACY-LIGHT-GATE"
+    item.pop("evidence_status")
+    return item
+
+
+def test_private_pilot_command_center_envelope_splits_legacy_risks_under_strict_gate() -> None:
+    install_customer_delivery_gate_patch()
     ready = _legacy_ready_item()
     clue = _legacy_ready_item()
     clue["id"] = "CLUE-1"
@@ -43,7 +63,20 @@ def test_private_pilot_command_center_envelope_splits_legacy_risks() -> None:
     assert data["executive_summary"]["internal_clues"] == 1
 
 
-def test_private_pilot_command_center_envelope_preserves_existing_tracks() -> None:
+def test_private_pilot_command_center_envelope_downgrades_old_light_gate_findings() -> None:
+    install_customer_delivery_gate_patch()
+    payload = _normalize_command_center_envelope({"ok": True, "data": {"risks": [_legacy_light_gate_only_item()]}})
+    data = payload["data"]
+
+    assert data["defects"] == []
+    assert [item["id"] for item in data["clues"]] == ["LEGACY-LIGHT-GATE"]
+    assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in data["clues"][0]["customer_delivery_gate_reasons"]
+    assert data["value_metrics"]["ready_bug_count"] == 0
+    assert data["executive_summary"]["ready_bugs"] == 0
+
+
+def test_private_pilot_command_center_envelope_preserves_existing_tracks_under_strict_gate() -> None:
+    install_customer_delivery_gate_patch()
     ready = _legacy_ready_item()
     clue = _legacy_ready_item()
     clue["id"] = "CLUE-1"
