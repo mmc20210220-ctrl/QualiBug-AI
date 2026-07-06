@@ -39,7 +39,29 @@ The JSON report includes:
 - credential-safety posture, including key source and masked-ref frontend policy;
 - Browser UI Smoke readiness, Playwright availability, and configured target URL environment variables;
 - scan context contract status, including source manifest, scan body preparation, and campaign context helpers;
-- a local `/api/health` payload preview.
+- a local `/api/health` payload preview;
+- remediation hints with concrete commands for common environment issues.
+
+## Remediation hints
+
+The `remediation_hints` array is machine-readable and field-engineer-friendly. Each item includes:
+
+- `code`: stable issue code;
+- `severity`: `info`, `warning`, or `error`;
+- `title`: short problem summary;
+- `action`: what to do next;
+- `commands`: suggested commands when the fix can be executed locally.
+
+Common codes include:
+
+| Code | Meaning | Typical fix |
+|------|---------|-------------|
+| `INVALID_QUALIBUG_PORT` | `QUALIBUG_PORT` is not a valid TCP port | `unset QUALIBUG_PORT` or `export QUALIBUG_PORT=8088` |
+| `CREDENTIAL_KEY_MISSING` | Local credential encryption key has not been created yet | `qualibug-doctor --install-patches --output` |
+| `BROWSER_UI_PLAYWRIGHT_MISSING` | Browser UI Smoke is enabled but Playwright is not installed | `pip install -e '.[browser]'` and `python -m playwright install chromium` |
+| `RUNTIME_PATCHES_NOT_INSTALLED_IN_READONLY_MODE` | Doctor ran in read-only mode, so active patch status is not installed yet | `qualibug-doctor --install-patches --output` |
+| `RUNTIME_PATCH_INSTALL_INCOMPLETE` | Runtime patches are still missing after install-patches mode | send the doctor report to support before claiming readiness |
+| `SCAN_CONTEXT_CONTRACT_INCOMPLETE` | Scan context helpers are missing or incomplete | `pip install -e .` then rerun doctor |
 
 ## Recommended handoff flow
 
