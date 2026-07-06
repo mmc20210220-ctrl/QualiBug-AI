@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 
 
@@ -22,6 +23,21 @@ _BEHAVIOR_SLICE_EXECUTION_ENV: dict[str, str] = {
 }
 
 
+def _enforce_stage_reasoner_static_cap() -> None:
+    """Harden the already-loaded main Reasoner module against legacy defaults.
+
+    ``stage_reason_all_v2`` historically exposed a larger module-level default.
+    Product calls resolve policy through this module, so enforce the canonical
+    cap on the actual loaded module before returning a reasoner budget.
+    """
+    module = sys.modules.get(f"{__package__}.stage_reason_all_v2")
+    if module is None:
+        return
+    for name in ("MAX_HYPOTHESES", "MAX_HYPOTHESES_HARD_LIMIT"):
+        if hasattr(module, name):
+            setattr(module, name, _REASONER_MAX_HYPOTHESES_PER_ENGINE)
+
+
 def _clamp_reasoner_hypothesis_cap(value: Any, fallback: Any) -> int:
     """Keep policy or environment data from widening the product budget."""
     try:
@@ -36,6 +52,7 @@ def _clamp_reasoner_hypothesis_cap(value: Any, fallback: Any) -> int:
 
 def _reasoner_hypothesis_cap(value: Any, fallback: Any) -> int:
     """Apply the optional environment override through the same hard cap."""
+    _enforce_stage_reasoner_static_cap()
     environment_value = os.environ.get(_REASONER_HYPOTHESIS_CAP_ENV)
     return _clamp_reasoner_hypothesis_cap(
         environment_value if environment_value not in (None, "") else value,
