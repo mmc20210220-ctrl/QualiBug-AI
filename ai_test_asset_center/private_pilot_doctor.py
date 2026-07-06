@@ -28,6 +28,8 @@ from ai_test_asset_center.version import (
     PRODUCT_VERSION,
 )
 
+DEFAULT_DOCTOR_REPORT_RELATIVE_PATH = Path("platform_outputs") / "private_pilot_doctor_report.json"
+
 PRIVATE_PILOT_PATCH_MODULES = [
     "ai_test_asset_center.private_pilot_entrypoint",
     "ai_test_asset_center.private_pilot_scan_context_contract",
@@ -54,6 +56,27 @@ def _int_env(name: str, fallback: int) -> int:
         return int(os.environ.get(name, "") or fallback)
     except Exception:
         return fallback
+
+
+def default_doctor_report_path(root: str | Path | None = None) -> Path:
+    return _resolve_root(root) / DEFAULT_DOCTOR_REPORT_RELATIVE_PATH
+
+
+def resolve_doctor_report_path(output: str | Path | None, root: str | Path | None = None) -> Path:
+    if output is None or str(output).strip() in {"", "default"}:
+        return default_doctor_report_path(root)
+    path = Path(output).expanduser()
+    if path.is_absolute():
+        return path
+    return _resolve_root(root) / path
+
+
+def write_doctor_report(payload: dict[str, Any], output: str | Path | None = None, root: str | Path | None = None) -> Path:
+    report_path = resolve_doctor_report_path(output, root)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    payload["doctor_report_file"] = str(report_path)
+    report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report_path
 
 
 def _module_status(module_name: str) -> dict[str, Any]:
@@ -243,9 +266,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", default=None, help="Private pilot root/workspace directory.")
     parser.add_argument("--install-patches", action="store_true", help="Install runtime patches before reporting status.")
     parser.add_argument("--compact", action="store_true", help="Print compact JSON instead of pretty JSON.")
+    parser.add_argument(
+        "--output",
+        nargs="?",
+        const="default",
+        default=None,
+        help="Write the doctor JSON report to a file. With no value, writes platform_outputs/private_pilot_doctor_report.json under --root.",
+    )
     args = parser.parse_args(argv)
 
     payload = diagnose_private_pilot(root=args.root, install_patches=args.install_patches)
+    if args.output is not None:
+        write_doctor_report(payload, output=args.output, root=args.root)
     print(json.dumps(payload, ensure_ascii=False, indent=None if args.compact else 2, sort_keys=True))
     return 0 if payload.get("ok") else 1
 
