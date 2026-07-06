@@ -93,6 +93,7 @@ Docker 容器内统一监听 `8088`，`docker-compose.yml` 默认映射为 `5000
 | Discovery Finding Gate | 双层门控 | discovery_finding_gate.py |
 | Adversarial Validator | 对抗性验证 | business_adversarial_validator.py |
 | Finding Registry | 发现注册中心 | business_finding_registry.py |
+| Browser UI Smoke | 页面可达性、console/network 错误、截图/HAR 证据 | browser_ui_smoke.py |
 
 ### 双层门控机制
 
@@ -108,6 +109,28 @@ Docker 容器内统一监听 `8088`，`docker-compose.yml` 默认映射为 `5000
    - 观察者证据
    - Cleanup 状态
 
+### 浏览器 UI Smoke 层
+
+浏览器 UI 层默认关闭，不影响 API 扫描主链路。打开后，patched private pilot scan 会额外采集：
+
+- 页面可达性与状态码；
+- console error / warning；
+- failed network request；
+- 页面截图；
+- HAR 证据文件。
+
+启用方式：
+
+```bash
+pip install -e .[browser]
+playwright install chromium
+export QUALIBUG_BROWSER_UI_SMOKE=1
+export QUALIBUG_BROWSER_UI_BASE_URL=http://127.0.0.1:5174
+qualibug-server
+```
+
+扫描结果会包含 `browser_ui_health`，并在未启用或缺少浏览器依赖时写入明确的 `coverage_gaps`，不会伪装成已覆盖 UI 缺陷。
+
 ### 安全保证
 
 - ✅ **禁止自动确认**: CANDIDATE → CONFIRMED 需人工审核
@@ -117,6 +140,7 @@ Docker 容器内统一监听 `8088`，`docker-compose.yml` 默认映射为 `5000
 - ✅ **语义裁决保留**: Stage_verify 裁决永不丢弃
 - ✅ **Cleanup 阻塞**: 脏环境阻塞高风险发现
 - ✅ **凭证安全**: 私有服务保存目标系统凭证前自动启用本地加密 key，GET 配置接口只返回 masked/ref，不回传明文密钥。
+- ✅ **UI 覆盖诚实标注**: 浏览器 UI 层未启用、缺 Playwright 或缺 UI 目标时，统一作为 coverage gap 输出，不声称已完成 UI 视觉验证。
 
 ---
 
@@ -129,7 +153,7 @@ qualibug doctor
 # 运行发布验证
 qualibug verify-release
 
-# 启动私有服务（统一加载部署补丁、主链路补丁与凭证安全补丁）
+# 启动私有服务（统一加载部署补丁、主链路补丁、凭证安全补丁与可选 UI smoke 补丁）
 qualibug-server
 # 或：python -m ai_test_asset_center.private_pilot_entrypoint
 
@@ -145,7 +169,7 @@ qualibug discover --prd "path/to/prd.md" --api "path/to/api.md"
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/health` | GET | 标准健康检查（返回版本 95.0.0、端口、LLM 连通状态与部署补丁状态） |
+| `/api/health` | GET | 标准健康检查（返回版本 95.0.0、端口、LLM 连通状态、部署补丁状态与 browser UI smoke 状态） |
 | `/health` | GET | 兼容健康检查别名 |
 | `/api/pilot/status` | GET | 服务状态 |
 | `/api/scan/run` | POST | 运行扫描 |
@@ -166,6 +190,7 @@ qualibug-ai/
 │   ├── discovery_finding_gate.py  # 双层门控
 │   ├── evidence_normalizer.py     # 证据归一化
 │   ├── business_evidence_enricher.py  # 业务证据富化
+│   ├── browser_ui_smoke.py        # 浏览器 UI smoke 证据采集
 │   ├── private_pilot_service.py   # 传统私有服务实现
 │   ├── private_pilot_entrypoint.py # 标准部署入口
 │   ├── version.py                 # 单一版本源
@@ -204,6 +229,10 @@ LLM_RESPONSE_FORMAT=json_object
 QUALIBUG_PROJECT=real_project_demo
 QUALIBUG_PORT=8088        # 默认 8088
 QUALIBUG_PRODUCTION=0     # 设为 1 时进入生产模式，禁止所有外部 HTTP 写入
+
+# 可选：浏览器 UI smoke，默认关闭
+# QUALIBUG_BROWSER_UI_SMOKE=1
+# QUALIBUG_BROWSER_UI_BASE_URL=http://127.0.0.1:5174
 
 # 可选：显式设置凭证加密主密钥；不设置时私有服务会自动生成本机 key 文件
 # QUALIBUG_CRED_ENC_KEY=<random-local-secret>
