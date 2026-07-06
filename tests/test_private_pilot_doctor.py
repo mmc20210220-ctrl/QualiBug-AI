@@ -29,6 +29,7 @@ def test_private_pilot_doctor_reports_delivery_contract(tmp_path: Path, monkeypa
     assert payload["readiness"]["level"] in {"ready", "warning", "blocked"}
     assert isinstance(payload["summary_lines"], list)
     assert payload["summary_text"].startswith("QualiBug private-pilot doctor:")
+    assert payload["support_bundle_manifest"]["policy"] == "diagnostics_only_no_customer_data"
 
 
 def test_private_pilot_doctor_tolerates_invalid_port_env(tmp_path: Path, monkeypatch) -> None:
@@ -106,6 +107,27 @@ def test_private_pilot_doctor_human_summary_mentions_blockers() -> None:
     assert "pip install -e ." in summary["summary_text"]
 
 
+def test_private_pilot_doctor_support_bundle_manifest_marks_sensitive_paths(tmp_path: Path) -> None:
+    from ai_test_asset_center.private_pilot_doctor import diagnose_private_pilot
+
+    payload = diagnose_private_pilot(root=tmp_path)
+    manifest = payload["support_bundle_manifest"]
+    safe_ids = {item["id"] for item in manifest["safe_to_share"]}
+    review_ids = {item["id"] for item in manifest["requires_review"]}
+    blocked_text = json.dumps(manifest["do_not_send"], ensure_ascii=False)
+
+    assert manifest["schema_version"] == "support-bundle-manifest-v1"
+    assert "private_pilot_doctor_report" in safe_ids
+    assert "private_pilot_doctor_patched_report" in safe_ids
+    assert "service_logs" in review_ids
+    assert "browser_ui_artifacts" in review_ids
+    assert ".env" in blocked_text
+    assert ".secrets" in blocked_text
+    assert "multi_service_config.json" in blocked_text
+    assert "source_registry" in blocked_text
+    assert any("masked refs" in rule for rule in manifest["redaction_rules"])
+
+
 def test_private_pilot_doctor_checks_patch_modules(tmp_path: Path) -> None:
     from ai_test_asset_center.private_pilot_doctor import PRIVATE_PILOT_PATCH_MODULES, diagnose_private_pilot
 
@@ -129,6 +151,7 @@ def test_private_pilot_doctor_writes_default_report(tmp_path: Path) -> None:
     assert isinstance(saved["remediation_hints"], list)
     assert saved["readiness"]["level"] in {"ready", "warning", "blocked"}
     assert saved["summary_text"] == payload["summary_text"]
+    assert saved["support_bundle_manifest"]["policy"] == "diagnostics_only_no_customer_data"
 
 
 def test_private_pilot_doctor_cli_writes_custom_report(tmp_path: Path, capsys) -> None:
@@ -146,6 +169,7 @@ def test_private_pilot_doctor_cli_writes_custom_report(tmp_path: Path, capsys) -
     assert '"remediation_hints"' in captured
     assert '"readiness"' in captured
     assert '"summary_text"' in captured
+    assert '"support_bundle_manifest"' in captured
 
 
 def test_private_pilot_doctor_cli_script_is_registered() -> None:
@@ -188,3 +212,4 @@ def test_private_pilot_doctor_main_prints_json(tmp_path: Path, capsys) -> None:
     assert '"remediation_hints"' in captured
     assert '"readiness"' in captured
     assert '"summary_text"' in captured
+    assert '"support_bundle_manifest"' in captured
