@@ -22,7 +22,7 @@ class Auth:
             raise PermissionError("api token is not configured")
         if not token or not secrets.compare_digest(str(token), expected):
             raise PermissionError("invalid api token")
-        return os.environ.get("QUALIBUG_TENANT_ID", "tenant_demo")
+        return os.environ.get("QUALIBUG_TENANT_ID", "unscoped")
 
 
 class RedisClient:
