@@ -176,6 +176,18 @@ function getEvidenceNormalizationSummary(record: JsonRecord): JsonRecord {
   return asRecord(contract.evidence_bundle_normalization_summary);
 }
 
+function getEvidenceNormalizationReport(record: JsonRecord): JsonRecord {
+  const direct = asRecord(record.evidence_bundle_normalization_report);
+  if (Object.keys(direct).length > 0) return direct;
+  const contract = asRecord(record.data_contract);
+  return asRecord(contract.evidence_bundle_normalization_report);
+}
+
+function evidenceNormalizationItems(report: JsonRecord): JsonRecord[] {
+  if (!Array.isArray(report.items)) return [];
+  return report.items.map(asRecord).filter((item) => Object.keys(item).length > 0);
+}
+
 function evidenceMissingEntries(summary: JsonRecord): Array<[string, number]> {
   const missing = asRecord(summary.missing_fields);
   return Object.entries(missing)
@@ -186,6 +198,17 @@ function evidenceMissingEntries(summary: JsonRecord): Array<[string, number]> {
 
 function evidenceMissingFieldLabel(field: string): string {
   return EVIDENCE_MISSING_FIELD_LABELS[field] || field;
+}
+
+function evidenceItemTitle(item: JsonRecord): string {
+  const evidenceId = asText(item.evidence_id);
+  const issueId = asText(item.issue_id);
+  const probeId = asText(item.probe_id);
+  return [evidenceId, issueId, probeId].filter(Boolean).join(' / ') || '未命名证据项';
+}
+
+function evidenceItemAction(item: JsonRecord): string {
+  return asText(item.next_action) || '补齐该证据项缺失字段后重新运行主链路合同。';
 }
 
 function evidenceNormalizationLabel(summary: JsonRecord): string {
@@ -291,10 +314,13 @@ export function Dashboard() {
   const firstBlockedStageLabel = firstBlockedStage ? (MAIN_CHAIN_STAGE_LABELS[firstBlockedStage] || firstBlockedStage) : '暂无';
   const firstBlockedNextAction = asText(mainChainSummary.first_blocked_next_action) || '等待后端上报主链路下一步。';
   const evidenceNormalizationSummary = getEvidenceNormalizationSummary(record);
+  const evidenceNormalizationReport = getEvidenceNormalizationReport(record);
+  const evidenceNormalizationItemReports = evidenceNormalizationItems(evidenceNormalizationReport);
+  const blockedEvidenceActionItems = evidenceNormalizationItemReports.filter((item) => item.normalized !== true);
   const evidenceMissingFields = evidenceMissingEntries(evidenceNormalizationSummary);
-  const evidenceBlockedItemCount = asNum(evidenceNormalizationSummary.blocked_item_count);
+  const evidenceBlockedItemCount = asNum(evidenceNormalizationSummary.blocked_item_count, blockedEvidenceActionItems.length);
   const evidenceFullyNormalizedCount = asNum(evidenceNormalizationSummary.fully_normalized_count);
-  const hasEvidenceNormalizationSummary = Object.keys(evidenceNormalizationSummary).length > 0;
+  const hasEvidenceNormalizationSummary = Object.keys(evidenceNormalizationSummary).length > 0 || evidenceNormalizationItemReports.length > 0;
   const campaign = asRecord(record.campaign);
   const campaignStatus = asText(campaign.campaign_status).toLowerCase();
   const campaignDeferredReason = asText(campaign.coverage_deferred_reason);
@@ -380,6 +406,13 @@ export function Dashboard() {
             <span key={field}><em>{evidenceMissingFieldLabel(field)}</em><b>{count}</b></span>
           ))}
         </div>
+        {blockedEvidenceActionItems.length > 0 && (
+          <div className="customer-secondary-meta">
+            {blockedEvidenceActionItems.slice(0, 3).map((item) => (
+              <span key={`${evidenceItemTitle(item)}-${asText(item.trace_id)}`}><em>{evidenceItemTitle(item)}</em><b>{evidenceItemAction(item)}</b></span>
+            ))}
+          </div>
+        )}
       </article>
       <article className={`customer-secondary-card${gatePatchEnabled ? '' : ' muted'}`}>
         <span className="customer-value-kicker">交付 Gate 诊断</span>
