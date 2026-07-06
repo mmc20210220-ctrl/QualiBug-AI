@@ -29,6 +29,7 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/policy_wiring.py').read()); print('policy_wiring.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/policy_registry.py').read()); print('policy_registry.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_campaign.py').read()); print('enterprise_campaign.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_test_data_plan.py').read()); print('enterprise_test_data_plan.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/__main__.py').read()); print('__main__.py OK')"
           python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/stage_reason_all_v2.py').read()); print('stage_reason_all_v2.py OK')"
