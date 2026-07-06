@@ -19,42 +19,63 @@ def test_evidence_bundle_normalizer_enriches_from_issue_and_execution(tmp_path: 
     _write_json(workspace_dir / "probe_execution_result.json", {"items": [{
         "probe_id": "P1",
         "execution_id": "EXEC-1",
+        "trace_id": "TRACE-1",
         "timestamp": "2026-07-06T12:00:00Z",
         "duration_seconds": 0.2,
         "response_status": 200,
         "request": {"method": "GET", "url": "/sample"},
         "response": {"status_code": 200},
     }]})
-    _write_json(output_dir / "evidence_bundle.json", {"items": [{"issue_id": "I1", "probe_id": "P1"}]})
+    _write_json(output_dir / "evidence_bundle.json", {"items": [{"evidence_id": "E1", "issue_id": "I1", "probe_id": "P1"}]})
 
     report = normalize_evidence_bundle(project, tmp_path, persist=True)
     bundle = json.loads((output_dir / "evidence_bundle.json").read_text(encoding="utf-8"))
     item = bundle["items"][0]
+    item_report = report["items"][0]
 
     assert report["fully_normalized_count"] == 1
+    assert report["blocked_item_count"] == 0
     assert item["request"]["method"] == "GET"
     assert item["response"]["status_code"] == 200
     assert item["expected"] == "expected value"
     assert item["actual"] == "actual value"
     assert item["execution_id"] == "EXEC-1"
+    assert item["trace_id"] == "TRACE-1"
     assert item["reproduction"]["is_synthetic"] is False
     assert item["is_synthetic"] is False
+    assert item_report["evidence_id"] == "E1"
+    assert item_report["issue_id"] == "I1"
+    assert item_report["probe_id"] == "P1"
+    assert item_report["execution_id"] == "EXEC-1"
+    assert item_report["trace_id"] == "TRACE-1"
+    assert item_report["matched_issue"] is True
+    assert item_report["matched_execution"] is True
+    assert item_report["missing_field_details"] == []
+    assert item_report["next_action"] == "证据字段已标准化，可进入严格证据链合同校验。"
     assert (output_dir / "evidence_bundle_normalization_report.json").exists()
     assert (workspace_dir / "evidence_bundle_normalization_report.json").exists()
 
 
-def test_evidence_bundle_normalizer_reports_missing_fields(tmp_path: Path) -> None:
+def test_evidence_bundle_normalizer_reports_missing_fields_with_actions(tmp_path: Path) -> None:
     project = "demo"
     output_dir = tmp_path / "platform_outputs" / project / "real_project"
     _write_json(output_dir / "evidence_bundle.json", {"items": [{"issue_id": "I1", "request": {"method": "GET"}}]})
 
     report = normalize_evidence_bundle(project, tmp_path, persist=True)
     item_report = report["items"][0]
+    detail_by_field = {item["field"]: item for item in item_report["missing_field_details"]}
 
     assert report["fully_normalized_count"] == 0
+    assert report["blocked_item_count"] == 1
     assert item_report["normalized"] is False
+    assert item_report["matched_issue"] is False
+    assert item_report["matched_execution"] is False
     assert "response" in item_report["missing_fields"]
     assert "expected" in item_report["missing_fields"]
     assert "actual" in item_report["missing_fields"]
     assert "reproduction_or_replay" in item_report["missing_fields"]
     assert "execution_receipt" in item_report["missing_fields"]
+    assert detail_by_field["response"]["label"] == "原始 response"
+    assert detail_by_field["execution_receipt"]["next_action"] == "补齐 execution_id/probe_id/trace_id/timestamp/duration/response_status 等真实执行回执。"
+    assert "补齐 reproduction/replay" in item_report["next_action"]
+    assert "补齐 execution_id/probe_id/trace_id" in item_report["next_action"]
