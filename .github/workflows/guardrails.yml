@@ -1,0 +1,68 @@
+name: QualiBug Guardrails
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Syntax check Python files
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          failures = []
+          for path in Path('.').rglob('*.py'):
+              if any(part in {'.git', '.venv', 'venv', '__pycache__'} for part in path.parts):
+                  continue
+              try:
+                  ast.parse(path.read_text(encoding='utf-8'))
+              except Exception as exc:
+                  failures.append(f'{path}: {exc}')
+
+          if failures:
+              raise SystemExit('\n'.join(failures))
+          print('Python syntax check passed')
+          PY
+
+      - name: Enforce reasoner static guardrails
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('ai_test_asset_center/stage_reason_all_v2.py').read_text(encoding='utf-8')
+          required = [
+              'MAX_HYPOTHESES = 15',
+              'MAX_HYPOTHESES_HARD_LIMIT = 15',
+              'MAX_REASONER_WORKERS = 4',
+              'MIN_REASONER_TIMEOUT_SECONDS = 300',
+              'MIN_REASONER_MAX_TOKENS = 32768',
+          ]
+          forbidden = [
+              'MAX_HYPOTHESES = 300',
+              'MAX_HYPOTHESES_HARD_LIMIT = 500',
+          ]
+
+          missing = [item for item in required if item not in source]
+          present = [item for item in forbidden if item in source]
+          if missing or present:
+              raise SystemExit(
+                  'Reasoner guardrail drift detected\n'
+                  f'Missing required: {missing}\n'
+                  f'Forbidden present: {present}'
+              )
+          print('Reasoner static guardrails passed')
+          PY
