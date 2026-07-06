@@ -56,7 +56,7 @@ all = [
 
 [project.scripts]
 qualibug = "aitestops.cli:main"
-qualibug-server = "ai_test_asset_center.private_pilot_server:run_server"
+qualibug-server = "ai_test_asset_center.private_pilot_entrypoint:run_server"
 qualibug-discover-chain = "ai_test_asset_center.real_project_discovery_with_chain:main"
 qualibug-pilot-chain = "ai_test_asset_center.enterprise_pilot_runtime_with_chain:_cli"
 
