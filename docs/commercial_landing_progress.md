@@ -18,6 +18,8 @@ Completed so far:
 - Added a private pilot server wrapper that patches the legacy delivery-track partitioning through the backend gate before startup.
 - Routed the default `qualibug-server` entrypoint through the private pilot server wrapper.
 - Added tests proving the patched entrypoint downgrades legacy light-gate results into internal clues when business evidence is not validated.
+- Added patch diagnostics so runtime can report whether the strict delivery gate patch is active, where it came from, and which partition function is live.
+- Added a restore helper for isolated diagnostics and tests, while keeping the default service startup strict.
 
 Current commercial rule:
 
@@ -29,6 +31,7 @@ Current service integration:
 
 - `qualibug-server` now starts through `ai_test_asset_center.private_pilot_server:run_server`.
 - The wrapper installs the strict backend customer-delivery gate before delegating to the original private pilot service.
+- The wrapper exposes patch status and restore helpers for operational diagnostics and isolated tests.
 
 Next engineering step:
 
