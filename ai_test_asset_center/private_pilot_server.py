@@ -18,12 +18,16 @@ def install_customer_delivery_gate_patch() -> None:
     if getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False):
         return
 
+    original_partition = getattr(_service, "_partition_delivery_tracks", None)
+
     def _strict_partition_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         safe_items = [item for item in items if isinstance(item, dict)]
         return split_customer_delivery_tracks(safe_items)
 
+    _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = original_partition  # type: ignore[attr-defined]
     _service._partition_delivery_tracks = _strict_partition_delivery_tracks  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = True  # type: ignore[attr-defined]
+    _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = "ai_test_asset_center.private_pilot_server"  # type: ignore[attr-defined]
 
 
 def run_server() -> None:
