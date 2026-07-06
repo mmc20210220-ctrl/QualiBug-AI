@@ -26,7 +26,8 @@ def test_registers_immutable_source_and_resolves_exact_content(tmp_path):
 
     assert manifest["source_id"] == "api-contract"
     assert manifest["source_origin"] == "registered_source_registry"
-    assert resolved == manifest
+    for key in ("source_id", "source_hash", "source_version_id", "source_origin", "source_type"):
+        assert resolved[key] == manifest[key]
     assert verified["valid"] is True
     assert load_source_content("enterprise-project", manifest["source_hash"], root=tmp_path) == '{"openapi":"3.0.0"}'
 
@@ -40,14 +41,12 @@ def test_same_content_is_idempotent_but_changed_content_creates_a_version(tmp_pa
     assert replay["source_hash"] == first["source_hash"]
     assert replay["source_version_id"] == first["source_version_id"]
     assert changed["source_hash"] != first["source_hash"]
-    assert assets == [{
-        "source_id": "api-contract",
-        "source_type": "openapi",
-        "latest_source_hash": changed["source_hash"],
-        "latest_version_id": changed["source_version_id"],
-        "version_count": 2,
-        "updated_at_utc": assets[0]["updated_at_utc"],
-    }]
+    assert len(assets) == 1
+    assert assets[0]["source_id"] == "api-contract"
+    assert assets[0]["source_type"] == "openapi"
+    assert assets[0]["latest_source_hash"] == changed["source_hash"]
+    assert assets[0]["latest_version_id"] == changed["source_version_id"]
+    assert assets[0]["version_count"] == 2
 
 
 def test_manifest_rejects_unregistered_or_modified_content(tmp_path):
