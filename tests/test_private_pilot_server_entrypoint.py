@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from ai_test_asset_center import private_pilot_service
+from ai_test_asset_center import private_pilot_server, private_pilot_service
 from ai_test_asset_center.private_pilot_server import (
     customer_delivery_gate_patch_status,
     install_customer_delivery_gate_patch,
@@ -38,6 +39,11 @@ def _legacy_ready_but_business_unvalidated() -> dict:
     }
 
 
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     pyproject = PYPROJECT.read_text(encoding="utf-8")
     wrapper = SERVER_ENTRYPOINT.read_text(encoding="utf-8")
@@ -48,6 +54,8 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     assert "restore_customer_delivery_gate_patch" in wrapper
     assert "split_customer_delivery_tracks" in wrapper
     assert "_inject_delivery_gate_patch_status" in wrapper
+    assert "_inject_main_chain_contract" in wrapper
+    assert "main_chain_contract" in wrapper
     assert "customer_delivery_gate_patch" in wrapper
     assert "_ORIGINAL_PARTITION_DELIVERY_TRACKS" in wrapper
     assert "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE" in wrapper
@@ -93,6 +101,50 @@ def test_private_pilot_server_patch_exposes_status_in_command_center_payload() -
     assert payload["data"]["customer_delivery_gate_patch"] == status
     assert payload["data"]["data_contract"]["customer_delivery_gate_patch"] == status
     assert payload["data"]["delivery_tracks"]["customer_delivery_gate_patch"] == status
+
+
+def test_private_pilot_server_patch_exposes_main_chain_contract_in_command_center_payload(monkeypatch, tmp_path: Path) -> None:
+    project = "demo"
+    output_dir = tmp_path / "platform_outputs" / project / "real_project"
+    contract = {
+        "project_id": project,
+        "chain_ready": False,
+        "customer_defect_delivery_ready": False,
+        "summary": {
+            "passed_stage_count": 3,
+            "partial_stage_count": 1,
+            "missing_stage_count": 2,
+            "first_blocked_stage": "execution",
+            "first_blocked_next_action": "补齐 base_url、测试账号和真实执行回执。",
+        },
+        "stages": [{"stage": "execution", "status": "missing"}],
+    }
+    _write_json(output_dir / "main_chain_contract.json", contract)
+    monkeypatch.setattr(private_pilot_server, "ROOT", tmp_path)
+    restore_customer_delivery_gate_patch()
+    install_customer_delivery_gate_patch()
+
+    payload = private_pilot_service._normalize_command_center_envelope({
+        "ok": True,
+        "project_id": project,
+        "data": {
+            "project_id": project,
+            "risks": [],
+            "data_contract": {},
+            "delivery_tracks": {},
+            "executive_summary": {},
+        },
+    })
+    summary = payload["main_chain_contract_summary"]
+
+    assert payload["main_chain_contract"] == contract
+    assert payload["data"]["main_chain_contract"] == contract
+    assert payload["data"]["main_chain_contract_summary"] == summary
+    assert payload["data"]["data_contract"]["main_chain_contract"] == summary
+    assert payload["data"]["delivery_tracks"]["main_chain_contract"] == summary
+    assert payload["data"]["executive_summary"]["main_chain_ready"] is False
+    assert payload["data"]["executive_summary"]["main_chain_first_blocked_stage"] == "execution"
+    assert summary["first_blocked_next_action"] == "补齐 base_url、测试账号和真实执行回执。"
 
 
 def test_private_pilot_server_patch_can_restore_original_partition_and_normalizer_for_diagnostics() -> None:
