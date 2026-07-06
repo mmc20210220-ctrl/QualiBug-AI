@@ -123,6 +123,35 @@ def test_scheduler_respects_explicit_round_limit():
     assert selection["stop_reason"] == "configured_round_limit_reached"
 
 
+def test_pipeline_persists_ledger_and_advances_without_external_round_or_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "1")
+    monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "3")
+    monkeypatch.setenv("QUALIBUG_DISCOVERY_ROUND", "1")
+
+    first = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+    )
+    second = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+    )
+
+    ledger_path = tmp_path / "platform_workspace" / "generic-project" / "defect_discovery" / "v12_behavior_slice_ledger.json"
+    assert ledger_path.exists()
+    assert first["behavior_slice_ledger"]["history_source"] == "persisted_ledger"
+    assert second["behavior_slice_ledger"]["history_source"] == "persisted_ledger"
+    assert second["behavior_slice_ledger"]["selection_mode"] == "next_unattempted_after_history"
+    assert first["behavior_slice_ledger"]["selected_slice_ids"] != second["behavior_slice_ledger"]["selected_slice_ids"]
+    assert second["behavior_slice_ledger"]["confirmed_slice_ids"] == []
+
+
 def test_pipeline_selects_different_source_slices_across_incremental_rounds(monkeypatch, tmp_path):
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "1")
     monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "2")
