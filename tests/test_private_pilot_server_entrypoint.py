@@ -47,7 +47,10 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     assert "customer_delivery_gate_patch_status" in wrapper
     assert "restore_customer_delivery_gate_patch" in wrapper
     assert "split_customer_delivery_tracks" in wrapper
+    assert "_inject_delivery_gate_patch_status" in wrapper
+    assert "customer_delivery_gate_patch" in wrapper
     assert "_ORIGINAL_PARTITION_DELIVERY_TRACKS" in wrapper
+    assert "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE" in wrapper
     assert "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE" in wrapper
     assert "_service.run_server()" in wrapper
 
@@ -66,10 +69,33 @@ def test_private_pilot_server_patch_routes_legacy_partition_through_strict_gate(
     assert status["patched"] is True
     assert status["source"] == "ai_test_asset_center.private_pilot_server"
     assert status["has_original_partition"] is True
+    assert status["has_original_normalizer"] is True
     assert status["active_partition_name"] == "_strict_partition_delivery_tracks"
+    assert status["active_normalizer_name"] == "_strict_normalize_command_center_envelope"
 
 
-def test_private_pilot_server_patch_can_restore_original_partition_for_diagnostics() -> None:
+def test_private_pilot_server_patch_exposes_status_in_command_center_payload() -> None:
+    restore_customer_delivery_gate_patch()
+    install_customer_delivery_gate_patch()
+
+    payload = private_pilot_service._normalize_command_center_envelope({
+        "ok": True,
+        "data": {
+            "risks": [_legacy_ready_but_business_unvalidated()],
+            "data_contract": {},
+            "delivery_tracks": {},
+        },
+    })
+    status = payload["customer_delivery_gate_patch"]
+
+    assert status["patched"] is True
+    assert status["source"] == "ai_test_asset_center.private_pilot_server"
+    assert payload["data"]["customer_delivery_gate_patch"] == status
+    assert payload["data"]["data_contract"]["customer_delivery_gate_patch"] == status
+    assert payload["data"]["delivery_tracks"]["customer_delivery_gate_patch"] == status
+
+
+def test_private_pilot_server_patch_can_restore_original_partition_and_normalizer_for_diagnostics() -> None:
     install_customer_delivery_gate_patch()
     assert customer_delivery_gate_patch_status()["patched"] is True
 
@@ -79,4 +105,6 @@ def test_private_pilot_server_patch_can_restore_original_partition_for_diagnosti
     assert status["patched"] is False
     assert status["source"] == ""
     assert status["has_original_partition"] is False
+    assert status["has_original_normalizer"] is False
     assert status["active_partition_name"] == "_partition_delivery_tracks"
+    assert status["active_normalizer_name"] == "_normalize_command_center_envelope"
