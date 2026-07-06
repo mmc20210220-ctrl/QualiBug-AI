@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from ai_test_asset_center.enterprise_campaign import (
     EnterpriseCampaign,
     EnterpriseCampaignStore,
@@ -70,6 +72,28 @@ def test_campaign_defaults_source_identity_to_snapshot_when_single_asset_is_not_
     assert campaign.source_id == f"source_snapshot:{snapshot[:24]}"
     assert restored.source_hash == snapshot
     assert restored.source_id == f"source_snapshot:{snapshot[:24]}"
+
+
+def test_campaign_store_projects_safe_governance_to_command_center_snapshot(tmp_path):
+    campaign = _campaign()
+    campaign.record_cycle(
+        round_number=1,
+        selection={"stop_reason": "configured_round_limit_reached", "selected_slice_ids": ["BHV_1"], "remaining_slice_count": 4},
+        findings=[],
+        coverage_gap_count=2,
+        execution_status="blocked",
+    )
+    store = EnterpriseCampaignStore(tmp_path, "enterprise-project")
+    store.save(campaign)
+    snapshot_path = tmp_path / "platform_outputs" / "enterprise-project" / "real_project" / "real_project_defect_data.json"
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    projected = payload["continuous_discovery_campaign"]
+
+    assert projected["campaign"]["campaign_id"] == campaign.campaign_id
+    assert projected["summary"]["campaign_state"] == "coverage_deferred"
+    assert projected["current_run"]["remaining_slice_count"] == 4
+    assert "attempted_slice_ids" not in projected["campaign"]
+    assert "confirmation_receipts" not in projected["campaign"]
 
 
 def test_confirmed_slice_requires_complete_real_receipt():
