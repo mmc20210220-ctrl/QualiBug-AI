@@ -9,7 +9,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from .business_state_graph import BusinessStateGraph, StateTransition
+from .business_state_graph import BusinessStateGraph, StateTransition, behavior_slice_id
 
 
 @dataclass
@@ -46,83 +46,143 @@ class ExecutableScenario:
     execution_policy: str = "plan_only_requires_fixture"
     evidence_gaps: list[str] = field(default_factory=list)
     source_refs: list[dict[str, str]] = field(default_factory=list)
+    behavior_slice_id: str = ""
+    behavior_slice_kind: str = ""
+    discovery_round: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "id": self.id, "title": self.title, "description": self.description,
-            "category": self.category, "severity": self.severity, "entity": self.entity,
-            "preconditions": self.preconditions, "actors": self.actors,
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "category": self.category,
+            "severity": self.severity,
+            "entity": self.entity,
+            "preconditions": self.preconditions,
+            "actors": self.actors,
             "steps": [
-                {"order": step.order, "action": step.action, "method": step.api_method,
-                 "path": step.api_path, "body": step.body_template,
-                 "extract": step.extract_from_response, "expected": step.expected_status,
-                 "actor": step.actor}
+                {
+                    "order": step.order,
+                    "action": step.action,
+                    "method": step.api_method,
+                    "path": step.api_path,
+                    "body": step.body_template,
+                    "extract": step.extract_from_response,
+                    "expected": step.expected_status,
+                    "actor": step.actor,
+                }
                 for step in self.steps
             ],
             "expected_state": self.expected_state,
             "oracle_rules": self.oracle_rules,
             "cleanup": [step.action for step in self.cleanup_steps],
-            "flags": {"forbidden": self.is_forbidden_path, "boundary": self.is_boundary_path,
-                      "concurrent": self.is_concurrent},
+            "flags": {
+                "forbidden": self.is_forbidden_path,
+                "boundary": self.is_boundary_path,
+                "concurrent": self.is_concurrent,
+            },
             "confidence": self.confidence,
             "execution_policy": self.execution_policy,
             "evidence_gaps": self.evidence_gaps,
             "source_refs": self.source_refs,
+            "behavior_slice_id": self.behavior_slice_id,
+            "behavior_slice_kind": self.behavior_slice_kind,
+            "discovery_round": self.discovery_round,
         }
 
 
 class SemanticScenarioGenerator:
-    """Plans only the source-backed obligations already present in the graph."""
+    """Plan only source-backed obligations selected by the incremental scheduler."""
 
-    def generate(self, graphs: dict[str, BusinessStateGraph], api_doc: str = "") -> list[ExecutableScenario]:
+    def generate(
+        self,
+        graphs: dict[str, BusinessStateGraph],
+        api_doc: str = "",
+        active_slice_ids: set[str] | None = None,
+        discovery_round: int = 1,
+    ) -> list[ExecutableScenario]:
+        del api_doc  # Source bindings already live on the graph; never infer another route here.
+        round_number = max(1, int(discovery_round or 1))
         results: list[ExecutableScenario] = []
         for entity, graph in sorted((graphs or {}).items()):
             if not isinstance(graph, BusinessStateGraph):
                 continue
             for transition in graph.transitions:
-                results.append(self._transition(entity, transition))
+                item = self._transition(entity, transition, round_number)
+                if active_slice_ids is None or item.behavior_slice_id in active_slice_ids:
+                    results.append(item)
             for state, node in graph.states.items():
                 for invariant in node.invariants:
-                    results.append(self._invariant(entity, state, invariant, node.source_refs))
+                    item = self._invariant(entity, state, invariant, node.source_refs, round_number)
+                    if active_slice_ids is None or item.behavior_slice_id in active_slice_ids:
+                        results.append(item)
         deduped: list[ExecutableScenario] = []
         seen: set[str] = set()
         for item in results:
-            fingerprint = f"{item.entity}|{item.title}|{item.expected_state}"
+            fingerprint = f"{item.behavior_slice_id}|{item.entity}|{item.title}|{item.expected_state}"
             if fingerprint not in seen:
                 seen.add(fingerprint)
                 deduped.append(item)
         return deduped
 
-    def _transition(self, entity: str, transition: StateTransition) -> ExecutableScenario:
+    def _transition(self, entity: str, transition: StateTransition, discovery_round: int) -> ExecutableScenario:
         forbidden = bool(transition.is_forbidden)
         kind = "禁止流转" if forbidden else ("边界流转" if transition.is_boundary else "状态流转")
         gaps = ["FIXTURE_CONTRACT_MISSING", "ACTOR_BINDING_MISSING", "CLEANUP_CONTRACT_MISSING"]
         if not transition.action or not transition.api_endpoint:
             gaps.insert(0, "ACTION_ROUTE_NOT_SOURCE_BOUND")
+        slice_id = transition.behavior_slice_id or behavior_slice_id(
+            "transition",
+            entity,
+            transition.from_state,
+            transition.to_state,
+            transition.action,
+            transition.api_endpoint,
+            "forbidden" if forbidden else "normal",
+        )
         return ExecutableScenario(
             id=self._id(entity, transition.from_state, transition.to_state, transition.action),
             title=f"[来源约束{kind}] {entity}: {transition.from_state} -> {transition.to_state}",
             description="当前资料未提供完整运行时前置数据和身份绑定；仅产生计划，不自动发起请求。",
-            severity="P0" if forbidden else "P2", entity=entity,
+            severity="P0" if forbidden else "P2",
+            entity=entity,
             preconditions=[f"已通过可追溯数据证明 {entity} 处于 {transition.from_state}"],
             expected_state=transition.from_state if forbidden else transition.to_state,
             oracle_rules=["StateOracle.source_grounded_transition", f"{transition.from_state}->{transition.to_state}"],
-            is_forbidden_path=forbidden, is_boundary_path=bool(transition.is_boundary),
+            is_forbidden_path=forbidden,
+            is_boundary_path=bool(transition.is_boundary),
             confidence=0.55 if transition.source_refs else 0.2,
-            evidence_gaps=gaps, source_refs=list(transition.source_refs),
+            evidence_gaps=gaps,
+            source_refs=list(transition.source_refs),
+            behavior_slice_id=slice_id,
+            behavior_slice_kind="transition",
+            discovery_round=discovery_round,
         )
 
-    def _invariant(self, entity: str, state: str, invariant: str,
-                   refs: list[dict[str, str]]) -> ExecutableScenario:
+    def _invariant(
+        self,
+        entity: str,
+        state: str,
+        invariant: str,
+        refs: list[dict[str, str]],
+        discovery_round: int,
+    ) -> ExecutableScenario:
         return ExecutableScenario(
             id=self._id(entity, state, invariant),
-            title=f"[来源约束不变量] {entity}: {state}", description=invariant[:300],
-            category="invariant", severity="P1", entity=entity,
-            preconditions=[f"需要 {entity} 的来源可追溯运行时样本"], expected_state=state,
+            title=f"[来源约束不变量] {entity}: {state}",
+            description=invariant[:300],
+            category="invariant",
+            severity="P1",
+            entity=entity,
+            preconditions=[f"需要 {entity} 的来源可追溯运行时样本"],
+            expected_state=state,
             oracle_rules=["ConsistencyOracle.source_grounded_invariant", invariant[:300]],
             confidence=0.45 if refs else 0.2,
             evidence_gaps=["OBSERVATION_ROUTE_NOT_SOURCE_BOUND", "ACTOR_BINDING_MISSING"],
             source_refs=list(refs),
+            behavior_slice_id=behavior_slice_id("invariant", entity, state, invariant),
+            behavior_slice_kind="invariant",
+            discovery_round=discovery_round,
         )
 
     @staticmethod
