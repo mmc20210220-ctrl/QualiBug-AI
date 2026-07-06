@@ -135,6 +135,10 @@ def test_private_pilot_doctor_report_guide_documents_output_workflow() -> None:
     assert "INVALID_QUALIBUG_PORT" in guide
     assert "CREDENTIAL_KEY_MISSING" in guide
     assert "RUNTIME_PATCHES_NOT_INSTALLED_IN_READONLY_MODE" in guide
+    assert "## Readiness levels" in guide
+    assert "`ready`" in guide
+    assert "`warning`" in guide
+    assert "`blocked`" in guide
 
 
 def test_private_pilot_doctor_main_prints_json(tmp_path: Path, capsys) -> None:
