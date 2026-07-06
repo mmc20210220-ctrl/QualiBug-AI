@@ -32,6 +32,8 @@ Completed so far:
 - Added a chain-aware enterprise pilot runtime wrapper that patches the pilot runtime's `real_project_discovery` callable to the chain-aware discovery runner before task execution.
 - Added a `qualibug-pilot-chain` CLI entrypoint for running pilot runtime tasks with automatic main-chain validation.
 - Added tests proving the chain-aware pilot wrapper installs/restores the patch and delegates `run_next` only after the chain-aware discovery runner is active.
+- Exposed `main_chain_contract` and `main_chain_contract_summary` in Command Center payloads from backend output artifacts.
+- Added tests proving Command Center can surface the first blocked main-chain stage and next action from `main_chain_contract.json`.
 
 Current commercial rule:
 
@@ -46,6 +48,7 @@ Current service integration:
 - The wrapper installs the strict backend customer-delivery gate before delegating to the original private pilot service.
 - The wrapper exposes patch status and restore helpers for operational diagnostics and isolated tests.
 - Command-center responses now include `customer_delivery_gate_patch` at the top level and under `data`, `data_contract`, and `delivery_tracks`.
+- Command-center responses now include `main_chain_contract` and `main_chain_contract_summary` loaded from backend output/workspace artifacts.
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
 - `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for automatic chain validation.
@@ -53,6 +56,7 @@ Current service integration:
 
 Next engineering step:
 
-- Expose `main_chain_contract` in Command Center from backend output, not by frontend guessing.
+- Add a backend contract test that Command Center must not report customer-delivery readiness when `main_chain_contract.chain_ready` is false.
+- Then surface the main-chain contract in the frontend only after the backend contract remains stable.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
