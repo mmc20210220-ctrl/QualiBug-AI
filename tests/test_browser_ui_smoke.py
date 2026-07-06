@@ -75,6 +75,8 @@ def test_browser_ui_scan_bridge_is_extracted_from_entrypoint() -> None:
     bridge = Path("ai_test_asset_center/private_pilot_browser_bridge.py").read_text(encoding="utf-8")
 
     assert "from ai_test_asset_center.private_pilot_browser_bridge import" in entrypoint
+    assert "from ai_test_asset_center.private_pilot_scan_context_contract import current_scan_campaign_context" in bridge
+    assert "private_pilot_server" not in bridge
     assert "def scan_base_url_from_context" in bridge
     assert "def _scan_base_url_from_context" not in entrypoint
     assert "def _scan_with_browser_ui_smoke" not in entrypoint
