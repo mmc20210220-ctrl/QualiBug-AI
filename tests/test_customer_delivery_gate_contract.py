@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_GATE = ROOT / "frontend" / "src" / "api" / "data.ts"
 INTERNAL_CLUES_PAGE = ROOT / "frontend" / "src" / "pages" / "InternalClues.tsx"
+DASHBOARD_PAGE = ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx"
 FINDING_TYPES = ROOT / "frontend" / "src" / "types" / "index.ts"
 
 
@@ -76,3 +77,16 @@ def test_internal_clue_page_prefers_backend_gate_explanations_with_reason_fallba
     assert "return reasonCodes.map" in page
     assert "reason.next_action" in page
     assert "下一步：" in page
+
+
+def test_dashboard_surfaces_delivery_gate_patch_status() -> None:
+    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+
+    assert "function getGatePatchStatus" in page
+    assert "customer_delivery_gate_patch" in page
+    assert "gatePatchLabel" in page
+    assert "交付 Gate 诊断" in page
+    assert "严格 Gate 已启用" in page
+    assert "严格 Gate 未确认" in page
+    assert "active_partition_name" in page
+    assert "has_original_partition" in page
