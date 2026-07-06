@@ -54,7 +54,30 @@ The report contains:
 - `checks.credential_safety`: masked-ref policy and plaintext-return guard;
 - `checks.scenario_readiness`: source registry asset count and required scan metadata readiness;
 - `checks.http_health`: optional live `/api/health` result when `--server-url` is supplied;
+- `customer_acceptance_summary`: bilingual copyable customer handoff summary;
 - `support_bundle_manifest`: safe-to-share and do-not-send guidance inherited from doctor.
+
+## Customer acceptance summary
+
+`customer_acceptance_summary` is designed for customer acceptance forms, support tickets, and handoff emails. It contains:
+
+- `zh_text` / `zh_lines`: Chinese copyable summary;
+- `en_text` / `en_lines`: English copyable summary;
+- `safe_report_paths`: reports that can be sent back to support;
+- `next_commands`: suggested next commands;
+- `accepted` and `level`: the same decision status used by `acceptance`.
+
+Example Chinese summary shape:
+
+```text
+客户验收结果：warning（通过）。
+产品版本：95.0.0。
+可安全发回支持的报告：platform_outputs/private_pilot_acceptance_smoke_report.json；platform_outputs/private_pilot_doctor_report.json
+待处理事项：scenario_readiness_missing:source_registry_asset,base_url,scope_id,environment_ref,test_data_strategy
+真实扫描前置缺失：source_registry_asset，base_url，scope_id，environment_ref，test_data_strategy
+下一步：Review warnings and scenario_readiness before claiming a clean handoff.
+建议命令：qualibug-acceptance-smoke --project <project> --scan-base-url <url> --scope-id <scope> --environment-ref <env> --test-data-strategy <strategy> --require-scenario-ready --output
+```
 
 ## Scenario-readiness preflight
 
