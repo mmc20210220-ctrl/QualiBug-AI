@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import json
+
+from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
+from ai_test_asset_center.v12_pipeline import _behavior_slice_settings, run_v12_pipeline
+
+
+API_SPEC = json.dumps({
+    "openapi": "3.0.0",
+    "paths": {
+        "/api/cases/{case_id}/approve": {"patch": {"operationId": "approveCase"}},
+        "/api/cases/{case_id}/reopen": {"patch": {"operationId": "reopenCase"}},
+    },
+    "components": {
+        "schemas": {
+            "Case": {
+                "type": "object",
+                "properties": {
+                    "state": {"type": "string", "enum": ["DRAFT", "APPROVED", "CLOSED"]},
+                },
+            },
+        },
+    },
+}, ensure_ascii=False)
+
+DB_SCHEMA = """
+CREATE TABLE cases (
+  id TEXT PRIMARY KEY,
+  state TEXT CHECK (state IN ('DRAFT', 'APPROVED', 'CLOSED'))
+);
+"""
+
+PRD = """
+# Case lifecycle
+DRAFT -> APPROVED by approve
+
+禁止状态流转：
+CLOSED -> DRAFT by reopen
+
+# Value constraint
+aggregate_value must equal reconciled_value
+"""
+
+
+def test_builder_outputs_only_source_bound_slices_and_explicit_unbound_gap():
+    builder = BusinessStateGraphBuilder()
+    graphs = builder.build(PRD, API_SPEC, DB_SCHEMA)
+    contract = builder.behavior_contract()
+
+    assert set(graphs) == {"case"}
+    assert contract["summary"]["total_slices"] >= 2
+    transition_slices = [item for item in contract["slices"] if item["kind"] == "transition"]
+    assert {item["slice_id"] for item in transition_slices}
+    assert all(item["source_refs"] for item in transition_slices)
+    assert any(item["endpoints"] for item in transition_slices)
+    assert any(gap["kind"] == "UNBOUND_REQUIREMENT" for gap in contract["coverage_gaps"])
+    assert all("case" not in gap["title"].lower() for gap in contract["coverage_gaps"])
+
+
+def test_slice_budget_is_hard_capped_at_fifteen(monkeypatch):
+    monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "999")
+    settings = _behavior_slice_settings()
+    assert settings["slice_budget"] == 15
+
+
+def test_pipeline_selects_different_source_slices_across_incremental_rounds(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "1")
+    monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "2")
+    monkeypatch.setenv("QUALIBUG_DISCOVERY_ROUND", "1")
+
+    first = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+    )
+
+    assert "error" not in first
+    assert first["phases"]["incremental_discovery"]["status"] == "planned"
+    assert len(first["behavior_slice_ledger"]["selected_slice_ids"]) == 1
+    assert first["phases"]["execution"]["status"] == "skipped"
+    assert all(item["behavior_slice_id"] for item in first["plan_only_scenarios"])
+    assert all(item["discovery_round"] == 1 for item in first["plan_only_scenarios"])
+
+    monkeypatch.setenv("QUALIBUG_DISCOVERY_ROUND", "2")
+    second = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+    )
+
+    assert "error" not in second
+    assert second["phases"]["incremental_discovery"]["status"] == "planned"
+    assert first["behavior_slice_ledger"]["selected_slice_ids"] != second["behavior_slice_ledger"]["selected_slice_ids"]
+    assert all(item["discovery_round"] == 2 for item in second["plan_only_scenarios"])
