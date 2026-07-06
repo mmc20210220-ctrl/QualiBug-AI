@@ -55,6 +55,7 @@ The report contains:
 - `checks.scenario_readiness`: source registry asset count and required scan metadata readiness;
 - `checks.http_health`: optional live `/api/health` result when `--server-url` is supplied;
 - `customer_acceptance_summary`: bilingual copyable customer handoff summary;
+- `acceptance_artifact_manifest`: archive index for handoff artifacts;
 - `support_bundle_manifest`: safe-to-share and do-not-send guidance inherited from doctor.
 
 ## Customer acceptance summary
@@ -78,6 +79,32 @@ Example Chinese summary shape:
 下一步：Review warnings and scenario_readiness before claiming a clean handoff.
 建议命令：qualibug-acceptance-smoke --project <project> --scan-base-url <url> --scope-id <scope> --environment-ref <env> --test-data-strategy <strategy> --require-scenario-ready --output
 ```
+
+## Acceptance artifact manifest
+
+`acceptance_artifact_manifest` is the handoff archive index. It tells the delivery manager which artifacts must be kept together and which embedded fields can be copied into an acceptance record.
+
+Required handoff artifacts include:
+
+| Artifact id | Kind | Purpose |
+|-------------|------|---------|
+| `acceptance_smoke_report` | file | Primary customer acceptance JSON report |
+| `private_pilot_doctor_report` | file | Companion diagnostics report with masked credential refs |
+| `customer_acceptance_summary_zh` | embedded field | Chinese handoff note for acceptance forms or support tickets |
+| `support_bundle_manifest` | embedded field | Safety policy for what can and cannot be shared |
+
+Optional but safe artifact:
+
+| Artifact id | Kind | Purpose |
+|-------------|------|---------|
+| `customer_acceptance_summary_en` | embedded field | English handoff note |
+
+Archive recommendations:
+
+- archive the acceptance smoke report and companion doctor report together;
+- use `customer_acceptance_summary.zh_text` or `customer_acceptance_summary.en_text` as the handoff note;
+- do not add logs, HAR files, screenshots, `.env` files, secrets, or enterprise source registry contents unless explicitly approved;
+- follow inherited `support_bundle_manifest.do_not_send` rules.
 
 ## Scenario-readiness preflight
 
