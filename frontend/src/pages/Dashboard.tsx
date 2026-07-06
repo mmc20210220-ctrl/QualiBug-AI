@@ -95,6 +95,17 @@ function getExecutiveDescription(defectCount: number, clueCount: number, evidenc
   return '当前结果代表本轮没有形成客户可交付缺陷。后续新增扫描结果后，这里会自动更新业务结论。';
 }
 
+function getGatePatchStatus(record: JsonRecord): JsonRecord {
+  const direct = asRecord(record.customer_delivery_gate_patch);
+  if (Object.keys(direct).length > 0) return direct;
+  const contract = asRecord(record.data_contract);
+  return asRecord(contract.customer_delivery_gate_patch);
+}
+
+function gatePatchLabel(patched: boolean): string {
+  return patched ? '严格 Gate 已启用' : '严格 Gate 未确认';
+}
+
 export function Dashboard() {
   usePageTitle('风险总览');
   const [params] = useSearchParams();
@@ -164,6 +175,10 @@ export function Dashboard() {
   const clues = ((record.clues || []) as Finding[]);
   const valueMetrics = asRecord(record.value_metrics);
   const scanMeta = asRecord(record.scan_meta);
+  const gatePatch = getGatePatchStatus(record);
+  const gatePatchEnabled = Boolean(gatePatch.patched);
+  const gatePatchSource = asText(gatePatch.source) || '未上报';
+  const activePartitionName = asText(gatePatch.active_partition_name) || '未上报';
   const campaign = asRecord(record.campaign);
   const campaignStatus = asText(campaign.campaign_status).toLowerCase();
   const campaignDeferredReason = asText(campaign.coverage_deferred_reason);
@@ -206,6 +221,17 @@ export function Dashboard() {
           <span><em>最近扫描</em><b>{formatScanTime(asText(scanMeta.last_scan_at) || asText(record.updated_at))}</b></span>
           <span><em>本轮耗时</em><b>{formatDurationMs(asNum(scanMeta.total_ms))}</b></span>
           <span><em>结果评级</em><b>{asText(scanMeta.grade) || riskRatingLabel(evidenceTrust)}</b></span>
+          <span><em>交付 Gate</em><b>{gatePatchLabel(gatePatchEnabled)}</b></span>
+        </div>
+      </article>
+      <article className={`customer-secondary-card${gatePatchEnabled ? '' : ' muted'}`}>
+        <span className="customer-value-kicker">交付 Gate 诊断</span>
+        <h3>{gatePatchLabel(gatePatchEnabled)}</h3>
+        <p>{gatePatchEnabled ? '客户缺陷列表已通过严格后端 Gate 分流，未达标结果会进入内部线索池。' : '当前返回体未确认严格 Gate 状态，建议检查后端是否通过 qualibug-server 启动。'}</p>
+        <div className="customer-secondary-meta">
+          <span><em>来源</em><b>{gatePatchSource}</b></span>
+          <span><em>分流函数</em><b>{activePartitionName}</b></span>
+          <span><em>原函数保留</em><b>{gatePatch.has_original_partition ? '是' : '否'}</b></span>
         </div>
       </article>
       {campaignStatus && (
@@ -253,6 +279,7 @@ export function Dashboard() {
             <span className="summary-pill">阻断发布 {p0Count}</span>
             <span className="summary-pill">Campaign {campaignStatusLabel(campaignStatus)}</span>
             <span className="summary-pill">覆盖缺口 {coverageGaps}</span>
+            <span className="summary-pill">{gatePatchLabel(gatePatchEnabled)}</span>
           </div>
           <div className="customer-showcase-actions">
             <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>查看客户缺陷</button>
@@ -269,6 +296,7 @@ export function Dashboard() {
           <div className="customer-status-meta">
             <span><em>最近扫描</em><b>{formatScanTime(asText(scanMeta.last_scan_at) || asText(record.updated_at))}</b></span>
             <span><em>证据达标</em><b>{deliveryReadiness}%</b></span>
+            <span><em>交付 Gate</em><b>{gatePatchLabel(gatePatchEnabled)}</b></span>
             <span><em>本轮说明</em><b>{asNum(scanMeta.run_count) ? `第 ${asNum(scanMeta.run_count)} 轮` : campaignStatus ? campaignStatusLabel(campaignStatus) : '首次结果'}</b></span>
           </div>
         </div>
