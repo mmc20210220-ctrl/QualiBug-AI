@@ -22,6 +22,99 @@ _BLOCKED_LANE_MARKERS = {
 }
 _SYNTHETIC_MARKERS = {"simulation", "simulated", "demo", "synthetic", "mock"}
 
+REJECTION_REASON_EXPLANATIONS: dict[str, dict[str, str]] = {
+    "INVALID_FINDING_PAYLOAD": {
+        "label": "结果结构异常",
+        "detail": "当前 finding 不是合法对象，无法进入客户交付。",
+        "next_action": "检查上游结果格式化与序列化流程。",
+    },
+    "NOT_MARKED_FOR_DEFECT_DELIVERY": {
+        "label": "未标记为客户缺陷轨道",
+        "detail": "当前结果仍属于内部线索或其他轨道。",
+        "next_action": "完成补证并重新通过客户交付 Gate。",
+    },
+    "BUG_STATUS_NOT_REPRODUCED": {
+        "label": "缺陷状态不是已复现",
+        "detail": "没有达到 reproduced 状态，不能对客户声称为 Bug。",
+        "next_action": "补跑复现步骤并记录请求、响应、断言与时间戳。",
+    },
+    "GATE_NOT_PASSED": {
+        "label": "证据门控未通过",
+        "detail": "上游 Gate 未确认该结果具备可交付证据。",
+        "next_action": "查看 gate_failures 或 evidence_status，补齐缺失证据。",
+    },
+    "SYNTHETIC_OR_DEMO_EVIDENCE": {
+        "label": "证据来源不真实",
+        "detail": "结果包含模拟、演示、mock 或 synthetic 信号。",
+        "next_action": "在客户测试环境中重新执行真实请求或浏览器复现。",
+    },
+    "NOT_EXECUTED": {
+        "label": "尚未真实执行",
+        "detail": "当前只有计划、候选或线索，没有真实运行时执行结果。",
+        "next_action": "执行对应 API/页面路径，并保存状态码、响应体和执行时间。",
+    },
+    "NOT_CONFIRMED": {
+        "label": "尚未形成确认结论",
+        "detail": "当前仍需人工或二次验证确认。",
+        "next_action": "完成语义验证和业务证据验证后再提交客户页。",
+    },
+    "EVIDENCE_CONSISTENCY_REJECTED": {
+        "label": "声明与证据不一致",
+        "detail": "当前证据不能支撑缺陷声明，或证据已被判定缺失。",
+        "next_action": "重新绑定 finding 与真实请求响应，确保方法、路径、实体和断言一致。",
+    },
+    "EVIDENCE_QUALITY_NOT_VALIDATED": {
+        "label": "证据质量未达标",
+        "detail": "证据质量不是 validated，或分数低于客户交付阈值。",
+        "next_action": "补齐文档来源、真实响应、断言、日志、DB 快照或复现资产。",
+    },
+    "BUSINESS_EVIDENCE_NOT_VALIDATED": {
+        "label": "业务证据未验证通过",
+        "detail": "语义结论、业务证据状态、最终评审状态或 missing requirements 未达标。",
+        "next_action": "补齐 before/after、业务实体绑定、规则来源和复现流。",
+    },
+    "MISSING_REAL_REPLAY_ASSET": {
+        "label": "缺少真实复现资产",
+        "detail": "没有可回放的真实方法、路径和 HAR/响应证据。",
+        "next_action": "生成真实 curl/HAR/Playwright 复现资产并绑定到该 finding。",
+    },
+    "MISSING_CUSTOMER_FACING_HARD_EVIDENCE": {
+        "label": "缺少客户可核验证据",
+        "detail": "请求、响应、失败断言、时间戳或真实证据标记不完整。",
+        "next_action": "补齐 request_raw、response_raw、expected/actual 断言和 timestamp。",
+    },
+    "BLOCKED_AUTH_BLOCKED": {
+        "label": "认证或权限配置阻断",
+        "detail": "当前响应只能说明认证/权限配置阻断，不能证明业务缺陷。",
+        "next_action": "补充真实测试账号、角色和 token 后重新执行。",
+    },
+    "BLOCKED_ROUTE_BLOCKED": {
+        "label": "路由或网关阻断",
+        "detail": "请求没有到达目标业务接口，不能证明当前业务缺陷。",
+        "next_action": "检查服务映射、网关路由和目标 base URL。",
+    },
+    "BLOCKED_ENVIRONMENT_BLOCKED": {
+        "label": "环境不可达或被拦截",
+        "detail": "目标环境阻断了复现动作，不能作为已复现缺陷。",
+        "next_action": "修复网络、白名单、测试环境地址或服务启动状态。",
+    },
+    "BLOCKED_COVERAGE_GAP": {
+        "label": "覆盖缺口",
+        "detail": "当前只是覆盖不足或待执行路径，不是已复现缺陷。",
+        "next_action": "补跑对应场景并沉淀真实运行时证据。",
+    },
+    "BLOCKED_NOT_REPRODUCED": {
+        "label": "未复现",
+        "detail": "已执行但没有触发可证明的异常。",
+        "next_action": "调整测试数据、账号、状态前置条件后定向复测。",
+    },
+    "BLOCKED_VALIDATION_LEAD": {
+        "label": "仍是验证线索",
+        "detail": "当前可以作为内部验证线索，但不能进入客户缺陷清单。",
+        "next_action": "按缺失证据列表继续补证。",
+    },
+}
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -163,6 +256,21 @@ def customer_delivery_rejection_reasons(item: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def explain_rejection_reason(reason: str) -> dict[str, str]:
+    return REJECTION_REASON_EXPLANATIONS.get(reason, {
+        "label": reason,
+        "detail": "未知 Gate 拒绝原因。",
+        "next_action": "检查后端 Gate 配置并补充解释文案。",
+    })
+
+
+def customer_delivery_rejection_explanations(item: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {"code": reason, **explain_rejection_reason(reason)}
+        for reason in customer_delivery_rejection_reasons(item)
+    ]
+
+
 def is_customer_deliverable_defect(item: dict[str, Any]) -> bool:
     return not customer_delivery_rejection_reasons(item)
 
@@ -182,6 +290,7 @@ def split_customer_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[di
                 "customer_delivery_label": "客户可交付缺陷",
                 "customer_visible": True,
                 "customer_delivery_gate_reasons": [],
+                "customer_delivery_gate_explanations": [],
             })
         else:
             clues.append({
@@ -191,5 +300,9 @@ def split_customer_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[di
                 "customer_delivery_label": "内部待验证线索",
                 "customer_visible": False,
                 "customer_delivery_gate_reasons": rejection_reasons,
+                "customer_delivery_gate_explanations": [
+                    {"code": reason, **explain_rejection_reason(reason)}
+                    for reason in rejection_reasons
+                ],
             })
     return defects, clues
