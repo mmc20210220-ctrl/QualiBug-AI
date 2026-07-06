@@ -48,6 +48,30 @@ def _collect_candidate_items(data: dict[str, Any]) -> list[dict[str, Any]]:
     return _dedupe_by_identity(candidates)
 
 
+def _set_nested_counter(data: dict[str, Any], section: str, key: str, value: int) -> None:
+    target = data.get(section)
+    if isinstance(target, dict):
+        target[key] = value
+
+
+def _sync_command_center_counters(data: dict[str, Any], defects: list[dict[str, Any]], clues: list[dict[str, Any]]) -> None:
+    ready_count = len(defects)
+    clue_count = len(clues)
+    data["ready_bug_count"] = ready_count
+    data["internal_clue_count"] = clue_count
+
+    _set_nested_counter(data, "scan_meta", "ready_bug_count", ready_count)
+    _set_nested_counter(data, "scan_meta", "customer_ready_defects", ready_count)
+    _set_nested_counter(data, "scan_meta", "internal_clue_count", clue_count)
+    _set_nested_counter(data, "value_metrics", "ready_bug_count", ready_count)
+    _set_nested_counter(data, "value_metrics", "defect_count", ready_count)
+    _set_nested_counter(data, "value_metrics", "clue_count", clue_count)
+    _set_nested_counter(data, "executive_summary", "total_bugs_found", ready_count)
+    _set_nested_counter(data, "executive_summary", "ready_bugs", ready_count)
+    _set_nested_counter(data, "executive_summary", "customer_ready_defects", ready_count)
+    _set_nested_counter(data, "executive_summary", "internal_clues", clue_count)
+
+
 def normalize_command_center_delivery(payload: dict[str, Any]) -> dict[str, Any]:
     """Return a command-center payload whose customer defects pass the gate.
 
@@ -78,8 +102,7 @@ def normalize_command_center_delivery(payload: dict[str, Any]) -> dict[str, Any]
         "clue_count": len(all_clues),
         "contract_rule": "data.defects contains only gate-accepted customer-deliverable defects; data.clues contains internal validation leads.",
     }
-    data["ready_bug_count"] = len(defects)
-    data["internal_clue_count"] = len(all_clues)
+    _sync_command_center_counters(data, defects, all_clues)
 
     if "data" in payload:
         normalized["data"] = data
