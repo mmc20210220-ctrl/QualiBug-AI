@@ -55,6 +55,8 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     assert "split_customer_delivery_tracks" in wrapper
     assert "_inject_delivery_gate_patch_status" in wrapper
     assert "_inject_main_chain_contract" in wrapper
+    assert "_apply_main_chain_readiness_guard" in wrapper
+    assert "MAIN_CHAIN_NOT_READY" in wrapper
     assert "main_chain_contract" in wrapper
     assert "customer_delivery_gate_patch" in wrapper
     assert "_ORIGINAL_PARTITION_DELIVERY_TRACKS" in wrapper
@@ -145,6 +147,63 @@ def test_private_pilot_server_patch_exposes_main_chain_contract_in_command_cente
     assert payload["data"]["executive_summary"]["main_chain_ready"] is False
     assert payload["data"]["executive_summary"]["main_chain_first_blocked_stage"] == "execution"
     assert summary["first_blocked_next_action"] == "补齐 base_url、测试账号和真实执行回执。"
+
+
+def test_private_pilot_server_main_chain_guard_blocks_false_delivery_readiness(monkeypatch, tmp_path: Path) -> None:
+    project = "demo"
+    output_dir = tmp_path / "platform_outputs" / project / "real_project"
+    contract = {
+        "project_id": project,
+        "chain_ready": False,
+        "customer_defect_delivery_ready": False,
+        "summary": {
+            "passed_stage_count": 2,
+            "partial_stage_count": 2,
+            "missing_stage_count": 2,
+            "first_blocked_stage": "execution",
+            "first_blocked_next_action": "补齐真实执行回执。",
+        },
+    }
+    _write_json(output_dir / "main_chain_contract.json", contract)
+    monkeypatch.setattr(private_pilot_server, "ROOT", tmp_path)
+    restore_customer_delivery_gate_patch()
+    install_customer_delivery_gate_patch()
+
+    payload = private_pilot_service._normalize_command_center_envelope({
+        "ok": True,
+        "project_id": project,
+        "customer_defect_delivery_ready": True,
+        "data": {
+            "project_id": project,
+            "risks": [],
+            "customer_defect_delivery_ready": True,
+            "scan_meta": {"customer_defect_delivery_ready": True},
+            "value_metrics": {"customer_defect_delivery_ready": True},
+            "data_contract": {"customer_defect_delivery_ready": True},
+            "delivery_tracks": {"customer_defect_delivery_ready": True},
+            "executive_summary": {
+                "release_ready": True,
+                "customer_delivery_ready": True,
+                "customer_defect_delivery_ready": True,
+            },
+        },
+    })
+    data = payload["data"]
+
+    assert payload["customer_defect_delivery_ready"] is False
+    assert "MAIN_CHAIN_NOT_READY" in payload["delivery_blockers"]
+    assert data["customer_defect_delivery_ready"] is False
+    assert "MAIN_CHAIN_NOT_READY" in data["delivery_blockers"]
+    for key in ("scan_meta", "value_metrics", "data_contract", "delivery_tracks"):
+        assert data[key]["customer_defect_delivery_ready"] is False
+        assert data[key]["main_chain_ready"] is False
+        assert "MAIN_CHAIN_NOT_READY" in data[key]["delivery_blockers"]
+    assert data["executive_summary"]["release_ready"] is False
+    assert data["executive_summary"]["customer_delivery_ready"] is False
+    assert data["executive_summary"]["customer_defect_delivery_ready"] is False
+    assert data["executive_summary"]["main_chain_first_blocked_stage"] == "execution"
+    assert data["executive_summary"]["delivery_readiness_label"] == "主链路未闭合，禁止声明客户交付就绪"
+    assert data["main_chain_delivery_blocker"]["reason"] == "MAIN_CHAIN_NOT_READY"
 
 
 def test_private_pilot_server_patch_can_restore_original_partition_and_normalizer_for_diagnostics() -> None:
