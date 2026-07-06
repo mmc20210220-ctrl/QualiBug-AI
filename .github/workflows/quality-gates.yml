@@ -60,6 +60,7 @@ jobs:
             tests/test_phase110_test_data_receipts.py \
             tests/test_phase110_execution_approvals.py \
             tests/test_phase110_v12_execution_approval.py \
+            tests/test_phase110_scan_execution_approval.py \
             tests/test_phase110_release_gate.py \
             -q
 
