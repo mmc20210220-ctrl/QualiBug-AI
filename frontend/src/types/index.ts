@@ -259,3 +259,78 @@ export interface CoverageData {
 export interface KnowledgeSource {
   source_id: string;
   filename: string;
+  source_type: string;
+  status: string;
+  size_bytes: number;
+  uploaded_at: string;
+}
+
+export interface EnvConfig {
+  target_environment: string;
+  base_url: string;
+  request_timeout_seconds: number;
+  environments: Array<{
+    name: string;
+    base_url: string;
+    description: string;
+  }>;
+}
+
+export interface ReleaseGateStatus {
+  release_id: string;
+  overall_status: 'pass' | 'fail' | 'pending';
+  checks: ReleaseCheck[];
+}
+
+export interface ReleaseCheck {
+  name: string;
+  status: 'pass' | 'fail' | 'pending';
+  detail: string;
+}
+
+export interface BehaviorSpaceData {
+  total_endpoints: number;
+  covered_endpoints: number;
+  auth_tested: number;
+  data_validation_tested: number;
+  business_logic_tested: number;
+  routes: BehaviorRoute[];
+}
+
+export interface BehaviorRoute {
+  method: string;
+  path: string;
+  tested: boolean;
+  findings: number;
+}
+
+// Replay API 结果类型
+export interface ReplayResult {
+  ok: boolean;
+  finding_id: string;
+  request?: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body?: string;
+    timestamp: string;
+  };
+  response?: {
+    status_code: number;
+    headers: Record<string, string>;
+    body: string;
+    duration_ms: number;
+  };
+  success?: boolean;
+  error?: string;
+  original_evidence?: {
+    status_code: number;
+    response_body_excerpt: string;
+    har_actor: string;
+  };
+  diff?: {
+    status_match: boolean;
+    body_match: boolean;
+    key_differences: string[];
+  };
+}
