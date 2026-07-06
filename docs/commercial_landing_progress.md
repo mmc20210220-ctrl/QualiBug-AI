@@ -40,6 +40,9 @@ Completed so far:
 - Added a frontend contract test so dashboard main-chain diagnostics cannot be silently removed.
 - Tightened the main-chain evidence stage so passing evidence now requires stable `issue_id`, raw request/response, expected+actual, replay/reproduction, a real execution receipt, and non-synthetic evidence.
 - Added tests proving weak evidence bundles without replay/execution receipt, synthetic evidence, or missing expected/actual pairs cannot close the evidence chain.
+- Added an evidence bundle normalizer that standardizes request/response aliases, copies expected/actual from linked issues, attaches captured execution receipts, and derives replay data only from captured executions.
+- Wired evidence normalization into the chain-aware discovery runner before main-chain contract evaluation.
+- Added tests proving evidence normalization can close strict evidence fields when source artifacts contain the required runtime data, and reports missing fields when it cannot.
 
 Current commercial rule:
 
@@ -49,6 +52,7 @@ Current commercial rule:
 - A project run is not commercially complete until the whole enterprise evidence chain is complete: inputs, parsing, plan, execution, discovery, and evidence.
 - If `main_chain_contract.chain_ready=false`, Command Center must report `MAIN_CHAIN_NOT_READY` and must not claim customer-delivery readiness.
 - Evidence-chain completion requires raw request/response, expected+actual, replay/reproduction, execution receipt, stable issue linkage, and non-synthetic proof.
+- Evidence normalization may standardize and enrich fields only from captured runtime artifacts; it must not invent validated proof.
 
 Current service integration:
 
@@ -61,11 +65,11 @@ Current service integration:
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
 - Dashboard displays the main enterprise evidence chain status, six-stage progress, first blocked stage, and next action from the backend contract.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
-- `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for automatic chain validation.
+- `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for discovery, evidence normalization, and automatic chain validation.
 - `enterprise_pilot_runtime_with_chain.py` provides the safe pilot-runtime entrypoint that routes `real_project_discovery` tasks through the chain-aware runner.
 
 Next engineering step:
 
-- Normalize evidence bundle output from the discovery engine so generated evidence consistently includes the fields required by the strict evidence-chain contract.
+- Expose `evidence_bundle_normalization_report` in Command Center so operators can see which evidence fields were normalized and which still block the chain.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
