@@ -51,8 +51,6 @@ def test_sandbox_interaction_requires_explicit_write_approval():
 
 
 def test_browser_target_cannot_escape_approved_base_url():
-    with pytest.raises(BrowserExecutionError, match="browser_target_outside_approved_base_url"):
-        validate_browser_plan(
-            {"steps": [{"action": "goto", "url": "https://other.example.invalid/"}]},
-            CONTRACT,
-        )
+    for unsafe_url in ("https://other.example.invalid/", "https://test.example.invalid.evil/"):
+        with pytest.raises(BrowserExecutionError, match="browser_target_outside_approved_base_url"):
+            validate_browser_plan({"steps": [{"action": "goto", "url": unsafe_url}]}, CONTRACT)
