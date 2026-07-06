@@ -10,6 +10,7 @@ const navItems = [
   { to: 'evidence', icon: 'shield', label: '证据链', section: null },
   { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
   { to: 'materials', icon: 'knowledge', label: '企业资料', section: '系统' },
+  { to: 'campaigns', icon: 'campaign', label: '受控 Campaign', section: null },
   { to: 'release', icon: 'release', label: '发布门禁', section: null },
   { to: 'products', icon: 'product', label: '产品矩阵', section: null },
   { to: 'settings', icon: 'settings', label: '设置', section: null },
@@ -28,6 +29,7 @@ const icons: Record<string, string> = {
   shield: 'M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Z',
   runtime: 'M12 3v9l6 3M5 4h14v16H5z',
   knowledge: 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5v-16Z',
+  campaign: 'M4 5h16v14H4V5Zm3 3h5v3H7V8Zm0 5h10v3H7v-3Zm7-5h3v3h-3V8Z',
   release: 'M6 4h12v16H6z M9 8h6M9 12h6M9 16h3',
   product: 'M4 6h7v5H4V6Zm9 0h7v5h-7V6ZM4 13h7v5H4v-5Zm9 2h7v3h-7v-3Z',
   settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2-3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
@@ -56,7 +58,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         ? '可进入闭环'
         : (clueCount || 0) > 0
           ? '待补证'
-        : '待首次检测';
+          : '待首次检测';
 
   return (
     <>
