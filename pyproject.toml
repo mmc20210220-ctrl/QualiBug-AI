@@ -58,6 +58,7 @@ all = [
 qualibug = "aitestops.cli:main"
 qualibug-server = "ai_test_asset_center.private_pilot_entrypoint:run_server"
 qualibug-doctor = "ai_test_asset_center.private_pilot_doctor:main"
+qualibug-acceptance-smoke = "ai_test_asset_center.private_pilot_acceptance_smoke:main"
 qualibug-discover-chain = "ai_test_asset_center.real_project_discovery_with_chain:main"
 qualibug-pilot-chain = "ai_test_asset_center.enterprise_pilot_runtime_with_chain:_cli"
 
