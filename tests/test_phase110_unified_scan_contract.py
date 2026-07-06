@@ -5,6 +5,7 @@ import json
 
 from ai_test_asset_center.__main__ import scan
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from ai_test_asset_center.evidence_artifact_store import verify_evidence_bundle
 from ai_test_asset_center.enterprise_test_data_plan import validate_test_data_contract
 
 
@@ -30,6 +31,7 @@ def test_inline_source_without_provenance_is_blocked_before_campaign_planning(tm
     assert result["campaign"]["coverage_deferred_reason"] == "source_provenance_missing"
     assert any(gap["code"] == "SOURCE_PROVENANCE_MISSING" for gap in result["input_gaps"])
     assert result["execution_status"] == "blocked"
+    assert result["evidence_bundle"]["status"] == "not_created"
 
 
 def test_external_api_doc_path_without_manifest_is_not_implicitly_trusted(tmp_path):
@@ -48,6 +50,8 @@ def test_external_api_doc_path_is_allowed_with_complete_explicit_manifest(tmp_pa
     assert result["grade"] == "inconclusive"
     assert result["runtime_contract"]["source_manifest"]["source_id"] == "api-spec-v1"
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "declared_manifest"
+    assert result["evidence_bundle"]["status"] == "persisted"
+    assert verify_evidence_bundle("enterprise-project", result["evidence_bundle"]["bundle_id"], root=tmp_path)["valid"] is True
 
 
 def test_declared_source_hash_must_match_submitted_content(tmp_path):
@@ -71,6 +75,7 @@ def test_registered_source_registry_asset_is_preferred_and_keeps_version_identit
     assert manifest["source_hash"] == registered["source_hash"]
     assert manifest["source_version_id"] == registered["source_version_id"]
     assert manifest["source_origin"] == "registered_source_registry"
+    assert result["evidence_bundle"]["status"] == "persisted"
 
 
 def test_registered_project_asset_supplies_provenance_without_client_supplied_manifest(tmp_path):
