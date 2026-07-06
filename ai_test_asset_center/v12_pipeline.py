@@ -1,9 +1,9 @@
 """V12 source-grounded behavior pipeline with enterprise Campaign governance.
 
-The public ``run_v12_pipeline`` entry point remains compatible. A Campaign is
-an auditable project scope, environment reference and source snapshot. Both the
-unified scanner and direct callers must supply an approved runtime contract
-before V12 can contact a target.
+A Campaign is an auditable project scope, environment reference and source
+snapshot. Planning can proceed without a target; any runtime traffic additionally
+requires a valid source contract and a time-bounded execution approval issued for
+the resolved Campaign.
 """
 from __future__ import annotations
 
@@ -127,6 +127,7 @@ def _source_manifest_details(context: dict[str, Any], source_text: Any) -> tuple
         "source_id": source_id[:160],
         "source_hash": source_hash[:128],
         "source_origin": source_origin[:80],
+        "source_version_id": str(manifest.get("source_version_id") or "")[:80],
     }, issues
 
 
@@ -160,6 +161,41 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         "missing_requirements": [],
         "approved_base_url": str(base_url).rstrip("/"),
         "source_manifest": manifest,
+    }
+
+
+def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCampaign, base_url: str, root: Path) -> dict[str, Any]:
+    """Verify an approval only after the canonical Campaign identity is known."""
+    if not base_url:
+        return {"status": "not_required", "reason": "runtime_target_missing"}
+    approval_id = str(context.get("execution_approval_id") or "").strip()
+    execution_mode = str(context.get("execution_mode") or "safe_read_only").strip()
+    if not approval_id:
+        return {"status": "blocked", "code": "EXECUTION_APPROVAL_MISSING", "execution_mode": execution_mode}
+    try:
+        from .execution_approvals import verify_execution_approval
+        verdict = verify_execution_approval(
+            campaign.project_id,
+            approval_id,
+            root=root,
+            campaign_id=campaign.campaign_id,
+            scope_id=campaign.scope_id,
+            environment_ref=campaign.environment_ref,
+            source_hash=campaign.source_hash,
+            target_base_url=base_url,
+            execution_mode=execution_mode,
+        )
+    except Exception as exc:
+        return {"status": "blocked", "code": f"EXECUTION_APPROVAL_VERIFICATION_ERROR:{type(exc).__name__}", "execution_mode": execution_mode}
+    if verdict.get("valid") is not True:
+        return {"status": "blocked", "code": str(verdict.get("code") or "EXECUTION_APPROVAL_INVALID"), "execution_mode": execution_mode}
+    approval = _dict(verdict.get("approval"))
+    return {
+        "status": "approved",
+        "approval_id": approval_id,
+        "approval_hash": str(approval.get("approval_hash") or ""),
+        "execution_mode": execution_mode,
+        "expires_at_utc": str(approval.get("expires_at_utc") or ""),
     }
 
 
@@ -239,9 +275,7 @@ def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, 
     attempted, confirmed = _slice_history(history)
     all_slices = [item for item in slices if isinstance(item, dict) and str(item.get("slice_id") or "")]
     pending = [item for item in all_slices if str(item["slice_id"]) not in confirmed]
-    round_number = int(settings["round_number"])
-    round_limit = int(settings["round_limit"])
-    budget = int(settings["slice_budget"])
+    round_number, round_limit, budget = int(settings["round_number"]), int(settings["round_limit"]), int(settings["slice_budget"])
     if not all_slices:
         return _selection_result(status="stopped", stop_reason="no_source_bound_behavior_slices", selected=[], pending=[], attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="none")
     if not pending:
@@ -277,15 +311,13 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     environment_ref = str(context.get("environment_ref") or context.get("target_environment") or (f"target_{hashlib.sha256(base_url.encode()).hexdigest()[:16]}" if base_url else "unbound_environment"))[:160]
     snapshot = source_snapshot_hash(prd_text, api_spec_text, db_schema_text, scope_id, environment_ref)
     source_manifest, source_issues = _source_manifest_details(context, submitted_api_spec_text)
-    source_id = source_manifest["source_id"] if not source_issues else ""
-    source_hash = source_manifest["source_hash"] if not source_issues else ""
     candidate = EnterpriseCampaign.create(
         project,
         scope_id,
         environment_ref,
         snapshot,
-        source_id=source_id,
-        source_hash=source_hash,
+        source_id=source_manifest["source_id"] if not source_issues else "",
+        source_hash=source_manifest["source_hash"] if not source_issues else "",
         policy_version=policy_version,
         slice_budget=settings["slice_budget"],
         automatic_round_limit=settings["round_limit"],
@@ -306,7 +338,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     runtime_contract = _runtime_contract(context, base_url, submitted_api_spec_text)
     approved_base_url = str(runtime_contract.get("approved_base_url") or "")
     result: dict[str, Any] = {
-        "v12_version": "2.4",
+        "v12_version": "2.5",
         "enabled": True,
         "phases": {},
         "findings": [],
@@ -333,17 +365,21 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         graphs = builder.build(prd_text, api_spec_text, db_schema_text)
         behavior_contract = builder.behavior_contract()
         settings = _behavior_slice_settings()
-        campaign, campaign_store, campaign_mode = _campaign_context(
-            project,
-            prd_text,
-            api_spec_text,
-            db_schema_text,
-            approved_base_url,
-            settings,
-            context,
-            root,
-            submitted_api_spec_text,
-        )
+        campaign, campaign_store, campaign_mode = _campaign_context(project, prd_text, api_spec_text, db_schema_text, approved_base_url, settings, context, root, submitted_api_spec_text)
+        approval = _execution_approval_contract(context, campaign, approved_base_url, root)
+        if approved_base_url and approval.get("status") != "approved":
+            runtime_contract = {
+                **runtime_contract,
+                "status": "blocked",
+                "reason": "execution_approval_required",
+                "missing_requirements": [str(approval.get("code") or "EXECUTION_APPROVAL_MISSING")],
+                "approved_base_url": "",
+                "execution_approval": approval,
+            }
+            approved_base_url = ""
+        else:
+            runtime_contract = {**runtime_contract, "execution_approval": approval}
+        result["runtime_contract"] = runtime_contract
         if campaign.status in {"coverage_deferred", "completed", "blocked"}:
             selection = _selection_result(status="stopped", stop_reason=f"campaign_{campaign.status}", selected=[], pending=behavior_contract["slices"], attempted=set(campaign.attempted_slice_ids), confirmed=set(campaign.confirmation_receipts), next_round=None, selection_mode="campaign_terminal")
         else:
@@ -411,13 +447,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     if isinstance(finding, dict):
                         matching = next((item for item in selection["selected"] if str(finding.get("path") or "") in item.get("endpoints", [])), None)
                         if matching:
-                            finding.update({
-                                "behavior_slice_id": matching["slice_id"],
-                                "discovery_round": settings["round_number"],
-                                "campaign_id": campaign.campaign_id,
-                                "execution_status": "executed",
-                                "confirmation_status": "candidate",
-                            })
+                            finding.update({"behavior_slice_id": matching["slice_id"], "discovery_round": settings["round_number"], "campaign_id": campaign.campaign_id, "execution_status": "executed", "confirmation_status": "candidate"})
             except Exception:
                 pass
         result["findings"].extend(fuzzer_findings)
@@ -451,13 +481,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         if selection["status"] != "planned":
             result["phases"]["execution"] = {"status": "stopped", "reason": selection["stop_reason"], "planned_only": 0, "executed": 0}
         elif base_url and not approved_base_url:
-            result["phases"]["execution"] = {
-                "status": "blocked",
-                "reason": "runtime_contract_missing",
-                "missing_requirements": runtime_contract.get("missing_requirements", []),
-                "planned_only": len(plan_only),
-                "executed": 0,
-            }
+            result["phases"]["execution"] = {"status": "blocked", "reason": str(runtime_contract.get("reason") or "runtime_contract_missing"), "missing_requirements": runtime_contract.get("missing_requirements", []), "planned_only": len(plan_only), "executed": 0}
         elif not approved_base_url:
             result["phases"]["execution"] = {"status": "skipped", "reason": "no_base_url", "planned_only": len(plan_only), "executed": 0}
         elif not executable:
