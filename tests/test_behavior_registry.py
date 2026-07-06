@@ -44,6 +44,7 @@ def test_build_behavior_registry_groups_violations_and_evidence_by_behavior():
     assert create_order["violations"] == ["VIO-001", "BUG-008"]
     assert create_order["evidence"] == ["EVID-001", {"status_code": 500}]
     assert create_order["status"] == "violated"
+    assert create_order["status_lifecycle"] == ["registered", "validated", "violated"]
 
 
 def test_build_behavior_registry_marks_observed_behavior_from_validation_run():
@@ -60,6 +61,37 @@ def test_build_behavior_registry_marks_observed_behavior_from_validation_run():
     assert registry["status_counts"]["observed"] == 1
     assert registry["behaviors"][0]["status"] == "observed"
     assert registry["behaviors"][0]["validation_runs"] == ["RUN-001"]
+    assert registry["behaviors"][0]["status_lifecycle"] == ["registered", "observed"]
+
+
+def test_build_behavior_registry_preserves_enterprise_history_fields():
+    registry = build_behavior_registry(
+        [
+            {
+                "behavior_id": "BEH-REFUND",
+                "behavior_name": "Refund Payment",
+                "validation_run_id": "RUN-100",
+                "validation_result": {"run_id": "RUN-100", "status": "failed"},
+                "risk_assessment": {"severity": "P1", "risk_score": 75},
+                "regression_asset_id": "REG-100",
+            },
+            {
+                "behavior_id": "BEH-REFUND",
+                "regression_result": {"asset_id": "REG-100", "status": "passed_after_customer_change"},
+                "severity": "P1",
+            },
+        ]
+    )
+
+    behavior = registry["behaviors"][0]
+    assert behavior["validation_runs"] == ["RUN-100"]
+    assert behavior["validation_history"] == [{"run_id": "RUN-100", "status": "failed"}]
+    assert behavior["risk_history"] == [{"severity": "P1", "risk_score": 75}, "P1"]
+    assert behavior["regression_history"] == [
+        "REG-100",
+        {"asset_id": "REG-100", "status": "passed_after_customer_change"},
+    ]
+    assert behavior["status_lifecycle"] == ["registered", "observed", "regression-tracked"]
 
 
 def test_build_behavior_registry_creates_stable_fallback_behavior_ids():
