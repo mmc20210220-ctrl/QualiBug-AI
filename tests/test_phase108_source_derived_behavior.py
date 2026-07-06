@@ -33,6 +33,7 @@ def test_behavior_graph_uses_only_entities_and_states_in_current_project_sources
     assert set(graphs) == {"case"}
     assert {"CREATED", "CLOSED", "ARCHIVED"}.issubset(graphs["case"].states)
     assert any(item.is_forbidden and item.from_state == "CLOSED" for item in graphs["case"].transitions)
+    assert any("must not be reopened" in rule for node in graphs["case"].states.values() for rule in node.invariants)
     assert "order" not in graphs
     assert "payment" not in graphs
 
