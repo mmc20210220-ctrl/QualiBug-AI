@@ -68,3 +68,14 @@ def test_browser_ui_smoke_patch_attaches_health_to_scan(tmp_path: Path, monkeypa
 
     restore_browser_ui_smoke_patch()
     scanner_module.scan = original_scan
+
+
+def test_browser_ui_scan_bridge_is_extracted_from_entrypoint() -> None:
+    entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
+    bridge = Path("ai_test_asset_center/private_pilot_browser_bridge.py").read_text(encoding="utf-8")
+
+    assert "from ai_test_asset_center.private_pilot_browser_bridge import" in entrypoint
+    assert "def scan_base_url_from_context" in bridge
+    assert "def _scan_base_url_from_context" not in entrypoint
+    assert "def _scan_with_browser_ui_smoke" not in entrypoint
+    assert "browser_ui_error_report" in bridge
