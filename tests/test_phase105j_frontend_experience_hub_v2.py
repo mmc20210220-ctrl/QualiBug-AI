@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -12,7 +12,7 @@ from ai_test_asset_center.phase105_frontend_experience_hub_v2 import (
 
 
 def test_phase105j_builds_hub_v2_with_test_execution_page(tmp_path) -> None:
-    manifest = build_frontend_experience_hub_v2(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8790")
+    manifest = build_frontend_experience_hub_v2(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8088")
 
     assert manifest["version"].startswith("phase105j")
     assert manifest["redaction_status"] == "safe"
@@ -47,7 +47,7 @@ def test_phase105j_builds_hub_v2_with_test_execution_page(tmp_path) -> None:
 
 
 def test_phase105j_acceptance_and_validate_only(tmp_path) -> None:
-    result = run_frontend_experience_hub_v2_export(output_dir=tmp_path, scenario="ecommerce", api_base_url="http://127.0.0.1:8790")
+    result = run_frontend_experience_hub_v2_export(output_dir=tmp_path, scenario="ecommerce", api_base_url="http://127.0.0.1:8088")
 
     assert result["acceptance"]["passed"] is True
     assert result["acceptance"]["score"] == 100
@@ -69,3 +69,4 @@ def test_phase105j_detects_missing_execution_page_and_secret_leak(tmp_path) -> N
     assert "AI 测试" in details or "test_execution" in details
     assert "client_secret=" in details
     assert scan_frontend_hub_v2_for_secret_leaks(tmp_path)
+

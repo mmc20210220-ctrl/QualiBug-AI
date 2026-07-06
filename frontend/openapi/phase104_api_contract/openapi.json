@@ -1,4 +1,4 @@
-{
+﻿{
   "components": {
     "parameters": {
       "ProjectId": {
@@ -1885,7 +1885,7 @@
   "servers": [
     {
       "description": "Local Phase104A API server",
-      "url": "http://127.0.0.1:8790"
+      "url": "http://127.0.0.1:8088"
     }
   ],
   "x-qualibug": {

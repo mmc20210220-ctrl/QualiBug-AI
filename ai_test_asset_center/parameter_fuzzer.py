@@ -51,16 +51,24 @@ class ParameterFuzzer:
                 if "/auth/" in path or "/login" in path or "/register" in path:
                     continue
                 # 1. No-auth access test
+                # 2xx on non-GET methods = true auth bypass (the endpoint should
+                # require authentication but succeeded without it).
+                # 401/403 = auth working (correctly blocked), NOT a bug.
+                # 3xx redirects = not a proven bypass.
+                # 4xx other than 401/403 (e.g. 404/405/422) = route/env issue, not a bug.
+                # 5xx = server error, could be a bug but not necessarily ACL.
                 status, resp_body, _ = self._call(method, path)
-                if status < 400 and method != "GET":
+                if 200 <= status < 300 and method != "GET":
                     # Non-GET endpoint accessible without auth = potential ACL bypass
                     findings.append(self._to_finding(method, path, status, resp_body,
                         f"无认证可执行 {method} {path}", "ACL", "P0"))
                 # 2. Admin endpoint access with buyer token (if admin patterns match)
+                # Only flag 2xx success — 401/403 means auth correctly blocked.
                 path_lower = path.lower()
                 if any(p in path_lower for p in admin_patterns) and self._buyer_token:
                     status, resp_body, _ = self._call(method, path, tok=self._buyer_token)
-                    if status < 400:
+                    if 200 <= status < 300:
+                        # Buyer token accessing admin endpoint with 2xx = true ACL bypass
                         findings.append(self._to_finding(method, path, status, resp_body,
                             f"普通用户可访问管理端点 {method} {path}", "ACL", "P0"))
         # Static fallback tests
@@ -71,7 +79,10 @@ class ParameterFuzzer:
                 body.update(body_extra)
             tok = self._get_token(token_type) if token_type else None
             status, resp_body, elapsed = self._call(method, path, body, tok=tok)
-            if status < 400 and isinstance(resp_body, dict) and resp_body.get("ok"):
+            # 2xx success on a restricted operation = ACL bug.
+            # 401/403 = auth correctly working, NOT a bug.
+            # 3xx = redirect, not conclusive.
+            if 200 <= status < 300 and isinstance(resp_body, dict) and resp_body.get("ok"):
                 severity = "P0" if "admin" in desc.lower() or "管理" in desc else "P1"
                 findings.append(self._to_finding(method, path, status, resp_body,
                     desc, "ACL", severity))
@@ -247,21 +258,11 @@ class ParameterFuzzer:
 
         return findings
 
-    def _test_acl(self) -> list[dict]:
-        findings = []
-        for method, path, body_extra, token_type, desc in self.ACL_TESTS:
-            body = {"username": "test_" + str(int(time.time()) % 10000),
-                    "password": "x"} if method == "POST" else None
-            if body and body_extra:
-                body.update(body_extra)
-            tok = self._get_token(token_type) if token_type else None
-            status, resp_body, elapsed = self._call(method, path, body, tok=tok)
-            # ACL bug: access succeeds when it shouldn't
-            if status < 400 and isinstance(resp_body, dict) and resp_body.get("ok"):
-                severity = "P0" if "admin" in desc.lower() or "管理" in desc else "P1"
-                findings.append(self._to_finding(method, path, status, resp_body,
-                    desc, "ACL", severity))
-        return findings
+    # NOTE: _test_acl is defined earlier in this class (lines ~34-78) with full
+    # dynamic routes-driven ACL probing logic. The duplicate definition here has
+    # been removed because Python's method-resolution-order uses the LAST
+    # definition, which shadowed the dynamic routes variant. See Git history
+    # for the removed static-only fallback.
 
     def _get_token(self, role: str = "admin") -> str:
         if role == "admin" and self._admin_token:

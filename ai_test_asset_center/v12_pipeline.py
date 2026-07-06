@@ -193,34 +193,43 @@ def run_v12_pipeline(
                     scenario_token = tmp_fuzzer._token
             except Exception:
                 pass
-            for scenario in scenarios[:30]:  # Full coverage for hit-rate test
+            for scenario in scenarios:  # Execute all generated scenarios for full coverage
                 try:
                     if scenario_token:
                         scenario.actor_token = scenario_token
                     trace = _execute_scenario(scenario, base_url, max_retries=2)
                     traces.append((scenario, trace))
                     executed += 1
-                    # Quick-find: flag server errors and auth bypass as findings
+                        # Quick-find: flag server errors as findings
                     for step_result in trace.get("steps", []):
                         status = step_result.get("status", 0)
+                        # ── Status code classification (v12.3 fix) ──
+                        # 401/403 = auth working correctly, NOT permission bug
+                        # 404/405 = route or method mismatch, NOT business bug
+                        # 2xx + wrong actor scenario = candidate for permission testing
+                        # 5xx = server error, flag but don't claim "permission bypass"
                         if status >= 500:
+                            # 5xx = genuine server error during execution
                             result["findings"].append({
                                 "severity": "P0",
-                                "title": f"[场景执行] {scenario.title[:80]}",
+                                "title": f"[场景执行错误] {scenario.title[:80]}",
                                 "category": scenario.category,
                                 "source": "v12_scenario_executor",
-                                "description": f"服务端错误 {status}: {step_result.get('path','')}",
-                                "confidence_score": 0.95,
+                                "description": f"服务端错误 HTTP{status}: {step_result.get('path','')}",
+                                "confidence_score": 0.80,  # 5xx is clear bug signal
                             })
-                        elif status == 403:
-                            result["findings"].append({
-                                "severity": "P0",
-                                "title": f"[权限穿透] {scenario.title[:80]}",
-                                "category": "permission",
-                                "source": "v12_scenario_executor",
-                                "description": f"越权访问成功 {status}: {step_result.get('path','')}",
-                                "confidence_score": 0.90,
-                            })
+                        elif status in (401, 403):
+                            # 401/403 = authentication/authorization working correctly.
+                            # This is expected behaviour when the scenario attempts to
+                            # access a protected endpoint. NOT a bug — the system is
+                            # correctly enforcing access control.
+                            # Log as a security boundary observation for internal audit.
+                            pass
+                        elif status in (404, 405):
+                            # 404 = route does not exist, 405 = method not allowed.
+                            # These are environment/route configuration issues,
+                            # not business logic bugs. Do not generate findings.
+                            pass
                 except Exception:
                     failed += 1
             result["phases"]["execution"] = {

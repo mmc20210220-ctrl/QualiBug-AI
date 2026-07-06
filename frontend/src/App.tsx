@@ -5,6 +5,7 @@ import { ScrollToTop } from './components/ScrollToTop';
 import { isAuthenticated } from './api/client';
 import { Dashboard } from './pages/Dashboard';
 import { Findings } from './pages/Findings';
+import { InternalClues } from './pages/InternalClues';
 import { EvidenceChain } from './pages/EvidenceChain';
 import { BehaviorSpace } from './pages/BehaviorSpace';
 import { EnterpriseMaterials } from './pages/EnterpriseMaterials';
@@ -34,6 +35,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/findings" element={<Findings />} />
+            <Route path="/clues" element={<InternalClues />} />
             <Route path="/evidence" element={<EvidenceChain />} />
             <Route path="/behavior-space" element={<BehaviorSpace />} />
             <Route path="/materials" element={<EnterpriseMaterials />} />

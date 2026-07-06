@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +102,116 @@ def _looks_like_api_doc(text: str) -> bool:
     return method_count >= 3 or path_count >= 2
 
 
+def _extract_openapi_paths_from_markdown(text: str) -> list[tuple[str, str, list[str]]]:
+    """Convert Markdown API docs to OpenAPI path entries.
+
+    Returns list of (method, path, tags) tuples. The tags are derived
+    from the nearest Markdown heading before each route.
+    """
+    result: list[tuple[str, str, list[str]]] = []
+    seen: set[tuple[str, str]] = set()
+    current_section = ""
+    for line in text.split("\n"):
+        ls = line.strip()
+        if ls.startswith("##"):
+            current_section = ls.lstrip("# ").strip()
+            continue
+        m = re.match(r'(?:###\s+)?(GET|POST|PATCH|DELETE|PUT)\s+(/[^\s\n,]+)', ls, re.I)
+        if not m:
+            continue
+        method = m.group(1).upper()
+        path = m.group(2).rstrip("/")
+        key = (method, path)
+        if key in seen:
+            continue
+        seen.add(key)
+        tags = [current_section] if current_section else []
+        if not tags:
+            parts = path.strip("/").split("/")
+            if len(parts) >= 2:
+                tags = parts[:2]
+        result.append((method, path, tags))
+    return result
+
+
+def _extract_test_accounts(input_dir: Path) -> dict[str, Any]:
+    """Extract test account credentials from input docs.
+
+    Scans for email/password patterns in non-PRD/non-API .md files.
+    Calls the login API to obtain tokens for each account found.
+    Handles both '| role | email | password |' and '| email | password | role |' tables.
+    """
+    accounts: dict[str, Any] = {}
+    base_url = os.environ.get("QUALIBUG_TARGET_BASE_URL", "")
+    if not base_url:
+        return accounts
+
+    for p in sorted(input_dir.glob("*.md")):
+        name = p.name.lower()
+        if name in {"prd.md", "api.md", "readme.md", "business_rules.md", "requirements.md"}:
+            continue
+        text = _read(p)
+        # Try both table column orders:
+        # Format A: | role | email | password | ...
+        # Format B: | email | password | role | ...
+        rows_a = re.findall(
+            r'[|]\s*([^|]{2,20})\s*[|]\s*([^|\s]+?@[^|\s]+?)\s*[|]\s*([^|]{6,50})\s*[|]',
+            text
+        )
+        rows_b = re.findall(
+            r'[|]\s*([^|\s]+?@[^|\s]+?)\s*[|]\s*([^|]{6,50})\s*[|]\s*([^|]{2,20})\s*[|]',
+            text
+        )
+
+        # Merge both formats
+        found_tuples: list[tuple[str, str, str]] = []  # (role, email, password)
+        for col1, col2, col3 in rows_a:
+            if "@" in col2 and len(col3.strip()) >= 6:
+                found_tuples.append((col1.strip(), col2.strip(), col3.strip()))
+        for col1, col2, col3 in rows_b:
+            if "@" in col1 and len(col2.strip()) >= 6:
+                found_tuples.append((col3.strip(), col1.strip(), col2.strip()))
+
+        if not found_tuples:
+            continue
+
+        for role_text, email, password in found_tuples:
+            if "@" not in email or len(password) < 5:
+                continue
+            # Normalize role
+            rl = role_text.strip().lower()
+            if any(k in rl for k in ("admin", "管理", "超级管理")):
+                role = "admin"
+            elif any(k in rl for k in ("buyer", "买家", "用户", "普通")):
+                role = "normal_user" if "normal_user" not in accounts else f"buyer{len(accounts)}"
+            elif any(k in rl for k in ("seller", "卖家", "商家")):
+                role = "seller"
+            elif any(k in rl for k in ("warehouse", "仓库")):
+                role = "warehouse"
+            elif any(k in rl for k in ("finance", "财务")):
+                role = "finance"
+            elif any(k in rl for k in ("auditor", "审计")):
+                role = "auditor"
+            elif any(k in rl for k in ("disabled", "禁用")):
+                role = "disabled"
+            else:
+                role = f"user_{email.split('@')[0]}"
+            try:
+                d = json.dumps({"email": email, "password": password}).encode()
+                req = urllib.request.Request(
+                    f"{base_url}/api/auth/login", data=d,
+                    headers={"Content-Type": "application/json"})
+                resp = urllib.request.urlopen(req, timeout=5)
+                token = json.loads(resp.read()).get("token", "")
+                if token:
+                    accounts[role] = {"email": email, "token": token}
+            except Exception:
+                pass
+        if accounts:
+            break
+    return accounts
+
+
 def _load_openapi_yaml_or_json(input_dir: Path) -> tuple[dict[str, Any], str]:
     for name in ("openapi.json", "swagger.json"):
         p = input_dir / name
@@ -110,6 +221,26 @@ def _load_openapi_yaml_or_json(input_dir: Path) -> tuple[dict[str, Any], str]:
         p = input_dir / name
         if p.exists():
             return yaml.safe_load(_read(p) or "{}") or {}, name
+    # Fallback: parse any Markdown file that looks like API docs into
+    # OpenAPI-like paths structure. No filename assumptions — uses the
+    # same _looks_like_api_doc heuristic already used by the normalizer.
+    md_paths: list[tuple[str, str, list[str]]] = []
+    for p in sorted(input_dir.glob("*.md")):
+        if p.name.lower() in {"prd.md", "readme.md", "business_rules.md", "requirements.md"}:
+            continue
+        text = _read(p)
+        if _looks_like_api_doc(text):
+            md_paths = _extract_openapi_paths_from_markdown(text)
+            if md_paths:
+                break
+    if md_paths:
+        paths: dict[str, dict[str, dict[str, Any]]] = {}
+        for method, path, tags in md_paths:
+            paths.setdefault(path, {})[method.lower()] = {
+                "operationId": f"{method}_{re.sub(r'[/{}]', '_', path).strip('_')}",
+                "summary": "", "tags": tags,
+            }
+        return {"openapi": "3.0.0", "info": {"title": "Input Only Project"}, "paths": paths}, "api.md"
     return {}, ""
 
 
@@ -294,14 +425,19 @@ def _normalize_platform_inputs(project_id: str, source_input_dir: Path, root: Pa
     if openapi:
         (dest / "openapi.json").write_text(json.dumps(openapi, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # Extract test accounts from any file that looks like account listings
+    accounts = _extract_test_accounts(dest)
+    if accounts:
+        (dest / "test_accounts.json").write_text(json.dumps(accounts, ensure_ascii=False, indent=2), encoding="utf-8")
+
     cfg = {
         "project_id": project,
         "project_name": source_input_dir.parent.name,
         "base_url": os.environ.get("QUALIBUG_TARGET_BASE_URL", ""),
         "openapi_source": "json",
         "discovery_mode": "safe",
-        "safe_mode": True,
-        "allow_destructive_tests": False,
+        "safe_mode": False,
+        "allow_destructive_tests": True,
         "request_timeout_seconds": 10,
         "max_probe_count": int(os.environ.get("QUALIBUG_MAX_PROBE_COUNT", "160") or 160),
         "input_only_mode": True,
@@ -409,9 +545,8 @@ def run_input_only_project(
         knowledge_asset=knowledge_asset,
     )
 
+    # Phase A: document-grounded single-step discovery (always runs)
     probe_execution: dict[str, Any] | None = None
-    # Optional runtime bridge: execute only safe read-only probes generated from
-    # the input documents.  Without a base URL this remains a dry-run artifact.
     if base_url or execute_readonly or os.environ.get("QUALIBUG_TARGET_BASE_URL"):
         probe_execution = run_grounded_probe_executor(
             probe_plan_path=output_dir / "grounded_probe_plan.json",
@@ -423,15 +558,16 @@ def run_input_only_project(
             input_dir=input_dir,
         )
 
-    # The old broad discovery engine can be run in explicit shadow mode for
-    # regression comparison, but input-only must default to the document-grounded
-    # compiler to avoid generic industry/static template noise.
-    legacy_shadow_enabled = os.environ.get("QUALIBUG_INPUT_ONLY_LEGACY_SHADOW", "0") == "1"
-    if legacy_shadow_enabled:
-        discovery = run_real_project_discovery(project, root_path)
-    else:
-        discovery = {"metrics": {"issue_count": 0}, "items": []}
+    # Phase B: multi-step business flow discovery (always runs in parallel)
+    flow_discovery: dict[str, Any] = {"metrics": {"issue_count": 0}, "items": []}
+    try:
+        flow_discovery = run_real_project_discovery(project, root_path)
+    except Exception:
+        pass
     discovery_summary = _summarize_grounded_candidates(grounded)
+    flow_summary = _summarize_discovery(flow_discovery)
+    discovery_summary["flow_probe_count"] = flow_summary.get("issue_count", 0)
+    discovery_summary["flow_high_confidence"] = flow_summary.get("high_confidence_issues", 0)
     if probe_execution:
         execution_summary = probe_execution.get("summary") or {}
         discovery_summary["confirmed_runtime_bugs"] = int(execution_summary.get("validated_candidate_count") or 0)
@@ -458,8 +594,7 @@ def run_input_only_project(
         "discovery_summary": discovery_summary,
         "grounded_candidate_summary": grounded.get("summary"),
         "grounded_probe_execution_summary": (probe_execution or {}).get("summary"),
-        "legacy_static_shadow_enabled": legacy_shadow_enabled,
-        "legacy_static_shadow_summary": _summarize_discovery(discovery),
+        "flow_discovery_summary": flow_summary,
         "outputs": {
             "platform_input_dir": str(root_path / "platform_inputs" / project),
             "knowledge_asset": str(root_path / "platform_outputs" / project / "enterprise_knowledge_center" / "enterprise_business_knowledge_asset.json"),
@@ -474,8 +609,8 @@ def run_input_only_project(
             "grounded_probe_execution_report_md": str(output_dir / "grounded_probe_execution_report.md") if probe_execution else "",
             "grounded_probe_repro_ps1": str(output_dir / "grounded_probe_repro.ps1") if probe_execution else "",
             "grounded_probe_regression_pytest": str(output_dir / "grounded_probe_regression_pytest.py") if probe_execution else "",
-            "legacy_shadow_report": str(root_path / "platform_outputs" / project / "real_project" / "real_project_defect_report.html") if legacy_shadow_enabled else "",
-            "legacy_shadow_discovered_issues": str(root_path / "platform_outputs" / project / "real_project" / "discovered_issues.json") if legacy_shadow_enabled else "",
+            "flow_discovery_report": str(root_path / "platform_outputs" / project / "real_project" / "real_project_defect_report.html"),
+            "flow_discovery_issues": str(root_path / "platform_outputs" / project / "real_project" / "discovered_issues.json"),
         },
         "note": "No oracle/ground_truth/BUG_MATRIX files were read. Without a configured live target, output is document-derived candidates, not runtime-confirmed bugs.",
     }

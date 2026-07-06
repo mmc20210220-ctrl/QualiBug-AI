@@ -431,7 +431,13 @@ def _build_investigation_guidance(finding: dict[str, Any], enterprise_ctx: dict[
     tables = CATEGORY_TABLES_MAP.get(category, [])
     
     # Log search pattern
-    log_search = CATEGORY_LOG_MAP.get(category, rf'grep -i "{path}" /var/log/app/*.log | grep -i "error\|warn"')
+    if path:
+        log_search = CATEGORY_LOG_MAP.get(category, rf'grep -i "{path}" /var/log/app/*.log | grep -i "error\|warn"')
+    else:
+        log_search = (
+            "# 当前缺少可绑定的真实接口路径\n"
+            "# 请先补跑真实请求，记录接口地址、时间窗口、状态码、traceId/requestId 后再检索日志"
+        )
     
     # SQL verify hint
     sql_verify = _build_sql_verify(finding, category, tables)

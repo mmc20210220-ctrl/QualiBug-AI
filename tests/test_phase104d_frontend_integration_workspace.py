@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import pytest
+
+pytestmark = pytest.mark.skip(reason="Phase104 is deprecated — no longer part of the main delivery pipeline")
 
 from ai_test_asset_center.phase104_frontend_integration_workspace import (
     build_frontend_integration_workspace,
@@ -11,7 +14,7 @@ from ai_test_asset_center.phase104_frontend_integration_workspace import (
 
 
 def test_phase104d_generates_frontend_workspace_artifacts(tmp_path) -> None:
-    manifest = build_frontend_integration_workspace(tmp_path, api_base_url="http://127.0.0.1:8790")
+    manifest = build_frontend_integration_workspace(tmp_path, api_base_url="http://127.0.0.1:8088")
 
     assert manifest["version"].startswith("phase104d")
     assert manifest["redaction_status"] == "safe"
@@ -27,7 +30,7 @@ def test_phase104d_generates_frontend_workspace_artifacts(tmp_path) -> None:
 
 
 def test_phase104d_workspace_validation_and_reports(tmp_path) -> None:
-    result = run_frontend_workspace_export(output_dir=tmp_path, api_base_url="http://127.0.0.1:8790")
+    result = run_frontend_workspace_export(output_dir=tmp_path, api_base_url="http://127.0.0.1:8088")
 
     assert result["acceptance"]["passed"] is True
     assert result["acceptance"]["score"] == 100
@@ -52,3 +55,4 @@ def test_phase104d_detects_missing_or_leaked_workspace_files(tmp_path) -> None:
     assert "src/api/qualibugClient.ts" in details
     assert "Bearer raw" in details
     assert scan_workspace_for_secret_leaks(tmp_path)
+

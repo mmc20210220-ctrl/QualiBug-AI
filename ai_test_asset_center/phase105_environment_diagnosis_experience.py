@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105D: customer environment diagnosis experience for the frontend layer.
 
@@ -320,7 +320,7 @@ def _extract_business_impact(demo: Mapping[str, Any], environment: Mapping[str, 
     return impacts
 
 
-def _build_environment_diagnosis_data(scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8790") -> dict[str, Any]:
+def _build_environment_diagnosis_data(scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088") -> dict[str, Any]:
     demo = collect_product_shell_demo_data(scenario=scenario, api_base_url=api_base_url)
     environment = _as_mapping(demo.get("environment"))
     project = _as_mapping(demo.get("project"))
@@ -843,7 +843,7 @@ def build_environment_diagnosis_experience(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
 ) -> dict[str, Any]:
     root = Path(output_dir)
     data = _build_environment_diagnosis_data(scenario=scenario, api_base_url=api_base_url)
@@ -967,7 +967,7 @@ def run_environment_diagnosis_experience_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     validate_only: bool = False,
 ) -> dict[str, Any]:
     root = Path(output_dir)
@@ -983,7 +983,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate or validate Phase105D environment diagnosis frontend experience.")
     parser.add_argument("--output-dir", default="outputs/phase105_environment_diagnosis_experience")
     parser.add_argument("--scenario", default="manufacturing", choices=("manufacturing", "ecommerce", "saas"))
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
 
@@ -999,3 +999,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

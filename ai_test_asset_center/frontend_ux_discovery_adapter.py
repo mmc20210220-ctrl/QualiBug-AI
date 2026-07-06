@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """UX-oriented discovery probes for enterprise frontend flows."""
 
@@ -69,7 +69,7 @@ def collect_frontend_ux_issues(
             output_dir=output_dir,
             build_first=True,
             scenario=scenario,
-            api_base_url=str(cfg.get("base_url") or "http://127.0.0.1:8790"),
+            api_base_url=str(cfg.get("base_url") or "http://127.0.0.1:8088"),
             min_score=int(cfg.get("frontend_interaction_min_score") or 90),
         )
         acceptance = result.get("acceptance") if isinstance(result, dict) else {}
@@ -120,3 +120,4 @@ def collect_frontend_ux_issues(
             )
         )
     return issues
+

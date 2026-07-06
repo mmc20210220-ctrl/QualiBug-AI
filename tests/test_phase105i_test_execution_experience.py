@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -12,7 +12,7 @@ from ai_test_asset_center.phase105_test_execution_experience import (
 
 
 def test_phase105i_builds_ai_test_execution_page(tmp_path) -> None:
-    manifest = build_test_execution_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8790")
+    manifest = build_test_execution_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8088")
 
     assert manifest["version"].startswith("phase105i")
     assert manifest["entrypoint"] == "test_execution.html"
@@ -33,7 +33,7 @@ def test_phase105i_builds_ai_test_execution_page(tmp_path) -> None:
 
 
 def test_phase105i_acceptance_and_validate_only(tmp_path) -> None:
-    result = run_test_execution_experience_export(output_dir=tmp_path, scenario="ecommerce", api_base_url="http://127.0.0.1:8790")
+    result = run_test_execution_experience_export(output_dir=tmp_path, scenario="ecommerce", api_base_url="http://127.0.0.1:8088")
 
     assert result["acceptance"]["passed"] is True
     assert result["acceptance"]["score"] == 100
@@ -57,3 +57,4 @@ def test_phase105i_detects_missing_page_data_and_secret_leak(tmp_path) -> None:
     assert "探针组" in details or "时间线" in details
     assert "client_secret=" in details
     assert scan_test_execution_for_secret_leaks(tmp_path)
+

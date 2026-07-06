@@ -75,6 +75,13 @@ def match_finding_to_har(
         path_match = re.search(r'(/api/[\w/{}\.\-%:]+)', text)
         if path_match:
             path = path_match.group(1)
+
+    # No declared path and no path mention in the claim means we do not have a
+    # reliable request identity. In that case, binding the finding to an
+    # arbitrary 4xx/5xx HAR row creates false evidence such as unrelated login
+    # failures. Leave HAR empty rather than fabricating a link.
+    if not path:
+        return []
     
     scored: list[tuple[float, dict[str, Any]]] = []
     
@@ -86,18 +93,23 @@ def match_finding_to_har(
         entry_status = entry.get("response", {}).get("status", 0)
         
         score = 0.0
+        binding_signal = False
         
         # 1. Exact path + method match (highest weight)
         if path and method and entry_method == method and entry_path == path:
             score += 10.0
+            binding_signal = True
         elif path and entry_path == path:
             score += 8.0
+            binding_signal = True
         
         # 2. Path substring match in finding text
         if path and path in entry_url:
             score += 5.0
+            binding_signal = True
         if entry_path and entry_path in text:
             score += 4.0
+            binding_signal = True
         
         # 3. Method match (weaker signal)
         if method and entry_method == method:
@@ -129,9 +141,19 @@ def match_finding_to_har(
         for cp in cat_paths:
             if cp in entry_path:
                 score += 1.5
+                binding_signal = True
                 break
-        
-        if score > 0:
+
+        # Error responses are only meaningful after we have bound the runtime
+        # row to the finding. Otherwise a random login 401 will hijack a
+        # pathless business-rule finding.
+        if binding_signal:
+            if entry_status >= 400:
+                score += 1.0
+            if entry_status >= 500:
+                score += 1.0  # Double weight for 500 errors
+
+        if binding_signal and score > 0:
             scored.append((score, entry))
     
     # Sort by score descending

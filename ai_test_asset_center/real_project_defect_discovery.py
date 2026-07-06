@@ -574,6 +574,143 @@ def _execution_attempted(execution: dict[str, Any]) -> bool:
     return execution.get("response_status") is not None or execution.get("duration_seconds") is not None or bool(error)
 
 
+def _strict_verifier_for_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    """V13 strict verifier: each candidate issue MUST pass ALL gates to become ready_bug.
+
+    Gates (all must pass):
+    1. request method/path matches the declared bug's API reference
+    2. response status/body is consistent with bug description
+    3. has explicit expected/actual comparison
+    4. has failed_assertions list (at least one non-trivial assertion)
+    5. has reproduction_steps (not synthetic/generated placeholders)
+    6. has evidence_refs (links back to HAR entries, DB snapshots, etc.)
+    7. verification.verdict == "validated_bug"
+    8. is_reproducible == True
+    9. gate_passed == True
+
+    Issues that fail ANY gate are classified as:
+    - "internal_validation_lead" (partial evidence, needs human)
+    - "coverage_gap" (quality assurance gap, not a bug)
+    - "rejected_evidence" (evidence contradicts the claim)
+    - "route_blocked" / "auth_blocked" / "environment_blocked" (execution blocked)
+
+    Only issues that pass ALL gates may enter the customer-facing data.risks list.
+    """
+    result: dict[str, Any] = {
+        "passes_strict_verifier": False,
+        "verdict": "pending",
+        "failed_gates": [],
+        "reasons": [],
+    }
+
+    # ── Gate 1: Request method/path consistency ──
+    repro = issue.get("reproduction") or {}
+    har = issue.get("har_evidence") or {}
+    api_path = (repro.get("path") or issue.get("repro_path") or
+                issue.get("_api_path") or har.get("path") or "")
+    api_method = (repro.get("method") or issue.get("repro_method") or
+                  issue.get("_api_method") or har.get("method") or "")
+    if not api_method or not api_path:
+        result["failed_gates"].append("no_api_reference")
+        result["reasons"].append("缺少请求方法和路径，无法追溯到 API 调用")
+
+    # ── Gate 2: Response status/body consistency ──
+    har_status = har.get("status_code") or 0
+    har_body = har.get("response_body") or ""
+    title = str(issue.get("title") or "")
+    description = str(issue.get("description") or "")
+    claim_text = f"{title} {description}"
+
+    # Check for claimed vs actual status mismatch.
+    # Only flag when the claim *asserts* a specific error was returned
+    # (e.g. "返回500", "HTTP 500"), NOT when it says something *should* be
+    # returned (e.g. "should return 401", "预期返回 401").
+    import re as _re2
+    # Match patterns like "返回500", "HTTP 500" — claims about observed status
+    claimed_observed = set(
+        int(m) for m in _re2.findall(
+            r'(?:返回|HTTP\s*|状态码\s*|responded?\s+with\s+|got\s+)(\d{3})',
+            claim_text, _re2.IGNORECASE
+        )
+        if 400 <= int(m) <= 599
+    )
+    if har_status and 200 <= har_status < 300 and claimed_observed:
+        result["failed_gates"].append("status_contradiction")
+        result["reasons"].append(
+            f"声明-证据矛盾：声称返回错误码 {claimed_observed}，实际响应 {har_status}（成功）"
+        )
+
+    # ── Gate 3: expected/actual comparison ──
+    expected = issue.get("expected") or issue.get("expected_behavior") or ""
+    actual = issue.get("actual") or issue.get("actual_behavior") or ""
+    if not expected:
+        result["failed_gates"].append("missing_expected_behavior")
+        result["reasons"].append("缺少预期行为，无法判断业务规则应当如何成立")
+    if not actual:
+        result["failed_gates"].append("missing_actual_behavior")
+        result["reasons"].append("缺少实际行为，无法证明系统当前表现与预期不一致")
+
+    # ── Gate 4: failed_assertions ──
+    failed_assertions = issue.get("failed_assertions") or []
+    if not failed_assertions or len(failed_assertions) == 0:
+        result["failed_gates"].append("no_failed_assertions")
+        result["reasons"].append("缺少失败断言，无法证明业务规则被违反")
+
+    # ── Gate 5: reproduction_steps (not synthetic) ──
+    repro_steps = repro.get("steps") or []
+    is_synthetic = bool(repro.get("is_synthetic")) or False
+    if not repro_steps or len(repro_steps) == 0 or is_synthetic:
+        result["failed_gates"].append("no_real_reproduction_steps")
+        result["reasons"].append("缺少真实复现步骤（当前仅有合成/生成占位步骤）")
+
+    # ── Gate 6: evidence_refs ──
+    evidence_refs = issue.get("evidence_refs") or []
+    if not evidence_refs or len(evidence_refs) == 0:
+        result["failed_gates"].append("no_evidence_refs")
+        result["reasons"].append("缺少证据引用，无法追溯到 HAR/DB/日志等原始证据")
+
+    # ── Gate 7: verification.verdict ──
+    verification = issue.get("verification") or {}
+    verdict = str(verification.get("verdict") or "").strip()
+    if verdict != "validated_bug":
+        result["failed_gates"].append("verdict_not_validated")
+        result["reasons"].append(
+            f"verification.verdict 不是 validated_bug（当前: {verdict or '缺失'}）"
+        )
+
+    # ── Gate 8: is_reproducible ──
+    if not bool(issue.get("is_reproducible")):
+        result["failed_gates"].append("not_reproducible")
+        result["reasons"].append("is_reproducible 不为 True")
+
+    # ── Gate 9: gate_passed ──
+    if not bool(issue.get("gate_passed")):
+        result["failed_gates"].append("gate_not_passed")
+        result["reasons"].append("gate_passed 不为 True")
+
+    # ── Final classification ──
+    if not result["failed_gates"]:
+        result["passes_strict_verifier"] = True
+        result["verdict"] = "validated_bug"
+        result["value_lane"] = "ready_bug"
+    elif any(g in ("no_api_reference", "no_evidence_refs", "no_real_reproduction_steps")
+             for g in result["failed_gates"]):
+        result["verdict"] = "internal_validation_lead"
+        result["value_lane"] = "validation_lead"
+    elif any(g in ("status_contradiction", "verdict_not_validated")
+             for g in result["failed_gates"]):
+        result["verdict"] = "rejected_evidence"
+        result["value_lane"] = "rejected_evidence"
+    elif "no_failed_assertions" in result["failed_gates"]:
+        result["verdict"] = "coverage_gap"
+        result["value_lane"] = "coverage_gap"
+    else:
+        result["verdict"] = "internal_validation_lead"
+        result["value_lane"] = "validation_lead"
+
+    return result
+
+
 def _build_discovery_funnel(
     probes: list[dict[str, Any]],
     executions: list[dict[str, Any]],
@@ -604,8 +741,39 @@ def _build_discovery_funnel(
     ]
 
     accounting_rows = [classify_issue_accounting(item) for item in issues if isinstance(item, dict)]
+
+    # ── V13 Strict Verification: every issue must pass ALL 9 gates ──
+    strict_verifier_results = [_strict_verifier_for_issue(item) for item in issues if isinstance(item, dict)]
+    for i, issue in enumerate(issues):
+        if i < len(strict_verifier_results):
+            sr = strict_verifier_results[i]
+            issue["_strict_verifier_passed"] = sr["passes_strict_verifier"]
+            issue["_strict_verifier_verdict"] = sr["verdict"]
+            issue["_strict_verifier_failed_gates"] = sr["failed_gates"]
+            issue["_strict_verifier_reasons"] = sr["reasons"]
+            issue["_value_lane"] = sr.get("value_lane", "validation_lead")
+            # Only promote to ready_bug if strict verifier passes
+            if sr["passes_strict_verifier"]:
+                issue["gate_passed"] = True
+                issue["is_reproducible"] = True
+                issue["verification"] = issue.get("verification") or {}
+                issue["verification"]["verdict"] = "validated_bug"
+                issue["bug_status"] = "reproduced"
+            elif sr["verdict"] == "rejected_evidence":
+                issue["gate_passed"] = False
+                issue["is_reproducible"] = False
+                issue["bug_status"] = "not_reproduced"
+            elif sr["verdict"] in ("coverage_gap", "internal_validation_lead"):
+                issue["gate_passed"] = False
+                issue["is_reproducible"] = False
+                if issue.get("bug_status") != "reproduced":
+                    issue["bug_status"] = "suspected"
+
     verifier_passed_count = sum(1 for item in accounting_rows if item.get("verifier_passed"))
+    strict_verifier_passed_count = sum(1 for sr in strict_verifier_results if sr["passes_strict_verifier"])
     validated_bug_count = sum(1 for item in accounting_rows if item.get("strict_validated_bug"))
+    # Use strict verifier count as the primary validated_bug metric
+    validated_bug_count = max(validated_bug_count, strict_verifier_passed_count)
     candidate_issue_count = sum(1 for item in accounting_rows if item.get("accounting_state") == "candidate")
     pending_finding_count = sum(1 for item in accounting_rows if item.get("accounting_state") == "pending")
     saleable_count = sum(1 for item in accounting_rows if item.get("saleable"))

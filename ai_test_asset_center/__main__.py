@@ -454,6 +454,27 @@ def scan(
 
     # ── E2E Business Flow Test: 下单→支付→取消→退款 全链路 ──
     e2e_findings: list[dict] = []
+    
+    # Take DB snapshot before any state-modifying tests
+    db_snapshot: dict | None = None
+    db_cfg = cfg.get("database", {})
+    if db_cfg.get("host") and db_cfg.get("database"):
+        try:
+            import pg8000 as _pg
+            _conn = _pg.connect(host=db_cfg["host"], port=db_cfg.get("port", 5432),
+                database=db_cfg["database"], user=db_cfg.get("user", ""),
+                password=db_cfg.get("password", ""))
+            _cur = _conn.cursor()
+            _cur.execute("SELECT sku, available_qty, locked_qty FROM inventory")
+            _inv = [(r[0], r[1], r[2]) for r in _cur.fetchall()]
+            _cur.execute("SELECT email, balance FROM users")
+            _bal = [(r[0], r[1]) for r in _cur.fetchall()]
+            _conn.close()
+            db_snapshot = {"inventory": _inv, "balances": _bal, "taken_at": time.time()}
+            print(f"  [SNAPSHOT] DB state captured for idempotent scan", flush=True)
+        except Exception as _se:
+            print(f"  [WARN] DB snapshot failed (non-fatal): {_se}", flush=True)
+    
     try:
         if base_url:
             import urllib.request as _ur, json as _j
@@ -478,19 +499,33 @@ def scan(
                                 "confidence_score": 0.92
                             })
                 
-                # Step 2: Get user addresses (dynamic)
+                # Step 2: Pick first available ON_SALE product for E2E flow
+                test_sku = ""
+                test_price = 0
+                for p in (products if isinstance(products, list) else []):
+                    if isinstance(p, dict) and p.get("status") == "ON_SALE" and p.get("sku"):
+                        test_sku = p["sku"]
+                        test_price = float(p.get("price", 0) or 0)
+                        break
+                if not test_sku:
+                    print("  [WARN] No ON_SALE product found, skipping order flow", flush=True)
+                
+                # Step 3: Get user addresses (dynamic)
                 addr_id = _ensure_address(token, base_url)
                 
-                # Step 3: Create order
-                order_body = _j.dumps({"items": [{"sku": "SKU-PHONE-001", "qty": 1}], "addressId": addr_id}).encode()
-                try:
-                    order_resp = _ur.urlopen(_ur.Request(f"{base_url}/api/orders", data=order_body, headers=H, method="POST"), timeout=5)
-                    order_data = _j.loads(order_resp.read())
-                    order_id = order_data.get("id") or order_data.get("order_id", "")
-                    order_amount = float(order_data.get("total_amount") or order_data.get("payable_amount") or 6999)
-                except Exception:
-                    order_id = ""
-                    order_amount = 6999
+                # Step 4: Create order
+                order_id = ""
+                order_amount = test_price
+                if test_sku:
+                    order_body = _j.dumps({"items": [{"sku": test_sku, "qty": 1}], "addressId": addr_id}).encode()
+                    try:
+                        order_resp = _ur.urlopen(_ur.Request(f"{base_url}/api/orders", data=order_body, headers=H, method="POST"), timeout=5)
+                        order_data = _j.loads(order_resp.read())
+                        order_id = order_data.get("id") or order_data.get("order_id", "")
+                        order_amount = float(order_data.get("total_amount") or order_data.get("payable_amount") or test_price)
+                    except Exception:
+                        order_id = ""
+                        order_amount = test_price
                 
                 if order_id:
                     # Step 4: Double-create (idempotency)
@@ -569,31 +604,32 @@ def scan(
                     pass
                 
                 # Step 10: Inventory concurrency test
-                import threading, queue
-                results = queue.Queue()
-                def place_order():
-                    try:
-                        ob = _j.dumps({"items": [{"sku": "SKU-PHONE-001", "qty": 1}], "addressId": addr_id}).encode()
-                        r = _ur.urlopen(_ur.Request(f"{base_url}/api/orders", data=ob, headers=H, method="POST"), timeout=5)
-                        results.put(("ok", r.status))
-                    except Exception as ex:
-                        results.put(("err", str(ex)))
-                t1 = threading.Thread(target=place_order)
-                t2 = threading.Thread(target=place_order)
-                t1.start(); t2.start()
-                t1.join(timeout=5); t2.join(timeout=5)
-                r1 = r2 = None
-                while not results.empty():
-                    r = results.get_nowait()
-                    if r1 is None: r1 = r
-                    else: r2 = r
-                if r1 and r2 and r1[0] == "ok" and r2[0] == "ok":
-                    e2e_findings.append({
-                        "severity": "P1", "title": "[E2E] 库存并发 — 双订单同时创建应验证库存一致性",
-                        "category": "concurrency", "source": "e2e_flow",
-                        "description": "两个并发订单均成功，需验证SKU-PHONE-001库存是否正确扣减",
-                        "confidence_score": 0.85
-                    })
+                if test_sku:
+                    import threading, queue as _q
+                    results = _q.Queue()
+                    def place_order():
+                        try:
+                            ob = _j.dumps({"items": [{"sku": test_sku, "qty": 1}], "addressId": addr_id}).encode()
+                            r = _ur.urlopen(_ur.Request(f"{base_url}/api/orders", data=ob, headers=H, method="POST"), timeout=5)
+                            results.put(("ok", r.status))
+                        except Exception as ex:
+                            results.put(("err", str(ex)))
+                    t1 = threading.Thread(target=place_order)
+                    t2 = threading.Thread(target=place_order)
+                    t1.start(); t2.start()
+                    t1.join(timeout=5); t2.join(timeout=5)
+                    r1 = r2 = None
+                    while not results.empty():
+                        r = results.get_nowait()
+                        if r1 is None: r1 = r
+                        else: r2 = r
+                    if r1 and r2 and r1[0] == "ok" and r2[0] == "ok":
+                        e2e_findings.append({
+                            "severity": "P1", "title": "[E2E] 库存并发 — 双订单同时创建应验证库存一致性",
+                            "category": "concurrency", "source": "e2e_flow",
+                            "description": f"两个并发订单均成功，需验证{test_sku}库存是否正确扣减",
+                            "confidence_score": 0.85
+                        })
             
             print(f"  [INFO] E2E flow: {len(e2e_findings)} findings", flush=True)
     except Exception as ee:
@@ -627,6 +663,42 @@ def scan(
     except Exception as ue:
         print(f"  [WARN] Frontend UI tests failed: {ue}", flush=True)
     
+    # ── Restore DB snapshot to ensure scan idempotency ──
+    if db_snapshot:
+        try:
+            import pg8000 as _pg2
+            _conn2 = _pg2.connect(host=db_cfg.get("host", "localhost"), port=db_cfg.get("port", 5432),
+                database=db_cfg.get("database", ""), user=db_cfg.get("user", ""),
+                password=db_cfg.get("password", ""))
+            _cur2 = _conn2.cursor()
+            for sku, avail, locked in db_snapshot.get("inventory", []):
+                _cur2.execute("UPDATE inventory SET available_qty=%s, locked_qty=%s WHERE sku=%s",
+                            (avail, locked, sku))
+            for email, balance in db_snapshot.get("balances", []):
+                _cur2.execute("UPDATE users SET balance=%s WHERE email=%s", (balance, email))
+            # Clean up E2E-created test data
+            taken_at = db_snapshot.get("taken_at", 0)
+            import datetime as _dt2
+            cutoff = _dt2.datetime.fromtimestamp(taken_at, tz=_dt2.timezone.utc)
+            _cur2.execute("DELETE FROM refunds WHERE created_at > %s", (cutoff,))
+            _cur2.execute("DELETE FROM payments WHERE created_at > %s", (cutoff,))
+            _cur2.execute("DELETE FROM orders WHERE created_at > %s", (cutoff,))
+            _conn2.commit()
+            _conn2.close()
+            print(f"  [CLEANUP] 已恢复数据库到测试前状态", flush=True)
+        except Exception as _re:
+            print(f"  [WARN] DB restore failed (non-fatal): {_re}", flush=True)
+    
+    # ── Holistic re-evaluation with all layer findings ──
+    all_extra_findings = db_findings + e2e_findings + deep_findings + ui_findings
+    try:
+        from .evaluation_engine import CoverageAnalyzer
+        full_analyzer = CoverageAnalyzer()
+        full_coverage = full_analyzer.analyze(v12, extra_findings=all_extra_findings)
+        holistic_cov = full_coverage.to_dict()["overall_coverage"]
+    except Exception:
+        holistic_cov = evaluation.coverage.to_dict().get("overall_coverage", 0)
+    
     result = {
         "success": True,
         "db_findings": db_findings,
@@ -637,7 +709,7 @@ def scan(
         "project": project,
         "grade": evaluation.system_grade,
         "score": evaluation.overall_score,
-        "coverage": evaluation.coverage.to_dict().get("overall_coverage", 0),
+        "coverage": holistic_cov,
         "total_findings": total_findings,
         "total_ms": total_ms,
         "layers": layers,

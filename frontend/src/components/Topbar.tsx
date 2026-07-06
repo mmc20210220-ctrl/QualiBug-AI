@@ -8,6 +8,7 @@ import { useProjectNavigation } from '../lib/project-navigation';
 const pageLabels: Record<string, string> = {
   '/dashboard': '风险总览',
   '/findings': '行为验证',
+  '/clues': '待验证线索',
   '/evidence': '证据链',
   '/behavior-space': '行为空间',
   '/materials': '企业资料',
@@ -53,14 +54,14 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
     ? (lastScanMinutes < 1 ? '刚刚' : `${lastScanMinutes} 分钟前`)
     : '--';
   const statusText = isProductsPage
-    ? '版本策略已同步'
+    ? '版本已同步'
     : !hasSelectedCustomer
-    ? '未选择客户'
+    ? '待选择客户'
     : scanActive
-      ? '检测执行中'
+      ? '检测中'
       : hasMaterializedMetrics
-        ? (continuousActive ? '持续检测中 · 自动运行' : `状态已同步 · 最近扫描 ${minutesDisplay}`)
-        : '已选择客户 · 暂无真实数据';
+        ? (continuousActive ? '持续检测中' : `已同步 · ${minutesDisplay}`)
+        : '暂无结果';
   const dotTone = isProductsPage ? 'success' : !hasSelectedCustomer ? 'muted' : scanActive ? 'warning' : hasMaterializedMetrics ? 'success' : 'muted';
 
   useEffect(() => {
@@ -94,10 +95,10 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
             <span className="breadcrumb">QualiBug AI <b>/ {currentPage}</b></span>
             <span className="topbar-subtitle">
               {isProductsPage
-                ? '企业级产品策略与版本路径'
+                ? '产品策略与版本路径'
                 : hasSelectedCustomer
                   ? customerButtonName
-                  : '企业级行为风险决策界面'}
+                  : '行为风险决策台'}
             </span>
           </div>
         </div>

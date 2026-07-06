@@ -37,8 +37,10 @@ from ai_test_asset_center.display_ready_formatter import (  # noqa: E402
     _format_single_finding,
     _has_runtime_response,
     _path_mismatch_reasons,
+    format_findings_display_ready,
+    sanitize_customer_evidence_payload,
 )
-from ai_test_asset_center.phase104_command_center_http_api import _sanitize_customer_evidence_payload  # noqa: E402
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -565,7 +567,7 @@ class TestRuntimeEvidenceTraceability:
             },
         }
 
-        sanitized = _sanitize_customer_evidence_payload(payload)
+        sanitized = sanitize_customer_evidence_payload(payload)
         risk = sanitized["data"]["risks"][0]
 
         assert risk["bug_status"] == "not_reproduced"
@@ -593,7 +595,7 @@ class TestRuntimeEvidenceTraceability:
             "proof": {"repro_rate": 100},
         }
 
-        sanitized = _sanitize_customer_evidence_payload(payload)
+        sanitized = sanitize_customer_evidence_payload(payload)
 
         assert sanitized["bug_status"] == "not_reproduced"
         assert sanitized["raw_evidence"]["response_raw"] == {}
@@ -616,7 +618,7 @@ class TestRuntimeEvidenceTraceability:
             "proof": {"repro_rate": 0},
         }
 
-        sanitized = _sanitize_customer_evidence_payload(payload)
+        sanitized = sanitize_customer_evidence_payload(payload)
 
         assert sanitized["raw_evidence"]["response_raw"] == {}
         assert sanitized["reproduction"]["har_evidence"] is None
@@ -673,3 +675,150 @@ class TestRuntimeEvidenceTraceability:
 
         assert _has_runtime_response(finding) is True
         assert _path_mismatch_reasons(finding) == []
+
+
+
+class TestDisplayReadyCommercialContract:
+    """Commercial delivery counts must come from display-ready findings, not raw totals."""
+
+    def test_contract_separates_raw_candidates_from_materialized_display_risks(self):
+        risks = [
+            {
+                "title": "text-only candidate should not be sold as reproduced bug",
+                "status": "confirmed",
+                "_api_path": "/api/orders",
+                "expected_behavior": "expected state",
+                "actual_behavior": "actual state",
+                "evidence": {"source_file": "reasoner-output.json"},
+            }
+        ]
+        raw_report = {"total_findings": 9, "value_metrics": {"evidence_trust_score": 98}}
+
+        display_risks, metrics = format_findings_display_ready(risks, {}, raw_report)
+        contract = metrics["display_contract"]
+
+        assert len(display_risks) == 1
+        assert contract["materialized_risk_count"] == 1
+        assert contract["raw_candidate_risk_count"] == 9
+        assert contract["raw_to_display_delta"] == 8
+        assert contract["ready_bug_count"] == 0
+        assert contract["needs_validation_count"] == 1
+        assert metrics["scores"]["evidence_trust_score"] < 98
+
+    def test_contract_counts_only_gate_passed_reproduced_as_ready_bug(self):
+        risks = [
+            {
+                "title": "GET /api/orders returns 500 when list orders",
+                "status": "confirmed",
+                "_api_path": "/api/orders",
+                "_api_method": "GET",
+                "expected_behavior": "orders endpoint should return a stable list response",
+                "actual_behavior": "GET /api/orders returned HTTP 500 with error body",
+                "har_evidence": {
+                    "method": "GET",
+                    "path": "/api/orders",
+                    "status_code": 500,
+                    "response_body": '{"error":"database failed"}',
+                },
+                "evidence": {"method": "GET", "path": "/api/orders"},
+            }
+        ]
+
+        display_risks, metrics = format_findings_display_ready(risks, {}, {"raw_total": 1})
+        contract = metrics["display_contract"]
+
+        assert display_risks[0]["bug_status"] == "reproduced"
+        assert display_risks[0]["gate_passed"] is True
+        assert contract["ready_bug_count"] == 1
+        assert contract["needs_validation_count"] == 0
+
+
+class TestCanonicalRuntimeObservationEvidence:
+    """Deep evidence correctness: every display layer must use the same runtime row."""
+
+    def test_runtime_call_evidence_populates_raw_evidence_and_assertions(self):
+        finding = {
+            "title": "GET /api/accounts returns server error",
+            "status": "confirmed",
+            "_api_method": "GET",
+            "_api_path": "/api/accounts",
+            "expected_behavior": "accounts endpoint should return a stable list response",
+            "actual_behavior": "GET /api/accounts returned HTTP 500 with an error body",
+            "evidence": {
+                "calls": [
+                    {
+                        "call": "GET /api/accounts",
+                        "results": {
+                            "admin": {
+                                "status": "500",
+                                "body": {"error": "database failed", "traceId": "tr-123"},
+                                "duration_ms": 41,
+                                "_request": {"url": "http://local.test/api/accounts"},
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+
+        formatted = _format_single_finding(finding)
+
+        assert formatted["bug_status"] == "reproduced"
+        assert formatted["raw_evidence"]["response_raw"]["status_code"] == 500
+        assert formatted["raw_evidence"]["response_raw"]["source"] == "runtime_call"
+        assert formatted["reproduction"]["har_evidence"]["source"] == "runtime_call"
+        assert any(a["type"] == "http_status_error" for a in formatted["failed_assertions"])
+        assert formatted["expected_actual_comparison"]["api_comparison"]["source"] == "runtime_call"
+
+    def test_method_mismatch_downgrades_runtime_call_to_not_reproduced(self):
+        finding = {
+            "title": "POST /api/accounts returns server error",
+            "status": "confirmed",
+            "_api_method": "POST",
+            "_api_path": "/api/accounts",
+            "expected_behavior": "POST should create account successfully",
+            "actual_behavior": "POST /api/accounts returned HTTP 500",
+            "evidence": {
+                "calls": [
+                    {
+                        "call": "GET /api/accounts",
+                        "results": {"admin": {"status": "500", "body": {"error": "boom"}}},
+                    }
+                ]
+            },
+        }
+
+        formatted = _format_single_finding(finding)
+
+        assert formatted["bug_status"] == "not_reproduced"
+        assert formatted["raw_evidence"]["response_raw"] == {}
+        assert formatted["reproduction"]["har_evidence"] is None
+        assert any("method" in item for item in formatted["gate_failures"])
+
+    def test_response_sanitizer_rejects_cached_method_mismatch(self):
+        payload = {
+            "title": "POST /api/accounts returns server error",
+            "expected": "POST should create account successfully",
+            "actual": "POST returned HTTP 500",
+            "bug_status": "reproduced",
+            "verdict": "confirmed",
+            "gate_passed": True,
+            "is_reproducible": True,
+            "repro_method": "POST",
+            "repro_path": "/api/accounts",
+            "evidence_quality": {"score": 90, "can_reproduce": True, "verified": ["已捕获真实接口响应（状态码/响应体）"], "missing": []},
+            "raw_evidence": {
+                "request_raw": {"method": "GET", "path": "/api/accounts"},
+                "response_raw": {"status_code": 500, "body": '{"error":"boom"}'},
+                "has_real_evidence": True,
+            },
+            "reproduction": {"har_evidence": {"status_code": 500}},
+            "proof": {"repro_rate": 100},
+        }
+
+        sanitized = sanitize_customer_evidence_payload(payload)
+
+        assert sanitized["bug_status"] == "not_reproduced"
+        assert sanitized["raw_evidence"]["response_raw"] == {}
+        assert sanitized["reproduction"]["har_evidence"] is None
+        assert sanitized["proof"]["repro_rate"] == 0

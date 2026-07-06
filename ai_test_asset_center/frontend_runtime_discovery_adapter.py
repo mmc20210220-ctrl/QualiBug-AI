@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Adapters that surface frontend runtime artifacts as discovery signals."""
 
@@ -92,7 +92,7 @@ def collect_frontend_runtime_issues(
             workspace_dir=workspace_dir,
             output_dir=output_dir,
             scenario=scenario,
-            api_base_url=str(cfg.get("base_url") or "http://127.0.0.1:8790"),
+            api_base_url=str(cfg.get("base_url") or "http://127.0.0.1:8088"),
             build_workspace=True,
         ).to_dict()
         for step in smoke_report.get("steps") or []:
@@ -143,3 +143,4 @@ def collect_frontend_runtime_issues(
             )
         )
     return issues
+

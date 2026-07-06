@@ -37,7 +37,10 @@ from ai_test_asset_center.phase103_command_center_api import (
 )
 from ai_test_asset_center.phase103_demo_runner import seed_demo_project
 from ai_test_asset_center.phase103_enterprise_command_center import redact_value
-from ai_test_asset_center.display_ready_formatter import _runtime_observation_supports_finding
+from ai_test_asset_center.display_ready_formatter import (
+    _runtime_identity_mismatch_reasons,
+    _runtime_observation_supports_finding,
+)
 from ai_test_asset_center.real_project_onboarding import ROOT, _safe_project_id
 
 PHASE104A_VERSION = "phase104a-command-center-http-api-v1"
@@ -252,7 +255,7 @@ def _sanitize_display_risk(risk: dict[str, Any]) -> dict[str, Any]:
         "duration_ms": response_raw.get("duration_ms") or 0,
         "actor": request_raw.get("actor"),
     }
-    if _runtime_observation_supports_finding(risk, obs):
+    if _runtime_observation_supports_finding(risk, obs) and not _runtime_identity_mismatch_reasons(risk, obs):
         return risk
 
     cleaned = dict(risk)
@@ -521,7 +524,7 @@ class Phase104HTTPServer(ThreadingHTTPServer):
         super().__init__(server_address, _CommandCenterHTTPRequestHandler)
 
 
-def serve_http_api(*, host: str = "127.0.0.1", port: int = 8790, seed_scenario: str | None = None) -> Phase104HTTPServer:
+def serve_http_api(*, host: str = "127.0.0.1", port: int = 8088, seed_scenario: str | None = None) -> Phase104HTTPServer:
     app = Phase104CommandCenterHttpApp(seed_scenario=seed_scenario)
     server = Phase104HTTPServer((host, port), app)
     print(f"Phase104A Command Center HTTP API listening on http://{host}:{port}")
@@ -542,7 +545,7 @@ def serve_http_api(*, host: str = "127.0.0.1", port: int = 8790, seed_scenario: 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Phase104A mutable local Command Center HTTP API.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to 127.0.0.1.")
-    parser.add_argument("--port", type=int, default=8790, help="Bind port. Defaults to 8790.")
+    parser.add_argument("--port", type=int, default=8088, help="Bind port. Defaults to 8088.")
     parser.add_argument(
         "--seed-scenario",
         choices=["manufacturing", "ecommerce", "saas"],
@@ -570,3 +573,4 @@ __all__ = [
     "serve_http_api",
     "main",
 ]
+

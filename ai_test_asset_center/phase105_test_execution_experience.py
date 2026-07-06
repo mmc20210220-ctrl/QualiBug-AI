@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105I: AI test plan and realtime execution frontend experience.
 
@@ -684,7 +684,7 @@ def build_test_execution_experience(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
 ) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -842,7 +842,7 @@ def run_test_execution_experience_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     validate_only: bool = False,
 ) -> dict[str, Any]:
     manifest: dict[str, Any]
@@ -858,7 +858,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate the Phase105I AI test execution frontend page.")
     parser.add_argument("--output-dir", default="outputs/phase105_test_execution_experience")
     parser.add_argument("--scenario", default="manufacturing")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--validate-only", action="store_true")
     return parser
 
@@ -877,3 +877,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

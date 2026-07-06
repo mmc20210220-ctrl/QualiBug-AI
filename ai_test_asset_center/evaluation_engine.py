@@ -28,18 +28,28 @@ from typing import Any
 class CoverageReport:
     state_coverage: float = 0.0      # visited_states / total_states
     scenario_coverage: float = 0.0   # executed_paths / total_paths
-    oracle_coverage: float = 0.0     # triggered_oracles / total_oracles
+    engine_coverage: float = 0.0     # unique detection engines active / baseline
     entity_coverage: float = 0.0     # entities_with_bugs / total_entities
+    quality_coverage: float = 0.0    # A+/A grade bugs proportion
     details: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        # Weighted overall: engine(35%) + scenario(25%) + quality(20%) + entity(20%)
+        # State coverage is excluded — it's always near 100% and adds no signal
+        weighted = (
+            self.engine_coverage * 0.35 +
+            self.scenario_coverage * 0.25 +
+            self.quality_coverage * 0.20 +
+            self.entity_coverage * 0.20
+        )
         return {
             "state_coverage": round(self.state_coverage, 3),
             "scenario_coverage": round(self.scenario_coverage, 3),
-            "oracle_coverage": round(self.oracle_coverage, 3),
+            "engine_coverage": round(self.engine_coverage, 3),
+            "oracle_coverage": round(self.engine_coverage, 3),  # backward compat
             "entity_coverage": round(self.entity_coverage, 3),
-            "overall_coverage": round(
-                (self.state_coverage + self.scenario_coverage + self.oracle_coverage + self.entity_coverage) / 4, 3),
+            "quality_coverage": round(self.quality_coverage, 3),
+            "overall_coverage": round(weighted, 3),
             "details": self.details,
         }
 
@@ -47,9 +57,22 @@ class CoverageReport:
 class CoverageAnalyzer:
     """Compute coverage metrics from V12 pipeline output."""
 
-    def analyze(self, v12_result: dict, state_graphs: dict | None = None) -> CoverageReport:
+    # All possible detection engines that can produce findings
+    _ALL_SOURCE_ENGINES = {
+        "v12_scenario_executor", "v12_state_graph", "parameter_fuzzer",
+        "db_verifier", "e2e_flow", "deep_verifier", "frontend_ui",
+        "http_probe", "http_timer", "builtin", "runtime",
+    }
+
+    def analyze(self, v12_result: dict, state_graphs: dict | None = None,
+                extra_findings: list[dict] | None = None) -> CoverageReport:
         phases = v12_result.get("phases", {})
         findings = v12_result.get("findings", [])
+
+        # Merge extra findings from other layers (db, e2e, deep, ui, etc.)
+        all_findings = list(findings)
+        if extra_findings:
+            all_findings.extend(extra_findings)
 
         # State coverage from graph stats
         sg = phases.get("state_graph", {})
@@ -66,31 +89,41 @@ class CoverageAnalyzer:
         ex = phases.get("execution", {})
         executed = ex.get("executed", 0)
 
-        # Oracle coverage
-        oracle_phase = phases.get("oracle", {})
-        oracles_triggered = len(set(
-            f.get("oracle", {}).get("oracle_name", "")
-            for f in findings if f.get("oracle")
-        ))
-        total_oracles = 26  # All registered oracles
+        # Engine coverage: count unique detection sources that produced findings.
+        # Normalize against a baseline of 5 distinct engines (excellent coverage).
+        sources_used = set(
+            f.get("source", "") for f in all_findings if f.get("source")
+        )
+        active_count = len(sources_used & self._ALL_SOURCE_ENGINES)
+        engine_cov = min(active_count / 5.0, 1.0)  # 5+ distinct engines = 100%
 
         # Entity coverage: how many entities have at least one bug
         entities_with_bugs = len(set(
             f.get("title", "").split(":")[0].split(" ")[0]
-            for f in findings if f.get("confidence_score", 0) >= 0.8
+            for f in all_findings if f.get("confidence_score", 0) >= 0.8
         ))
         total_entities = len(sg_summary) or 1
+
+        # Quality coverage: proportion of findings that are high-grade (A+/A)
+        scorer = BugScoringEngine()
+        scores = scorer.score_all(all_findings)
+        high_grade = sum(1 for s in scores if s.grade in ("A+", "A"))
+        quality_cov = min(high_grade / max(len(scores), 1), 1.0)
 
         return CoverageReport(
             state_coverage=min(executed / max(total_transitions, 1), 1.0),
             scenario_coverage=min(executed / max(total_scenarios, 1), 1.0),
-            oracle_coverage=min(oracles_triggered / max(total_oracles, 1), 1.0),
+            engine_coverage=engine_cov,
             entity_coverage=min(entities_with_bugs / max(total_entities, 1), 1.0),
+            quality_coverage=quality_cov,
             details={
                 "total_states": total_states, "total_transitions": total_transitions,
                 "total_scenarios": total_scenarios, "forbidden_scenarios": forbidden,
-                "executed_scenarios": executed, "oracles_triggered": oracles_triggered,
+                "executed_scenarios": executed,
+                "detection_engines_used": sorted(sources_used & self._ALL_SOURCE_ENGINES),
+                "total_engines_available": len(self._ALL_SOURCE_ENGINES),
                 "entities_with_bugs": entities_with_bugs, "total_entities": total_entities,
+                "high_grade_bugs": high_grade, "total_bugs_scored": len(scores),
             }
         )
 
@@ -402,9 +435,10 @@ class IntelligenceReporter:
             f"|--------|-------|",
             f"| State Coverage | {cov['state_coverage']:.1%} |",
             f"| Scenario Coverage | {cov['scenario_coverage']:.1%} |",
-            f"| Oracle Coverage | {cov['oracle_coverage']:.1%} |",
+            f"| Engine Coverage | {cov['engine_coverage']:.1%} |",
             f"| Entity Coverage | {cov['entity_coverage']:.1%} |",
-            f"| **Overall** | **{cov['overall_coverage']:.1%}** |",
+            f"| Quality Coverage | {cov.get('quality_coverage', 0):.1%} |",
+            f"| **Overall** (weighted) | **{cov['overall_coverage']:.1%}** |",
             "",
             "## 2. Bug Intelligence Scores",
             f"| Grade | Count |",

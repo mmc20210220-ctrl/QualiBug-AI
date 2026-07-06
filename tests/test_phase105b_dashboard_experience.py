@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -12,7 +12,7 @@ from ai_test_asset_center.phase105_dashboard_experience import (
 
 
 def test_phase105b_generates_dashboard_experience_blocks(tmp_path) -> None:
-    manifest = build_dashboard_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8790")
+    manifest = build_dashboard_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8088")
 
     assert manifest["version"].startswith("phase105b")
     assert manifest["redaction_status"] == "safe"
@@ -35,7 +35,7 @@ def test_phase105b_generates_dashboard_experience_blocks(tmp_path) -> None:
 
 
 def test_phase105b_acceptance_report_and_validate_only(tmp_path) -> None:
-    result = run_dashboard_experience_export(output_dir=tmp_path, scenario="saas", api_base_url="http://127.0.0.1:8790")
+    result = run_dashboard_experience_export(output_dir=tmp_path, scenario="saas", api_base_url="http://127.0.0.1:8088")
 
     assert result["acceptance"]["passed"] is True
     assert result["acceptance"]["score"] == 100
@@ -58,3 +58,4 @@ def test_phase105b_detects_missing_dashboard_and_secret_leak(tmp_path) -> None:
     assert "dashboard.html" in details
     assert "Bearer raw" in details
     assert scan_dashboard_experience_for_secret_leaks(tmp_path)
+

@@ -56,11 +56,11 @@ python -m ai_test_asset_center.private_pilot_service
 Open:
 
 ```text
-http://127.0.0.1:8088/dashboard?project=real_project_demo
-http://127.0.0.1:8088/control-plane?project=real_project_demo
-http://127.0.0.1:8088/knowledge?project=real_project_demo
-http://127.0.0.1:8088/release?project=real_project_demo
-http://127.0.0.1:8088/benchmark?project=real_project_demo
+http://127.0.0.1:5174/dashboard?project=real_project_demo
+http://127.0.0.1:5174/control-plane?project=real_project_demo
+http://127.0.0.1:5174/knowledge?project=real_project_demo
+http://127.0.0.1:5174/release?project=real_project_demo
+http://127.0.0.1:5174/benchmark?project=real_project_demo
 ```
 
 Production or long-running pilots must be deployed behind a trusted reverse

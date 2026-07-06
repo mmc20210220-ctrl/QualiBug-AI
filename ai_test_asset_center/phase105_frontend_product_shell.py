@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105A: frontend product shell generator for QualiBug Command Center.
 
@@ -143,7 +143,7 @@ def _api_data(app: Phase104CommandCenterHttpApp, method: str, path: str, body: M
     return envelope.get("data")
 
 
-def collect_product_shell_demo_data(scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8790") -> dict[str, Any]:
+def collect_product_shell_demo_data(scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088") -> dict[str, Any]:
     """Collect redacted real demo API data for the product display shell."""
     app = Phase104CommandCenterHttpApp(seed_scenario=scenario)
     health = _api_data(app, "GET", "/api/v1/health")
@@ -673,7 +673,7 @@ def build_frontend_product_shell(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
 ) -> dict[str, Any]:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -830,7 +830,7 @@ def run_frontend_product_shell_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     validate_only: bool = False,
 ) -> dict[str, Any]:
     out = Path(output_dir)
@@ -846,7 +846,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate or validate the Phase105A frontend product shell.")
     parser.add_argument("--output-dir", default="outputs/phase105_frontend_product_shell")
     parser.add_argument("--scenario", default="manufacturing", choices=["manufacturing", "ecommerce", "saas"])
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
 
@@ -862,3 +862,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

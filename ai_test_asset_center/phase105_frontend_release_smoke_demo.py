@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105P: one-click smoke and demo command for the frontend preview release.
 
@@ -716,7 +716,7 @@ def build_frontend_release_smoke_demo(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     host: str = "127.0.0.1",
     port: int = 8795,
     create_zip: bool = True,
@@ -780,7 +780,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="outputs/phase105_frontend_release_smoke_demo")
     parser.add_argument("--package-dir", default=None)
     parser.add_argument("--scenario", default="manufacturing", choices=["manufacturing", "ecommerce", "saas"])
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8795)
     parser.add_argument("--validate-only", action="store_true")
@@ -847,3 +847,4 @@ __all__ = [
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

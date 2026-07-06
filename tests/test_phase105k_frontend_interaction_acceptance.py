@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -21,7 +21,7 @@ def test_phase105k_build_first_validates_frontend_interaction_gate(tmp_path) -> 
         output_dir=output_dir,
         build_first=True,
         scenario="manufacturing",
-        api_base_url="http://127.0.0.1:8790",
+        api_base_url="http://127.0.0.1:8088",
     )
 
     assert result["acceptance"]["version"] == PHASE105K_VERSION
@@ -62,3 +62,4 @@ def test_phase105k_validate_existing_hub_to_separate_output(tmp_path) -> None:
     assert result["manifest"]["redaction_status"] == "safe"
     assert (output_dir / "frontend_interaction_acceptance_manifest.json").exists()
     assert not (hub_dir / "frontend_interaction_acceptance_report.json").exists()
+

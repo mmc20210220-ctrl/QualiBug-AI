@@ -1,0 +1,12 @@
+- [ ] command-center 只输出可交付 `defects` 与内部 `clues` 两条正式轨道，且所有汇总字段与数组长度严格一致
+- [ ] 缺少有效绑定信号的 finding 不会绑定任何 HAR、日志或 DB 证据
+- [ ] 相似路径、认证墙 401、同资源前缀接口不会被错误认作某条 finding 的真实运行时证据
+- [ ] 所有 synthetic、derived、suggested、fallback 复现资产都不会进入 customer-ready 判定
+- [ ] 系统不会生成或展示默认 cURL、默认步骤、默认 GET/POST 方法、默认账号、默认密码或默认 base_url
+- [ ] strict verifier 与 independent verifier、discovery gate 对 cleanup、expected/actual、evidence refs 的通过标准完全一致
+- [ ] 客户页只展示 `defects`，`clues` 不会混入风险总览、行为验证、证据链、导出或侧栏正式统计
+- [ ] 前端不存在 `risks` 回退、`path+method` 放行、P0 代替总数、evidence_chain 长度代替证据闭环的本地口径
+- [ ] 行为空间、行为验证、证据链不会展示默认 `GET`、建议性命令、建议性复现入口或空 grep 伪命令
+- [ ] OpenAPI、前端类型、后端实际返回在 `defects/clues/delivery_track/customer_delivery_status` 上保持一致
+- [ ] runtime verifier 与运行时探针链不包含行业硬编码、样例账号、样例密码、样例路径或 localhost 模板
+- [ ] 自动化测试与端到端验收能直接证明系统只交付真实 bug、真实证据、真实可复现资产

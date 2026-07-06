@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,11 +54,12 @@ def test_dynamic_frontend_adapters_surface_ui_and_compatibility_issues(monkeypat
         ),
     )
 
-    runtime_issues = collect_frontend_runtime_issues("demo", root=tmp_path, scenario="manufacturing", cfg={"base_url": "http://127.0.0.1:8790"})
-    ux_issues = collect_frontend_ux_issues("demo", root=tmp_path, scenario="manufacturing", cfg={"base_url": "http://127.0.0.1:8790"})
+    runtime_issues = collect_frontend_runtime_issues("demo", root=tmp_path, scenario="manufacturing", cfg={"base_url": "http://127.0.0.1:8088"})
+    ux_issues = collect_frontend_ux_issues("demo", root=tmp_path, scenario="manufacturing", cfg={"base_url": "http://127.0.0.1:8088"})
     compat_issues = collect_compatibility_issues({"environment_class": "sandbox", "deployment_mode": "private_deployment"}, openapi={"openapi": "3.0.0"}, project_id="demo", root=tmp_path)
 
     assert any(issue["defect_family"] == "uiux" for issue in runtime_issues)
     assert any(issue["defect_family"] == "uiux" for issue in ux_issues)
     assert any(issue["defect_family"] == "compatibility" for issue in compat_issues)
+
 

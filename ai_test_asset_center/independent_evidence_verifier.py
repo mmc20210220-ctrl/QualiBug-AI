@@ -138,7 +138,7 @@ def verify_evidence_integrity(finding: dict[str, Any], *, workspace_root: Path |
     cleanup_evidence = cleanup.get("evidence_ref", "")
     checks.append({
         "check": "cleanup_status_valid",
-        "passed": cleanup_status in ("CLEAN", "NOT_APPLICABLE", "PENDING"),
+        "passed": cleanup_status in ("CLEAN", "NOT_APPLICABLE"),
         "detail": f"Cleanup status: {cleanup_status}",
     })
     checks.append({

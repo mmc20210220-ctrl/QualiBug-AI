@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105J: unified frontend experience hub v2 for QualiBug.
 
@@ -490,7 +490,7 @@ def build_frontend_experience_hub_v2(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     create_zip: bool = True,
 ) -> dict[str, Any]:
     output = Path(output_dir)
@@ -660,7 +660,7 @@ def run_frontend_experience_hub_v2_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     validate_only: bool = False,
     create_zip: bool = True,
 ) -> dict[str, Any]:
@@ -677,7 +677,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build or validate the Phase105J unified frontend experience hub v2.")
     parser.add_argument("--output-dir", default="outputs/phase105_frontend_experience_hub_v2")
     parser.add_argument("--scenario", default="manufacturing", choices=("manufacturing", "ecommerce", "saas"))
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--no-zip", action="store_true")
     return parser
@@ -698,3 +698,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

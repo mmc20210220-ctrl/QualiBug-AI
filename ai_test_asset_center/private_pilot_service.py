@@ -238,6 +238,218 @@ def _load_real_project_discovery_payload(root: Path, project_id: str) -> dict[st
     return None
 
 
+def _has_customer_facing_hard_evidence(item: dict[str, Any]) -> bool:
+    raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
+    reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+    har = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
+    response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+    return bool(
+        raw_evidence.get("has_real_evidence")
+        or response_raw
+        or raw_evidence.get("db_snapshot")
+        or raw_evidence.get("logs")
+        or raw_evidence.get("execution_trace")
+        or har
+    )
+
+
+def _has_customer_replay_asset(item: dict[str, Any]) -> bool:
+    reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+    har = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
+    method = str(reproduction.get("method") or item.get("repro_method") or "").strip().upper()
+    path = str(reproduction.get("path") or item.get("repro_path") or "").strip()
+    if not method or not path:
+        return False
+    if bool(reproduction.get("is_synthetic")):
+        return False
+    return bool(har)
+
+
+def _is_customer_delivery_risk(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if str(item.get("bug_status") or "") != "reproduced":
+        return False
+    if not bool(item.get("gate_passed")):
+        return False
+    return _has_customer_facing_hard_evidence(item) and _has_customer_replay_asset(item)
+
+
+def _partition_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    defects: list[dict[str, Any]] = []
+    clues: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if _is_customer_delivery_risk(item):
+            defects.append({
+                **item,
+                "delivery_track": "defect",
+                "customer_delivery_status": "defect",
+                "customer_delivery_label": "客户可交付缺陷",
+                "customer_visible": True,
+            })
+        else:
+            clues.append({
+                **item,
+                "delivery_track": "clue",
+                "customer_delivery_status": "clue",
+                "customer_delivery_label": "内部待验证线索",
+                "customer_visible": False,
+            })
+    return defects, clues
+
+
+def _collect_track_counts(items: list[dict[str, Any]]) -> tuple[dict[str, int], dict[str, int]]:
+    status_counts: dict[str, int] = {}
+    severity_counts: dict[str, int] = {}
+    for item in items:
+        status = str(item.get("bug_status") or "risk_clue")
+        severity = str(item.get("severity") or "P2")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+    return status_counts, severity_counts
+
+
+def _rebuild_customer_display_contract(
+    display_contract: dict[str, Any],
+    display_risks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    status_counts, severity_counts = _collect_track_counts(display_risks)
+
+    rebuilt = dict(display_contract)
+    rebuilt["schema_version"] = str(display_contract.get("schema_version") or "display-ready-v2026-07-05")
+    rebuilt["materialized_risk_count"] = len(display_risks)
+    rebuilt["ready_bug_count"] = len(display_risks)
+    rebuilt["needs_validation_count"] = 0
+    rebuilt["not_reproduced_count"] = 0
+    rebuilt["status_counts"] = status_counts
+    rebuilt["severity_counts"] = severity_counts
+    rebuilt["customer_delivery_mode"] = (
+        "严格客户口径：仅返回 reproduced + gate_passed 且具备真实原始证据的缺陷；"
+        "疑似、线索、未复现与自动推断账本均不进入客户缺陷交付。"
+    )
+    return rebuilt
+
+
+def _build_internal_clue_contract(
+    display_contract: dict[str, Any],
+    display_risks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    status_counts, severity_counts = _collect_track_counts(display_risks)
+    return {
+        "schema_version": str(display_contract.get("schema_version") or "display-ready-v2026-07-05"),
+        "source_of_truth": "backend.private_pilot_service._build_command_center",
+        "display_key": "clues",
+        "materialized_risk_count": len(display_risks),
+        "raw_candidate_risk_count": len(display_risks),
+        "ready_bug_count": 0,
+        "needs_validation_count": status_counts.get("suspected", 0) + status_counts.get("risk_clue", 0),
+        "not_reproduced_count": status_counts.get("not_reproduced", 0),
+        "status_counts": status_counts,
+        "severity_counts": severity_counts,
+        "customer_delivery_mode": "内部线索池：仅供采证、复验和回归规划，不进入客户缺陷交付。",
+        "internal_only": True,
+    }
+
+
+def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return payload
+
+    raw_defects = data.get("defects")
+    raw_clues = data.get("clues")
+    legacy_risks = data.get("risks") if isinstance(data.get("risks"), list) else []
+
+    if isinstance(raw_defects, list) or isinstance(raw_clues, list):
+        defects = [item for item in (raw_defects if isinstance(raw_defects, list) else []) if isinstance(item, dict)]
+        clues = [item for item in (raw_clues if isinstance(raw_clues, list) else []) if isinstance(item, dict)]
+    else:
+        legacy_items = [item for item in legacy_risks if isinstance(item, dict)]
+        defects, clues = _partition_delivery_tracks(legacy_items)
+
+    contract_base = data.get("data_contract") if isinstance(data.get("data_contract"), dict) else {}
+    customer_contract = _rebuild_customer_display_contract(contract_base, defects)
+    clue_contract = _build_internal_clue_contract(contract_base, clues)
+
+    severity_counts = customer_contract.get("severity_counts") if isinstance(customer_contract.get("severity_counts"), dict) else {}
+    p0_count = int(severity_counts.get("P0") or sum(1 for item in defects if item.get("severity") == "P0"))
+    p1_count = int(severity_counts.get("P1") or sum(1 for item in defects if item.get("severity") == "P1"))
+    p2_count = max(0, len(defects) - p0_count - p1_count)
+    ready_bug_count = len(defects)
+    needs_validation_count = int(clue_contract.get("needs_validation_count") or 0)
+    not_reproduced_count = int(clue_contract.get("not_reproduced_count") or 0)
+
+    value_metrics = dict(data.get("value_metrics") or {})
+    value_metrics["canonical_risk_count"] = len(defects)
+    value_metrics["materialized_risk_count"] = len(defects)
+    value_metrics["raw_candidate_risk_count"] = int(customer_contract.get("raw_candidate_risk_count") or len(defects))
+    value_metrics["ready_bug_count"] = ready_bug_count
+    value_metrics["needs_validation_count"] = needs_validation_count
+    value_metrics["not_reproduced_count"] = not_reproduced_count
+    value_metrics["defect_count"] = len(defects)
+    value_metrics["clue_count"] = len(clues)
+    value_metrics["p0_count"] = p0_count
+    value_metrics["p1_count"] = p1_count
+    value_metrics["p2_count"] = p2_count
+    value_metrics["ready_p0_count"] = p0_count
+    value_metrics["ready_p1_count"] = p1_count
+    value_metrics["status_counts"] = customer_contract.get("status_counts") if isinstance(customer_contract.get("status_counts"), dict) else {}
+
+    executive_summary = dict(data.get("executive_summary") or {})
+    executive_summary["total_findings"] = len(defects)
+    executive_summary["total_bugs_found"] = ready_bug_count
+    executive_summary["ready_bugs"] = ready_bug_count
+    executive_summary["customer_ready_defects"] = len(defects)
+    executive_summary["internal_clues"] = len(clues)
+    executive_summary["needs_validation_findings"] = needs_validation_count
+    executive_summary["not_reproduced_findings"] = not_reproduced_count
+    executive_summary["raw_candidate_findings"] = int(customer_contract.get("raw_candidate_risk_count") or len(defects))
+    executive_summary["critical_bugs"] = p0_count
+    executive_summary["high_priority_bugs"] = p1_count
+    executive_summary["materialized_findings"] = len(defects)
+
+    scan_meta = dict(data.get("scan_meta") or {})
+    scan_meta["total_findings"] = len(defects)
+    scan_meta["materialized_findings"] = len(defects)
+    scan_meta["raw_candidate_findings"] = int(customer_contract.get("raw_candidate_risk_count") or len(defects))
+    scan_meta["ready_bug_count"] = ready_bug_count
+    scan_meta["needs_validation_findings"] = needs_validation_count
+    scan_meta["not_reproduced_findings"] = not_reproduced_count
+    scan_meta["customer_ready_defects"] = len(defects)
+    scan_meta["internal_clue_count"] = len(clues)
+
+    data["defects"] = defects
+    data["clues"] = clues
+    data["risks"] = defects
+    data["scan_meta"] = scan_meta
+    data["value_metrics"] = value_metrics
+    data["data_contract"] = {
+        **customer_contract,
+        "endpoint": data.get("data_contract", {}).get("endpoint") if isinstance(data.get("data_contract"), dict) else "",
+        "frontend_entry": "frontend/src/api/client.ts:getFindings",
+        "backend_builder": "ai_test_asset_center/private_pilot_service.py:_build_command_center",
+        "formatter": "ai_test_asset_center/display_ready_formatter.py:format_findings_display_ready",
+        "display_key": "defects",
+        "compatibility_alias": "risks",
+        "contract_rule": "客户页优先渲染 data.defects；data.risks 仅为兼容别名。内部待验证线索统一放在 data.clues。",
+    }
+    data["delivery_tracks"] = {
+        "defects": {
+            **customer_contract,
+            "display_key": "defects",
+            "compatibility_alias": "risks",
+        },
+        "clues": clue_contract,
+    }
+    data["executive_summary"] = executive_summary
+    payload["data"] = data
+    return payload
+
+
 def _write_env_local(updates: dict[str, str]) -> Path:
     configured = os.environ.get("QUALIBUG_ENV_LOCAL_PATH", "").strip()
     env_path = Path(configured).expanduser().resolve() if configured else Path(__file__).resolve().parents[1] / ".env.local"
@@ -774,6 +986,17 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
             )
             try:
                 payload = self._build_command_center(pid, root)
+                try:
+                    from .display_ready_formatter import sanitize_customer_evidence_payload
+                    payload = sanitize_customer_evidence_payload(payload)
+                except Exception as sanitize_exc:
+                    _dbg_report(
+                        hypothesis_id="F",
+                        msg="[WARN] command-center evidence response sanitize skipped",
+                        data={"project_id": pid, "error": str(sanitize_exc)},
+                        trace_id=trace_id,
+                    )
+                payload = _normalize_command_center_envelope(payload)
                 _dbg_report(
                     hypothesis_id="C",
                     msg="[DEBUG] command-center built",
@@ -2025,7 +2248,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         report = self._load_v12_report(project_id, root)
         enterprise_docs = self._load_enterprise_docs(project_id, root)
         knowledge_summary = self._load_knowledge_summary(project_id, root)
-        discovery_payload = _load_real_project_discovery_payload(root, project_id) or self._auto_discovery_payload(project_id, root, report)
+        real_discovery_payload = _load_real_project_discovery_payload(root, project_id)
+        discovery_payload = real_discovery_payload or self._auto_discovery_payload(project_id, root, report)
         risks = self._v12_findings(report, enterprise_docs)
         risks.extend(self._load_db_findings(root, project_id))
         risks.extend(self._load_perf_regressions(root, project_id))
@@ -2198,40 +2422,104 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
         # ── Display-Ready Formatting: unify all findings into display-ready JSON ──
         try:
-            from .display_ready_formatter import format_findings_display_ready
+            from .display_ready_formatter import (
+                _build_display_contract,
+                _compute_commercial_value,
+                _compute_scores,
+                format_findings_display_ready,
+                sanitize_customer_evidence_payload,
+            )
             enterprise_ctx_for_fmt = {}
             try:
                 from .evidence_enricher_v3 import load_enterprise_context as _lec
                 enterprise_ctx_for_fmt = _lec(project_id, root) or {}
             except Exception:
                 pass
-            display_risks, display_metrics = format_findings_display_ready(risks, enterprise_ctx_for_fmt, report)
+            raw_display_risks, _display_metrics = format_findings_display_ready(risks, enterprise_ctx_for_fmt, report)
+            sanitized_display_risks = sanitize_customer_evidence_payload(raw_display_risks)
+            display_risks = sanitized_display_risks if isinstance(sanitized_display_risks, list) else []
+            display_metrics = {
+                "scores": _compute_scores(display_risks, report),
+                "commercial_value": _compute_commercial_value(display_risks, report),
+                "display_contract": _build_display_contract(display_risks, report),
+            }
         except Exception as e:
             _dbg_report(hypothesis_id="F", msg="[WARN] display_ready_formatter fallback", data={"error": str(e)})
             display_risks = risks
             display_metrics = {}
 
-        materialized_total = len(display_risks)
-        p0 = sum(1 for item in display_risks if item.get("severity") == "P0")
-        p1 = sum(1 for item in display_risks if item.get("severity") == "P1")
-        p2 = sum(1 for item in display_risks if item.get("severity") in {"P2", "P3"})
-        canonical_total = max(
-            materialized_total,
-            self._report_summary_number(report, "risk_total", "risk_count", "total_findings", "total_bugs_found", "total_found", "raw_total", fallback=0),
+        all_display_risks = [item for item in display_risks if isinstance(item, dict)]
+        delivery_defects, internal_clues = _partition_delivery_tracks(all_display_risks)
+        display_risks = delivery_defects
+        overall_display_contract = display_metrics.get("display_contract") if isinstance(display_metrics.get("display_contract"), dict) else {}
+        if isinstance(display_metrics.get("display_contract"), dict):
+            display_metrics["display_contract"] = _rebuild_customer_display_contract(
+                overall_display_contract,
+                display_risks,
+            )
+        clue_contract = _build_internal_clue_contract(
+            overall_display_contract,
+            internal_clues,
         )
-        canonical_p0 = self._report_summary_number(report, "p0", "p0_count", "critical_bugs", fallback=p0)
-        canonical_p1 = self._report_summary_number(report, "p1", "p1_count", "high_priority_bugs", fallback=p1)
-        canonical_p2 = max(0, canonical_total - canonical_p0 - canonical_p1) if canonical_total else p2
-        evidence_trust = self._evidence_trust_score(risks)
-        # Use display-ready formatter's scores if available
+
+        materialized_total = len(display_risks)
         scores = display_metrics.get("scores") or {}
         commercial_value = display_metrics.get("commercial_value") or {}
+        display_contract = display_metrics.get("display_contract") if isinstance(display_metrics.get("display_contract"), dict) else {}
+        if not display_contract:
+            status_counts = {}
+            severity_counts = {}
+            for item in display_risks:
+                status = str(item.get("bug_status") or "risk_clue")
+                severity = str(item.get("severity") or "P2")
+                status_counts[status] = status_counts.get(status, 0) + 1
+                severity_counts[severity] = severity_counts.get(severity, 0) + 1
+            display_contract = {
+                "schema_version": "display-ready-fallback",
+                "source_of_truth": "backend.private_pilot_service._build_command_center",
+                "display_key": "risks",
+                "materialized_risk_count": materialized_total,
+                "raw_candidate_risk_count": max(materialized_total, self._report_summary_number(report, "risk_total", "risk_count", "total_findings", "total_bugs_found", "total_found", "raw_total", fallback=0)),
+                "ready_bug_count": sum(1 for item in display_risks if item.get("bug_status") == "reproduced" and bool(item.get("gate_passed"))),
+                "needs_validation_count": status_counts.get("suspected", 0) + status_counts.get("risk_clue", 0),
+                "not_reproduced_count": status_counts.get("not_reproduced", 0),
+                "status_counts": status_counts,
+                "severity_counts": severity_counts,
+            }
+
+        canonical_total = materialized_total
+        raw_candidate_total = int(display_contract.get("raw_candidate_risk_count") or canonical_total)
+        ready_bug_count = int(display_contract.get("ready_bug_count") or 0)
+        needs_validation_count = int(display_contract.get("needs_validation_count") or 0)
+        not_reproduced_count = int(display_contract.get("not_reproduced_count") or 0)
+        status_counts = display_contract.get("status_counts") if isinstance(display_contract.get("status_counts"), dict) else {}
+        severity_counts = display_contract.get("severity_counts") if isinstance(display_contract.get("severity_counts"), dict) else {}
+        canonical_p0 = int(severity_counts.get("P0") or sum(1 for item in display_risks if item.get("severity") == "P0"))
+        canonical_p1 = int(severity_counts.get("P1") or sum(1 for item in display_risks if item.get("severity") == "P1"))
+        canonical_p2 = max(0, canonical_total - canonical_p0 - canonical_p1)
+        ready_p0 = sum(1 for item in display_risks if item.get("bug_status") == "reproduced" and bool(item.get("gate_passed")) and item.get("severity") == "P0")
+        ready_p1 = sum(1 for item in display_risks if item.get("bug_status") == "reproduced" and bool(item.get("gate_passed")) and item.get("severity") == "P1")
+        evidence_trust = self._evidence_trust_score(risks)
         if scores:
             evidence_trust = scores.get("evidence_trust_score", evidence_trust)
         try:
-            ai_points = max(int(report.get("raw_total") or 0), int(report.get("total_findings") or 0), canonical_total)
+            evidence_trust = max(0.0, min(100.0, float(evidence_trust or 0)))
         except Exception:
-            ai_points = canonical_total
+            evidence_trust = 0.0
+        try:
+            ai_points = max(int(report.get("raw_total") or 0), int(report.get("total_findings") or 0), raw_candidate_total, canonical_total)
+        except Exception:
+            ai_points = max(raw_candidate_total, canonical_total)
+        if canonical_total <= 0:
+            evidence_grade = "C"
+        elif evidence_trust >= 85:
+            evidence_grade = "A"
+        elif evidence_trust >= 70:
+            evidence_grade = "B"
+        elif evidence_trust >= 50:
+            evidence_grade = "C"
+        else:
+            evidence_grade = "D"
         scan_counter = self._scan_counter(project_id, root)
         scan_meta = {
             "scan_id": str(report.get("scan_id") or ""),
@@ -2241,8 +2529,14 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "total_ms": int(report.get("total_ms") or 0),
             "total_findings": canonical_total,
             "materialized_findings": materialized_total,
-            "grade": str(report.get("grade") or report.get("system_grade") or ("A+" if canonical_total else "C")),
-            "score": float(report.get("score") or report.get("overall_score") or (97.0 if canonical_total else 0)),
+            "raw_candidate_findings": raw_candidate_total,
+            "ready_bug_count": ready_bug_count,
+            "needs_validation_findings": needs_validation_count,
+            "not_reproduced_findings": not_reproduced_count,
+            "customer_ready_defects": len(delivery_defects),
+            "internal_clue_count": len(internal_clues),
+            "grade": evidence_grade,
+            "score": evidence_trust,
             "report_path": str(report.get("report_path") or report.get("report_source_path") or ""),
         }
         data = {
@@ -2252,24 +2546,59 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "updated_at": scan_meta["last_scan_at"] or str(report.get("generated_at_utc") or ""),
             "live_map": {"status": "completed" if report else "idle"},
             "scan_meta": scan_meta,
+            "defects": delivery_defects,
+            "clues": internal_clues,
             "risks": display_risks,
             "value_metrics": {
                 "evidence_trust_score": evidence_trust,
                 "ai_equivalent_test_points": ai_points,
                 "canonical_risk_count": canonical_total,
                 "materialized_risk_count": materialized_total,
+                "raw_candidate_risk_count": raw_candidate_total,
+                "ready_bug_count": ready_bug_count,
+                "needs_validation_count": needs_validation_count,
+                "not_reproduced_count": not_reproduced_count,
+                "defect_count": len(delivery_defects),
+                "clue_count": len(internal_clues),
                 "p0_count": canonical_p0,
                 "p1_count": canonical_p1,
                 "p2_count": canonical_p2,
+                "ready_p0_count": ready_p0,
+                "ready_p1_count": ready_p1,
+                "status_counts": status_counts,
                 "scores": scores,
                 "commercial_value": commercial_value,
+            },
+            "data_contract": {
+                **display_contract,
+                "endpoint": f"/api/v1/projects/{project_id}/command-center",
+                "frontend_entry": "frontend/src/api/client.ts:getFindings",
+                "backend_builder": "ai_test_asset_center/private_pilot_service.py:_build_command_center",
+                "formatter": "ai_test_asset_center/display_ready_formatter.py:format_findings_display_ready",
+                "display_key": "defects",
+                "compatibility_alias": "risks",
+                "contract_rule": "客户页优先渲染 data.defects；data.risks 仅为兼容别名。内部待验证线索统一放在 data.clues。",
+            },
+            "delivery_tracks": {
+                "defects": {
+                    **display_contract,
+                    "display_key": "defects",
+                    "compatibility_alias": "risks",
+                },
+                "clues": clue_contract,
             },
             "business_flow_summary": {"total": ai_points},
             "executive_summary": {
                 "total_findings": canonical_total,
-                "total_bugs_found": canonical_total,
-                "critical_bugs": canonical_p0,
-                "high_priority_bugs": canonical_p1,
+                "total_bugs_found": ready_bug_count,
+                "ready_bugs": ready_bug_count,
+                "customer_ready_defects": len(delivery_defects),
+                "internal_clues": len(internal_clues),
+                "needs_validation_findings": needs_validation_count,
+                "not_reproduced_findings": not_reproduced_count,
+                "raw_candidate_findings": raw_candidate_total,
+                "critical_bugs": ready_p0,
+                "high_priority_bugs": ready_p1,
                 "materialized_findings": materialized_total,
                 "llm_powered_analyses": ai_points,
                 "system_grade": scan_meta["grade"],
@@ -2278,9 +2607,9 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         }
         if knowledge_summary:
             data["knowledge_summary"] = knowledge_summary
-        if isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
+        if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
             data["continuous_discovery_campaign"] = discovery_payload["continuous_discovery_campaign"]
-        if isinstance(discovery_payload.get("metrics"), dict):
+        if real_discovery_payload and isinstance(discovery_payload.get("metrics"), dict):
             data["continuous_discovery_metrics"] = {
                 key: value
                 for key, value in discovery_payload["metrics"].items()

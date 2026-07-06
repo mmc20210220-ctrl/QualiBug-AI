@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105G: executive report and ROI-value frontend experience.
 
@@ -604,7 +604,7 @@ def build_report_roi_experience(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
 ) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -731,7 +731,7 @@ def run_report_roi_experience_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     validate_only: bool = False,
 ) -> dict[str, Any]:
     if not validate_only:
@@ -747,7 +747,7 @@ def run_report_roi_experience_export(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Export Phase105G executive report and ROI frontend experience.")
     parser.add_argument("--scenario", default="manufacturing", choices=("manufacturing", "ecommerce", "saas"))
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--output-dir", default="outputs/phase105_report_roi_experience")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
@@ -764,3 +764,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

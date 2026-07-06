@@ -46,6 +46,7 @@ class EntityCandidate:
     tenant_fields: list[str] = field(default_factory=list)
     version_fields: list[str] = field(default_factory=list)
     api_sources: list[str] = field(default_factory=list)
+    source_documents: list = field(default_factory=list)
     confidence: float = 0.0
     evidence: list[dict] = field(default_factory=list)
     human_confirmation_required: bool = True
@@ -96,6 +97,18 @@ class APICapability:
     security: list = field(default_factory=list)
     confidence: float = 0.0
     evidence: list = field(default_factory=list)
+
+
+@dataclass
+class SourceRef:
+    """A traceable reference back to a source document section.
+
+    Used to pin every entity / rule inference to a concrete document excerpt.
+    """
+    source: str = ""
+    line: int = 0
+    excerpt: str = ""
+    confidence: float = 0.0
 
 
 @dataclass

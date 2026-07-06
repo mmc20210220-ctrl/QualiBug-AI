@@ -10,6 +10,8 @@ Display-Ready Formatter — 统一成果展示格式化引擎。
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -39,6 +41,8 @@ DEFECT_FAMILY_META = {
     "uiux": {"label": "交互体验", "reporting_bucket": "ux", "bucket_label": "体验"},
     "accessibility_i18n": {"label": "可访问性/本地化", "reporting_bucket": "ux", "bucket_label": "体验"},
 }
+
+EVIDENCE_RELEVANCE_FAILURE = "运行时响应与当前缺陷描述不匹配，已拒绝作为复现证据"
 
 RISK_TYPE_TO_FAMILY = {
     "permission_bypass": "security_boundary", "idor": "security_boundary",
@@ -199,11 +203,10 @@ def _runtime_observation_supports_finding(finding: dict, obs: dict[str, Any]) ->
     """Return True only when runtime response evidence belongs to this finding.
 
     Same endpoint is not enough: a generic 500 from a placeholder request must not
-    be used as proof for an unrelated business-state finding.
+    be used as proof for an unrelated business-state finding. Apply the same
+    binding rule to HAR and evidence.calls runtime rows so every display layer
+    reads a consistent evidence source.
     """
-    if _clean(obs.get("source")) != "har":
-        return True
-
     path = _clean(obs.get("path"))
     if _is_placeholder_value(path):
         return False
@@ -319,26 +322,126 @@ def _runtime_observations(finding: dict) -> list[dict[str, Any]]:
     return observations
 
 
-def _has_runtime_response(finding: dict) -> bool:
+def _observation_has_response_payload(obs: dict[str, Any]) -> bool:
+    return _status_code_int(obs.get("status_code")) > 0 or _response_body_has_value(obs.get("body"))
+
+
+def _declared_request_identity(finding: dict) -> tuple[str, str]:
+    method = _clean(
+        finding.get("_api_method")
+        or finding.get("repro_method")
+        or _deep_get(finding, "evidence", "method")
+        or finding.get("method")
+    ).upper()
+    path = _clean(
+        finding.get("_api_path")
+        or finding.get("repro_path")
+        or _deep_get(finding, "evidence", "path")
+        or finding.get("path")
+    )
+    return method, path
+
+
+def _runtime_identity_mismatch_reasons(finding: dict, obs: dict[str, Any] | None = None) -> list[str]:
+    """Check that runtime evidence is bound to the declared request identity.
+
+    A response from the wrong method/path must never be used as proof for the
+    current finding. This is intentionally generic and does not depend on any
+    business table or industry vocabulary.
+    """
+    declared_method, declared_path = _declared_request_identity(finding)
+    reasons: list[str] = []
+    if declared_path and _is_placeholder_value(declared_path):
+        reasons.append(f"API path is a placeholder or unresolved template: {declared_path}")
+
+    observations = [obs] if obs is not None else _runtime_observations(finding)
+    observed_paths: list[str] = []
+    observed_methods: list[str] = []
+    for row in observations:
+        if not isinstance(row, dict):
+            continue
+        observed_path = _clean(row.get("path"))
+        observed_method = _clean(row.get("method")).upper()
+        if observed_path and not _is_placeholder_value(observed_path):
+            observed_paths.append(observed_path)
+        if observed_method:
+            observed_methods.append(observed_method)
+
+    if declared_path and observed_paths and declared_path not in observed_paths:
+        reasons.append(
+            f"Declared API path {declared_path} does not match observed runtime path(s): "
+            f"{', '.join(sorted(set(observed_paths))[:5])}"
+        )
+    if declared_method and observed_methods and declared_method not in observed_methods:
+        reasons.append(
+            f"Declared API method {declared_method} does not match observed runtime method(s): "
+            f"{', '.join(sorted(set(observed_methods))[:5])}"
+        )
+    return reasons
+
+
+def _accepted_runtime_observations(finding: dict) -> list[dict[str, Any]]:
+    accepted: list[dict[str, Any]] = []
     for obs in _runtime_observations(finding):
+        if not isinstance(obs, dict):
+            continue
         path = _clean(obs.get("path"))
+        if _is_placeholder_value(path):
+            continue
+        if not _observation_has_response_payload(obs):
+            continue
+        if not _runtime_observation_supports_finding(finding, obs):
+            continue
+        if _runtime_identity_mismatch_reasons(finding, obs):
+            continue
+        accepted.append(obs)
+    return accepted
+
+
+def _best_runtime_observation(finding: dict) -> dict[str, Any]:
+    """Pick the single runtime row every display layer should use.
+
+    Preference: anomaly-bearing rows first, then HAR before evidence.calls, then
+    richer payloads. Returning one canonical row prevents the UI from showing a
+    different response than the one used for status/gate decisions.
+    """
+    rows = _accepted_runtime_observations(finding)
+    if not rows:
+        return {}
+
+    def _rank(obs: dict[str, Any]) -> tuple[int, int, int, int]:
         status = _status_code_int(obs.get("status_code"))
-        has_status = status > 0
-        if (
-            (has_status or _response_body_has_value(obs.get("body")))
-            and not _is_placeholder_value(path)
-            and _runtime_observation_supports_finding(finding, obs)
-        ):
-            return True
-    return False
+        has_error_status = 1 if status >= 400 else 0
+        body_text = _clean(obs.get("body"))
+        has_error_body = 1 if any(token in body_text.lower() for token in ("error", "exception", "traceback", "failed")) else 0
+        source_rank = 1 if _clean(obs.get("source")) == "har" else 0
+        richness = (1 if body_text else 0) + (1 if _clean(obs.get("request_body")) else 0) + (1 if _clean(obs.get("actor")) else 0)
+        return has_error_status, has_error_body, source_rank, richness
+
+    return sorted(rows, key=_rank, reverse=True)[0]
+
+
+def _runtime_body_excerpt(value: Any, limit: int = 1000) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, (dict, list)):
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            text = str(value)
+    else:
+        text = _clean(value)
+    return text[:limit]
+
+
+def _has_runtime_response(finding: dict) -> bool:
+    return bool(_accepted_runtime_observations(finding))
 
 
 def _has_anomaly_signal(finding: dict) -> bool:
     if _extract_db_evidence(finding):
         return True
-    for obs in _runtime_observations(finding):
-        if not _runtime_observation_supports_finding(finding, obs):
-            continue
+    for obs in _accepted_runtime_observations(finding):
         status = _status_code_int(obs.get("status_code"))
         if status >= 400:
             return True
@@ -352,18 +455,8 @@ def _has_anomaly_signal(finding: dict) -> bool:
 
 
 def _path_mismatch_reasons(finding: dict) -> list[str]:
-    declared = _clean(finding.get("_api_path") or finding.get("repro_path") or _deep_get(finding, "evidence", "path") or finding.get("path"))
-    reasons: list[str] = []
-    if declared and _is_placeholder_value(declared):
-        reasons.append(f"API path is a placeholder or unresolved template: {declared}")
-    observed_paths = [
-        _clean(obs.get("path"))
-        for obs in _runtime_observations(finding)
-        if _clean(obs.get("path")) and not _is_placeholder_value(obs.get("path"))
-    ]
-    if declared and observed_paths and declared not in observed_paths:
-        reasons.append(f"Declared API path {declared} does not match observed runtime path(s): {', '.join(sorted(set(observed_paths))[:5])}")
-    return reasons
+    """Backward-compatible wrapper; now checks both path and method binding."""
+    return _runtime_identity_mismatch_reasons(finding)
 
 
 def _has_any_value(value: Any) -> bool:
@@ -583,26 +676,35 @@ def _extract_db_evidence(finding: dict) -> dict | None:
 
 
 def _extract_har_response_evidence(finding: dict) -> dict | None:
-    """从 har_evidence 提取结构化请求响应证据（通用，不硬编码业务概念）。"""
-    har = _relevant_har_evidence(finding)
-    status_code = har.get("status_code") or 0
-    response_body = _clean(har.get("response_body"))
-    actor = _clean(har.get("actor"))
-    duration_ms = har.get("duration_ms") or 0
-    method = _clean(har.get("method") or finding.get("_api_method") or finding.get("method") or "GET").upper()
-    path = _clean(har.get("path") or finding.get("_api_path") or finding.get("path"))
+    """提取结构化请求响应证据。
+
+    名称保持兼容，但实际来源已统一为 canonical runtime observation：
+    HAR 与 evidence.calls 都走同一个验真、路径/方法绑定和占位符过滤逻辑。
+    """
+    obs = _best_runtime_observation(finding)
+    if not obs:
+        return None
+    status_code = _status_code_int(obs.get("status_code"))
+    response_body = _runtime_body_excerpt(obs.get("body"), 1000)
+    actor = _clean(obs.get("actor"))
+    duration_ms = obs.get("duration_ms") or 0
+    method = _clean(obs.get("method") or finding.get("_api_method") or finding.get("method")).upper()
+    path = _clean(obs.get("path") or finding.get("_api_path") or finding.get("path"))
 
     if not (status_code or response_body or path):
         return None
     if path and _is_placeholder_value(path):
         return None
     return {
-        "method": method or "GET",
+        "source": _clean(obs.get("source")) or "runtime",
+        "method": method,
         "path": path,
         "status_code": status_code,
-        "response_body": response_body[:1000],
+        "response_body": response_body,
+        "request_body": _runtime_body_excerpt(obs.get("request_body"), 2000),
         "actor": actor,
         "duration_ms": duration_ms,
+        "request_url": _clean(obs.get("request_url")),
     }
 
 
@@ -721,12 +823,12 @@ def _build_display_evidence_chain(finding: dict) -> dict:
             "label": "触发请求",
             "content": f"{method or 'GET'} {path}",
             "detail": _strip_internal_tags(_clean(finding.get("evidence_hint"))) or "按该接口回放请求，记录参数、状态码、响应体和时间戳。",
-            "source": "har" if _has_runtime_response(finding) else "engine",
+            "source": (_best_runtime_observation(finding).get("source") or "runtime") if _has_runtime_response(finding) else "engine",
             "confidence": "high" if _has_runtime_response(finding) else "low",
             "timestamp": timestamp,
         })
 
-    # 3. 接口响应（从 HAR 提取真实状态码/响应体/耗时）
+    # 3. 接口响应（从 canonical runtime observation 提取真实状态码/响应体/耗时）
     har_ev = _extract_har_response_evidence(finding)
     if har_ev and (har_ev.get("status_code") or har_ev.get("response_body")):
         status = har_ev.get("status_code") or 0
@@ -756,7 +858,7 @@ def _build_display_evidence_chain(finding: dict) -> dict:
             "label": "接口响应",
             "content": " · ".join(content_parts),
             "detail": detail,
-            "source": "har",
+            "source": har_ev.get("source") or "runtime",
             "confidence": "high",
             "timestamp": timestamp,
             "structured": {
@@ -764,6 +866,7 @@ def _build_display_evidence_chain(finding: dict) -> dict:
                 "response_body": body,
                 "actor": actor,
                 "duration_ms": duration,
+                "source": har_ev.get("source") or "runtime",
             },
         })
 
@@ -890,11 +993,11 @@ def _filter_chain_for_test(chain: list[dict]) -> list[dict]:
 def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None) -> dict:
     """构建复现信息展示（基于 HAR 真实数据）"""
     ctx = enterprise_ctx or {}
-    har = _relevant_har_evidence(finding)
+    runtime_obs = _best_runtime_observation(finding)
     finding_path = finding.get("_api_path") or finding.get("repro_path") or ""
     finding_method = (finding.get("_api_method") or finding.get("repro_method") or "").upper()
-    har_path = har.get("path") or ""
-    har_method = (har.get("method") or "").upper()
+    har_path = runtime_obs.get("path") or ""
+    har_method = (runtime_obs.get("method") or "").upper()
 
     # 优先用 finding 自己的 path（更精确）
     if har_path and not _is_placeholder_value(har_path):
@@ -904,6 +1007,8 @@ def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None
     if _is_placeholder_value(path):
         path = ""
     method = finding_method or har_method
+    if not path:
+        method = ""
 
     # 复现步骤（优先用已有的 reproduction_steps）
     real_steps = finding.get("reproduction_steps") or finding.get("reproduce_steps_business") or []
@@ -929,16 +1034,17 @@ def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None
         curl_command = f'curl -X {method or "GET"} "{full_url}" -H "Authorization: Bearer <TOKEN>"{body_part} -v'
 
     har_evidence_out = None
-    if har and not _path_mismatch_reasons(finding):
+    if runtime_obs and not _path_mismatch_reasons(finding):
         har_evidence_out = {
-            "status_code": har.get("status_code") or 0,
-            "response_body": str(har.get("response_body") or "")[:2000],
-            "actor": har.get("actor") or "",
-            "duration_ms": har.get("duration_ms") or 0,
+            "source": runtime_obs.get("source") or "runtime",
+            "status_code": _status_code_int(runtime_obs.get("status_code")),
+            "response_body": _runtime_body_excerpt(runtime_obs.get("body"), 2000),
+            "actor": runtime_obs.get("actor") or "",
+            "duration_ms": runtime_obs.get("duration_ms") or 0,
         }
 
     return {
-        "method": method or "GET",
+        "method": method,
         "path": path,
         "steps": steps,
         "is_synthetic": is_synthetic,
@@ -953,8 +1059,8 @@ def _generate_default_repro_steps(finding: dict, path: str, method: str, ctx: di
     注意：这些是"建议操作指引"，不是"已执行的真实复现步骤"。
     调用方应通过 is_synthetic=True 标记，前端据此区分"真实复现步骤"与"建议指引"。
     """
-    # 如果有 HAR 真实响应，说明请求确实执行过，可以基于真实数据生成指引
-    har = _relevant_har_evidence(finding)
+    # 如果有运行时真实响应，说明请求确实执行过，可以基于真实数据生成指引
+    runtime_obs = _best_runtime_observation(finding)
     has_real_response = _has_runtime_response(finding)
 
     if not path or _is_placeholder_value(path):
@@ -962,7 +1068,7 @@ def _generate_default_repro_steps(finding: dict, path: str, method: str, ctx: di
 
     if path and has_real_response:
         # 有真实响应 → 生成基于实际执行的指引（但仍标记为 synthetic）
-        status = har.get("status_code") or 0
+        status = _status_code_int(runtime_obs.get("status_code")) if runtime_obs else 0
         return [
             f"[指引] 已执行 {method or 'GET'} {path}，实际响应 {status}。请对比响应与预期规则。",
             f"[指引] 预期规则：{_strip_internal_tags(_clean(finding.get('expected_behavior') or finding.get('expected'))) or '需上传企业资料明确预期'}",
@@ -1038,12 +1144,13 @@ def _extract_business_keys(finding: dict) -> list[tuple[str, str]]:
         if val:
             keys.append((field, val))
 
-    # 5. 从 HAR evidence 请求体动态提取（通用）
-    har = _relevant_har_evidence(finding)
-    if har.get("request_body"):
+    # 5. 从 canonical runtime request body 动态提取（通用）
+    runtime_obs = _best_runtime_observation(finding)
+    runtime_request_body = runtime_obs.get("request_body") if runtime_obs else None
+    if runtime_request_body:
         import json as _json
         try:
-            body = _json.loads(har["request_body"]) if isinstance(har["request_body"], str) else har["request_body"]
+            body = _json.loads(runtime_request_body) if isinstance(runtime_request_body, str) else runtime_request_body
             if isinstance(body, dict):
                 # 动态提取所有看起来像主键的字段（通用：含 _id 后缀或常见主键名）
                 for field, val in body.items():
@@ -1203,7 +1310,7 @@ def _build_investigation_display(finding: dict) -> dict:
     inv = finding.get("investigation_guidance") if isinstance(finding.get("investigation_guidance"), dict) else {}
     entity = _clean(finding.get("source_entity"))
     path = _clean(finding.get("_api_path") or finding.get("repro_path") or finding.get("path"))
-    method = _clean(finding.get("_api_method") or finding.get("repro_method") or "GET").upper()
+    method = _clean(finding.get("_api_method") or finding.get("repro_method")).upper()
     primary_area = inv.get("primary_area") or entity or ""
 
     # 提取业务主键和推断相关表
@@ -1250,13 +1357,13 @@ def _build_investigation_display(finding: dict) -> dict:
             if m:
                 trace_id = _clean(m.group(1))
     if not trace_id:
-        # 从 har_evidence 响应体提取
-        har = _relevant_har_evidence(finding)
-        har_body = har.get("response_body") or ""
-        if har_body:
+        # 从 canonical runtime observation 响应体提取
+        runtime_obs = _best_runtime_observation(finding)
+        runtime_body = runtime_obs.get("body") if runtime_obs else ""
+        if runtime_body:
             import json as _json
             try:
-                body_obj = _json.loads(har_body) if isinstance(har_body, str) else har_body
+                body_obj = _json.loads(runtime_body) if isinstance(runtime_body, str) else runtime_body
                 if isinstance(body_obj, dict):
                     trace_id = _clean(
                         body_obj.get("traceId") or body_obj.get("trace_id") or
@@ -1282,7 +1389,11 @@ def _build_investigation_display(finding: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _compute_scores(findings: list[dict], raw: dict | None = None) -> dict:
-    """计算 BEI / BDS / BCS 评分"""
+    """计算 BEI / BDS / BCS 评分。
+
+    商业化口径：证据可信度只能来自 display-ready 后的证据门控结果，
+    不能用原始报告中的高分或 finding 数量把“线索”包装成“已复现缺陷”。
+    """
     raw = raw or {}
     if not findings:
         return {"bei": 0, "bds": "0.0", "bcs": 0, "evidence_trust_score": 0}
@@ -1306,17 +1417,37 @@ def _compute_scores(findings: list[dict], raw: dict | None = None) -> dict:
     paths = oracles * 8
     bds = f"{((p0p1 / max(paths, 1)) * 1000):.1f}"
 
-    # BCS
-    db_hit_rate = _deep_get(raw, "db_verification", "hit_rate", default=0) or _deep_get(raw, "value_metrics", "evidence_trust_score", default=0) or 0
+    # BCS 仍保留业务覆盖口径，但不再反推证据可信度。
+    db_hit_rate = _deep_get(raw, "db_verification", "hit_rate", default=0) or 0
     bcs = round(min(98, 60 + db_hit_rate + len(findings) * 1.5), 1)
 
-    # Evidence trust — already 0-100 from _evidence_trust_score(), no *100 needed
-    exec = raw.get("executive_summary") or {}
-    value_metrics = raw.get("value_metrics") or {}
+    def _quality_score(item: dict) -> float:
+        quality = item.get("evidence_quality") if isinstance(item.get("evidence_quality"), dict) else {}
+        try:
+            return max(0.0, min(100.0, float(quality.get("score") or 0)))
+        except Exception:
+            return 0.0
+
+    status_weight = {
+        "reproduced": 1.0,
+        "suspected": 0.65,
+        "risk_clue": 0.35,
+        "not_reproduced": 0.0,
+    }
+    weighted_quality = []
+    for item in findings:
+        status = str(item.get("bug_status") or "risk_clue")
+        weighted_quality.append(_quality_score(item) * status_weight.get(status, 0.35))
+    evidence_trust = round(sum(weighted_quality) / max(len(weighted_quality), 1))
+
     raw_trust = _deep_get(raw, "value_metrics", "evidence_trust_score", default=0) or 0
-    # 如果值 <= 1 说明是 0-1 的小数比例，需要 * 100；否则直接用
-    evidence_trust = round(raw_trust * 100) if raw_trust <= 1 else round(raw_trust)
-    evidence_trust = evidence_trust or bcs
+    try:
+        raw_trust = round(float(raw_trust) * 100) if float(raw_trust) <= 1 else round(float(raw_trust))
+    except Exception:
+        raw_trust = 0
+    # 原始分只能作为上限，不能把 display-ready 证据门控后的低可信度抬高。
+    if raw_trust:
+        evidence_trust = min(evidence_trust, max(0, min(100, raw_trust)))
 
     return {"bei": bei, "bds": bds, "bcs": bcs, "evidence_trust_score": max(0, min(100, evidence_trust))}
 
@@ -1337,10 +1468,8 @@ def _compute_commercial_value(findings: list[dict], raw: dict | None = None) -> 
 
     p0 = int(exec.get("critical_bugs") or sum(1 for f in findings if f.get("severity") == "P0") or 0)
     p1 = int(exec.get("high_priority_bugs") or sum(1 for f in findings if f.get("severity") == "P1") or 0)
-    raw_trust = value_metrics.get("evidence_trust_score") or 0
-    # 如果值 <= 1 说明是 0-1 的小数比例，需要 * 100；否则直接用
-    evidence_trust = round(raw_trust * 100) if raw_trust <= 1 else round(raw_trust)
-    evidence_trust = max(0, min(100, evidence_trust)) or _compute_scores(findings, raw)["bcs"]
+    computed_scores = _compute_scores(findings, raw)
+    evidence_trust = computed_scores["evidence_trust_score"]
     ai_test_points = value_metrics.get("ai_equivalent_test_points") or exec.get("llm_powered_analyses") or runtime.get("total_probes") or len(findings)
     explored = discovery_funnel.get("explored_paths") or discovery_funnel.get("total_candidates") or runtime.get("total_probes") or ai_test_points
     capability_families = capability_matrix.get("total_capabilities") or capability_matrix.get("covered_capabilities") or len(capability_matrix) or 0
@@ -1598,6 +1727,41 @@ def _enforce_evidence_gate(
             "gate_failures": contradictions,
         }
 
+    # ── 1.5. evidence_consistency.verdict 检查 ──
+    evidence_consistency = finding.get("evidence_consistency") or {}
+    if isinstance(evidence_consistency, dict):
+        ec_verdict = str(evidence_consistency.get("verdict") or "").lower()
+        if ec_verdict in ("rejected", "missing", "inconsistent"):
+            return {
+                "status": "not_reproduced",
+                "label": BUG_STATUS_META["not_reproduced"]["label"],
+                "description": f"证据一致性审查未通过：{ec_verdict}",
+                "is_reproducible": False,
+                "gate_passed": False,
+                "gate_failures": [f"evidence_consistency.verdict = {ec_verdict}"],
+            }
+
+    # ── 1.6. 执行阻断检查（route/auth/environment blocked）──
+    execution_block_reason = (
+        _clean(finding.get("execution_block") or finding.get("block_reason") or
+               finding.get("route_blocked_reason") or finding.get("_block_reason") or
+               (evidence_consistency.get("block_reason") if isinstance(evidence_consistency, dict) else ""))
+    )
+    value_lane = _clean(finding.get("value_lane") or finding.get("_value_lane") or "")
+    if not execution_block_reason and value_lane:
+        execution_block_reason = value_lane
+    block_keywords = ("route_blocked", "auth_blocked", "environment_blocked",
+                      "coverage_gap", "validation_lead", "not_reproduced")
+    if execution_block_reason and any(kw in str(execution_block_reason).lower() for kw in block_keywords):
+        return {
+            "status": "not_reproduced",
+            "label": BUG_STATUS_META["not_reproduced"]["label"],
+            "description": f"执行/环境阻断，不能作为客户交付 Bug：{execution_block_reason}",
+            "is_reproducible": False,
+            "gate_passed": False,
+            "gate_failures": [f"blocked: {execution_block_reason}"],
+        }
+
     # ── 2. 证据完备度门控（仅 reproduced 状态检查）──
     if bug_status["status"] != "reproduced":
         return bug_status
@@ -1646,8 +1810,8 @@ def _compute_reproducibility_confidence(finding: dict, bug_status: dict, evidenc
     can_reproduce = evidence_quality.get("can_reproduce", False)
 
     # 有运行时证据加权
-    har = _relevant_har_evidence(finding)
-    if har.get("status_code"):
+    runtime_obs = _best_runtime_observation(finding)
+    if runtime_obs.get("status_code"):
         score = min(1.0, score + 0.1)
     if can_reproduce:
         score = min(1.0, score + 0.1)
@@ -1690,19 +1854,19 @@ def _extract_failed_assertions(finding: dict, reproduction: dict) -> list[dict]:
         })
 
     # 3. API 响应状态码异常
-    har = _relevant_har_evidence(finding)
-    status_code = har.get("status_code") or 0
+    runtime_obs = _best_runtime_observation(finding)
+    status_code = _status_code_int(runtime_obs.get("status_code")) if runtime_obs else 0
+    body = _runtime_body_excerpt(runtime_obs.get("body"), 1000) if runtime_obs else ""
     if status_code and status_code >= 400:
         assertions.append({
             "type": "http_status_error",
             "label": f"HTTP {status_code} 响应异常",
             "expected": "2xx 成功响应",
             "actual": f"状态码 {status_code}",
-            "detail": _clean(har.get("response_body"))[:200] or "响应体未捕获",
+            "detail": body[:200] or "响应体未捕获",
         })
 
     # 4. 响应体含通用错误标识
-    body = _clean(har.get("response_body"))
     if body:
         import json as _json
         try:
@@ -1740,9 +1904,9 @@ def _extract_failed_assertions(finding: dict, reproduction: dict) -> list[dict]:
 def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
     """构建原始证据结构（机器可追溯）。
 
-    从 HAR/DB/日志/执行记录中提取原始证据，不伪造。
+    从 canonical runtime observation / DB / 日志 / 执行记录中提取原始证据，不伪造。
     """
-    har = _relevant_har_evidence(finding)
+    runtime_obs = _best_runtime_observation(finding)
     inv = finding.get("investigation_guidance") if isinstance(finding.get("investigation_guidance"), dict) else {}
     evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
     db_ev = _extract_db_evidence(finding)
@@ -1752,23 +1916,32 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
 
     # 请求原始数据
     request_raw: dict[str, Any] = {}
-    method = _clean(har.get("method") or finding.get("_api_method") or "GET").upper()
-    path = _clean(har.get("path") or finding.get("_api_path") or finding.get("path"))
+    method = _clean(runtime_obs.get("method") or finding.get("_api_method") or "GET").upper()
+    path = _clean(runtime_obs.get("path") or finding.get("_api_path") or finding.get("path"))
     if method or (path and not _is_placeholder_value(path)):
         request_raw["method"] = method
         if path and not _is_placeholder_value(path):
             request_raw["path"] = path
-        request_raw["actor"] = _clean(har.get("actor"))
-        if har.get("request_body"):
-            request_raw["body"] = str(har.get("request_body"))[:2000]
+        if runtime_obs.get("source"):
+            request_raw["source"] = runtime_obs.get("source")
+        if runtime_obs.get("request_url"):
+            request_raw["url"] = _clean(runtime_obs.get("request_url"))
+        actor = _clean(runtime_obs.get("actor"))
+        if actor:
+            request_raw["actor"] = actor
+        request_body = _runtime_body_excerpt(runtime_obs.get("request_body"), 2000)
+        if request_body:
+            request_raw["body"] = request_body
 
     # 响应原始数据
     response_raw: dict[str, Any] = {}
-    status_code = har.get("status_code") or 0
-    if status_code or har.get("response_body"):
+    status_code = _status_code_int(runtime_obs.get("status_code")) if runtime_obs else 0
+    response_body = _runtime_body_excerpt(runtime_obs.get("body"), 2000) if runtime_obs else ""
+    if status_code or response_body:
         response_raw["status_code"] = status_code
-        response_raw["body"] = str(har.get("response_body") or "")[:2000]
-        response_raw["duration_ms"] = har.get("duration_ms") or 0
+        response_raw["body"] = response_body
+        response_raw["duration_ms"] = runtime_obs.get("duration_ms") or 0
+        response_raw["source"] = runtime_obs.get("source") or "runtime"
 
     # DB 快照
     db_snapshot: dict[str, Any] = {}
@@ -1807,7 +1980,7 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
 
 def _build_technical_details(finding: dict, investigation: dict, reproduction: dict) -> dict:
     """构建研发定位证据（让研发一眼能定位问题）。"""
-    har = _relevant_har_evidence(finding)
+    runtime_obs = _best_runtime_observation(finding)
     risk_type = _clean(finding.get("risk_type") or finding.get("category") or "unknown")
     path = _clean(finding.get("_api_path") or finding.get("repro_path") or finding.get("path"))
     method = _clean(finding.get("_api_method") or finding.get("method") or "GET").upper()
@@ -1853,10 +2026,10 @@ def _build_technical_details(finding: dict, investigation: dict, reproduction: d
         "api_endpoint": {
             "method": method,
             "path": path,
-            "actor": _clean(har.get("actor")),
+            "actor": _clean(runtime_obs.get("actor")),
         },
-        "response_status": har.get("status_code") or 0,
-        "response_body_excerpt": _clean(har.get("response_body"))[:500],
+        "response_status": _status_code_int(runtime_obs.get("status_code")) if runtime_obs else 0,
+        "response_body_excerpt": _runtime_body_excerpt(runtime_obs.get("body"), 500) if runtime_obs else "",
         "related_tables": investigation.get("relevant_tables", []),
         "trace_id": investigation.get("trace_id", ""),
         "possible_root_cause": possible_root_cause,
@@ -1920,7 +2093,7 @@ def _build_expected_actual_comparison(finding: dict) -> dict:
     expected = _strip_internal_tags(_clean(finding.get("expected_behavior") or finding.get("expected")))
     actual = _strip_internal_tags(_clean(finding.get("actual_behavior") or finding.get("actual") or finding.get("description")))
     db_ev = _extract_db_evidence(finding)
-    har = _relevant_har_evidence(finding)
+    runtime_obs = _best_runtime_observation(finding)
 
     comparison = {
         "expected": expected or "未关联预期规则（需上传 PRD / API 规范）",
@@ -1941,13 +2114,14 @@ def _build_expected_actual_comparison(finding: dict) -> dict:
         }
 
     # API 对比
-    status_code = har.get("status_code") or 0
+    status_code = _status_code_int(runtime_obs.get("status_code")) if runtime_obs else 0
     if status_code:
         comparison["api_comparison"] = {
             "expected": "2xx 成功响应",
             "actual": f"HTTP {status_code}",
-            "response_body": _clean(har.get("response_body"))[:500],
-            "duration_ms": har.get("duration_ms") or 0,
+            "response_body": _runtime_body_excerpt(runtime_obs.get("body"), 500),
+            "duration_ms": runtime_obs.get("duration_ms") or 0,
+            "source": runtime_obs.get("source") or "runtime",
         }
 
     # 差异描述
@@ -1986,7 +2160,9 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     repro_path = _clean(finding.get("_api_path") or finding.get("repro_path") or _deep_get(finding, "evidence", "path") or finding.get("path"))
     if _is_placeholder_value(repro_path):
         repro_path = ""
-    repro_method = _clean(finding.get("_api_method") or finding.get("repro_method") or _deep_get(finding, "evidence", "method") or finding.get("method") or "GET").upper()
+    repro_method = _clean(finding.get("_api_method") or finding.get("repro_method") or _deep_get(finding, "evidence", "method") or finding.get("method")).upper()
+    if not repro_path:
+        repro_method = ""
 
     taxonomy = _build_taxonomy(finding)
     evidence_quality = _compute_evidence_quality(finding, repro_path)
@@ -2384,9 +2560,209 @@ def _dedupe_by_business_semantics(risks: list[dict]) -> list[dict]:
     return deduped
 
 
+
+
+def _safe_report_total(raw: dict | None) -> int:
+    """Return raw candidate count from legacy report fields without changing display count."""
+    raw = raw or {}
+    candidates: list[Any] = [
+        raw.get("risk_total"), raw.get("risk_count"), raw.get("total_findings"),
+        raw.get("total_bugs_found"), raw.get("total_found"), raw.get("raw_total"),
+    ]
+    exec_summary = raw.get("executive_summary") if isinstance(raw.get("executive_summary"), dict) else {}
+    candidates.extend([
+        exec_summary.get("total_findings"), exec_summary.get("total_bugs_found"), exec_summary.get("total_found"),
+    ])
+    for value in candidates:
+        try:
+            number = int(float(value))
+        except Exception:
+            continue
+        if number >= 0:
+            return number
+    return 0
+
+
+def _build_display_contract(display_findings: list[dict], raw_report: dict | None = None) -> dict:
+    """Build a single source-of-truth contract consumed by the frontend.
+
+    This is the audit boundary: every number that implies customer-facing bugs must
+    be derived from the already formatted ``risks`` list, not from raw/cached report
+    totals. Raw report totals are kept only as candidate/reference counts.
+    """
+    statuses = {"reproduced": 0, "suspected": 0, "risk_clue": 0, "not_reproduced": 0}
+    evidence_levels = {"validated": 0, "partial": 0, "suspected": 0, "needs_evidence": 0}
+    severities = {"P0": 0, "P1": 0, "P2": 0, "P3": 0}
+
+    for item in display_findings:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("bug_status") or "risk_clue")
+        statuses[status] = statuses.get(status, 0) + 1
+        quality = item.get("evidence_quality") if isinstance(item.get("evidence_quality"), dict) else {}
+        level = str(quality.get("level") or "needs_evidence")
+        evidence_levels[level] = evidence_levels.get(level, 0) + 1
+        severity = str(item.get("severity") or "P2")
+        severities[severity] = severities.get(severity, 0) + 1
+
+    ready_bug_count = sum(
+        1 for item in display_findings
+        if isinstance(item, dict) and item.get("bug_status") == "reproduced" and bool(item.get("gate_passed"))
+    )
+    needs_validation_count = statuses.get("suspected", 0) + statuses.get("risk_clue", 0)
+    not_reproduced_count = statuses.get("not_reproduced", 0)
+    materialized_count = len(display_findings)
+    raw_candidate_count = max(_safe_report_total(raw_report), materialized_count)
+
+    projection = []
+    for item in display_findings:
+        if not isinstance(item, dict):
+            continue
+        quality = item.get("evidence_quality") if isinstance(item.get("evidence_quality"), dict) else {}
+        completeness = item.get("evidence_completeness") if isinstance(item.get("evidence_completeness"), dict) else {}
+        projection.append({
+            "id": item.get("id"),
+            "title": item.get("title"),
+            "severity": item.get("severity"),
+            "bug_status": item.get("bug_status"),
+            "gate_passed": bool(item.get("gate_passed")),
+            "repro_method": item.get("repro_method"),
+            "repro_path": item.get("repro_path"),
+            "evidence_level": quality.get("level"),
+            "evidence_score": quality.get("score"),
+            "completeness_present": completeness.get("present_count"),
+            "failed_assertion_count": len(item.get("failed_assertions") or []),
+        })
+    integrity_hash = hashlib.sha256(
+        json.dumps(projection, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:24]
+
+    return {
+        "schema_version": "display-ready-v2026-07-05",
+        "source_of_truth": "backend.display_ready_formatter.format_findings_display_ready",
+        "display_key": "risks",
+        "materialized_risk_count": materialized_count,
+        "raw_candidate_risk_count": raw_candidate_count,
+        "raw_to_display_delta": max(0, raw_candidate_count - materialized_count),
+        "ready_bug_count": ready_bug_count,
+        "needs_validation_count": needs_validation_count,
+        "not_reproduced_count": not_reproduced_count,
+        "status_counts": statuses,
+        "evidence_level_counts": evidence_levels,
+        "severity_counts": severities,
+        "customer_delivery_mode": "只把 reproduced + gate_passed 作为已复现 Bug；suspected/risk_clue 作为待补证据线索；not_reproduced 不进入客户缺陷交付。",
+        "integrity_hash": integrity_hash,
+    }
+
 # ═══════════════════════════════════════════════════════════════════════
 # 主入口
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def sanitize_customer_evidence_payload(value: Any) -> Any:
+    """Recursively clean customer-facing evidence payloads on the current main path.
+
+    This is a final response guard for stale cache or legacy rows that may already
+    have been materialized before display-ready formatting was tightened. It is
+    intentionally placed in display_ready_formatter instead of historical Phase104
+    adapters, because the active commercial route is private_pilot_service ->
+    format_findings_display_ready -> frontend/src/api/client.ts.
+    """
+    if isinstance(value, list):
+        return [sanitize_customer_evidence_payload(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    sanitized = {str(key): sanitize_customer_evidence_payload(item) for key, item in value.items()}
+    if _looks_like_display_risk_payload(sanitized):
+        return _sanitize_display_risk_payload(sanitized)
+    return sanitized
+
+
+def _looks_like_display_risk_payload(item: dict[str, Any]) -> bool:
+    return (
+        "title" in item
+        and ("raw_evidence" in item or "reproduction" in item or "evidence_quality" in item)
+        and ("bug_status" in item or "verdict" in item)
+    )
+
+
+def _sanitize_display_risk_payload(risk: dict[str, Any]) -> dict[str, Any]:
+    raw_evidence = risk.get("raw_evidence") if isinstance(risk.get("raw_evidence"), dict) else {}
+    response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+    if not response_raw:
+        return risk
+
+    request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+    obs = {
+        "source": response_raw.get("source") or "runtime",
+        "method": request_raw.get("method") or risk.get("repro_method"),
+        "path": request_raw.get("path") or risk.get("repro_path"),
+        "status_code": response_raw.get("status_code"),
+        "body": response_raw.get("body"),
+        "request_body": request_raw.get("body"),
+        "duration_ms": response_raw.get("duration_ms") or 0,
+        "actor": request_raw.get("actor"),
+    }
+    if _runtime_observation_supports_finding(risk, obs) and not _runtime_identity_mismatch_reasons(risk, obs):
+        return risk
+
+    cleaned = dict(risk)
+    cleaned["bug_status"] = "not_reproduced"
+    cleaned["bug_status_label"] = "未复现"
+    cleaned["bug_status_description"] = EVIDENCE_RELEVANCE_FAILURE
+    cleaned["verdict"] = "pending"
+    cleaned["is_reproducible"] = False
+    cleaned["gate_passed"] = False
+    failures = [str(item) for item in cleaned.get("gate_failures") or [] if str(item)]
+    if EVIDENCE_RELEVANCE_FAILURE not in failures:
+        failures.append(EVIDENCE_RELEVANCE_FAILURE)
+    cleaned["gate_failures"] = failures
+    cleaned["confidence"] = 0.0
+
+    cleaned_raw = dict(raw_evidence)
+    cleaned_raw["response_raw"] = {}
+    cleaned_raw["has_real_evidence"] = bool(
+        cleaned_raw.get("db_snapshot")
+        or cleaned_raw.get("logs")
+        or cleaned_raw.get("execution_trace")
+    )
+    cleaned["raw_evidence"] = cleaned_raw
+
+    reproduction = dict(cleaned.get("reproduction") or {})
+    reproduction["har_evidence"] = None
+    reproduction["is_synthetic"] = True
+    reproduction["steps"] = [
+        "当前运行响应与缺陷描述不匹配，已拒绝作为复现证据；请重新执行与该缺陷场景一致的复现步骤。"
+    ]
+    cleaned["reproduction"] = reproduction
+
+    quality = dict(cleaned.get("evidence_quality") or {})
+    quality["can_reproduce"] = False
+    quality["score"] = min(int(quality.get("score") or 0), 40)
+    quality["level"] = "needs_evidence"
+    quality["label"] = "风险线索"
+    quality["summary"] = EVIDENCE_RELEVANCE_FAILURE
+    quality["verified"] = [
+        item for item in quality.get("verified") or []
+        if "接口响应" not in str(item) and "复现" not in str(item)
+    ]
+    missing = [str(item) for item in quality.get("missing") or [] if str(item)]
+    if "缺少与缺陷描述匹配的真实接口响应" not in missing:
+        missing.insert(0, "缺少与缺陷描述匹配的真实接口响应")
+    quality["missing"] = missing[:6]
+    cleaned["evidence_quality"] = quality
+
+    comparison = dict(cleaned.get("expected_actual_comparison") or {})
+    comparison["api_comparison"] = None
+    cleaned["expected_actual_comparison"] = comparison
+    cleaned["failed_assertions"] = [
+        assertion for assertion in cleaned.get("failed_assertions") or []
+        if isinstance(assertion, dict) and assertion.get("type") not in {"http_status_error", "response_error_field", "behavior_mismatch"}
+    ]
+    proof = dict(cleaned.get("proof") or {})
+    proof["repro_rate"] = 0
+    cleaned["proof"] = proof
+    return cleaned
 
 def format_findings_display_ready(
     risks: list[dict],
@@ -2417,8 +2793,11 @@ def format_findings_display_ready(
     scores = _compute_scores(display_findings, raw_report)
     commercial_value = _compute_commercial_value(display_findings, raw_report)
 
+    display_contract = _build_display_contract(display_findings, raw_report)
+
     metrics = {
         "scores": scores,
         "commercial_value": commercial_value,
+        "display_contract": display_contract,
     }
     return display_findings, metrics

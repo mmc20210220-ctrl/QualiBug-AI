@@ -30,3 +30,4 @@ assert engine.client.config.timeout_seconds >= 300, "timeout too low"
 assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 ```
 所有产品前后端都不能有硬编码，要保持通用性，我做的是全行业适配的，绝对不能有硬编码
+测试项目测试bug不能造假数据给我，没有执行找出的bug不要给我，不能给我假数据

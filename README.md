@@ -1,4 +1,4 @@
-# QualiBug AI Enterprise Edition
+﻿﻿# QualiBug AI Enterprise Edition
 
 **Enterprise Business-Quality Assurance Platform — AI-powered bug discovery across any industry**
 
@@ -41,7 +41,10 @@ python -m pytest tests/test_phase95_runtime_evidence_scoreboard.py -v
 python -m pytest tests/ -q
 
 # 5. 启动服务
+# 后端固定端口：8088
 python -m ai_test_asset_center.private_pilot_service
+# 前端固定端口：5174
+cd frontend && npm run dev
 # 或使用 CLI（发布验证、扫描等）
 qualibug verify-release
 ```
@@ -132,7 +135,7 @@ qualibug discover --prd "path/to/prd.md" --api "path/to/api.md"
 | `/api/knowledge/ingest` | POST | 知识导入 |
 | `/api/settings/save` | POST | 系统设置 |
 
-前端联调 API 面（Phase104A，`phase104_command_center_http_api`，默认端口 8790）使用 `/api/v1/*` 前缀，详见 `PHASE104A_COMMAND_CENTER_HTTP_API_README.md`。
+前端联调 API 面（Phase104A，`phase104_command_center_http_api`，默认端口 8088）使用 `/api/v1/*` 前缀，详见 `PHASE104A_COMMAND_CENTER_HTTP_API_README.md`。
 
 ---
 
@@ -212,3 +215,4 @@ Proprietary - QualiBug Team
 - 文档: `docs/`
 - 问题: GitHub Issues
 - 邮件: team@qualibug.com
+

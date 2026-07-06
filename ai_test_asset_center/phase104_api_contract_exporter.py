@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase104B: OpenAPI contract and frontend integration kit exporter.
 
@@ -282,7 +282,7 @@ def build_openapi_spec(*, title: str = "QualiBug Enterprise Command Center API")
             "version": PHASE104B_VERSION,
             "description": "QualiBug Phase104 Enterprise Quality Command Center local API contract.",
         },
-        "servers": [{"url": "http://127.0.0.1:8790", "description": "Local Phase104A API server"}],
+        "servers": [{"url": "http://127.0.0.1:8088", "description": "Local Phase104A API server"}],
         "paths": paths,
         "components": _components(),
         "x-qualibug": {
@@ -301,7 +301,7 @@ def render_contract_markdown(spec: Mapping[str, Any] | None = None) -> str:
         "",
         f"- Contract Version: `{PHASE104B_VERSION}`",
         f"- Runtime Version: `{PHASE104A_VERSION}`",
-        "- Base URL: `http://127.0.0.1:8790`",
+        "- Base URL: `http://127.0.0.1:8088`",
         "- 安全约束：所有响应默认脱敏，前端不得展示 token/cookie/session/client_secret 原值。",
         "",
         "## 路由总览",
@@ -350,7 +350,7 @@ export type ApiEnvelope<T = unknown> = {
 };
 
 export class QualiBugCommandCenterClient {
-  constructor(private readonly baseUrl: string = 'http://127.0.0.1:8790') {}
+  constructor(private readonly baseUrl: string = 'http://127.0.0.1:8088') {}
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
@@ -462,3 +462,4 @@ __all__ = [
     "route_contracts",
     "main",
 ]
+

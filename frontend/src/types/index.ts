@@ -65,6 +65,7 @@ export interface Finding {
     path: string;
     steps: string[];
     curl_command: string;
+    is_synthetic?: boolean;
     har_evidence?: {
       status_code: number;
       response_body: string;
@@ -115,6 +116,12 @@ export interface Finding {
   timestamp: string;
   reproducibility_count: number;
   proof: { hash: string; repro_rate: number };
+
+  // 交付轨道（后端单一真相源）
+  delivery_track?: 'defect' | 'clue';
+  customer_delivery_status?: 'defect' | 'clue';
+  customer_delivery_label?: string;
+  customer_visible?: boolean;
 
   // 兼容字段（后端同时返回）
   expected: string;

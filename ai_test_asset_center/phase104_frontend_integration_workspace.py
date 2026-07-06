@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase104D: frontend integration workspace generator.
 
@@ -131,7 +131,7 @@ def render_package_json() -> str:
         "scripts": {
             "typecheck": "tsc --noEmit",
             "contract:readme": "echo See contract/API_CONTRACT.md",
-            "api:dev": "python -m ai_test_asset_center.phase104_command_center_http_api --seed-scenario manufacturing --port 8790",
+            "api:dev": "python -m ai_test_asset_center.phase104_command_center_http_api --seed-scenario manufacturing --port 8088",
         },
         "devDependencies": {
             "typescript": "^5.0.0"
@@ -327,7 +327,7 @@ import {{ toDashboardViewModel, toEnvironmentViewModel, toLiveMapViewModel }} fr
 
 // Phase104D framework-neutral frontend smoke workflow.
 // Start backend first:
-// python -m ai_test_asset_center.phase104_command_center_http_api --seed-scenario manufacturing --port 8790
+// python -m ai_test_asset_center.phase104_command_center_http_api --seed-scenario manufacturing --port 8088
 
 const client = new QualiBugCommandCenterClient('{api_base_url.rstrip('/')}');
 
@@ -377,7 +377,7 @@ def render_readme(api_base_url: str) -> str:
 ## 启动后端
 
 ```powershell
-python -m ai_test_asset_center.phase104_command_center_http_api --seed-scenario manufacturing --port 8790
+python -m ai_test_asset_center.phase104_command_center_http_api --seed-scenario manufacturing --port 8088
 ```
 
 默认 API 地址：`{api_base_url.rstrip('/')}`
@@ -485,7 +485,7 @@ def _workspace_files_manifest(output_dir: Path) -> dict[str, dict[str, Any]]:
 def build_frontend_integration_workspace(
     output_dir: str | Path,
     *,
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Generate a framework-neutral frontend handoff workspace."""
@@ -636,7 +636,7 @@ def render_validation_markdown(report: WorkspaceValidationReport) -> str:
 def run_frontend_workspace_export(
     *,
     output_dir: str | Path,
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     validate: bool = True,
 ) -> dict[str, Any]:
     manifest = build_frontend_integration_workspace(output_dir, api_base_url=api_base_url)
@@ -653,7 +653,7 @@ def run_frontend_workspace_export(
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Phase104D frontend integration workspace.")
     parser.add_argument("--output-dir", required=True, help="Directory for generated workspace artifacts.")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790", help="Local API base URL for generated env/client examples.")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088", help="Local API base URL for generated env/client examples.")
     parser.add_argument("--validate-only", action="store_true", help="Validate an existing workspace without regenerating it.")
     parser.add_argument("--no-validate", action="store_true", help="Skip validation report after generation.")
     return parser
@@ -683,3 +683,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

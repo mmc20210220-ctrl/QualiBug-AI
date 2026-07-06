@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105K: frontend interaction acceptance gate for QualiBug.
 
@@ -360,7 +360,7 @@ def run_frontend_interaction_acceptance(
     output_dir: str | Path | None = None,
     build_first: bool = False,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     min_score: int = 90,
 ) -> dict[str, Any]:
     hub = Path(hub_dir)
@@ -377,7 +377,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--build-first", action="store_true")
     parser.add_argument("--scenario", default="manufacturing")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--min-score", type=int, default=90)
     return parser
 
@@ -398,3 +398,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

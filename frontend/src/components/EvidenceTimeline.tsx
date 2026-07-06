@@ -45,12 +45,14 @@ function StructuredBlock({ step }: { step: EvidenceStep }) {
 
   if (step.tag === 'response') {
     const body = String(s.response_body || '').slice(0, 500);
+    const durationMs = Number(s.duration_ms) || 0;
+    const actor = String(s.actor || '').trim();
     return (
       <div className="evidence-structured">
         <div className="evidence-structured-row">
           <StatusCodeBadge code={Number(s.status_code) || 0} />
-          {Number(s.duration_ms) > 0 && <span className="evidence-meta-chip">耗时 {formatDurationMs(s.duration_ms)}</span>}
-          {s.actor && <span className="evidence-meta-chip">操作者: {formatActorName(String(s.actor))}</span>}
+          {durationMs > 0 && <span className="evidence-meta-chip">耗时 {formatDurationMs(durationMs)}</span>}
+          {actor && <span className="evidence-meta-chip">操作者: {formatActorName(actor)}</span>}
         </div>
         {body && <pre className="evidence-code-block">{body}</pre>}
       </div>
@@ -58,23 +60,29 @@ function StructuredBlock({ step }: { step: EvidenceStep }) {
   }
 
   if (step.tag === 'db') {
+    const table = String(s.table || '').trim();
+    const column = String(s.column || '').trim();
+    const value = s.value === undefined || s.value === '' ? '' : String(s.value);
+    const businessKey = String(s.business_key || '').trim();
+    const violation = String(s.violation || '').trim();
     return (
       <div className="evidence-structured">
         <div className="evidence-db-table">
-          {s.table && <span className="evidence-db-cell"><em>表</em><code>{String(s.table)}</code></span>}
-          {s.column && <span className="evidence-db-cell"><em>字段</em><code>{String(s.column)}</code></span>}
-          {s.value !== undefined && s.value !== '' && <span className="evidence-db-cell"><em>当前值</em><code className="evidence-db-value">{String(s.value)}</code></span>}
-          {s.business_key && <span className="evidence-db-cell"><em>业务主键</em><code>{String(s.business_key)}</code></span>}
+          {table && <span className="evidence-db-cell"><em>表</em><code>{table}</code></span>}
+          {column && <span className="evidence-db-cell"><em>字段</em><code>{column}</code></span>}
+          {value && <span className="evidence-db-cell"><em>当前值</em><code className="evidence-db-value">{value}</code></span>}
+          {businessKey && <span className="evidence-db-cell"><em>业务主键</em><code>{businessKey}</code></span>}
         </div>
-        {s.violation && <p className="evidence-db-violation">{String(s.violation)}</p>}
+        {violation && <p className="evidence-db-violation">{violation}</p>}
       </div>
     );
   }
 
-  if (step.tag === 'log' && s.trace_id) {
+  const traceId = String(s.trace_id || '').trim();
+  if (step.tag === 'log' && traceId) {
     return (
       <div className="evidence-structured">
-        <code className="evidence-trace-id-inline">{String(s.trace_id)}</code>
+        <code className="evidence-trace-id-inline">{traceId}</code>
       </div>
     );
   }

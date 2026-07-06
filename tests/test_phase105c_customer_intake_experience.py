@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -12,7 +12,7 @@ from ai_test_asset_center.phase105_customer_intake_experience import (
 
 
 def test_phase105c_generates_customer_intake_page_and_phase104_payload(tmp_path) -> None:
-    manifest = build_customer_intake_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8790")
+    manifest = build_customer_intake_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8088")
 
     assert manifest["version"].startswith("phase105c")
     assert manifest["redaction_status"] == "safe"
@@ -36,7 +36,7 @@ def test_phase105c_generates_customer_intake_page_and_phase104_payload(tmp_path)
 
 
 def test_phase105c_acceptance_report_and_validate_only(tmp_path) -> None:
-    result = run_customer_intake_experience_export(output_dir=tmp_path, scenario="saas", api_base_url="http://127.0.0.1:8790")
+    result = run_customer_intake_experience_export(output_dir=tmp_path, scenario="saas", api_base_url="http://127.0.0.1:8088")
 
     assert result["acceptance"]["passed"] is True
     assert result["acceptance"]["score"] == 100
@@ -59,3 +59,4 @@ def test_phase105c_detects_missing_page_and_secret_leak(tmp_path) -> None:
     assert "customer_intake.html" in details
     assert "Bearer raw" in details
     assert scan_customer_intake_for_secret_leaks(tmp_path)
+

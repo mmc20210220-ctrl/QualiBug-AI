@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Phase105L: frontend experience delivery bundle for QualiBug.
 
@@ -347,7 +347,7 @@ def build_frontend_delivery_bundle(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8790",
+    api_base_url: str = "http://127.0.0.1:8088",
     create_zip: bool = True,
 ) -> dict[str, Any]:
     bundle = Path(output_dir)
@@ -517,7 +517,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="outputs/phase105_frontend_delivery_bundle")
     parser.add_argument("--bundle-dir", default=None)
     parser.add_argument("--scenario", default="manufacturing")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8790")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--no-zip", action="store_true")
     parser.add_argument("--min-score", type=int, default=90)
@@ -539,3 +539,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

@@ -1,8 +1,8 @@
-# QualiBug Phase104B API 合同
+﻿# QualiBug Phase104B API 合同
 
 - Contract Version: `phase104b-api-contract-exporter-v1`
 - Runtime Version: `phase104a-command-center-http-api-v1`
-- Base URL: `http://127.0.0.1:8790`
+- Base URL: `http://127.0.0.1:8088`
 - 安全约束：所有响应默认脱敏，前端不得展示 token/cookie/session/client_secret 原值。
 
 ## 路由总览
@@ -50,3 +50,4 @@
 ## 脱敏规范
 
 合同示例只包含脱敏占位和状态字段，不包含原始凭证。Credential 类字段只允许进入本地运行时，不能进入报告、静态前端或交付包。
+

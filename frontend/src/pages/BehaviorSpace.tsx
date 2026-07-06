@@ -378,7 +378,7 @@ function buildIdentifier(type: BehaviorType, finding: Finding): string {
 }
 
 function buildDetail(type: BehaviorType, finding: Finding): string {
-  if (type === 'API') return finding.repro_method || 'GET';
+  if (type === 'API') return finding.repro_method || '待补充';
   if (type === '业务流程') return finding.defect_family_label || finding.reporting_bucket_label || '运行证据聚合';
   if (type === '数据库') return finding.investigation_guidance?.relevant_tables?.join(', ') || '数据一致性证据';
   if (type === '文档') return finding.doc_refs?.[0]?.display_name || '资料规则证据';

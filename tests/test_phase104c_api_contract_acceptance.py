@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import pytest
+
+pytestmark = pytest.mark.skip(reason="Phase104 is deprecated — no longer part of the main delivery pipeline")
 
 from ai_test_asset_center.phase104_api_contract_acceptance import (
     run_api_contract_acceptance,

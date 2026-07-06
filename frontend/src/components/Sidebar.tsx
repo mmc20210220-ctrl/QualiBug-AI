@@ -6,6 +6,7 @@ import { buildProjectPath } from '../lib/project-navigation';
 const navItems = [
   { to: 'dashboard', icon: 'overview', label: '风险总览', section: '风险监控' },
   { to: 'findings', icon: 'bug', label: '行为验证', section: null, badgeKey: 'findings' },
+  { to: 'clues', icon: 'runtime', label: '待验证线索', section: null, badgeKey: 'clues' },
   { to: 'evidence', icon: 'shield', label: '证据链', section: null },
   { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
   { to: 'materials', icon: 'knowledge', label: '企业资料', section: '系统' },
@@ -40,7 +41,7 @@ function SvgIcon({ name }: { name: string }) {
 export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
-  const { projectName, findingsCount, p0Count } = useProjectSummary(project);
+  const { projectName, findingsCount, clueCount, p0Count } = useProjectSummary(project);
   const findingCount = findingsCount;
 
   const navEntries = navItems.map((item, index) => ({
@@ -53,6 +54,8 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
       ? '存在阻断项'
       : (findingCount || 0) > 0
         ? '可进入闭环'
+        : (clueCount || 0) > 0
+          ? '待补证'
         : '待首次检测';
 
   return (
@@ -79,12 +82,12 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
               <strong>{riskStateLabel}</strong>
             </div>
             <div className="side-project-metric">
-              <span>风险发现</span>
+              <span>可交付</span>
               <strong>{findingCount ?? 0}</strong>
             </div>
             <div className="side-project-metric">
-              <span>阻断项</span>
-              <strong>{p0Count}</strong>
+              <span>待验证</span>
+              <strong>{clueCount ?? 0}</strong>
             </div>
           </div>
         </div>
@@ -96,8 +99,10 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           ) : null;
 
           const badge = item.badgeKey === 'findings' && findingCount !== null
-            ? (p0Count > 0 ? p0Count : findingCount)
-            : item.badge;
+            ? findingCount
+            : item.badgeKey === 'clues'
+              ? clueCount
+              : item.badge;
           const badgeAlert = item.badgeKey === 'findings' && p0Count > 0;
 
           return (

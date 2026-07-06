@@ -38,6 +38,7 @@ type ProjectSummary = {
   resolvedProjectId: string;
   projectName: string;
   findingsCount: number;
+  clueCount: number;
   p0Count: number;
 };
 
@@ -46,21 +47,47 @@ function getResolvedProjectId(raw: any): string {
 }
 
 function getReportFindings(raw: any): Finding[] {
-  const risks = raw?.risks;
-  return Array.isArray(risks) ? risks as Finding[] : [];
+  const defects = raw?.defects;
+  if (Array.isArray(defects)) return defects as Finding[];
+  return [];
+}
+
+function getReportClues(raw: any): Finding[] {
+  const clues = raw?.clues;
+  return Array.isArray(clues) ? clues as Finding[] : [];
 }
 
 function getCompletedAt(raw: any): string {
   return String(raw?.updatedAt || raw?.updated_at || '').trim();
 }
 
+function asFiniteNumber(value: any, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function firstFiniteNumber(...values: any[]): number {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue;
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+
 function hasMaterializedFindingData(raw: any): boolean {
   const findings = getReportFindings(raw);
   const exec = raw?.executive_summary || {};
-  const totalBugs = Number(exec.total_bugs_found || exec.total_findings || 0);
-  const runtimeConfirmed = Number(raw?.runtime_verification?.confirmed || 0);
-  const dbConfirmed = Number(raw?.db_verification?.confirmed || 0);
-  return findings.length > 0 || totalBugs > 0 || runtimeConfirmed > 0 || dbConfirmed > 0;
+  const contract = raw?.data_contract || {};
+  const materializedTotal = firstFiniteNumber(
+    contract.materialized_risk_count,
+    exec.materialized_findings,
+    exec.total_findings,
+    findings.length
+  );
+  const runtimeConfirmed = asFiniteNumber(raw?.runtime_verification?.confirmed);
+  const dbConfirmed = asFiniteNumber(raw?.db_verification?.confirmed);
+  return findings.length > 0 || materializedTotal > 0 || runtimeConfirmed > 0 || dbConfirmed > 0;
 }
 
 function isContinuousDiscoveryActive(raw: any): boolean {
@@ -74,15 +101,83 @@ function isContinuousDiscoveryActive(raw: any): boolean {
 function buildProjectSummary(raw: any, project: string): ProjectSummary {
   const resolvedProjectId = getResolvedProjectId(raw);
   const findings = getReportFindings(raw);
-  const exec = raw?.executive_summary || {};
-  const canonicalTotal = Number(exec.total_bugs_found || exec.total_findings || findings.length || 0);
-  const canonicalP0 = Number(exec.critical_bugs || findings.filter((f: Finding) => f.severity === 'P0').length || 0);
+  const clues = getReportClues(raw);
   return {
     resolvedProjectId,
     projectName: String(raw?.project_name || raw?.projectName || project || '').trim() || '未选择客户',
-    findingsCount: canonicalTotal,
-    p0Count: canonicalP0,
+    findingsCount: findings.length,
+    clueCount: clues.length,
+    p0Count: findings.filter((f: Finding) => f.severity === 'P0').length,
   };
+}
+
+export function isCustomerReadyFinding(finding: Finding): boolean {
+  if (!finding) {
+    return false;
+  }
+
+  const deliveryStatus = String(finding.customer_delivery_status || finding.delivery_track || '').trim();
+  if (deliveryStatus !== 'defect') return false;
+
+  if (finding.bug_status !== 'reproduced' || !finding.gate_passed) {
+    return false;
+  }
+
+  // ── evidence_consistency.verdict 门控 ──
+  // 证据一致性审查未通过的不能进入客户交付
+  const evidenceConsistency = (finding as any).evidence_consistency;
+  if (evidenceConsistency && typeof evidenceConsistency === 'object') {
+    const verdict = String(evidenceConsistency.verdict || '').toLowerCase();
+    if (verdict === 'rejected' || verdict === 'missing') {
+      return false;
+    }
+  }
+
+  // ── 阻断类型过滤：这些是内部诊断状态，不是客户可交付缺陷 ──
+  const blockedKeywords = ['route_blocked', 'auth_blocked', 'environment_blocked',
+    'coverage_gap', 'validation_lead', 'not_reproduced'];
+  const valueLane = String((finding as any).value_lane || (finding as any)._value_lane || '').toLowerCase();
+  const blockReason = String((finding as any).execution_block || (finding as any).block_reason || '').toLowerCase();
+  const combined = `${valueLane} ${blockReason}`;
+  if (blockedKeywords.some(kw => combined.includes(kw))) {
+    return false;
+  }
+
+  if (finding.reproduction?.is_synthetic) {
+    return false;
+  }
+
+  return hasRealReplayAsset(finding) && hasCustomerFacingHardEvidence(finding);
+}
+
+export function hasCustomerFacingHardEvidence(finding: Finding): boolean {
+  if (!finding) return false;
+  const repro = finding.reproduction || { method: '', path: '', steps: [], curl_command: '', is_synthetic: false };
+  const raw = finding.raw_evidence;
+  const hasRuntimeEvidence = Boolean(repro.har_evidence?.status_code || repro.har_evidence?.response_body);
+  const hasRawEvidence = Boolean(
+    raw?.has_real_evidence
+    || raw?.response_raw?.status_code
+    || raw?.response_raw?.body
+    || raw?.db_snapshot?.table
+    || raw?.logs?.trace_id
+    || raw?.execution_trace?.evidence_hash
+  );
+  return hasRawEvidence || hasRuntimeEvidence;
+}
+
+export function hasRealReplayAsset(finding: Finding): boolean {
+  if (!finding) return false;
+  const repro = finding.reproduction || { method: '', path: '', steps: [], curl_command: '', is_synthetic: false };
+  const eq = finding.evidence_quality || { can_reproduce: false };
+  const hasHarReplay = Boolean(repro.har_evidence?.status_code || repro.har_evidence?.response_body);
+  return Boolean(
+    eq.can_reproduce
+    && !repro.is_synthetic
+    && repro.method
+    && repro.path
+    && hasHarReplay
+  );
 }
 
 export function useWorkspaceDirectory() {
@@ -109,19 +204,20 @@ export function useProjectSummary(project: string) {
     resolvedProjectId: '',
     projectName: project || '未选择客户',
     findingsCount: 0,
+    clueCount: 0,
     p0Count: 0,
   });
   const [loading, setLoading] = useState(true);
   const load = useCallback(() => {
     if (!project) {
-      setSummary({ resolvedProjectId: '', projectName: '未选择客户', findingsCount: 0, p0Count: 0 });
+      setSummary({ resolvedProjectId: '', projectName: '未选择客户', findingsCount: 0, clueCount: 0, p0Count: 0 });
       setLoading(false);
       return;
     }
     setLoading(true);
     getFindings(project)
       .then((raw: any) => { setSummary(buildProjectSummary(raw, project)); setLoading(false); })
-      .catch(() => { setSummary({ resolvedProjectId: '', projectName: '未选择客户', findingsCount: 0, p0Count: 0 }); setLoading(false); });
+      .catch(() => { setSummary({ resolvedProjectId: '', projectName: '未选择客户', findingsCount: 0, clueCount: 0, p0Count: 0 }); setLoading(false); });
   }, [project]);
   useEffect(() => { load(); }, [load]);
   useScanCompletedRefresh(project, load);
@@ -162,27 +258,51 @@ export function usePipelineData(project: string) {
  */
 export function useFindingsData(project: string) {
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [clues, setClues] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const load = useCallback(() => {
     setLoading(true);
     setError('');
     getFindings(project)
-      .then((raw: any) => { setFindings(getReportFindings(raw)); setLoading(false); })
-      .catch((err: Error) => { setError(err.message); setLoading(false); });
+      .then((raw: any) => {
+        setFindings(getReportFindings(raw));
+        setClues(getReportClues(raw));
+        setLoading(false);
+      })
+      .catch((err: Error) => {
+        setFindings([]);
+        setClues([]);
+        setError(err.message);
+        setLoading(false);
+      });
   }, [project]);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError('');
     setFindings([]);
+    setClues([]);
     getFindings(project)
-      .then((raw: any) => { if (!cancelled) { setFindings(getReportFindings(raw)); setLoading(false); } })
-      .catch((err: Error) => { if (!cancelled) { setError(err.message); setLoading(false); } });
+      .then((raw: any) => {
+        if (!cancelled) {
+          setFindings(getReportFindings(raw));
+          setClues(getReportClues(raw));
+          setLoading(false);
+        }
+      })
+      .catch((err: Error) => {
+        if (!cancelled) {
+          setFindings([]);
+          setClues([]);
+          setError(err.message);
+          setLoading(false);
+        }
+      });
     return () => { cancelled = true; };
   }, [project]);
   useScanCompletedRefresh(project, load);
-  return { findings, loading, error, refetch: load };
+  return { findings, clues, loading, error, refetch: load };
 }
 
 function parseKnowledgeSources(raw: any): KnowledgeSource[] {
@@ -218,10 +338,11 @@ export function useKnowledgeData(project: string) {
 
 function parseReleaseChecks(raw: any): { overall: 'pass' | 'fail'; checks: ReleaseCheck[] } {
   const findings = getReportFindings(raw);
-  const p0 = findings.filter((f) => f.severity === 'P0').length;
-  const securityFindings = findings.filter((f) => f.defect_family === 'security_boundary' || f.defect_family === 'privacy_compliance');
-  const dataIntegrityFindings = findings.filter((f) => f.defect_family === 'data_integrity');
-  const dbConfirmed = Number(raw?.db_verification?.confirmed || 0);
+  const customerReadyFindings = findings.filter(isCustomerReadyFinding);
+  const p0 = customerReadyFindings.filter((f) => f.severity === 'P0').length;
+  const securityFindings = customerReadyFindings.filter((f) => f.defect_family === 'security_boundary' || f.defect_family === 'privacy_compliance');
+  const dataIntegrityFindings = customerReadyFindings.filter((f) => f.defect_family === 'data_integrity');
+  const dbConfirmed = asFiniteNumber(raw?.db_verification?.confirmed);
 
   const checks: ReleaseCheck[] = [
     { name: 'P0 缺陷阻塞', status: p0 === 0 ? 'pass' : 'fail', detail: p0 === 0 ? '无 P0 缺陷' : `${p0} 个 P0 缺陷未修复` },

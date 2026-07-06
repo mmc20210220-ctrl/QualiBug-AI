@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -12,7 +12,7 @@ from ai_test_asset_center.phase105_business_flow_map_experience import (
 
 
 def test_phase105e_generates_business_flow_map_page(tmp_path) -> None:
-    manifest = build_business_flow_map_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8790")
+    manifest = build_business_flow_map_experience(tmp_path, scenario="manufacturing", api_base_url="http://127.0.0.1:8088")
 
     assert manifest["version"].startswith("phase105e")
     assert manifest["redaction_status"] == "safe"
@@ -36,7 +36,7 @@ def test_phase105e_generates_business_flow_map_page(tmp_path) -> None:
 
 
 def test_phase105e_acceptance_report_and_validate_only(tmp_path) -> None:
-    result = run_business_flow_map_experience_export(output_dir=tmp_path, scenario="ecommerce", api_base_url="http://127.0.0.1:8790")
+    result = run_business_flow_map_experience_export(output_dir=tmp_path, scenario="ecommerce", api_base_url="http://127.0.0.1:8088")
 
     assert result["acceptance"]["passed"] is True
     assert result["acceptance"]["score"] == 100
@@ -59,3 +59,4 @@ def test_phase105e_detects_missing_page_and_secret_leak(tmp_path) -> None:
     assert "business_flow_map.html" in details
     assert "client_secret=" in details
     assert scan_business_flow_map_for_secret_leaks(tmp_path)
+
