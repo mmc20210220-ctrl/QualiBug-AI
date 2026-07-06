@@ -41,6 +41,12 @@ def _redact_url(value: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
+def _same_approved_origin(base_url: str, target_url: str) -> bool:
+    base = urlparse(base_url)
+    target = urlparse(target_url)
+    return bool(base.scheme and base.netloc and (base.scheme, base.netloc) == (target.scheme, target.netloc))
+
+
 def _as_steps(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise BrowserExecutionError("browser_steps_required")
@@ -58,6 +64,9 @@ def validate_browser_plan(plan: dict[str, Any], runtime_contract: dict[str, Any]
     base_url = str((runtime_contract or {}).get("approved_base_url") or "").strip()
     if not base_url:
         raise BrowserExecutionError("browser_target_missing")
+    parsed_base = urlparse(base_url)
+    if parsed_base.scheme not in {"https", "http"} or not parsed_base.netloc:
+        raise BrowserExecutionError("browser_approved_base_url_invalid")
     execution_mode = str(plan.get("execution_mode") or "safe_read_only")
     if execution_mode not in {"safe_read_only", "approved_sandbox_write"}:
         raise BrowserExecutionError("browser_execution_mode_invalid")
@@ -75,7 +84,7 @@ def validate_browser_plan(plan: dict[str, Any], runtime_contract: dict[str, Any]
             if not target:
                 raise BrowserExecutionError("browser_goto_url_missing")
             resolved = urljoin(base_url.rstrip("/") + "/", target)
-            if not resolved.startswith(base_url.rstrip("/")):
+            if not _same_approved_origin(base_url, resolved):
                 raise BrowserExecutionError("browser_target_outside_approved_base_url")
             raw["url"] = resolved
         elif action in _INTERACTIVE_ACTIONS | {"expect_text"}:
