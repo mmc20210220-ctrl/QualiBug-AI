@@ -16,6 +16,7 @@ from ai_test_asset_center.customer_delivery_gate import split_customer_delivery_
 from ai_test_asset_center.real_project_onboarding import ROOT, _safe_project_id, config_paths
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_server"
+MAIN_CHAIN_NOT_READY_REASON = "MAIN_CHAIN_NOT_READY"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -69,6 +70,45 @@ def _main_chain_contract_summary(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _append_unique(values: Any, item: str) -> list[str]:
+    result = [str(value) for value in values if str(value)] if isinstance(values, list) else []
+    if item not in result:
+        result.append(item)
+    return result
+
+
+def _apply_main_chain_readiness_guard(data: dict[str, Any], contract_summary: dict[str, Any]) -> None:
+    """Prevent customer-delivery readiness claims when the main chain is not closed."""
+    if contract_summary.get("chain_ready") is True:
+        return
+
+    blocker = {
+        "reason": MAIN_CHAIN_NOT_READY_REASON,
+        "stage": contract_summary.get("first_blocked_stage") or "unknown",
+        "next_action": contract_summary.get("first_blocked_next_action") or "补齐企业资料、解析、计划、执行、缺陷发现和证据链闭合。",
+    }
+    data["customer_defect_delivery_ready"] = False
+    data["main_chain_delivery_blocker"] = blocker
+    data["delivery_blockers"] = _append_unique(data.get("delivery_blockers"), MAIN_CHAIN_NOT_READY_REASON)
+
+    for key in ("scan_meta", "value_metrics", "data_contract", "delivery_tracks", "executive_summary"):
+        section = data.get(key)
+        if not isinstance(section, dict):
+            continue
+        section["customer_defect_delivery_ready"] = False
+        section["main_chain_ready"] = False
+        section["main_chain_delivery_blocker"] = blocker
+        section["delivery_blockers"] = _append_unique(section.get("delivery_blockers"), MAIN_CHAIN_NOT_READY_REASON)
+
+    executive_summary = data.get("executive_summary")
+    if isinstance(executive_summary, dict):
+        executive_summary["release_ready"] = False
+        executive_summary["customer_delivery_ready"] = False
+        executive_summary["main_chain_first_blocked_stage"] = blocker["stage"]
+        executive_summary["main_chain_first_blocked_next_action"] = blocker["next_action"]
+        executive_summary["delivery_readiness_label"] = "主链路未闭合，禁止声明客户交付就绪"
+
+
 def _inject_main_chain_contract(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
@@ -78,6 +118,9 @@ def _inject_main_chain_contract(payload: dict[str, Any]) -> dict[str, Any]:
     contract_summary = _main_chain_contract_summary(contract)
     payload["main_chain_contract"] = contract
     payload["main_chain_contract_summary"] = contract_summary
+    payload["customer_defect_delivery_ready"] = bool(contract_summary["customer_defect_delivery_ready"])
+    if not contract_summary["chain_ready"]:
+        payload["delivery_blockers"] = _append_unique(payload.get("delivery_blockers"), MAIN_CHAIN_NOT_READY_REASON)
     data = payload.get("data")
     if isinstance(data, dict):
         data["main_chain_contract"] = contract
@@ -93,6 +136,7 @@ def _inject_main_chain_contract(payload: dict[str, Any]) -> dict[str, Any]:
             executive_summary["main_chain_ready"] = contract_summary["chain_ready"]
             executive_summary["main_chain_first_blocked_stage"] = contract_summary["first_blocked_stage"]
             executive_summary["main_chain_first_blocked_next_action"] = contract_summary["first_blocked_next_action"]
+        _apply_main_chain_readiness_guard(data, contract_summary)
     return payload
 
 
