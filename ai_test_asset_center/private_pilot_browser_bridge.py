@@ -11,8 +11,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ai_test_asset_center import private_pilot_server as _server_patch
 from ai_test_asset_center import private_pilot_service as _service
+from ai_test_asset_center.private_pilot_scan_context_contract import current_scan_campaign_context
 
 
 def scan_project_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
@@ -37,10 +37,7 @@ def scan_base_url_from_context(kwargs: dict[str, Any]) -> str:
         value = str(kwargs.get(key) or "").strip()
         if value:
             return value.rstrip("/")
-    try:
-        pending = _server_patch._SCAN_CAMPAIGN_CONTEXT.get()  # type: ignore[attr-defined]
-    except Exception:
-        pending = None
+    pending = current_scan_campaign_context()
     if isinstance(pending, dict):
         for key in ("ui_base_url", "base_url", "target_url"):
             value = str(pending.get(key) or "").strip()
