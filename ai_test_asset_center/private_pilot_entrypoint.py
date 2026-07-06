@@ -27,6 +27,10 @@ from ai_test_asset_center.private_pilot_deployment_patch import (
     install_deployment_contract_patch as _install_deployment_contract_patch,
     restore_deployment_contract_patch as _restore_deployment_contract_patch,
 )
+from ai_test_asset_center.private_pilot_scan_context_patch import (
+    install_scan_campaign_context_patch,
+    restore_scan_campaign_context_patch,
+)
 from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_entrypoint"
@@ -48,6 +52,18 @@ def install_deployment_contract_patch() -> None:
     _install_deployment_contract_patch(patch_source=PATCH_SOURCE, fallback_root=_service._root())
 
 
+def install_extracted_scan_campaign_context_patch() -> None:
+    """Move scan campaign-context handlers from the legacy wrapper to the extracted module.
+
+    The legacy customer-delivery wrapper still wires the scan bridge because it
+    also installs the delivery gate. We restore only that scan bridge, then
+    install the extracted module so private-pilot deployments use the smaller
+    installer without changing the P0 source/campaign semantics.
+    """
+    restore_scan_campaign_context_patch()
+    install_scan_campaign_context_patch(patch_source=PATCH_SOURCE)
+
+
 def install_extracted_credential_safety_patch() -> None:
     """Move credential handlers from the legacy wrapper to the extracted module.
 
@@ -62,6 +78,7 @@ def install_extracted_credential_safety_patch() -> None:
 
 def restore_deployment_contract_patch() -> None:
     _restore_deployment_contract_patch()
+    restore_scan_campaign_context_patch()
     restore_browser_ui_smoke_patch()
     restore_customer_report_patch()
     restore_service_credentials_patch()
@@ -69,6 +86,7 @@ def restore_deployment_contract_patch() -> None:
 
 def install_runtime_patches() -> None:
     install_customer_delivery_gate_patch()
+    install_extracted_scan_campaign_context_patch()
     install_extracted_credential_safety_patch()
     install_browser_ui_smoke_patch()
     install_customer_report_patch()
