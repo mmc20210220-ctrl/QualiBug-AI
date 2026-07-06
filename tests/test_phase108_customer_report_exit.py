@@ -48,3 +48,19 @@ def test_proof_gaps_are_returned_to_the_existing_top_actions_exit():
     assert "BEFORE_SNAPSHOT_MISSING" in card["evidence_gaps"]
     assert "AFTER_SNAPSHOT_MISSING" in card["evidence_gaps"]
     assert "CLEANUP_RECEIPT_MISSING" in card["evidence_gaps"]
+
+
+def test_report_uses_intermediate_action_receipt_to_classify_a_write():
+    finding = _ready_finding()
+    finding.pop("method")
+    finding["evidence"] = {
+        "calls": [{"call": "GET /api/claims/claim-7"}, {"call": "PATCH /api/claims/claim-7"}],
+        "normalized_runtime": {"method": {"value": "GET"}, "action_ref": {"value": "PATCH /api/claims/claim-7"}},
+    }
+
+    card = build_customer_delivery_index([finding])["top_customer_actions"][0]
+
+    assert card["proof_status"] == "needs_more_evidence"
+    assert "BEFORE_SNAPSHOT_MISSING" in card["evidence_gaps"]
+    assert "AFTER_SNAPSHOT_MISSING" in card["evidence_gaps"]
+    assert "CLEANUP_RECEIPT_MISSING" in card["evidence_gaps"]
