@@ -68,6 +68,8 @@ class EnterpriseCampaign:
     scope_id: str
     environment_ref: str
     source_snapshot_hash: str
+    source_id: str = ""
+    source_hash: str = ""
     policy_version: str = ""
     status: str = "active"
     run_count: int = 0
@@ -83,14 +85,36 @@ class EnterpriseCampaign:
     updated_at_utc: str = field(default_factory=_now)
 
     @classmethod
-    def create(cls, project_id: str, scope_id: str, environment_ref: str, snapshot: str, *, policy_version: str = "", slice_budget: int = 15, automatic_round_limit: int = 3) -> "EnterpriseCampaign":
-        campaign_id = "CMP_" + _hash({"project": project_id, "scope": scope_id, "environment": environment_ref, "snapshot": snapshot, "policy": policy_version})
+    def create(
+        cls,
+        project_id: str,
+        scope_id: str,
+        environment_ref: str,
+        snapshot: str,
+        *,
+        source_id: str = "",
+        source_hash: str = "",
+        policy_version: str = "",
+        slice_budget: int = 15,
+        automatic_round_limit: int = 3,
+    ) -> "EnterpriseCampaign":
+        campaign_id = "CMP_" + _hash({
+            "project": project_id,
+            "scope": scope_id,
+            "environment": environment_ref,
+            "snapshot": snapshot,
+            "source_id": source_id,
+            "source_hash": source_hash,
+            "policy": policy_version,
+        })
         return cls(
             campaign_id=campaign_id,
             project_id=_text(project_id),
             scope_id=_text(scope_id),
             environment_ref=_text(environment_ref),
             source_snapshot_hash=_text(snapshot, 80),
+            source_id=_text(source_id),
+            source_hash=_text(source_hash, 128),
             policy_version=_text(policy_version, 120),
             slice_budget=max(1, min(int(slice_budget or 1), MAX_SLICES_PER_ROUND)),
             automatic_round_limit=max(1, min(int(automatic_round_limit or 1), MAX_AUTOMATIC_ROUNDS)),
@@ -111,7 +135,6 @@ class EnterpriseCampaign:
         reason = _text(selection.get("stop_reason"), 240)
         remaining = max(0, int(selection.get("remaining_slice_count") or 0))
         if reason.startswith("campaign_") and self.status in {"coverage_deferred", "completed", "blocked"}:
-            # Terminal Campaigns can be observed again but cannot silently reopen.
             pass
         elif reason == "all_source_bound_slices_confirmed":
             self.status = "completed"
@@ -132,7 +155,25 @@ class EnterpriseCampaign:
         self.updated_at_utc = _now()
 
     def public_contract(self) -> dict[str, Any]:
-        return {"campaign_id": self.campaign_id, "campaign_status": self.status, "project_id": self.project_id, "scope_id": self.scope_id, "environment_ref": self.environment_ref, "source_snapshot_hash": self.source_snapshot_hash, "policy_version": self.policy_version, "run_count": self.run_count, "round_count": self.round_count, "slice_budget": self.slice_budget, "automatic_round_limit": self.automatic_round_limit, "attempted_slice_count": len(self.attempted_slice_ids), "confirmed_slice_count": len(self.confirmation_receipts), "coverage_deferred_reason": self.coverage_deferred_reason, "next_campaign_reason": self.next_campaign_reason}
+        return {
+            "campaign_id": self.campaign_id,
+            "campaign_status": self.status,
+            "project_id": self.project_id,
+            "scope_id": self.scope_id,
+            "environment_ref": self.environment_ref,
+            "source_id": self.source_id,
+            "source_hash": self.source_hash,
+            "source_snapshot_hash": self.source_snapshot_hash,
+            "policy_version": self.policy_version,
+            "run_count": self.run_count,
+            "round_count": self.round_count,
+            "slice_budget": self.slice_budget,
+            "automatic_round_limit": self.automatic_round_limit,
+            "attempted_slice_count": len(self.attempted_slice_ids),
+            "confirmed_slice_count": len(self.confirmation_receipts),
+            "coverage_deferred_reason": self.coverage_deferred_reason,
+            "next_campaign_reason": self.next_campaign_reason,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {**self.public_contract(), "attempted_slice_ids": self.attempted_slice_ids, "confirmation_receipts": self.confirmation_receipts, "audit_events": self.audit_events, "created_at_utc": self.created_at_utc, "updated_at_utc": self.updated_at_utc}
@@ -140,7 +181,27 @@ class EnterpriseCampaign:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EnterpriseCampaign":
         return cls(
-            campaign_id=_text(value.get("campaign_id"), 80), project_id=_text(value.get("project_id")), scope_id=_text(value.get("scope_id")), environment_ref=_text(value.get("environment_ref")), source_snapshot_hash=_text(value.get("source_snapshot_hash"), 80), policy_version=_text(value.get("policy_version"), 120), status=_text(value.get("campaign_status") or value.get("status"), 80) or "active", run_count=max(0, int(value.get("run_count") or 0)), round_count=max(0, int(value.get("round_count") or 0)), slice_budget=max(1, min(int(value.get("slice_budget") or 15), MAX_SLICES_PER_ROUND)), automatic_round_limit=max(1, min(int(value.get("automatic_round_limit") or 3), MAX_AUTOMATIC_ROUNDS)), attempted_slice_ids=[_text(item) for item in value.get("attempted_slice_ids", []) if _text(item)], confirmation_receipts={_text(key): _text(item, 80) for key, item in _as_dict(value.get("confirmation_receipts")).items() if _text(key)}, coverage_deferred_reason=_text(value.get("coverage_deferred_reason"), 240), next_campaign_reason=_text(value.get("next_campaign_reason"), 240), audit_events=[_as_dict(item) for item in value.get("audit_events", []) if isinstance(item, dict)][-200:], created_at_utc=_text(value.get("created_at_utc"), 64) or _now(), updated_at_utc=_text(value.get("updated_at_utc"), 64) or _now())
+            campaign_id=_text(value.get("campaign_id"), 80),
+            project_id=_text(value.get("project_id")),
+            scope_id=_text(value.get("scope_id")),
+            environment_ref=_text(value.get("environment_ref")),
+            source_snapshot_hash=_text(value.get("source_snapshot_hash"), 80),
+            source_id=_text(value.get("source_id")),
+            source_hash=_text(value.get("source_hash"), 128),
+            policy_version=_text(value.get("policy_version"), 120),
+            status=_text(value.get("campaign_status") or value.get("status"), 80) or "active",
+            run_count=max(0, int(value.get("run_count") or 0)),
+            round_count=max(0, int(value.get("round_count") or 0)),
+            slice_budget=max(1, min(int(value.get("slice_budget") or 15), MAX_SLICES_PER_ROUND)),
+            automatic_round_limit=max(1, min(int(value.get("automatic_round_limit") or 3), MAX_AUTOMATIC_ROUNDS)),
+            attempted_slice_ids=[_text(item) for item in value.get("attempted_slice_ids", []) if _text(item)],
+            confirmation_receipts={_text(key): _text(item, 80) for key, item in _as_dict(value.get("confirmation_receipts")).items() if _text(key)},
+            coverage_deferred_reason=_text(value.get("coverage_deferred_reason"), 240),
+            next_campaign_reason=_text(value.get("next_campaign_reason"), 240),
+            audit_events=[_as_dict(item) for item in value.get("audit_events", []) if isinstance(item, dict)][-200:],
+            created_at_utc=_text(value.get("created_at_utc"), 64) or _now(),
+            updated_at_utc=_text(value.get("updated_at_utc"), 64) or _now(),
+        )
 
 
 class EnterpriseCampaignStore:
