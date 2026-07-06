@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 
 from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
-from ai_test_asset_center.v12_pipeline import _behavior_slice_settings, run_v12_pipeline
+from ai_test_asset_center.v12_pipeline import (
+    _behavior_slice_settings,
+    _schedule_behavior_slices,
+    run_v12_pipeline,
+)
 
 
 API_SPEC = json.dumps({
@@ -62,6 +66,23 @@ def test_slice_budget_is_hard_capped_at_fifteen(monkeypatch):
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "999")
     settings = _behavior_slice_settings()
     assert settings["slice_budget"] == 15
+
+
+def test_plan_only_slice_is_not_misclassified_as_confirmed():
+    selection = _schedule_behavior_slices(
+        [{"slice_id": "BHV_example", "entity": "example", "kind": "transition"}],
+        {"slice_budget": 1, "round_number": 1, "round_limit": 2},
+        [{
+            "behavior_slice_id": "BHV_example",
+            "execution_status": "not_executed",
+            "confirmation_status": "candidate",
+            "gate_passed": False,
+        }],
+    )
+
+    assert selection["status"] == "planned"
+    assert selection["confirmed_slice_ids"] == []
+    assert selection["selected_slice_ids"] == ["BHV_example"]
 
 
 def test_pipeline_selects_different_source_slices_across_incremental_rounds(monkeypatch, tmp_path):
