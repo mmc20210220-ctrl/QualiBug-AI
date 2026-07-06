@@ -32,6 +32,7 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_source_registry.py').read()); print('enterprise_source_registry.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/evidence_artifact_store.py').read()); print('evidence_artifact_store.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/browser_execution.py').read()); print('browser_execution.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_test_data_receipts.py').read()); print('enterprise_test_data_receipts.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_test_data_plan.py').read()); print('enterprise_test_data_plan.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/__main__.py').read()); print('__main__.py OK')"
           python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
@@ -54,6 +55,7 @@ jobs:
             tests/test_phase110_enterprise_source_registry.py \
             tests/test_phase110_evidence_artifact_store.py \
             tests/test_phase110_browser_execution_contract.py \
+            tests/test_phase110_test_data_receipts.py \
             -q
 
   frontend-quality:
