@@ -165,6 +165,21 @@ def test_pipeline_persists_campaign_and_advances_without_external_round_or_histo
     assert all(item["discovery_round"] == 2 for item in second["plan_only_scenarios"])
 
 
+def test_direct_v12_target_execution_is_blocked_without_enterprise_contract(tmp_path):
+    result = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+        base_url="https://example.invalid",
+    )
+    assert result["runtime_contract"]["status"] == "blocked"
+    assert result["phases"]["execution"]["status"] == "blocked"
+    assert result["auto_har"]["status"] == "no_traffic"
+    assert result["campaign"]["confirmed_slice_count"] == 0
+
+
 def test_pipeline_selects_different_source_slices_across_explicit_rounds(monkeypatch, tmp_path):
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "1")
     monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "2")
