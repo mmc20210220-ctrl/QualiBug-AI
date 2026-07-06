@@ -22,6 +22,10 @@ def _access_policy_raw() -> str:
     return os.environ.get("QUALIBUG_ACCESS_POLICY_JSON", "").strip()
 
 
+def _jwt_identity_policy_raw() -> str:
+    return os.environ.get("QUALIBUG_JWT_ACCESS_POLICY_JSON", "").strip()
+
+
 def _workspace_root() -> Path:
     return Path(os.environ.get("QUALIBUG_WORKSPACE_ROOT", Path.cwd())).resolve()
 
@@ -32,7 +36,7 @@ def _extract_bearer_token(authorization: str | None) -> str:
 
 
 def require_api_token(authorization: str | None = Header(None)) -> str:
-    """Compatibility authentication for deployments without an access policy."""
+    """Compatibility authentication for deployments without a policy."""
     expected = _expected_api_token()
     token = _extract_bearer_token(authorization)
     if not expected:
@@ -43,29 +47,36 @@ def require_api_token(authorization: str | None = Header(None)) -> str:
 
 
 def require_access(authorization: str | None, permission: str, *, project_id: str = "") -> Any | None:
-    """Authorize by tenant/project policy when configured, otherwise use legacy token.
+    """Authorize by deployment policy; roles supplied by clients never grant access.
 
-    A configured policy is authoritative and fails closed. Client-supplied actor
-    or role fields never participate in authorization.
+    The service accepts either an opaque-token policy or a verified JWT subject
+    mapped through an identity policy. When neither policy is configured, the
+    existing single-token deployment mode remains available for compatibility.
     """
-    raw_policy = _access_policy_raw()
-    if not raw_policy:
+    raw_token_policy = _access_policy_raw()
+    raw_identity_policy = _jwt_identity_policy_raw()
+    if not raw_token_policy and not raw_identity_policy:
         require_api_token(authorization)
         return None
     try:
         from ai_test_asset_center.enterprise_access_policy import (
             AccessPolicyError,
+            authenticate_jwt_identity,
             authenticate_token,
+            parse_identity_policy,
             parse_token_policy,
             require_authorized,
         )
-        policy = parse_token_policy(raw_policy)
+        token_policy = parse_token_policy(raw_token_policy) if raw_token_policy else {}
+        identity_policy = parse_identity_policy(raw_identity_policy) if raw_identity_policy else {}
     except AccessPolicyError as exc:
         raise HTTPException(status_code=503, detail=f"access policy is invalid: {str(exc)}") from exc
     token = _extract_bearer_token(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="authentication required")
-    principal = authenticate_token(token, policy)
+    principal = authenticate_token(token, token_policy) if token_policy else None
+    if principal is None and identity_policy:
+        principal = authenticate_jwt_identity(token, identity_policy)
     if principal is None:
         raise HTTPException(status_code=401, detail="authentication required")
     try:
@@ -294,8 +305,10 @@ def verify_evidence_bundle_endpoint(project_id: str, bundle_id: str, authorizati
 def health() -> dict[str, Any]:
     """Expose verified status, not optimistic configuration status."""
     static_token_configured = bool(_expected_api_token())
-    access_policy_configured = bool(_access_policy_raw())
-    auth_configured = static_token_configured or access_policy_configured
+    token_policy_configured = bool(_access_policy_raw())
+    jwt_identity_policy_configured = bool(_jwt_identity_policy_raw())
+    policy_configured = token_policy_configured or jwt_identity_policy_configured
+    auth_configured = static_token_configured or policy_configured
     allowlist_configured = bool(os.environ.get("QUALIBUG_ALLOWED_TARGET_ORIGINS", "").strip())
     return {
         "status": "healthy",
@@ -303,14 +316,15 @@ def health() -> dict[str, Any]:
         "components": {
             "api": _component("healthy"),
             "authentication": _component("configured_unverified" if auth_configured else "not_configured", reason="token_or_identity_policy_presence_checked_only"),
-            "access_policy": _component("configured_unverified" if access_policy_configured else "not_configured", reason="policy_presence_checked_only"),
+            "access_policy": _component("configured_unverified" if policy_configured else "not_configured", reason="token_or_jwt_identity_policy_presence_checked_only"),
             "execution_engine": _component("configured_unverified", reason="runtime execution requires source, campaign, target and approval contracts"),
             "target_allowlist": _component("configured_unverified" if allowlist_configured else "not_configured", reason="configuration_presence_checked_only"),
             "llm": _component("not_configured", reason="no_provider_health_check_registered"),
             "external_services": _component("not_configured", reason="no_external_service_health_check_registered"),
         },
         "auth_configured": auth_configured,
-        "access_policy_configured": access_policy_configured,
+        "access_policy_configured": policy_configured,
+        "jwt_identity_policy_configured": jwt_identity_policy_configured,
         "target_allowlist_configured": allowlist_configured,
         "execution_source": "memory_simulation",
     }
