@@ -59,6 +59,7 @@ jobs:
             tests/test_phase110_browser_execution_contract.py \
             tests/test_phase110_test_data_receipts.py \
             tests/test_phase110_execution_approvals.py \
+            tests/test_phase110_v12_execution_approval.py \
             tests/test_phase110_release_gate.py \
             -q
 
