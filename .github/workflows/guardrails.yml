@@ -66,3 +66,13 @@ jobs:
               )
           print('Reasoner static guardrails passed')
           PY
+
+      - name: Install test runner
+        run: python -m pip install --upgrade pytest
+
+      - name: Run critical discovery regression tests
+        run: |
+          python -m pytest -q \
+            tests/test_reasoner_static_guardrails.py \
+            tests/test_discovery_execution_chain.py \
+            tests/test_discovery_verifier_evidence.py
