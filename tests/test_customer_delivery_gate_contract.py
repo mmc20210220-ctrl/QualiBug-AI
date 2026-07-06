@@ -112,3 +112,22 @@ def test_dashboard_surfaces_main_chain_contract_status() -> None:
     assert "真实执行" in page
     assert "Bug 发现" in page
     assert "证据链" in page
+
+
+def test_dashboard_surfaces_evidence_normalization_blockers() -> None:
+    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+
+    assert "EVIDENCE_MISSING_FIELD_LABELS" in page
+    assert "function getEvidenceNormalizationSummary" in page
+    assert "function evidenceMissingEntries" in page
+    assert "function evidenceMissingFieldLabel" in page
+    assert "evidence_bundle_normalization_summary" in page
+    assert "missing_fields" in page
+    assert "证据标准化阻断项" in page
+    assert "证据标准化未完成" in page
+    assert "证据字段已标准化" in page
+    assert "execution_receipt" in page
+    assert "reproduction / replay" in page
+    assert "actual" in page
+    assert "原始 request" in page
+    assert "原始 response" in page
