@@ -52,6 +52,12 @@ def _behavior_name(item: dict[str, Any], behavior_id: str) -> str:
     )
 
 
+def _extend_unique(target: list[Any], values: list[Any]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
+
+
 def _evidence_refs(item: dict[str, Any]) -> list[Any]:
     refs: list[Any] = []
     for key in ("evidence_id", "evidence_ids", "evidence", "runtime_evidence"):
@@ -66,14 +72,34 @@ def _violation_refs(item: dict[str, Any]) -> list[Any]:
     return refs
 
 
+def _history_refs(item: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:
+    refs: list[Any] = []
+    for key in keys:
+        refs.extend(_as_list(item.get(key)))
+    return refs
+
+
 def _status_for_record(record: dict[str, Any]) -> str:
     if record["violations"]:
         return "violated"
     if record["evidence"]:
         return "validated"
-    if record["validation_runs"]:
+    if record["validation_runs"] or record["validation_history"]:
         return "observed"
     return "untested"
+
+
+def _status_lifecycle(record: dict[str, Any]) -> list[str]:
+    lifecycle = ["registered"]
+    if record["validation_runs"] or record["validation_history"]:
+        lifecycle.append("observed")
+    if record["evidence"]:
+        lifecycle.append("validated")
+    if record["violations"]:
+        lifecycle.append("violated")
+    if record["regression_history"]:
+        lifecycle.append("regression-tracked")
+    return lifecycle
 
 
 def build_behavior_registry(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -86,7 +112,6 @@ def build_behavior_registry(items: list[dict[str, Any]]) -> dict[str, Any]:
     """
 
     grouped: dict[str, dict[str, Any]] = {}
-    validation_runs_by_behavior: dict[str, list[Any]] = defaultdict(list)
 
     for index, item in enumerate(items, start=1):
         behavior_id = _behavior_id(item, index)
@@ -99,6 +124,10 @@ def build_behavior_registry(items: list[dict[str, Any]]) -> dict[str, Any]:
                 "violations": [],
                 "evidence": [],
                 "validation_runs": [],
+                "validation_history": [],
+                "risk_history": [],
+                "regression_history": [],
+                "status_lifecycle": [],
             },
         )
 
@@ -109,23 +138,18 @@ def build_behavior_registry(items: list[dict[str, Any]]) -> dict[str, Any]:
         if record["category"] == "uncategorized":
             record["category"] = _first_text(item.get("category"), item.get("domain"), default="uncategorized")
 
-        for violation_ref in _violation_refs(item):
-            if violation_ref not in record["violations"]:
-                record["violations"].append(violation_ref)
-
-        for evidence_ref in _evidence_refs(item):
-            if evidence_ref not in record["evidence"]:
-                record["evidence"].append(evidence_ref)
-
-        for run_ref in _as_list(item.get("validation_run_id") or item.get("validation_runs")):
-            if run_ref not in validation_runs_by_behavior[behavior_id]:
-                validation_runs_by_behavior[behavior_id].append(run_ref)
+        _extend_unique(record["violations"], _violation_refs(item))
+        _extend_unique(record["evidence"], _evidence_refs(item))
+        _extend_unique(record["validation_runs"], _history_refs(item, ("validation_run_id", "validation_runs")))
+        _extend_unique(record["validation_history"], _history_refs(item, ("validation_history", "validation_result")))
+        _extend_unique(record["risk_history"], _history_refs(item, ("risk_history", "risk_assessment", "severity")))
+        _extend_unique(record["regression_history"], _history_refs(item, ("regression_history", "regression_asset_id", "regression_result")))
 
     behaviors = []
     for behavior_id in sorted(grouped):
         record = grouped[behavior_id]
-        record["validation_runs"] = validation_runs_by_behavior.get(behavior_id, [])
         record["status"] = _status_for_record(record)
+        record["status_lifecycle"] = _status_lifecycle(record)
         behaviors.append(record)
 
     status_counts = {status: 0 for status in BEHAVIOR_STATUS_ORDER}
