@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from ai_test_asset_center.customer_delivery_gate import (
+    customer_delivery_rejection_explanations,
     customer_delivery_rejection_reasons,
+    explain_rejection_reason,
     is_customer_deliverable_defect,
     split_customer_delivery_tracks,
 )
@@ -46,6 +48,7 @@ def _ready_finding() -> dict:
 def test_backend_gate_accepts_only_fully_validated_replayable_defect() -> None:
     assert is_customer_deliverable_defect(_ready_finding()) is True
     assert customer_delivery_rejection_reasons(_ready_finding()) == []
+    assert customer_delivery_rejection_explanations(_ready_finding()) == []
 
 
 def test_backend_gate_rejects_missing_business_evidence_status() -> None:
@@ -136,6 +139,19 @@ def test_backend_gate_rejects_missing_real_request_response_or_failure_assertion
     assert "MISSING_CUSTOMER_FACING_HARD_EVIDENCE" in customer_delivery_rejection_reasons(no_assertion)
 
 
+def test_backend_gate_explains_rejection_reasons_for_internal_users() -> None:
+    finding = _ready_finding()
+    finding["execution_status"] = "planned"
+
+    explanations = customer_delivery_rejection_explanations(finding)
+
+    assert any(item["code"] == "NOT_EXECUTED" for item in explanations)
+    assert all(item.get("label") for item in explanations)
+    assert all(item.get("detail") for item in explanations)
+    assert all(item.get("next_action") for item in explanations)
+    assert explain_rejection_reason("NOT_EXECUTED")["label"] == "尚未真实执行"
+
+
 def test_backend_gate_splits_non_ready_items_into_internal_clues() -> None:
     ready = _ready_finding()
     clue = _ready_finding()
@@ -151,4 +167,7 @@ def test_backend_gate_splits_non_ready_items_into_internal_clues() -> None:
     assert defects[0]["customer_delivery_status"] == "defect"
     assert clues[0]["customer_delivery_status"] == "clue"
     assert defects[0]["customer_delivery_gate_reasons"] == []
+    assert defects[0]["customer_delivery_gate_explanations"] == []
     assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in clues[0]["customer_delivery_gate_reasons"]
+    assert clues[0]["customer_delivery_gate_explanations"][0]["label"]
+    assert clues[0]["customer_delivery_gate_explanations"][0]["next_action"]
