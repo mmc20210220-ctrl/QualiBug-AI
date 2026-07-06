@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 from ai_test_asset_center.__main__ import scan
@@ -11,8 +12,7 @@ API_SPEC = json.dumps({
     "paths": {"/api/cases/{case_id}/approve": {"patch": {"operationId": "approveCase"}}},
     "components": {"schemas": {"Case": {"type": "object", "properties": {"state": {"type": "string", "enum": ["DRAFT", "APPROVED"]}}}}},
 })
-
-SOURCE_MANIFEST = {"source_id": "api-spec-v1", "source_hash": "sha256-test-source-v1"}
+SOURCE_MANIFEST = {"source_id": "api-spec-v1", "source_hash": hashlib.sha256(API_SPEC.encode("utf-8")).hexdigest()}
 
 
 def test_unified_scan_requires_a_real_source_asset(tmp_path):
@@ -23,12 +23,37 @@ def test_unified_scan_requires_a_real_source_asset(tmp_path):
 
 def test_inline_source_without_provenance_is_blocked_before_campaign_planning(tmp_path):
     result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC)
-
     assert result["success"] is True
     assert result["grade"] == "blocked"
     assert result["campaign"]["campaign_status"] == "blocked"
     assert any(gap["code"] == "SOURCE_PROVENANCE_MISSING" for gap in result["input_gaps"])
     assert result["execution_status"] == "blocked"
+
+
+def test_declared_source_hash_must_match_submitted_content(tmp_path):
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        campaign_context={"source_manifest": {"source_id": "api-spec-v1", "source_hash": "0" * 64}},
+    )
+    assert result["grade"] == "blocked"
+    assert any(gap["code"] == "SOURCE_HASH_MISMATCH" for gap in result["input_gaps"])
+
+
+def test_registered_project_asset_supplies_provenance_without_client_supplied_manifest(tmp_path):
+    input_dir = tmp_path / "platform_workspace" / "enterprise-project" / "input"
+    input_dir.mkdir(parents=True)
+    (input_dir / "api_spec.json").write_text(API_SPEC, encoding="utf-8")
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        campaign_context={"scope_id": "service-a", "environment_ref": "test-a"},
+    )
+    assert result["grade"] == "inconclusive"
+    assert result["runtime_contract"]["source_manifest"]["source_id"].startswith("project_asset:")
+    assert result["campaign"]["confirmed_slice_count"] == 0
 
 
 def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_path):
