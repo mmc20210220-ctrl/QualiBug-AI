@@ -36,6 +36,8 @@ Completed so far:
 - Added tests proving Command Center can surface the first blocked main-chain stage and next action from `main_chain_contract.json`.
 - Added a Command Center readiness guard: when `main_chain_contract.chain_ready` is false, customer-delivery readiness and release-ready flags are forced to false.
 - Added tests proving stale or optimistic payload fields cannot claim customer-delivery readiness while the main enterprise evidence chain is incomplete.
+- Surfaced `main_chain_contract` on the dashboard with the six core stages, first blocked stage, and next action.
+- Added a frontend contract test so dashboard main-chain diagnostics cannot be silently removed.
 
 Current commercial rule:
 
@@ -54,12 +56,13 @@ Current service integration:
 - Command-center responses now include `main_chain_contract` and `main_chain_contract_summary` loaded from backend output/workspace artifacts.
 - Command-center responses now force readiness fields to false and attach `MAIN_CHAIN_NOT_READY` when the main enterprise evidence chain is not closed.
 - Dashboard displays whether the strict delivery gate is enabled, the patch source, the active partition function, and whether the original function is retained.
+- Dashboard displays the main enterprise evidence chain status, six-stage progress, first blocked stage, and next action from the backend contract.
 - `main_chain_contract.py` can now generate `main_chain_contract.json` under both workspace and output folders for the core chain.
 - `real_project_discovery_with_chain.py` provides the safe backend-owned discovery entrypoint for automatic chain validation.
 - `enterprise_pilot_runtime_with_chain.py` provides the safe pilot-runtime entrypoint that routes `real_project_discovery` tasks through the chain-aware runner.
 
 Next engineering step:
 
-- Surface the main-chain contract in the frontend only after the backend contract remains stable.
+- Tighten `main_chain_contract` evidence checks so evidence-chain pass requires replay information, raw request/response, expected/actual, and a stable issue link.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
