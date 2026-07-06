@@ -1,44 +1,22 @@
 export function formatDurationMs(value: number | string | null | undefined, fallback = '暂无') {
   const duration = Number(value);
   if (!Number.isFinite(duration) || duration <= 0) return fallback;
-
-  if (duration < 10) {
-    return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(duration)}ms`;
-  }
-
-  if (duration < 1000) {
-    return `${Math.round(duration)}ms`;
-  }
-
+  if (duration < 10) return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(duration)}ms`;
+  if (duration < 1000) return `${Math.round(duration)}ms`;
   const seconds = duration / 1000;
-  if (seconds < 60) {
-    return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(seconds)}s`;
-  }
-
+  if (seconds < 60) return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(seconds)}s`;
   const totalSeconds = Math.round(seconds);
   const minutes = Math.floor(totalSeconds / 60);
   const remainSeconds = totalSeconds % 60;
   return remainSeconds ? `${minutes}m ${remainSeconds}s` : `${minutes}m`;
 }
 
+/**
+ * Preserve the actor label supplied by the project runtime.
+ * Role meaning is project-specific and must not be inferred from a fixed list.
+ */
 export function formatActorName(value: string | null | undefined) {
-  const actor = String(value || '').trim();
-  if (!actor) return '';
-
-  const normalized = actor.toLowerCase();
-  if (normalized === 'admin' || normalized === 'administrator') {
-    return '管理账号';
-  }
-
-  if (normalized === 'root' || normalized === 'super_admin' || normalized === 'superadmin' || normalized === 'owner') {
-    return '高权限账号';
-  }
-
-  if (normalized === 'system' || normalized === 'service' || normalized === 'robot' || normalized === 'bot') {
-    return '系统账号';
-  }
-
-  return actor;
+  return String(value || '').trim();
 }
 
 export function formatStatusCodeLabel(value: number | string | null | undefined) {
@@ -54,7 +32,6 @@ export function formatStatusCodeLabel(value: number | string | null | undefined)
 
 function normalizeInlineResponseText(content: string) {
   if (!content) return '';
-
   return content
     .replace(/耗时\s*([0-9]+(?:\.[0-9]+)?)\s*ms/gi, (_, value: string) => `耗时 ${formatDurationMs(value)}`)
     .replace(/操作者[:：]?\s*([A-Za-z0-9_-]+)/gi, (_, value: string) => `操作者 ${formatActorName(value)}`);
@@ -68,20 +45,11 @@ export function formatResponseSummary(
   const code = Number(structured?.status_code);
   const duration = Number(structured?.duration_ms);
   const actor = formatActorName(structured?.actor ? String(structured.actor) : '');
-
   if (Number.isFinite(code) && code > 0) {
     const label = formatStatusCodeLabel(code);
     parts.push(label ? `状态码 ${code}（${label}）` : `状态码 ${code}`);
   }
-
-  if (Number.isFinite(duration) && duration > 0) {
-    parts.push(`耗时 ${formatDurationMs(duration)}`);
-  }
-
-  if (actor) {
-    parts.push(`操作者 ${actor}`);
-  }
-
-  if (parts.length > 0) return parts.join(' · ');
-  return normalizeInlineResponseText(content);
+  if (Number.isFinite(duration) && duration > 0) parts.push(`耗时 ${formatDurationMs(duration)}`);
+  if (actor) parts.push(`操作者 ${actor}`);
+  return parts.length > 0 ? parts.join(' · ') : normalizeInlineResponseText(content);
 }
