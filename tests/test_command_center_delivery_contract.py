@@ -78,3 +78,33 @@ def test_command_center_delivery_contract_preserves_existing_clues() -> None:
     assert [item["id"] for item in data["defects"]] == ["BUG-1"]
     assert any(item["id"] == "OLD-CLUE" for item in data["clues"])
     assert normalized["delivery_contract"]["source"] == "backend_customer_delivery_gate"
+
+
+def test_command_center_delivery_contract_syncs_summary_counters_after_gate() -> None:
+    ready = _ready_finding()
+    fake_defect = _ready_finding()
+    fake_defect["id"] = "FAKE-DEFECT"
+    fake_defect["gate_passed"] = False
+
+    normalized = normalize_command_center_delivery({
+        "data": {
+            "defects": [ready, fake_defect],
+            "scan_meta": {"ready_bug_count": 99, "customer_ready_defects": 99, "internal_clue_count": 0},
+            "value_metrics": {"ready_bug_count": 99, "defect_count": 99, "clue_count": 0},
+            "executive_summary": {"total_bugs_found": 99, "ready_bugs": 99, "customer_ready_defects": 99, "internal_clues": 0},
+        }
+    })
+    data = normalized["data"]
+
+    assert data["ready_bug_count"] == 1
+    assert data["internal_clue_count"] == 1
+    assert data["scan_meta"]["ready_bug_count"] == 1
+    assert data["scan_meta"]["customer_ready_defects"] == 1
+    assert data["scan_meta"]["internal_clue_count"] == 1
+    assert data["value_metrics"]["ready_bug_count"] == 1
+    assert data["value_metrics"]["defect_count"] == 1
+    assert data["value_metrics"]["clue_count"] == 1
+    assert data["executive_summary"]["total_bugs_found"] == 1
+    assert data["executive_summary"]["ready_bugs"] == 1
+    assert data["executive_summary"]["customer_ready_defects"] == 1
+    assert data["executive_summary"]["internal_clues"] == 1
