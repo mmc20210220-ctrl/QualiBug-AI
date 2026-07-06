@@ -393,6 +393,58 @@ def _collect_readiness(payload: dict[str, Any], hints: list[dict[str, Any]]) -> 
     }
 
 
+def _collect_summary_lines(payload: dict[str, Any]) -> list[str]:
+    product = payload.get("product", {}) if isinstance(payload.get("product"), dict) else {}
+    environment = payload.get("environment", {}) if isinstance(payload.get("environment"), dict) else {}
+    readiness = payload.get("readiness", {}) if isinstance(payload.get("readiness"), dict) else {}
+    hints = payload.get("remediation_hints", []) if isinstance(payload.get("remediation_hints"), list) else []
+
+    level = str(readiness.get("level") or "unknown")
+    label = str(readiness.get("label") or "Unknown readiness")
+    product_version = str(product.get("version") or "unknown")
+    port = environment.get("port", "unknown")
+
+    lines = [
+        f"QualiBug private-pilot doctor: {label}.",
+        f"Product version: {product_version}; effective port: {port}; readiness: {level}.",
+    ]
+
+    blockers = readiness.get("blockers") if isinstance(readiness.get("blockers"), list) else []
+    warnings = readiness.get("warnings") if isinstance(readiness.get("warnings"), list) else []
+    if blockers:
+        lines.append("Blocking issues: " + ", ".join(str(item) for item in blockers[:5]) + (" ..." if len(blockers) > 5 else ""))
+    if warnings:
+        lines.append("Warnings/action items: " + ", ".join(str(item) for item in warnings[:5]) + (" ..." if len(warnings) > 5 else ""))
+
+    next_action = str(readiness.get("next_action") or "Review the doctor report and rerun qualibug-doctor --output.")
+    lines.append("Next action: " + next_action)
+
+    commands: list[str] = []
+    for hint in hints:
+        if not isinstance(hint, dict):
+            continue
+        for command in hint.get("commands") or []:
+            text = str(command or "").strip()
+            if text and text not in commands:
+                commands.append(text)
+            if len(commands) >= 3:
+                break
+        if len(commands) >= 3:
+            break
+    if commands:
+        lines.append("Suggested commands: " + " && ".join(commands))
+
+    return lines
+
+
+def _collect_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    lines = _collect_summary_lines(payload)
+    return {
+        "summary_lines": lines,
+        "summary_text": "\n".join(lines),
+    }
+
+
 def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: bool = False) -> dict[str, Any]:
     resolved_root = _resolve_root(root)
     if install_patches:
@@ -434,6 +486,7 @@ def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: b
     payload["warnings"] = _collect_warnings(payload)
     payload["remediation_hints"] = _collect_remediation_hints(payload)
     payload["readiness"] = _collect_readiness(payload, payload["remediation_hints"])
+    payload.update(_collect_summary(payload))
     payload["ok"] = payload["readiness"]["level"] != "blocked"
     return payload
 
