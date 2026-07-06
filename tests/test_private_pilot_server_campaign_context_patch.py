@@ -14,6 +14,7 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
                 "source_version_id": "srcv_1",
                 "source_origin": "registered_source_registry",
             },
+            "base_url": "http://127.0.0.1:8000",
             "scope_id": "checkout-scope",
             "environment_ref": "staging-env",
             "execution_approval_id": "approval-001",
@@ -25,6 +26,7 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
 
     assert context["source_manifest"]["source_id"] == "openapi-main"
     assert context["source_manifest"]["source_hash"] == "a" * 64
+    assert context["base_url"] == "http://127.0.0.1:8000"
     assert context["scope_id"] == "checkout-scope"
     assert context["environment_ref"] == "staging-env"
     assert context["execution_approval_id"] == "approval-001"
@@ -66,6 +68,7 @@ def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp
     assert prepared["api_doc"] == content
     assert prepared["source_manifest"]["source_id"] == "openapi-main"
     assert context["source_manifest"]["source_hash"] == manifest["source_hash"]
+    assert context["base_url"] == "http://127.0.0.1:8000"
     assert context["scope_id"] == "checkout-scope"
     assert context["environment_ref"] == "staging-env"
 
@@ -101,3 +104,28 @@ def test_scan_body_can_auto_select_latest_registered_source_when_frontend_omits_
     assert context["scope_id"] == "catalog-scope"
     assert context["environment_ref"] == "qa-env"
     assert context["test_data_contract"] == {"strategy": "blocked_with_testability_gap"}
+
+
+def test_install_patch_replaces_continuous_loop_and_reports_status() -> None:
+    from ai_test_asset_center import private_pilot_service as service
+    from ai_test_asset_center.private_pilot_server import (
+        customer_delivery_gate_patch_status,
+        install_customer_delivery_gate_patch,
+        restore_customer_delivery_gate_patch,
+    )
+
+    restore_customer_delivery_gate_patch()
+    original_loop = service._continuous_scan_loop
+    original_start = service.PrivatePilotHandler._handle_continuous_start
+
+    install_customer_delivery_gate_patch()
+    status = customer_delivery_gate_patch_status()
+
+    assert service._continuous_scan_loop is not original_loop
+    assert service.PrivatePilotHandler._handle_continuous_start is not original_start
+    assert status["scan_campaign_context_patched"] is True
+    assert status["continuous_scan_context_patched"] is True
+
+    restore_customer_delivery_gate_patch()
+    assert service._continuous_scan_loop is original_loop
+    assert service.PrivatePilotHandler._handle_continuous_start is original_start
