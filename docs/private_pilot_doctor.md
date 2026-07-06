@@ -41,7 +41,31 @@ The JSON report includes:
 - scan context contract status, including source manifest, scan body preparation, and campaign context helpers;
 - a local `/api/health` payload preview;
 - remediation hints with concrete commands for common environment issues;
-- readiness classification for handoff decisions.
+- readiness classification for handoff decisions;
+- human-readable `summary_text` and `summary_lines` for customer-facing handoff notes.
+
+## Human summary
+
+`summary_text` is a newline-separated field-engineer summary that can be copied into a handoff note, support ticket, or customer acceptance record. `summary_lines` contains the same content as a list for UI rendering.
+
+The summary includes:
+
+- readiness label and level;
+- product version and effective port;
+- blocking issue codes when present;
+- warning/action item codes when present;
+- next action;
+- up to three suggested commands.
+
+Example summary shape:
+
+```text
+QualiBug private-pilot doctor: Warning - usable for diagnosis, not clean handoff.
+Product version: 95.0.0; effective port: 8088; readiness: warning.
+Warnings/action items: CREDENTIAL_KEY_MISSING, RUNTIME_PATCHES_NOT_INSTALLED_IN_READONLY_MODE
+Next action: Review remediation_hints, apply recommended commands, then rerun qualibug-doctor --install-patches --output.
+Suggested commands: qualibug-doctor --install-patches --output && qualibug-server
+```
 
 ## Readiness levels
 
