@@ -52,7 +52,6 @@ def test_builder_outputs_only_source_bound_slices_and_explicit_unbound_gap():
     builder = BusinessStateGraphBuilder()
     graphs = builder.build(PRD, API_SPEC, DB_SCHEMA)
     contract = builder.behavior_contract()
-
     assert set(graphs) == {"case"}
     assert contract["summary"]["total_slices"] >= 2
     transition_slices = [item for item in contract["slices"] if item["kind"] == "transition"]
@@ -75,11 +74,9 @@ def test_unique_schema_field_overlap_binds_invariant_without_inventing_state():
     # Reconciliation constraint
     aggregate_value must equal reconciled_value
     """
-
     builder = BusinessStateGraphBuilder()
     graphs = builder.build(prd, "", db_schema)
     contract = builder.behavior_contract()
-
     assert set(graphs) == {"reconciliation"}
     assert contract["summary"]["source_field_bound_invariant_count"] == 1
     invariant_slices = [item for item in contract["slices"] if item["kind"] == "invariant"]
@@ -94,7 +91,6 @@ def test_behavior_slice_policy_guardrails_cap_budget_and_round_bounds(monkeypatc
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "999")
     monkeypatch.setenv("QUALIBUG_DISCOVERY_ROUND", "0")
     monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "999")
-
     assert _behavior_slice_execution_value("max_behavior_slices_per_round", 999, 15) == 15
     assert _behavior_slice_execution_value("incremental_discovery_round", 0, 1) == 1
     assert _behavior_slice_execution_value("incremental_discovery_round_limit", 999, 3) == 12
@@ -102,22 +98,15 @@ def test_behavior_slice_policy_guardrails_cap_budget_and_round_bounds(monkeypatc
 
 def test_slice_budget_is_hard_capped_at_fifteen(monkeypatch):
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "999")
-    settings = _behavior_slice_settings()
-    assert settings["slice_budget"] == 15
+    assert _behavior_slice_settings()["slice_budget"] == 15
 
 
 def test_plan_only_slice_is_not_misclassified_as_confirmed():
     selection = _schedule_behavior_slices(
         [{"slice_id": "BHV_example", "entity": "example", "kind": "transition"}],
         {"slice_budget": 1, "round_number": 1, "round_limit": 2},
-        [{
-            "behavior_slice_id": "BHV_example",
-            "execution_status": "not_executed",
-            "confirmation_status": "candidate",
-            "gate_passed": False,
-        }],
+        [{"behavior_slice_id": "BHV_example", "execution_status": "not_executed", "confirmation_status": "candidate", "gate_passed": False}],
     )
-
     assert selection["status"] == "planned"
     assert selection["confirmed_slice_ids"] == []
     assert selection["selected_slice_ids"] == ["BHV_example"]
@@ -125,14 +114,10 @@ def test_plan_only_slice_is_not_misclassified_as_confirmed():
 
 def test_history_advances_to_next_unattempted_slice_without_promoting_prior_plan():
     selection = _schedule_behavior_slices(
-        [
-            {"slice_id": "BHV_first", "entity": "example", "kind": "transition"},
-            {"slice_id": "BHV_second", "entity": "example", "kind": "invariant"},
-        ],
+        [{"slice_id": "BHV_first", "entity": "example", "kind": "transition"}, {"slice_id": "BHV_second", "entity": "example", "kind": "invariant"}],
         {"slice_budget": 1, "round_number": 1, "round_limit": 3},
-        [{"behavior_slice_ledger": {"selected_slice_ids": ["BHV_first"], "confirmed_slice_ids": []}}],
+        [{"behavior_slice_ledger": {"selected_slice_ids": ["BHV_first"], "confirmed_slice_ids": ["BHV_first"]}}],
     )
-
     assert selection["status"] == "planned"
     assert selection["selection_mode"] == "next_unattempted_after_history"
     assert selection["selected_slice_ids"] == ["BHV_second"]
@@ -143,9 +128,8 @@ def test_scheduler_stops_after_all_pending_slices_were_attempted_without_confirm
     selection = _schedule_behavior_slices(
         [{"slice_id": "BHV_example", "entity": "example", "kind": "transition"}],
         {"slice_budget": 1, "round_number": 1, "round_limit": 3},
-        [{"behavior_slice_ledger": {"selected_slice_ids": ["BHV_example"], "confirmed_slice_ids": []}}],
+        [{"behavior_slice_ledger": {"selected_slice_ids": ["BHV_example"], "confirmed_slice_ids": ["BHV_example"]}}],
     )
-
     assert selection["status"] == "stopped"
     assert selection["stop_reason"] == "all_pending_slices_attempted_needs_new_evidence_or_policy"
 
@@ -156,35 +140,23 @@ def test_scheduler_respects_explicit_round_limit():
         {"slice_budget": 1, "round_number": 4, "round_limit": 3},
         [],
     )
-
     assert selection["status"] == "stopped"
     assert selection["stop_reason"] == "configured_round_limit_reached"
 
 
-def test_pipeline_persists_ledger_and_advances_without_external_round_or_history(monkeypatch, tmp_path):
+def test_pipeline_persists_campaign_and_advances_without_external_round_or_history(monkeypatch, tmp_path):
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "1")
     monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "3")
     monkeypatch.delenv("QUALIBUG_DISCOVERY_ROUND", raising=False)
-
-    first = run_v12_pipeline(
-        project="generic-project",
-        root=tmp_path,
-        prd_text=PRD,
-        api_spec_text=API_SPEC,
-        db_schema_text=DB_SCHEMA,
-    )
-    second = run_v12_pipeline(
-        project="generic-project",
-        root=tmp_path,
-        prd_text=PRD,
-        api_spec_text=API_SPEC,
-        db_schema_text=DB_SCHEMA,
-    )
-
+    first = run_v12_pipeline(project="generic-project", root=tmp_path, prd_text=PRD, api_spec_text=API_SPEC, db_schema_text=DB_SCHEMA)
+    second = run_v12_pipeline(project="generic-project", root=tmp_path, prd_text=PRD, api_spec_text=API_SPEC, db_schema_text=DB_SCHEMA)
     ledger_path = tmp_path / "platform_workspace" / "generic-project" / "defect_discovery" / "v12_behavior_slice_ledger.json"
+    campaign_dir = tmp_path / "platform_workspace" / "generic-project" / "defect_discovery" / "campaigns"
     assert ledger_path.exists()
-    assert first["behavior_slice_ledger"]["history_source"] == "persisted_ledger"
-    assert second["behavior_slice_ledger"]["history_source"] == "persisted_ledger"
+    assert campaign_dir.exists()
+    assert first["campaign"]["campaign_mode"] == "created"
+    assert second["campaign"]["campaign_mode"] == "resumed"
+    assert first["campaign"]["campaign_id"] == second["campaign"]["campaign_id"]
     assert first["behavior_slice_ledger"]["round"] == 1
     assert second["behavior_slice_ledger"]["round"] == 2
     assert second["behavior_slice_ledger"]["selection_mode"] == "next_unattempted_after_history"
@@ -197,31 +169,15 @@ def test_pipeline_selects_different_source_slices_across_explicit_rounds(monkeyp
     monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "1")
     monkeypatch.setenv("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", "2")
     monkeypatch.setenv("QUALIBUG_DISCOVERY_ROUND", "1")
-
-    first = run_v12_pipeline(
-        project="generic-project",
-        root=tmp_path,
-        prd_text=PRD,
-        api_spec_text=API_SPEC,
-        db_schema_text=DB_SCHEMA,
-    )
-
+    first = run_v12_pipeline(project="generic-project", root=tmp_path, prd_text=PRD, api_spec_text=API_SPEC, db_schema_text=DB_SCHEMA)
     assert "error" not in first
     assert first["phases"]["incremental_discovery"]["status"] == "planned"
     assert len(first["behavior_slice_ledger"]["selected_slice_ids"]) == 1
     assert first["phases"]["execution"]["status"] == "skipped"
     assert all(item["behavior_slice_id"] for item in first["plan_only_scenarios"])
     assert all(item["discovery_round"] == 1 for item in first["plan_only_scenarios"])
-
     monkeypatch.setenv("QUALIBUG_DISCOVERY_ROUND", "2")
-    second = run_v12_pipeline(
-        project="generic-project",
-        root=tmp_path,
-        prd_text=PRD,
-        api_spec_text=API_SPEC,
-        db_schema_text=DB_SCHEMA,
-    )
-
+    second = run_v12_pipeline(project="generic-project", root=tmp_path, prd_text=PRD, api_spec_text=API_SPEC, db_schema_text=DB_SCHEMA)
     assert "error" not in second
     assert second["phases"]["incremental_discovery"]["status"] == "planned"
     assert first["behavior_slice_ledger"]["selected_slice_ids"] != second["behavior_slice_ledger"]["selected_slice_ids"]
