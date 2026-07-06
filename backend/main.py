@@ -139,6 +139,33 @@ def list_source_assets_endpoint(project_id: str, authorization: str = Header(Non
         raise HTTPException(status_code=422, detail=f"source asset lookup failed: {type(exc).__name__}") from exc
 
 
+@app.post("/v1/test-data-receipts")
+def issue_test_data_receipt_endpoint(body: dict[str, Any], authorization: str = Header(None)) -> dict[str, Any]:
+    require_api_token(authorization)
+    try:
+        from ai_test_asset_center.enterprise_test_data_receipts import issue_test_data_receipt
+        required = ("project_id", "kind", "campaign_id", "scope_id", "environment_ref")
+        if any(not _text(body, key, 160) for key in required):
+            raise HTTPException(status_code=422, detail="project_id, kind, campaign_id, scope_id and environment_ref are required")
+        return issue_test_data_receipt(
+            _text(body, "project_id", 160),
+            root=_workspace_root(),
+            kind=_text(body, "kind", 40),
+            campaign_id=_text(body, "campaign_id", 160),
+            scope_id=_text(body, "scope_id", 160),
+            environment_ref=_text(body, "environment_ref", 160),
+            actor=_actor(body),
+            data_scope_ref=_text(body, "data_scope_ref", 240),
+            fixture_ref=_text(body, "fixture_ref", 240),
+            provenance_ref=_text(body, "provenance_ref", 240),
+            operation_ref=_text(body, "operation_ref", 240),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"test-data receipt failed: {type(exc).__name__}") from exc
+
+
 @app.post("/v1/execution-approvals")
 def issue_execution_approval_endpoint(body: dict[str, Any], authorization: str = Header(None)) -> dict[str, Any]:
     require_api_token(authorization)
