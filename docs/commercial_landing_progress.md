@@ -20,6 +20,7 @@ Completed so far:
 - Added tests proving the patched entrypoint downgrades legacy light-gate results into internal clues when business evidence is not validated.
 - Added patch diagnostics so runtime can report whether the strict delivery gate patch is active, where it came from, and which partition function is live.
 - Added a restore helper for isolated diagnostics and tests, while keeping the default service startup strict.
+- Exposed `customer_delivery_gate_patch` in the command-center payload so frontend/customer environments can verify that the strict gate is active.
 
 Current commercial rule:
 
@@ -32,8 +33,10 @@ Current service integration:
 - `qualibug-server` now starts through `ai_test_asset_center.private_pilot_server:run_server`.
 - The wrapper installs the strict backend customer-delivery gate before delegating to the original private pilot service.
 - The wrapper exposes patch status and restore helpers for operational diagnostics and isolated tests.
+- Command-center responses now include `customer_delivery_gate_patch` at the top level and under `data`, `data_contract`, and `delivery_tracks`.
 
 Next engineering step:
 
+- Surface `customer_delivery_gate_patch` in the frontend diagnostics/status area.
 - Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
 - Keep the wrapper as a compatibility safety net for default startup.
