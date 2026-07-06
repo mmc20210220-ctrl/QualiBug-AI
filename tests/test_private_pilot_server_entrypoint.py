@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from ai_test_asset_center import private_pilot_service
-from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
+from ai_test_asset_center.private_pilot_server import (
+    customer_delivery_gate_patch_status,
+    install_customer_delivery_gate_patch,
+    restore_customer_delivery_gate_patch,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +44,8 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
 
     assert 'qualibug-server = "ai_test_asset_center.private_pilot_server:run_server"' in pyproject
     assert "install_customer_delivery_gate_patch" in wrapper
+    assert "customer_delivery_gate_patch_status" in wrapper
+    assert "restore_customer_delivery_gate_patch" in wrapper
     assert "split_customer_delivery_tracks" in wrapper
     assert "_ORIGINAL_PARTITION_DELIVERY_TRACKS" in wrapper
     assert "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE" in wrapper
@@ -47,14 +53,30 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
 
 
 def test_private_pilot_server_patch_routes_legacy_partition_through_strict_gate() -> None:
+    restore_customer_delivery_gate_patch()
     install_customer_delivery_gate_patch()
 
     defects, clues = private_pilot_service._partition_delivery_tracks([_legacy_ready_but_business_unvalidated()])
+    status = customer_delivery_gate_patch_status()
 
     assert defects == []
     assert [item["id"] for item in clues] == ["LEGACY-1"]
     assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in clues[0]["customer_delivery_gate_reasons"]
     assert clues[0]["customer_visible"] is False
-    assert private_pilot_service._CUSTOMER_DELIVERY_GATE_PATCHED is True
-    assert private_pilot_service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE == "ai_test_asset_center.private_pilot_server"
-    assert private_pilot_service._ORIGINAL_PARTITION_DELIVERY_TRACKS is not None
+    assert status["patched"] is True
+    assert status["source"] == "ai_test_asset_center.private_pilot_server"
+    assert status["has_original_partition"] is True
+    assert status["active_partition_name"] == "_strict_partition_delivery_tracks"
+
+
+def test_private_pilot_server_patch_can_restore_original_partition_for_diagnostics() -> None:
+    install_customer_delivery_gate_patch()
+    assert customer_delivery_gate_patch_status()["patched"] is True
+
+    restore_customer_delivery_gate_patch()
+    status = customer_delivery_gate_patch_status()
+
+    assert status["patched"] is False
+    assert status["source"] == ""
+    assert status["has_original_partition"] is False
+    assert status["active_partition_name"] == "_partition_delivery_tracks"
