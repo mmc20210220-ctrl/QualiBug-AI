@@ -104,6 +104,10 @@ def test_private_pilot_doctor_report_guide_documents_output_workflow() -> None:
     assert "platform_outputs/private_pilot_doctor_report.json" in guide
     assert "qualibug-doctor --install-patches --output" in guide
     assert "masked refs" in guide
+    assert "remediation_hints" in guide
+    assert "INVALID_QUALIBUG_PORT" in guide
+    assert "CREDENTIAL_KEY_MISSING" in guide
+    assert "RUNTIME_PATCHES_NOT_INSTALLED_IN_READONLY_MODE" in guide
 
 
 def test_private_pilot_doctor_main_prints_json(tmp_path: Path, capsys) -> None:
