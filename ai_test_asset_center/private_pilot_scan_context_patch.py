@@ -3,17 +3,21 @@ from __future__ import annotations
 """Scan campaign-context patch installer for private-pilot deployments.
 
 This module owns the runtime wiring that binds frontend scan metadata to the
-legacy scanner call path. It deliberately reuses the proven source-manifest
-helpers and context variables from ``private_pilot_server`` so the first
-extraction step changes ownership of the installer without changing the P0 scan
-semantics.
+legacy scanner call path. Pure source-manifest and campaign-context construction
+is delegated to ``private_pilot_scan_context_contract``.
 """
 
 from pathlib import Path
 from typing import Any
 
-from ai_test_asset_center import private_pilot_server as _server_patch
 from ai_test_asset_center import private_pilot_service as _service
+from ai_test_asset_center.private_pilot_scan_context_contract import (
+    CONTINUOUS_CAMPAIGN_CONTEXTS,
+    SCAN_CAMPAIGN_CONTEXT,
+    build_campaign_context_from_scan_body,
+    continuous_context_key,
+    prepare_scan_body_for_campaign,
+)
 
 
 def restore_scan_campaign_context_patch() -> None:
@@ -39,7 +43,7 @@ def restore_scan_campaign_context_patch() -> None:
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
-    _server_patch._CONTINUOUS_CAMPAIGN_CONTEXTS.clear()  # type: ignore[attr-defined]
+    CONTINUOUS_CAMPAIGN_CONTEXTS.clear()
 
 
 def install_scan_campaign_context_patch(*, patch_source: str) -> None:
@@ -55,7 +59,7 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
     original_continuous_loop = getattr(_service, "_continuous_scan_loop")
 
     def _scan_with_campaign_context(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        pending_context = _server_patch._SCAN_CAMPAIGN_CONTEXT.get()  # type: ignore[attr-defined]
+        pending_context = SCAN_CAMPAIGN_CONTEXT.get()
         if pending_context:
             explicit_context = kwargs.get("campaign_context")
             merged = dict(explicit_context) if isinstance(explicit_context, dict) else {}
@@ -76,13 +80,13 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
         actor: dict[str, str],
         body: dict[str, Any],
     ) -> Any:
-        prepared_body = _server_patch._prepare_scan_body_for_campaign(project, root, body)  # type: ignore[attr-defined]
-        campaign_context = _server_patch._build_campaign_context_from_scan_body(prepared_body)  # type: ignore[attr-defined]
-        token = _server_patch._SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)  # type: ignore[attr-defined]
+        prepared_body = prepare_scan_body_for_campaign(project, root, body)
+        campaign_context = build_campaign_context_from_scan_body(prepared_body)
+        token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
         try:
             return original_handler(self, project, root, actor, prepared_body)
         finally:
-            _server_patch._SCAN_CAMPAIGN_CONTEXT.reset(token)  # type: ignore[attr-defined]
+            SCAN_CAMPAIGN_CONTEXT.reset(token)
 
     def _handle_continuous_start_with_campaign_context(
         self: Any,
@@ -91,21 +95,21 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
         actor: dict[str, str],
         body: dict[str, Any],
     ) -> Any:
-        prepared_body = _server_patch._prepare_scan_body_for_campaign(project, root, body)  # type: ignore[attr-defined]
-        campaign_context = _server_patch._build_campaign_context_from_scan_body(prepared_body)  # type: ignore[attr-defined]
+        prepared_body = prepare_scan_body_for_campaign(project, root, body)
+        campaign_context = build_campaign_context_from_scan_body(prepared_body)
         if campaign_context:
-            key = _server_patch._continuous_context_key(root, project)  # type: ignore[attr-defined]
-            _server_patch._CONTINUOUS_CAMPAIGN_CONTEXTS[key] = campaign_context  # type: ignore[attr-defined]
+            key = continuous_context_key(root, project)
+            CONTINUOUS_CAMPAIGN_CONTEXTS[key] = campaign_context
         return original_continuous_start(self, project, root, actor, prepared_body)
 
     def _continuous_scan_loop_with_campaign_context(root: Path, project: str, tenant_id: str, interval_s: int) -> Any:
-        key = _server_patch._continuous_context_key(root, project)  # type: ignore[attr-defined]
-        campaign_context = _server_patch._CONTINUOUS_CAMPAIGN_CONTEXTS.get(key)  # type: ignore[attr-defined]
-        token = _server_patch._SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)  # type: ignore[attr-defined]
+        key = continuous_context_key(root, project)
+        campaign_context = CONTINUOUS_CAMPAIGN_CONTEXTS.get(key)
+        token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
         try:
             return original_continuous_loop(root, project, tenant_id, interval_s)
         finally:
-            _server_patch._SCAN_CAMPAIGN_CONTEXT.reset(token)  # type: ignore[attr-defined]
+            SCAN_CAMPAIGN_CONTEXT.reset(token)
 
     scanner_module.scan = _scan_with_campaign_context
     _service.PrivatePilotHandler._handle_v12_scan = _handle_v12_scan_with_campaign_context
