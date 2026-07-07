@@ -9,7 +9,6 @@ customer systems, or later real customer-approved benchmark runs.
 """
 
 import json
-import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -73,13 +72,22 @@ def extract_http_observations(scan_result: dict[str, Any]) -> list[dict[str, Any
     return observations
 
 
+def _segments(value: str) -> list[str]:
+    return [part for part in str(value or "").strip("/").split("/") if part]
+
+
 def _match_path(pattern: str, path: str) -> bool:
-    expected = str(pattern or "")
-    actual = str(path or "")
+    expected, actual = _segments(pattern), _segments(path)
     if expected == actual:
         return True
-    regex = "^" + re.sub(r"\{[^/]+\}", r"[^/]+", re.escape(expected)).replace(r"\[\^/\]\+", r"[^/]+") + "$"
-    return re.match(regex, actual) is not None
+    if len(expected) != len(actual):
+        return False
+    for left, right in zip(expected, actual):
+        if left.startswith("{") and left.endswith("}"):
+            continue
+        if left != right:
+            return False
+    return True
 
 
 def _field(body: Any, path: str) -> Any:
