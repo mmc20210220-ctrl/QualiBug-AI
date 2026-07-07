@@ -13,3 +13,10 @@ try:  # pragma: no cover - import-time P3 benchmark shim
     install_p3_benchmark_scan_patch()
 except Exception:
     pass
+
+try:  # pragma: no cover - import-time P4 value scorecard shim
+    from .p4_scorecard_scan_patch import install_p4_scorecard_scan_patch
+
+    install_p4_scorecard_scan_patch()
+except Exception:
+    pass
