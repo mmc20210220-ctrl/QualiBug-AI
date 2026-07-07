@@ -19,6 +19,7 @@ from .business_state_graph import BusinessStateGraph, StateTransition, behavior_
 _READ_ONLY_METHODS = {"GET", "HEAD"}
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _ALLOWED_POLICIES = {"safe_read_only", "approved_sandbox_write", "runtime_approved"}
+_WRITE_POLICIES = {"approved_sandbox_write", "runtime_approved"}
 
 
 @dataclass
@@ -158,11 +159,12 @@ class SemanticScenarioGenerator:
         if not actor_id:
             return []
         token = str(actor.get("token") or "").strip()
+        contract_write_approved = contract.get("write_approved") is True
         scenarios: list[ExecutableScenario] = []
         for index, row in enumerate(contract.get("scenarios") or []):
             if not isinstance(row, dict):
                 continue
-            item = self._contract_scenario(row, index, policy, actor_id, token, active_slice_ids, discovery_round)
+            item = self._contract_scenario(row, index, policy, actor_id, token, active_slice_ids, discovery_round, contract_write_approved)
             if item is not None:
                 scenarios.append(item)
         return scenarios
@@ -176,11 +178,20 @@ class SemanticScenarioGenerator:
         token: str,
         active_slice_ids: set[str] | None,
         discovery_round: int,
+        contract_write_approved: bool,
     ) -> ExecutableScenario | None:
         steps = self._contract_steps(row.get("steps"), policy, actor_id)
         if not steps:
             return None
         cleanup_steps = self._contract_steps(row.get("cleanup_steps") or row.get("cleanup"), "approved_sandbox_write", actor_id)
+        has_write = any(step.api_method in _WRITE_METHODS for step in steps)
+        write_approved = contract_write_approved or row.get("write_approved") is True
+        if has_write and policy not in _WRITE_POLICIES:
+            return None
+        if has_write and not write_approved:
+            return None
+        if has_write and not cleanup_steps:
+            return None
         declared_slice_id = str(row.get("behavior_slice_id") or "").strip()
         if declared_slice_id and active_slice_ids is not None and declared_slice_id not in active_slice_ids:
             # A customer-bound contract for a specific source slice must not jump discovery rounds.
