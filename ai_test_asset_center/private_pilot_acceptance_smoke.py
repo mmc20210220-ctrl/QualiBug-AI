@@ -63,9 +63,6 @@ def write_acceptance_report(payload: dict[str, Any], output: str | Path | None =
     report_path = resolve_acceptance_report_path(output, root)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     payload["acceptance_report_file"] = str(report_path)
-    if "customer_acceptance_summary" in payload:
-        payload["customer_acceptance_summary"] = _customer_acceptance_summary(payload, acceptance_report_path=report_path)
-    payload["acceptance_artifact_manifest"] = _acceptance_artifact_manifest(payload, acceptance_report_path=report_path)
     report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report_path
 
@@ -314,12 +311,12 @@ def _customer_summary_commands(acceptance: dict[str, Any], checks: dict[str, Any
     return deduped[:4]
 
 
-def _customer_acceptance_summary(payload: dict[str, Any], *, acceptance_report_path: str | Path | None = None) -> dict[str, Any]:
+def _customer_acceptance_summary(payload: dict[str, Any]) -> dict[str, Any]:
     acceptance = payload.get("acceptance", {}) if isinstance(payload.get("acceptance"), dict) else {}
     checks = payload.get("checks", {}) if isinstance(payload.get("checks"), dict) else {}
     scenario = checks.get("scenario_readiness", {}) if isinstance(checks.get("scenario_readiness"), dict) else {}
     report_paths = [
-        str(Path(acceptance_report_path).expanduser()) if acceptance_report_path else str(default_acceptance_report_path(payload.get("root"))),
+        str(default_acceptance_report_path(payload.get("root"))),
         str(Path(str(payload.get("doctor_report_default") or "")).expanduser()),
     ]
     commands = _customer_summary_commands(acceptance, checks)
@@ -363,68 +360,6 @@ def _customer_acceptance_summary(payload: dict[str, Any], *, acceptance_report_p
         "zh_text": "\n".join(zh_lines),
         "en_lines": en_lines,
         "en_text": "\n".join(en_lines),
-    }
-
-
-def _acceptance_artifact_manifest(payload: dict[str, Any], *, acceptance_report_path: str | Path | None = None) -> dict[str, Any]:
-    summary = payload.get("customer_acceptance_summary", {}) if isinstance(payload.get("customer_acceptance_summary"), dict) else {}
-    support_manifest = payload.get("support_bundle_manifest", {}) if isinstance(payload.get("support_bundle_manifest"), dict) else {}
-    acceptance_path = str(Path(acceptance_report_path).expanduser()) if acceptance_report_path else str(default_acceptance_report_path(payload.get("root")))
-    doctor_path = str(Path(str(payload.get("doctor_report_default") or "")).expanduser())
-    artifacts = [
-        {
-            "id": "acceptance_smoke_report",
-            "kind": "file",
-            "path": acceptance_path,
-            "required_for_handoff": True,
-            "safe_to_share": True,
-            "notes": "Primary customer acceptance JSON report.",
-        },
-        {
-            "id": "private_pilot_doctor_report",
-            "kind": "file",
-            "path": doctor_path,
-            "required_for_handoff": True,
-            "safe_to_share": True,
-            "notes": "Companion doctor diagnostics report with masked credential refs.",
-        },
-        {
-            "id": "customer_acceptance_summary_zh",
-            "kind": "embedded_field",
-            "field": "customer_acceptance_summary.zh_text",
-            "required_for_handoff": True,
-            "safe_to_share": True,
-            "notes": "Chinese handoff summary for acceptance forms or support tickets.",
-        },
-        {
-            "id": "customer_acceptance_summary_en",
-            "kind": "embedded_field",
-            "field": "customer_acceptance_summary.en_text",
-            "required_for_handoff": False,
-            "safe_to_share": True,
-            "notes": "English handoff summary for acceptance forms or support tickets.",
-        },
-        {
-            "id": "support_bundle_manifest",
-            "kind": "embedded_field",
-            "field": "support_bundle_manifest",
-            "required_for_handoff": True,
-            "safe_to_share": True,
-            "notes": "Safety policy for what support artifacts can and cannot be shared.",
-        },
-    ]
-    return {
-        "schema_version": "acceptance-artifact-manifest-v1",
-        "policy": "handoff_artifacts_only_no_customer_source_data",
-        "required_artifact_ids": [item["id"] for item in artifacts if item.get("required_for_handoff")],
-        "safe_to_share_paths": summary.get("safe_report_paths", [acceptance_path, doctor_path]),
-        "artifacts": artifacts,
-        "archive_recommendations": [
-            "Archive the acceptance smoke report and companion doctor report together.",
-            "Use customer_acceptance_summary.zh_text or en_text as the handoff note.",
-            "Do not add logs, HAR files, screenshots, .env files, secrets, or enterprise source registry contents unless explicitly approved.",
-        ],
-        "inherited_do_not_send": support_manifest.get("do_not_send", []),
     }
 
 
@@ -478,7 +413,6 @@ def run_acceptance_smoke(
         "support_bundle_manifest": doctor_payload.get("support_bundle_manifest", {}),
     }
     payload["customer_acceptance_summary"] = _customer_acceptance_summary(payload)
-    payload["acceptance_artifact_manifest"] = _acceptance_artifact_manifest(payload)
     return payload
 
 
