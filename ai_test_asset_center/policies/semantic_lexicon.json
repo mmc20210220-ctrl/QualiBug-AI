@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "purpose": "Configurable semantic hints for enterprise knowledge parsing. Product teams may replace or extend this asset per deployment without changing parser code.",
+  "role_words": {
+    "admin": ["admin", "administrator", "\u7ba1\u7406\u5458", "\u7cfb\u7edf\u7ba1\u7406\u5458"],
+    "operator": ["operator", "\u8fd0\u8425", "\u64cd\u4f5c\u5458", "\u5ba2\u670d"],
+    "approver": ["approver", "approve", "\u5ba1\u6279\u4eba", "\u5ba1\u6838\u4eba", "\u590d\u6838\u4eba"],
+    "finance": ["finance", "accountant", "\u8d22\u52a1", "\u4f1a\u8ba1", "\u51fa\u7eb3"],
+    "owner": ["owner", "\u8d1f\u8d23\u4eba", "\u5f52\u5c5e\u4eba", "\u5ba2\u6237\u7ecf\u7406"],
+    "tenant_user": ["tenant", "workspace", "\u7ec4\u7ec7\u6210\u5458", "\u79df\u6237\u7528\u6237"],
+    "doctor": ["doctor", "physician", "\u533b\u751f", "\u533b\u5e08"],
+    "teacher": ["teacher", "instructor", "\u8001\u5e08", "\u6559\u5e08"],
+    "student": ["student", "learner", "\u5b66\u751f", "\u5b66\u5458"]
+  },
+  "risk_terms": {
+    "permission_boundary": ["permission", "role", "access", "\u6743\u9650", "\u8d8a\u6743", "\u4ec5\u80fd", "\u53ea\u80fd", "tenant", "\u79df\u6237", "\u6240\u5c5e"],
+    "state_machine": ["status", "state", "transition", "\u72b6\u6001", "\u6d41\u8f6c", "\u7ec8\u6001", "\u64a4\u9500", "\u53d6\u6d88", "\u5ba1\u6279"],
+    "data_conservation": ["balance", "amount", "ledger", "inventory", "stock", "quota", "\u91d1\u989d", "\u4f59\u989d", "\u8d26\u672c", "\u5e93\u5b58", "\u989d\u5ea6", "\u6570\u91cf"],
+    "data_reconciliation": ["reconcile", "match", "consistency", "\u5bf9\u8d26", "\u4e00\u81f4", "\u5339\u914d", "\u540c\u6b65"],
+    "idempotency": ["idempotent", "duplicate", "retry", "\u5e42\u7b49", "\u91cd\u590d", "\u91cd\u8bd5"],
+    "async_event": ["callback", "webhook", "event", "message", "notify", "queue", "sms", "back_in_stock", "restock", "inventory_sync", "inventory_restore", "\u56de\u8c03", "\u4e8b\u4ef6", "\u6d88\u606f", "\u901a\u77e5", "\u77ed\u4fe1", "\u5f02\u6b65", "\u5230\u8d27\u63d0\u9192", "\u8865\u8d27\u63d0\u9192", "\u5e93\u5b58\u540c\u6b65", "\u5e93\u5b58\u6062\u590d", "\u6062\u590d\u5e93\u5b58", "\u5e93\u5b58\u56de\u8865"],
+    "sensitive_data": ["medical", "patient", "pii", "personal", "\u654f\u611f", "\u75c5\u5386", "\u9690\u79c1", "\u8eab\u4efd\u8bc1"],
+    "historical_regression": ["bug", "defect", "incident", "issue", "\u7f3a\u9677", "\u6545\u969c", "\u5de5\u5355", "\u4e8b\u6545"]
+  },
+  "state_tokens": ["active", "applied", "approved", "archived", "cancelled", "canceled", "closed", "complete", "completed", "confirmed", "created", "deleted", "delivered", "disabled", "done", "draft", "enabled", "expired", "failed", "finished", "inactive", "init", "new", "paid", "pending", "processing", "received", "refunded", "refunding", "rejected", "returned", "returning", "settled", "shipped", "submitted", "success", "void", "wait_return"],
+  "state_hints": ["\u5f85", "\u5df2", "\u5ba1\u6838", "\u5ba1\u6279", "\u901a\u8fc7", "\u62d2\u7edd", "\u9a73\u56de", "\u652f\u4ed8", "\u4ed8\u6b3e", "\u53d1\u8d27", "\u6536\u8d27", "\u5b8c\u6210", "\u53d6\u6d88", "\u5173\u95ed", "\u9000\u6b3e", "\u9000\u8d27", "\u5f52\u6863", "\u6210\u529f", "\u5931\u8d25", "\u5904\u7406\u4e2d", "\u521b\u5efa", "\u65b0\u5efa", "\u63d0\u4ea4", "\u53d7\u7406", "\u914d\u9001", "\u8349\u7a3f", "\u542f\u7528", "\u505c\u7528"]
+}

@@ -85,7 +85,11 @@ def evaluate_release_gate(
     if p1 and not allow_p1:
         reasons.append({"code": "CONFIRMED_P1_FINDINGS", "detail": str(len(p1))})
 
-    hard_block = any(reason["code"] in {"CAMPAIGN_NOT_CLOSED", "CONFIRMED_P0_FINDINGS"} for reason in reasons) or runtime_status == "blocked"
+    campaign_not_closed_blocks = gate_policy.get("campaign_not_closed_verdict") != "not_ready"
+    hard_block = any(
+        reason["code"] == "CONFIRMED_P0_FINDINGS" or (campaign_not_closed_blocks and reason["code"] == "CAMPAIGN_NOT_CLOSED")
+        for reason in reasons
+    ) or runtime_status == "blocked"
     if not reasons:
         verdict, status = "pass", "release_ready"
     elif hard_block:

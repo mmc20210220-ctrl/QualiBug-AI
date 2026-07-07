@@ -244,7 +244,13 @@ def save_pilot_runtime_config(project_id: str, patch: dict[str, Any], root: Path
 
 
 def _default_registry(project: str) -> dict[str, Any]:
-    return {"phase": PHASE, "project_id": project, "connectors": [], "updated_at_utc": _now()}
+    return {
+        "phase": PHASE,
+        "project_id": project,
+        "connectors": [],
+        "test_profile": {},
+        "updated_at_utc": _now(),
+    }
 
 
 def load_connector_registry(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:
@@ -252,8 +258,11 @@ def load_connector_registry(project_id: str = "real_project_demo", root: Path | 
     project = _safe_project_id(project_id)
     saved = _read_json(_paths(project, root)["connectors"], {})
     default = _default_registry(project)
-    if isinstance(saved, dict) and isinstance(saved.get("connectors"), list):
-        default["connectors"] = [row for row in saved["connectors"] if isinstance(row, dict)]
+    if isinstance(saved, dict):
+        if isinstance(saved.get("connectors"), list):
+            default["connectors"] = [row for row in saved["connectors"] if isinstance(row, dict)]
+        if isinstance(saved.get("test_profile"), dict):
+            default["test_profile"] = saved["test_profile"]
         default["updated_at_utc"] = str(saved.get("updated_at_utc") or default["updated_at_utc"])
     return default
 

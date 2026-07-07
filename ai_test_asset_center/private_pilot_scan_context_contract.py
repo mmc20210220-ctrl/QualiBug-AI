@@ -27,6 +27,57 @@ def as_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _is_production_like_environment(environment_ref: str, environment_type: str = "") -> bool:
+    try:
+        from ai_test_asset_center.enterprise_testops_control_plane import _is_production
+
+        return bool(_is_production({
+            "name": as_text(environment_ref),
+            "type": as_text(environment_type),
+            "production_protected": False,
+        }))
+    except Exception:
+        fingerprint = f"{as_text(environment_ref)} {as_text(environment_type)}".lower()
+        return any(token in fingerprint for token in ("prod", "production", "live"))
+
+
+def default_scan_execution_mode(body: dict[str, Any]) -> str:
+    explicit = as_text(body.get("execution_mode"))
+    if explicit:
+        return explicit
+    if not as_text(body.get("base_url")):
+        return "safe_read_only"
+    if _is_production_like_environment(
+        as_text(body.get("environment_ref") or body.get("target_environment")),
+        as_text(body.get("environment_class")),
+    ):
+        return "safe_read_only"
+    return "approved_sandbox_write"
+
+
+def default_scan_test_data_contract(body: dict[str, Any]) -> dict[str, Any]:
+    contract = as_dict(body.get("test_data_contract"))
+    if contract:
+        return contract
+    strategy = as_text(body.get("test_data_strategy"))
+    if strategy:
+        return {"strategy": strategy}
+    if default_scan_execution_mode(body) != "approved_sandbox_write":
+        return {}
+    scope_ref = (
+        as_text(body.get("scope_id"))
+        or as_text(body.get("environment_ref"))
+        or as_text(body.get("target_environment"))
+    )
+    if not scope_ref:
+        return {}
+    return {
+        "strategy": "create_disposable",
+        "write_approved": True,
+        "disposable_scope_ref": scope_ref,
+    }
+
+
 def continuous_context_key(root: Path, project: str) -> tuple[str, str]:
     return (str(root), str(project))
 
@@ -137,14 +188,11 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
         if value:
             context[key] = value
 
-    if "execution_mode" not in context:
-        context["execution_mode"] = "safe_read_only"
+    context["execution_mode"] = default_scan_execution_mode(body)
 
-    test_data_contract = as_dict(body.get("test_data_contract"))
+    test_data_contract = default_scan_test_data_contract(body)
     if test_data_contract:
         context["test_data_contract"] = test_data_contract
-    elif as_text(body.get("test_data_strategy")):
-        context["test_data_contract"] = {"strategy": as_text(body.get("test_data_strategy"))}
 
     release_policy = as_dict(body.get("release_policy"))
     if release_policy:

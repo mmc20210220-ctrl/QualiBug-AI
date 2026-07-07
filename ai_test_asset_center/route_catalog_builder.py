@@ -49,6 +49,7 @@ class RouteEntry:
             "tags": self.tags,
             "summary": self.summary,
             "path_params": self.path_params,
+            "path_param_formats": self.path_param_formats,
             "query_params": self.query_params,
             "request_body_schema": self.request_body_schema,
             "body_properties": self.request_body_schema.get("properties", {}) if isinstance(self.request_body_schema, dict) else {},
@@ -373,6 +374,8 @@ class RouteCatalogBuilder:
         # Enrich: extract path params from paths like /api/orders/{id}
         for entry in entries:
             params = re.findall(r'\{(\w+)\}', entry.path)
+            if not params:
+                params = re.findall(r':([A-Za-z_]\w*)', entry.path)
             if params:
                 entry.path_params = params
 

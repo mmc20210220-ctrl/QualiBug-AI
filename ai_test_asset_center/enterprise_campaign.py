@@ -145,16 +145,21 @@ class EnterpriseCampaign:
         return {
             "behavior_slice_ledger": {
                 "campaign_id": self.campaign_id,
-                "selected_slice_ids": list(self.attempted_slice_ids),
+                "selected_slice_ids": [],
                 "attempted_slice_ids": list(self.attempted_slice_ids),
                 "round": self.round_count,
             }
         }
 
-    def record_cycle(self, *, round_number: int, selection: dict[str, Any], findings: Iterable[Any], coverage_gap_count: int, execution_status: str) -> None:
+    def record_cycle(self, *, round_number: int, selection: dict[str, Any], findings: Iterable[Any], coverage_gap_count: int, execution_status: str, attempted_slice_ids: Iterable[str] | None = None) -> None:
         selected = [_text(value) for value in selection.get("selected_slice_ids", []) if _text(value)]
-        self.attempted_slice_ids = list(dict.fromkeys(self.attempted_slice_ids + selected))
-        self.round_count = max(self.round_count, int(round_number or 0))
+        if attempted_slice_ids is None:
+            realized_attempts = selected if _text(execution_status, 80).lower() == "completed" else []
+        else:
+            realized_attempts = [_text(value) for value in attempted_slice_ids if _text(value)]
+        self.attempted_slice_ids = list(dict.fromkeys(self.attempted_slice_ids + realized_attempts))
+        if realized_attempts or _text(execution_status, 80).lower() == "completed":
+            self.round_count = max(self.round_count, int(round_number or 0))
         for item in findings:
             if has_real_confirmation_receipt(item):
                 slice_id = _text(_as_dict(item).get("behavior_slice_id") or _as_dict(item).get("slice_id"))

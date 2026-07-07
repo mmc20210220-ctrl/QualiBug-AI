@@ -43,8 +43,8 @@ def _dbg_env() -> tuple[str, str]:
     if _DBG_ENV_CACHE is not None:
         return _DBG_ENV_CACHE
     url = "http://127.0.0.1:7777/event"
-    session_id = "command-center-502"
-    env_path = Path(__file__).resolve().parents[1] / ".dbg" / "command-center-502.env"
+    session_id = str(os.environ.get("QUALIBUG_DEBUG_SESSION_ID") or "command-center-502").strip() or "command-center-502"
+    env_path = Path(__file__).resolve().parents[1] / ".dbg" / f"{session_id}.env"
     try:
         if env_path.exists():
             content = env_path.read_text(encoding="utf-8")
@@ -79,9 +79,353 @@ def _dbg_report(*, hypothesis_id: str, msg: str, data: dict[str, Any] | None = N
     except Exception:
         pass
 
+
+def _dbg_fingerprint_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    import hashlib
+
+    row = payload if isinstance(payload, dict) else {}
+    source_manifest = row.get("source_manifest") if isinstance(row.get("source_manifest"), dict) else {}
+    prd_text = str(row.get("prd") or "")
+    api_doc = str(row.get("api_doc") or row.get("api_doc_text") or "")
+    return {
+        "project_id": str(row.get("project_id") or row.get("project") or ""),
+        "scope_id": str(row.get("scope_id") or ""),
+        "environment_ref": str(row.get("environment_ref") or row.get("target_environment") or ""),
+        "execution_approval_id": str(row.get("execution_approval_id") or ""),
+        "execution_mode": str(row.get("execution_mode") or ""),
+        "base_url": str(row.get("base_url") or ""),
+        "prd_len": len(prd_text),
+        "prd_sha": hashlib.sha256(prd_text.encode("utf-8")).hexdigest() if prd_text else "",
+        "api_len": len(api_doc),
+        "api_sha": hashlib.sha256(api_doc.encode("utf-8")).hexdigest() if api_doc else "",
+        "source_id": str(source_manifest.get("source_id") or ""),
+        "source_hash": str(source_manifest.get("source_hash") or ""),
+        "source_version_id": str(source_manifest.get("source_version_id") or ""),
+    }
+
 # #endregion
 def _current_tenant() -> str:
     return os.environ.get("QUALIBUG_TENANT", "default")
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _is_local_private_service(server: Any) -> bool:
+    server_host = str(getattr(server, "server_address", ("", 0))[0] or "")
+    return (
+        server_host in {"127.0.0.1", "localhost", "::1"}
+        and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1"
+        and _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "1")
+    )
+
+
+def _validate_scan_base_url(base_url: str, *, local_dev_mode: bool) -> None:
+    if not str(base_url or "").strip():
+        return
+    from .ssrf_guard import validate_url
+
+    validate_url(str(base_url).strip(), allow_internal=local_dev_mode)
+
+
+def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any]) -> dict[str, str]:
+    scope_id = _first_text(body.get("scope_id"), os.environ.get("QUALIBUG_SCOPE_ID"))
+    environment_ref = _first_text(
+        body.get("environment_ref"),
+        body.get("target_environment"),
+        os.environ.get("QUALIBUG_ENVIRONMENT_REF"),
+        os.environ.get("QUALIBUG_TARGET_ENVIRONMENT"),
+    )
+    registry_profile: dict[str, Any] = {}
+    try:
+        from .enterprise_pilot_runtime import load_connector_registry
+
+        registry = load_connector_registry(project, root)
+        profile = registry.get("test_profile") if isinstance(registry, dict) else {}
+        if isinstance(profile, dict):
+            registry_profile = profile
+    except Exception:
+        registry_profile = {}
+    try:
+        from .deployment_config_resolver import resolve_deployment_config
+
+        deployment = resolve_deployment_config(project_id=project, root=root)
+    except Exception:
+        deployment = {}
+    scope_id = _first_text(
+        scope_id,
+        registry_profile.get("scope_id"),
+        registry_profile.get("deployment_scope_id"),
+        registry_profile.get("project_scope_id"),
+        deployment.get("deployment_scope_id"),
+    )
+    environment_ref = _first_text(
+        environment_ref,
+        registry_profile.get("environment_ref"),
+        registry_profile.get("target_environment"),
+        registry_profile.get("environment_class"),
+        registry_profile.get("environment"),
+        deployment.get("environment_class"),
+    )
+    return {"scope_id": scope_id[:160], "environment_ref": environment_ref[:160]}
+
+
+def _read_project_prd_text(project: str, root: Path) -> str:
+    def _safe_read(path: Path) -> str:
+        try:
+            resolved = path.resolve()
+            root_resolved = root.resolve()
+            if root_resolved != resolved and root_resolved not in resolved.parents:
+                return ""
+            if not resolved.exists() or not resolved.is_file():
+                return ""
+            return resolved.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            return ""
+
+    try:
+        from .enterprise_knowledge_center import _load_registry
+
+        registry = _load_registry(project, root)
+        ranked_sources: list[tuple[int, Path]] = []
+        for source in registry.get("sources", []):
+            if not isinstance(source, dict) or source.get("status") != "active":
+                continue
+            source_type = str(source.get("source_type") or "").strip().lower()
+            filename = str(source.get("original_name") or "").strip().lower()
+            score = 0
+            if source_type == "prd":
+                score = 100
+            elif source_type == "mrd":
+                score = 90
+            elif source_type == "business_rules":
+                score = 70
+            elif source_type == "collaboration_document":
+                score = 60
+            elif source_type == "other_document":
+                score = 40
+            if any(token in filename for token in ("prd", "mrd", "requirement", "spec")):
+                score += 10
+            stored_path = str(source.get("stored_path") or "").strip()
+            if score > 0 and stored_path:
+                ranked_sources.append((score, root / stored_path))
+        for _score, path in sorted(ranked_sources, key=lambda item: (-item[0], str(item[1]).lower())):
+            text = _safe_read(path)
+            if text:
+                return text
+    except Exception:
+        pass
+
+    input_dir = root / "platform_workspace" / project / "input"
+    candidates: list[Path] = []
+    for pattern in ("PRD*", "prd*", "*requirement*", "*Requirement*", "*spec*"):
+        try:
+            candidates.extend(path for path in input_dir.glob(pattern) if path.is_file())
+        except Exception:
+            continue
+    seen: set[str] = set()
+    for path in sorted(candidates, key=lambda item: str(item).lower()):
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        text = _safe_read(path)
+        if text:
+            return text
+    return ""
+
+
+def _predicted_campaign_binding(project: str, root: Path, body: dict[str, Any]) -> dict[str, str]:
+    api_doc = str(body.get("api_doc") or body.get("api_doc_text") or "")
+    manifest = body.get("source_manifest") if isinstance(body.get("source_manifest"), dict) else {}
+    scope_id = str(body.get("scope_id") or "").strip()
+    environment_ref = str(body.get("environment_ref") or body.get("target_environment") or "").strip()
+    source_id = str(manifest.get("source_id") or "").strip()
+    source_hash = str(manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:")
+    if not api_doc or not scope_id or not environment_ref or not source_id or len(source_hash) != 64:
+        return {}
+    try:
+        from .__main__ import _load_schema_assets
+        from .universal_api_parser import detect_format, parse_to_openapi
+        from .v12_pipeline import _campaign_context
+
+        prd_text = str(body.get("prd") or "")
+        normalized_api_doc = api_doc
+        if detect_format(api_doc) not in {"openapi3", "unknown"}:
+            normalized = parse_to_openapi(api_doc)
+            if normalized.get("paths"):
+                normalized_api_doc = json.dumps(normalized, ensure_ascii=False, default=str)
+        schema_text = _load_schema_assets(root, project)
+        campaign, _store, _mode = _campaign_context(
+            project,
+            prd_text,
+            normalized_api_doc,
+            schema_text,
+            str(body.get("base_url") or "").strip(),
+            {"slice_budget": 15, "round_limit": 3},
+            {
+                "scope_id": scope_id,
+                "environment_ref": environment_ref,
+                "source_manifest": manifest,
+            },
+            root,
+            api_doc,
+        )
+    except Exception:
+        return {}
+    # #region debug-point B:predicted-binding
+    _dbg_report(
+        hypothesis_id="B",
+        msg="[DEBUG] predicted campaign binding",
+        data={
+            "body": _dbg_fingerprint_payload(body),
+            "normalized_api_sha": __import__("hashlib").sha256(normalized_api_doc.encode("utf-8")).hexdigest() if normalized_api_doc else "",
+            "normalized_api_len": len(normalized_api_doc),
+            "schema_sha": __import__("hashlib").sha256(schema_text.encode("utf-8")).hexdigest() if schema_text else "",
+            "schema_len": len(schema_text),
+            "campaign_id": campaign.campaign_id,
+            "scope_id": scope_id,
+            "environment_ref": environment_ref,
+            "source_hash": source_hash,
+        },
+    )
+    # #endregion
+    return {
+        "campaign_id": campaign.campaign_id,
+        "scope_id": scope_id,
+        "environment_ref": environment_ref,
+        "source_hash": source_hash,
+    }
+
+
+def _maybe_issue_local_runtime_approval(project: str, root: Path, actor: dict[str, str], body: dict[str, Any], *, local_dev_mode: bool) -> str:
+    if not local_dev_mode:
+        return ""
+    if str(body.get("execution_approval_id") or "").strip():
+        return ""
+    if str(body.get("base_url") or "").strip() == "":
+        return ""
+    execution_mode = str(body.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
+    if execution_mode not in {"safe_read_only", "approved_sandbox_write"}:
+        return ""
+    binding = _predicted_campaign_binding(project, root, body)
+    if not binding:
+        return ""
+    try:
+        from .execution_approvals import issue_execution_approval
+
+        expires_at_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+        approval = issue_execution_approval(
+            project,
+            root=root,
+            campaign_id=binding["campaign_id"],
+            scope_id=binding["scope_id"],
+            environment_ref=binding["environment_ref"],
+            source_hash=binding["source_hash"],
+            target_base_url=str(body.get("base_url") or "").strip(),
+            execution_mode=execution_mode,
+            expires_at_utc=expires_at_utc,
+            actor=actor,
+        )
+    except Exception:
+        return ""
+    return str(approval.get("approval_id") or "").strip()
+
+
+def _prepare_v12_scan_body(project: str, root: Path, actor: dict[str, str], body: dict[str, Any], *, local_dev_mode: bool) -> dict[str, Any]:
+    from .private_pilot_scan_context_contract import (
+        default_scan_execution_mode,
+        default_scan_test_data_contract,
+        prepare_scan_body_for_campaign,
+    )
+
+    prepared = prepare_scan_body_for_campaign(project, root, body)
+    if not str(prepared.get("prd") or "").strip():
+        prd_text = _read_project_prd_text(project, root)
+        if prd_text:
+            prepared["prd"] = prd_text
+    defaults = _resolve_scan_runtime_defaults(project, root, prepared)
+    if defaults["scope_id"] and not str(prepared.get("scope_id") or "").strip():
+        prepared["scope_id"] = defaults["scope_id"]
+    if defaults["environment_ref"] and not str(prepared.get("environment_ref") or "").strip():
+        prepared["environment_ref"] = defaults["environment_ref"]
+    if str(prepared.get("base_url") or "").strip():
+        if not str(prepared.get("execution_mode") or "").strip():
+            prepared["execution_mode"] = default_scan_execution_mode(prepared)
+        if not isinstance(prepared.get("test_data_contract"), dict):
+            test_data_contract = default_scan_test_data_contract(prepared)
+            if test_data_contract:
+                prepared["test_data_contract"] = test_data_contract
+    approval_id = _maybe_issue_local_runtime_approval(project, root, actor, prepared, local_dev_mode=local_dev_mode)
+    if approval_id:
+        prepared["execution_approval_id"] = approval_id
+    return prepared
+
+
+def _has_campaign_id_mismatch(result: dict[str, Any]) -> bool:
+    runtime_contract = result.get("runtime_contract") if isinstance(result, dict) else {}
+    if not isinstance(runtime_contract, dict):
+        return False
+    requirements = runtime_contract.get("missing_requirements")
+    if isinstance(requirements, list) and "EXECUTION_APPROVAL_CAMPAIGN_ID_MISMATCH" in {str(item) for item in requirements}:
+        return True
+    approval = runtime_contract.get("execution_approval")
+    return isinstance(approval, dict) and str(approval.get("code") or "") == "EXECUTION_APPROVAL_CAMPAIGN_ID_MISMATCH"
+
+
+def _issue_runtime_approval_for_result(
+    project: str,
+    root: Path,
+    actor: dict[str, str],
+    prepared_body: dict[str, Any],
+    scan_result: dict[str, Any],
+    *,
+    local_dev_mode: bool,
+) -> str:
+    if not local_dev_mode:
+        return ""
+    campaign = scan_result.get("campaign") if isinstance(scan_result, dict) else {}
+    if not isinstance(campaign, dict):
+        return ""
+    campaign_id = str(campaign.get("campaign_id") or "").strip()
+    scope_id = str(campaign.get("scope_id") or "").strip()
+    environment_ref = str(campaign.get("environment_ref") or "").strip()
+    source_hash = str(campaign.get("source_hash") or "").strip().lower()
+    base_url = str(prepared_body.get("base_url") or "").strip()
+    execution_mode = str(prepared_body.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
+    if (
+        not campaign_id
+        or not scope_id
+        or not environment_ref
+        or len(source_hash) != 64
+        or not base_url
+        or execution_mode not in {"safe_read_only", "approved_sandbox_write"}
+    ):
+        return ""
+    try:
+        from .execution_approvals import issue_execution_approval
+
+        expires_at_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+        approval = issue_execution_approval(
+            project,
+            root=root,
+            campaign_id=campaign_id,
+            scope_id=scope_id,
+            environment_ref=environment_ref,
+            source_hash=source_hash,
+            target_base_url=base_url,
+            execution_mode=execution_mode,
+            expires_at_utc=expires_at_utc,
+            actor=actor,
+        )
+    except Exception:
+        return ""
+    return str(approval.get("approval_id") or "").strip()
 
 def _tenant_from_headers(headers: dict) -> str:
     """Resolve tenant from request headers (Bearer JWT, Cookie, or API key)."""
@@ -1231,6 +1575,14 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 if dash_html.exists(): dash_html.unlink()
                 return self._json(result)
             elif parsed.path == "/api/v1/scan":
+                # #region debug-point A0:scan-route-enter
+                _dbg_report(
+                    hypothesis_id="A0",
+                    msg="[DEBUG] do_POST matched /api/v1/scan",
+                    data={"project": project, "path": parsed.path, "body_keys": sorted(body.keys()) if isinstance(body, dict) else []},
+                    trace_id=str(uuid.uuid4()),
+                )
+                # #endregion
                 return self._handle_v12_scan(project, root, actor, body)
             elif parsed.path == "/api/v1/continuous/status":
                 return self._json(_get_continuous_state(root, project))
@@ -1297,6 +1649,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         doc_info = _ingest(str(out_path))
 
         # Ingest into knowledge center 鈥?must pass document envelope dicts
+        source_manifest: dict[str, Any] = {}
         try:
             ingest_result = ingest_enterprise_knowledge_documents(project, [{"file_path": str(out_path), "filename": filename, "source_type": doc_type}], root=root, actor=actor)
             if isinstance(ingest_result, dict) and ingest_result.get("ok") is False:
@@ -1318,6 +1671,30 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             elif duplicates and isinstance(duplicates[0], dict):
                 source_id = str(duplicates[0].get("source_id") or "")
                 ingest_status = "duplicate"
+            try:
+                from .enterprise_source_registry import register_source_asset, resolve_source_manifest
+
+                source_asset_id = source_id or f"{doc_type}:{filename}"
+                text_content = raw.decode("utf-8", errors="replace")
+                source_manifest = resolve_source_manifest(project, text_content, root=root)
+                if not source_manifest:
+                    source_manifest = register_source_asset(
+                        project,
+                        source_asset_id,
+                        text_content,
+                        source_type=doc_type,
+                        root=root,
+                        actor=actor,
+                        origin="knowledge_ingest",
+                        filename=filename,
+                        metadata={
+                            "knowledge_source_id": source_id,
+                            "storage_mode": "verbatim_bytes",
+                            "input_path": str(out_path.relative_to(root)) if str(out_path).startswith(str(root)) else str(out_path),
+                        },
+                    )
+            except Exception as exc:
+                source_manifest = {"status": "unavailable", "reason": type(exc).__name__}
             # Clear caches so dashboard picks up new data
             try:
                 knowledge_cache = root / "platform_workspace" / project / "defect_discovery" / "enterprise_business_knowledge_asset.json"
@@ -1365,7 +1742,22 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                         import time as _time
                         _time.sleep(2)  # brief delay for file system sync
                         from .__main__ import scan as _scan_fn
-                        _scan_result = _scan_fn(_scan_project, _scan_root, save_report=True)
+                        scan_context: dict[str, Any] = {}
+                        if isinstance(source_manifest, dict) and source_manifest.get("source_id") and source_manifest.get("source_hash"):
+                            scan_context["source_manifest"] = source_manifest
+                        defaults = _resolve_scan_runtime_defaults(_scan_project, _scan_root, body)
+                        if defaults.get("scope_id"):
+                            scan_context["scope_id"] = defaults["scope_id"]
+                        if defaults.get("environment_ref"):
+                            scan_context["environment_ref"] = defaults["environment_ref"]
+                        api_text = raw.decode("utf-8", errors="replace") if doc_type in {"openapi", "markdown_api"} else ""
+                        _scan_result = _scan_fn(
+                            _scan_project,
+                            _scan_root,
+                            api_doc_text=api_text,
+                            campaign_context=scan_context,
+                            save_report=True,
+                        )
                         _update_continuous_state(_scan_root, _scan_project, _scan_result)
                     except Exception:
                         pass
@@ -1389,6 +1781,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "size_bytes": len(raw),
             "path": str(out_path),
             "storage_mode": "verbatim_bytes",
+            "source_manifest": source_manifest,
             "supported_source_types": list(KNOWLEDGE_INGEST_SOURCE_TYPES),
             "supported_extensions": list(KNOWLEDGE_INGEST_EXTENSIONS),
             "doc_info": doc_info,
@@ -1494,13 +1887,23 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
     def _handle_v12_scan(self, project: str, root: Path, actor: dict[str, str], body: dict[str, Any]) -> None:
         try:
             from .__main__ import scan
-            api_doc = str(body.get("api_doc") or body.get("api_doc_text") or "")
-            base_url = str(body.get("base_url") or "").strip()
+            from .private_pilot_scan_context_contract import build_campaign_context_from_scan_body
+            trace_id = str(uuid.uuid4())
+
+            prepared_body = _prepare_v12_scan_body(
+                project,
+                root,
+                actor,
+                body,
+                local_dev_mode=_is_local_private_service(self.server),
+            )
+            api_doc = str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or "")
+            base_url = str(prepared_body.get("base_url") or "").strip()
             # SSRF guard: validate user-supplied base_url before it reaches scan().
             if base_url:
-                from .ssrf_guard import validate_url, SsrfBlockedError
+                from .ssrf_guard import SsrfBlockedError
                 try:
-                    validate_url(base_url)
+                    _validate_scan_base_url(base_url, local_dev_mode=_is_local_private_service(self.server))
                 except SsrfBlockedError as exc:
                     return self._json({"ok": False, "error": "SSRF_BLOCKED", "message": str(exc)}, 400)
             if not api_doc:
@@ -1536,9 +1939,100 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 # Fallback
                 if not api_doc and base_url:
                     api_doc = f"| POST | {base_url}/api/orders | 鍒涘缓 |\n| GET | {base_url}/api/products | 鍟嗗搧鍒楄〃 |\n| GET | {base_url}/api/admin/stats | 绠＄悊缁熻 |"
+            if api_doc and not prepared_body.get("api_doc"):
+                prepared_body["api_doc"] = api_doc
+            if base_url and not prepared_body.get("base_url"):
+                prepared_body["base_url"] = base_url
+            if not str(body.get("execution_mode") or "").strip():
+                prepared_body.pop("execution_mode", None)
+            if not isinstance(body.get("test_data_contract"), dict) and not str(body.get("test_data_strategy") or "").strip():
+                prepared_body.pop("test_data_contract", None)
+            prepared_body = _prepare_v12_scan_body(
+                project,
+                root,
+                actor,
+                prepared_body,
+                local_dev_mode=_is_local_private_service(self.server),
+            )
+            campaign_context = build_campaign_context_from_scan_body(prepared_body)
+            # #region debug-point A:prepared-http-scan-body
+            _dbg_report(
+                hypothesis_id="A",
+                msg="[DEBUG] prepared http scan payload",
+                data={
+                    "actor": {"name": str(actor.get("name") or ""), "role": str(actor.get("role") or "")},
+                    "local_dev_mode": _is_local_private_service(self.server),
+                    "prepared_body": _dbg_fingerprint_payload(prepared_body),
+                    "campaign_context": _dbg_fingerprint_payload(campaign_context),
+                },
+                trace_id=trace_id,
+            )
+            # #endregion
 
-            result = scan(project=project, root=root, prd_text=str(body.get("prd","")),
-                          api_doc_text=api_doc, base_url=base_url, multi_layer=bool(base_url))
+            result = scan(
+                project=project,
+                root=root,
+                prd_text=str(prepared_body.get("prd", "")),
+                api_doc_text=str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or api_doc),
+                base_url=str(prepared_body.get("base_url") or base_url).strip(),
+                multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
+                campaign_context=campaign_context,
+            )
+            # #region debug-point C:http-scan-result
+            _dbg_report(
+                hypothesis_id="C",
+                msg="[DEBUG] http scan result campaign",
+                data={
+                    "campaign": result.get("campaign") if isinstance(result.get("campaign"), dict) else {},
+                    "runtime_contract": result.get("runtime_contract") if isinstance(result.get("runtime_contract"), dict) else {},
+                    "incremental_discovery": result.get("phases", {}).get("incremental_discovery") if isinstance(result.get("phases"), dict) else {},
+                },
+                trace_id=trace_id,
+            )
+            # #endregion
+            retry_approval_id = _issue_runtime_approval_for_result(
+                project,
+                root,
+                actor,
+                prepared_body,
+                result,
+                local_dev_mode=_is_local_private_service(self.server),
+            )
+            if retry_approval_id and _has_campaign_id_mismatch(result):
+                prepared_body["execution_approval_id"] = retry_approval_id
+                campaign_context = build_campaign_context_from_scan_body(prepared_body)
+                # #region debug-point D:retry-http-scan-body
+                _dbg_report(
+                    hypothesis_id="D",
+                    msg="[DEBUG] retry http scan payload",
+                    data={
+                        "prepared_body": _dbg_fingerprint_payload(prepared_body),
+                        "campaign_context": _dbg_fingerprint_payload(campaign_context),
+                        "retry_approval_id": retry_approval_id,
+                    },
+                    trace_id=trace_id,
+                )
+                # #endregion
+                result = scan(
+                    project=project,
+                    root=root,
+                    prd_text=str(prepared_body.get("prd", "")),
+                    api_doc_text=str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or api_doc),
+                    base_url=str(prepared_body.get("base_url") or base_url).strip(),
+                    multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
+                    campaign_context=campaign_context,
+                )
+                # #region debug-point E:retry-http-scan-result
+                _dbg_report(
+                    hypothesis_id="E",
+                    msg="[DEBUG] retry http scan result campaign",
+                    data={
+                        "campaign": result.get("campaign") if isinstance(result.get("campaign"), dict) else {},
+                        "runtime_contract": result.get("runtime_contract") if isinstance(result.get("runtime_contract"), dict) else {},
+                    },
+                    trace_id=trace_id,
+                )
+                # #endregion
             # Persist to DB — use cumulative merge so bugs accumulate across scans
             try:
                 db_persist.init_db(root)

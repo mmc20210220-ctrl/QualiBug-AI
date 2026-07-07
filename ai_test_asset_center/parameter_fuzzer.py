@@ -7,11 +7,20 @@ Every HTTP mutation requires a source-bound disposable-sandbox contract.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+from .real_id_resolver import (
+    QUALIBUG_UNRESOLVED_ID,
+    extract_first_entity_id,
+    infer_path_params,
+    path_has_placeholders,
+    resolve_real_id_from_documented_list,
+)
 
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -31,6 +40,7 @@ class ParameterFuzzer:
         self.allow_write = bool(allow_write)
         self._token = ""
         self._tokens: dict[str, str] = {}
+        self._real_ids: dict[tuple[str, str], str] = {}
 
     def login(self, email: str = "", password: str = "", login_path: str = "", body_template: dict[str, Any] | None = None) -> bool:
         """Authenticate only with caller-supplied, source-authorized credentials.
@@ -66,11 +76,16 @@ class ParameterFuzzer:
         return findings
 
     def _fuzz_read_route(self, route: dict[str, Any], max_variants: int) -> list[dict[str, Any]]:
-        path = str(route.get("path") or "")
-        params = self._declared_params(route, query_only=True)
-        if not params:
+        path = self._resolve_read_path(route)
+        if not path:
             return []
+        params = self._declared_params(route, query_only=True)
         findings: list[dict[str, Any]] = []
+        if not params:
+            status, body, elapsed = self._call("GET", path, token=self._token)
+            if status >= 500:
+                findings.append(self._finding("GET", path, status, body, elapsed, "server_error_under_source_declared_read_route", route))
+            return findings
         for name in params[:3]:
             for value in self.VARIANT_VALUES["any"][:max(1, max_variants)]:
                 url_path = path + ("&" if "?" in path else "?") + urllib.parse.urlencode({name: value})
@@ -78,6 +93,51 @@ class ParameterFuzzer:
                 if status >= 500:
                     findings.append(self._finding("GET", url_path, status, body, elapsed, "server_error_under_source_declared_parameter", route))
         return findings
+
+    def _resolve_read_path(self, route: dict[str, Any]) -> str:
+        path = str(route.get("path") or "")
+        path_params = infer_path_params(path, route.get("path_params") or [])
+        if not path_params and not path_has_placeholders(path):
+            return path
+        replacements = self._resolve_path_params(route, path_params)
+        resolved = path
+        for name, value in replacements.items():
+            token = str(value or "").strip()
+            if not token:
+                continue
+            resolved = resolved.replace(f"{{{name}}}", token)
+            resolved = re.sub(rf":{re.escape(name)}\b", token, resolved)
+        return "" if path_has_placeholders(resolved) else resolved
+
+    def _resolve_path_params(self, route: dict[str, Any], path_params: list[str]) -> dict[str, str]:
+        path = str(route.get("path") or "")
+        path_params = infer_path_params(path, path_params)
+        if not path_params:
+            return {}
+        resolved: dict[str, str] = {}
+        for name in path_params:
+            candidate = self._get_real_id(path, name)
+            if candidate and candidate != QUALIBUG_UNRESOLVED_ID:
+                resolved[name] = candidate
+        return resolved
+
+    def _get_real_id(self, path_pattern: str, param_name: str) -> str:
+        cache_key = (str(path_pattern or ""), str(param_name or ""))
+        if cache_key in self._real_ids:
+            return self._real_ids[cache_key]
+        resolved = resolve_real_id_from_documented_list(
+            str(path_pattern or ""),
+            str(param_name or ""),
+            self._try_extract_id_from_list,
+        )
+        self._real_ids[cache_key] = resolved
+        return resolved
+
+    def _try_extract_id_from_list(self, list_path: str, param_name: str) -> str | None:
+        status, body, _ = self._call("GET", list_path, token=self._token)
+        if status != 200:
+            return None
+        return extract_first_entity_id(body, param_name)
 
     def _fuzz_write_route(self, route: dict[str, Any], max_variants: int) -> list[dict[str, Any]]:
         template = route.get("request_template")

@@ -38,6 +38,11 @@ from .deployment_config_resolver import (
     persist_deployment_config_snapshot,
 )
 from .llm_reasoning import _get_client, ReasoningClient, ReasoningClientError
+from .real_id_resolver import (
+    QUALIBUG_UNRESOLVED_ID,
+    extract_first_entity_id,
+    resolve_real_id_from_documented_list,
+)
 
 
 @dataclass
@@ -1092,34 +1097,11 @@ class AutonomousDiscoveryEngine:
         4. Return sentinel QUALIBUG_UNRESOLVED_ID so caller knows data is missing
            (instead of silent fallback to "1" which hits non-existent resources)
         """
-        path_pattern = resolved.get("path_pattern", "")
-        list_path = re.sub(r'/\{[^}]+\}.*', '', path_pattern)
-        if not list_path or list_path == path_pattern:
-            return "QUALIBUG_UNRESOLVED_ID"
-        
-        # Strategy 1: Plain list endpoint
-        result = self._try_extract_id_from_list(list_path, param_name)
-        if result is not None:
-            return result
-        
-        # Strategy 2: Paginated variants
-        for page_suffix in ("?page=1&size=1", "?pageNum=1&pageSize=1",
-                            "?offset=0&limit=1", "?current=1&pageSize=1"):
-            result = self._try_extract_id_from_list(list_path + page_suffix, param_name)
-            if result is not None:
-                return result
-        
-        # Strategy 3: Try parent resource (strip last path segment)
-        parent_path = re.sub(r'/[^/]+$', '', list_path)
-        if parent_path and parent_path != list_path:
-            parent_id = self._try_extract_id_from_list(parent_path, "id")
-            if parent_id is not None:
-                # Try the original list path again — sometimes parent context helps
-                result = self._try_extract_id_from_list(list_path, param_name)
-                if result is not None:
-                    return result
-        
-        return "QUALIBUG_UNRESOLVED_ID"
+        return resolve_real_id_from_documented_list(
+            str(resolved.get("path_pattern") or ""),
+            param_name,
+            self._try_extract_id_from_list,
+        )
 
     def _try_extract_id_from_list(self, list_path: str, param_name: str) -> str | None:
         """GET a list endpoint and extract the first entity's ID.
@@ -1132,28 +1114,7 @@ class AutonomousDiscoveryEngine:
                 return None
             
             body = {k: v for k, v in r.items() if not k.startswith("_")}
-            entities = []
-            for list_field in ("records", "data", "items", "results", "list"):
-                items = body.get(list_field, [])
-                if isinstance(items, list) and items:
-                    entities = items
-                    break
-            if not entities and isinstance(body, dict):
-                vals = [v for v in body.values() if isinstance(v, dict)]
-                if vals:
-                    entities = vals
-            
-            if entities:
-                first = entities[0]
-                if isinstance(first, dict):
-                    for idf in ("id", "business_no", "order_id", param_name, "ID", "uuid"):
-                        if idf in first and first[idf] is not None:
-                            return str(first[idf])
-            
-            # Last resort: first positive integer field in body root
-            for k, v in body.items():
-                if isinstance(v, (int, float)) and v > 0:
-                    return str(int(v))
+            return extract_first_entity_id(body, param_name)
         except Exception:
             pass
         return None
@@ -1166,7 +1127,7 @@ class AutonomousDiscoveryEngine:
         """
         values = []
         real_id = self._fetch_real_id(param_name, resolved, route_map)
-        if real_id and real_id != "1" and not real_id.startswith("QUALIBUG_"):
+        if real_id and real_id != "1" and real_id != QUALIBUG_UNRESOLVED_ID:
             values.append(real_id)
         
         # Detect if parameter is uuid-type (from OpenAPI schema format, param name, or real_id format)

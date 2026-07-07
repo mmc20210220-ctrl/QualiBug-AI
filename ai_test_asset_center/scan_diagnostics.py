@@ -3,7 +3,7 @@ QualiBug Production Diagnostics — pre-scan health check + result summary.
 Client-facing: clear Chinese diagnostics for every layer.
 """
 from __future__ import annotations
-import json, urllib.request, time, socket
+import json, os, urllib.request, time, socket
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +23,10 @@ class DiagCheck:
                 "suggestion": self.suggestion, "severity": self.severity}
 
 
+def _allow_internal_preflight() -> bool:
+    return os.environ.get("QUALIBUG_LOCAL_DEV_ACTOR", "0") == "1" or os.environ.get("QUALIBUG_SSRF_ALLOW_INTERNAL", "0") == "1"
+
+
 def run_preflight(config: dict, api_doc: str | None = None) -> dict:
     """Run pre-scan health checks. Returns diagnostics dict."""
     checks: list[DiagCheck] = []
@@ -33,9 +37,12 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
     # ── 1. API reachability ──
     if base_url:
         try:
-            resp = safe_urlopen(base_url, timeout=5)
+            resp = safe_urlopen(base_url, timeout=5, allow_internal=_allow_internal_preflight())
             checks.append(DiagCheck("API可达性", True,
                 f"{base_url} 响应 HTTP {resp.status}"))
+        except urllib.error.HTTPError as e:
+            checks.append(DiagCheck("API可达性", True,
+                f"{base_url} 可达，根路径返回 HTTP {e.code}"))
         except Exception as e:
             checks.append(DiagCheck("API可达性", False,
                 f"无法连接 {base_url}: {_short_err(e)}",
@@ -55,7 +62,7 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
             data = json.dumps({"email": buyer["email"], "password": buyer["password"]}).encode()
             req = urllib.request.Request(f"{base_url}/api/auth/login", data=data,
                 headers={"Content-Type": "application/json"}, method="POST")
-            resp = safe_urlopen(req, timeout=5)
+            resp = safe_urlopen(req, timeout=5, allow_internal=_allow_internal_preflight())
             token = json.loads(resp.read()).get("token", "")
             if token:
                 checks.append(DiagCheck("买家凭证", True,
@@ -149,7 +156,7 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
         test_method = routes[0].split(" ", 1)[0] if routes else "GET"
         try:
             req = urllib.request.Request(f"{base_url}{test_route}", method=test_method, headers={"User-Agent": "QualiBug-Diag"})
-            resp = safe_urlopen(req, timeout=5)
+            resp = safe_urlopen(req, timeout=5, allow_internal=_allow_internal_preflight())
             checks.append(DiagCheck("接口冒烟测试", True,
                 f"{test_method} {test_route} → HTTP {resp.status}"))
         except urllib.error.HTTPError as e:

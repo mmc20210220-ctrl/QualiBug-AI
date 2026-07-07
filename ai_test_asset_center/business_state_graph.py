@@ -248,7 +248,7 @@ class BusinessStateGraph:
 
 class BusinessStateGraphBuilder:
     _transition = re.compile(r"(?P<before>[A-Z][A-Z0-9_]{1,64}|[\u4e00-\u9fff]{2,24})\s*(?:->|→|=>)\s*(?P<after>[A-Z][A-Z0-9_]{1,64}|[\u4e00-\u9fff]{2,24})")
-    _modal = re.compile(r"\b(?:must|shall|cannot|must\s+not|only)\b|必须|不得|不允许|不可|只能|禁止", re.I)
+    _modal = re.compile(r"\b(?:must|shall|cannot|must\s+not|only|become|becomes)\b|必须|不得|不允许|不可|只能|禁止|变为|变成", re.I)
     _forbidden = re.compile(r"forbidden|invalid|禁止|不得|不允许|不可", re.I)
     _state_field = re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I)
 
@@ -257,9 +257,11 @@ class BusinessStateGraphBuilder:
         self.behavior_slices: list[BehaviorSlice] = []
         self.coverage_gaps: list[dict[str, Any]] = []
         self.bound_invariants: list[dict[str, Any]] = []
+        self.endpoint_catalog: list[dict[str, str]] = []
 
     def build(self, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "") -> dict[str, BusinessStateGraph]:
         api_entities, api_states, endpoints = _api_facts(api_spec_text, self._state_field)
+        self.endpoint_catalog = list(endpoints)
         db_entities, db_states, dependencies = _schema_facts(db_schema_text, self._state_field)
         source_map: dict[str, list[dict[str, str]]] = defaultdict(list)
         for source in (api_entities, db_entities):
@@ -369,15 +371,17 @@ class BusinessStateGraphBuilder:
                 ))
             for state_name, node in graph.states.items():
                 for invariant in node.invariants:
+                    observation_endpoints = _observation_endpoints(entity, self.endpoint_catalog)
+                    gaps = [] if observation_endpoints else ["OBSERVATION_ROUTE_NOT_SOURCE_BOUND"]
                     slices.append(BehaviorSlice(
                         slice_id=behavior_slice_id("invariant", entity, state_name, invariant),
                         entity=entity,
                         kind="invariant",
                         states=[state_name],
-                        endpoints=[],
+                        endpoints=observation_endpoints,
                         priority=max(float(node.risk_score or 0.0), 0.55),
                         source_refs=_refs(node.source_refs or graph.source_refs),
-                        evidence_gaps=["OBSERVATION_ROUTE_NOT_SOURCE_BOUND"],
+                        evidence_gaps=gaps,
                     ))
             for edge in graph.edges:
                 slices.append(BehaviorSlice(
@@ -390,16 +394,33 @@ class BusinessStateGraphBuilder:
                     source_refs=_refs(edge.source_refs or graph.source_refs),
                     evidence_gaps=["CROSS_ENTITY_OBSERVATION_CONTRACT_MISSING"],
                 ))
+            observation_endpoints = _observation_endpoints(entity, self.endpoint_catalog)
+            has_entity_slice = any(item.entity == entity and item.endpoints for item in slices)
+            if observation_endpoints and not has_entity_slice:
+                slices.append(BehaviorSlice(
+                    slice_id=behavior_slice_id("source_observation", entity, ",".join(observation_endpoints)),
+                    entity=entity,
+                    kind="source_observation",
+                    states=sorted(graph.states),
+                    endpoints=observation_endpoints,
+                    priority=0.45 if graph.states else 0.3,
+                    source_refs=_refs(graph.source_refs),
+                    evidence_gaps=[],
+                ))
         for item in self.bound_invariants:
+            observation_endpoints = _observation_endpoints(str(item["entity"]), self.endpoint_catalog)
+            gaps = ["STATE_ANCHOR_NOT_SOURCE_BOUND"]
+            if not observation_endpoints:
+                gaps.insert(0, "OBSERVATION_ROUTE_NOT_SOURCE_BOUND")
             slices.append(BehaviorSlice(
                 slice_id=behavior_slice_id("invariant", item["entity"], item["invariant"]),
                 entity=item["entity"],
                 kind="invariant",
                 states=[],
-                endpoints=[],
+                endpoints=observation_endpoints,
                 priority=0.55,
                 source_refs=_refs(item["source_refs"]),
-                evidence_gaps=["OBSERVATION_ROUTE_NOT_SOURCE_BOUND", "STATE_ANCHOR_NOT_SOURCE_BOUND"],
+                evidence_gaps=gaps,
             ))
         deduped: dict[str, BehaviorSlice] = {}
         for item in slices:
@@ -447,6 +468,7 @@ class BusinessStateGraphBuilder:
             if current is None:
                 continue
             ref = _ref("requirement", f"line:{number}", line)
+            current["states"].update(_line_states(line))
             for match in self._transition.finditer(line):
                 before, after = _state(match.group("before")), _state(match.group("after"))
                 if before and after:
@@ -486,6 +508,20 @@ def _state(value: Any) -> str:
     text = str(value or "").strip().strip("`'\"[](){}<>.,;:：；。")
     valid = re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}|[\u4e00-\u9fff]{2,24}", text)
     return text if text and len(text) <= 64 and not any(char.isspace() for char in text) and valid else ""
+
+
+def _line_states(line: str) -> set[str]:
+    states: set[str] = set()
+    for value in re.findall(r"`([^`]+)`|'([^']+)'|\"([^\"]+)\"", str(line or "")):
+        for candidate in value:
+            token = _state(candidate)
+            if token:
+                states.add(token)
+    for candidate in re.findall(r"\b[A-Z][A-Z0-9_]{1,64}\b", str(line or "")):
+        token = _state(candidate)
+        if token:
+            states.add(token)
+    return states
 
 
 def _entity(value: Any) -> str:
@@ -531,14 +567,19 @@ def _path(path: str, operation: str) -> tuple[str, str]:
     return entity, "" if action == entity else action
 
 
+def _observation_endpoints(entity: str, endpoints: list[dict[str, str]]) -> list[str]:
+    return list(dict.fromkeys(
+        str(item.get("path") or "")
+        for item in endpoints
+        if str(item.get("entity") or "") == entity and str(item.get("method") or "").upper() in {"GET", "HEAD", "OPTIONS"} and str(item.get("path") or "").startswith("/")
+    ))
+
+
 def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dict[str, str]]], dict[str, dict[str, list[dict[str, str]]]], list[dict[str, str]]]:
     entities: dict[str, list[dict[str, str]]] = defaultdict(list)
     states: dict[str, dict[str, list[dict[str, str]]]] = defaultdict(lambda: defaultdict(list))
     endpoints: list[dict[str, str]] = []
-    try:
-        spec = json.loads(text) if str(text or "").lstrip().startswith("{") else {}
-    except Exception:
-        spec = {}
+    spec = _parse_structured_api_spec(text)
     if isinstance(spec.get("paths"), dict):
         for path, operations in spec["paths"].items():
             if isinstance(operations, dict):
@@ -549,7 +590,7 @@ def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dic
                         if entity:
                             ref = _ref("openapi", f"paths.{path}.{method}", str(operation.get("summary") or operation.get("operationId") or path))
                             entities[entity].append(ref)
-                            endpoints.append({"entity": entity, "action": action, "path": str(path)})
+                            endpoints.append({"entity": entity, "action": action, "path": str(path), "method": str(method).upper()})
         for name, schema in _dict(_dict(spec.get("components")).get("schemas")).items():
             if isinstance(schema, dict):
                 for field, definition in _dict(schema.get("properties")).items():
@@ -564,8 +605,27 @@ def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dic
         if entity:
             ref = _ref("api_document", f"line:{str(text).count(chr(10), 0, match.start()) + 1}", match.group(0))
             entities[entity].append(ref)
-            endpoints.append({"entity": entity, "action": action, "path": match.group(2)})
+            endpoints.append({"entity": entity, "action": action, "path": match.group(2), "method": match.group(1).upper()})
     return entities, states, endpoints
+
+
+def _parse_structured_api_spec(text: str) -> dict[str, Any]:
+    raw = str(text or "")
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw) if raw.lstrip().startswith("{") else {}
+    except Exception:
+        parsed = {}
+    if isinstance(parsed, dict) and isinstance(parsed.get("paths"), dict):
+        return parsed
+    try:
+        import yaml
+
+        parsed = yaml.safe_load(raw)
+    except Exception:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _schema_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dict[str, str]]], dict[str, dict[str, list[dict[str, str]]]], list[tuple[str, str, dict[str, str]]]]:
@@ -589,10 +649,7 @@ def _schema_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[
 def _source_field_index(api_spec_text: str, db_schema_text: str) -> dict[str, set[str]]:
     """Index source-declared field identifiers without attaching business semantics."""
     result: dict[str, set[str]] = defaultdict(set)
-    try:
-        spec = json.loads(api_spec_text) if str(api_spec_text or "").lstrip().startswith("{") else {}
-    except Exception:
-        spec = {}
+    spec = _parse_structured_api_spec(api_spec_text)
     for name, schema in _dict(_dict(spec.get("components")).get("schemas")).items():
         if not isinstance(schema, dict):
             continue
@@ -628,6 +685,10 @@ def _best_entity_for_section(section: dict[str, Any], known: dict[str, set[str]]
     state_entity = _best_entity(section.get("states", set()), known)
     if state_entity:
         return state_entity, "state_overlap"
+    title_entity = _entity(section.get("title") or "")
+    for entity in sorted(known):
+        if entity and (title_entity == entity or title_entity.startswith(f"{entity}_") or title_entity.endswith(f"_{entity}")):
+            return entity, "section_title"
     tokens = _invariant_tokens(section)
     if not tokens:
         return "", ""

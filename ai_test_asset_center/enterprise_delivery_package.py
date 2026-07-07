@@ -56,6 +56,9 @@ def create_delivery_package(
     bundle_id = str(evidence.get("bundle_id") or "")
     if str(evidence.get("status") or "") != "persisted" or not bundle_id:
         raise DeliveryPackageError("delivery_evidence_bundle_missing")
+    release_gate = result.get("release_gate") if isinstance(result.get("release_gate"), dict) else {}
+    if not release_gate:
+        raise DeliveryPackageError("delivery_release_gate_missing")
     try:
         from .evidence_artifact_store import load_evidence_bundle, verify_evidence_bundle
         verification = verify_evidence_bundle(project_id, bundle_id, root=workspace)
@@ -67,9 +70,6 @@ def create_delivery_package(
     except Exception as exc:
         raise DeliveryPackageError("delivery_evidence_bundle_unreadable") from exc
 
-    release_gate = result.get("release_gate") if isinstance(result.get("release_gate"), dict) else {}
-    if not release_gate:
-        raise DeliveryPackageError("delivery_release_gate_missing")
     bundle_dir = workspace / "platform_workspace" / project / "evidence_bundles" / bundle_id
     if not bundle_dir.exists():
         raise DeliveryPackageError("delivery_evidence_bundle_directory_missing")

@@ -95,6 +95,34 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)(password\s*[:=]\s*)([^\s,;]+)"),
     re.compile(r"(?i)(token\s*[:=]\s*)([^\s,;]+)"),
 ]
+SEMANTIC_LEXICON_PATH = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+_SEMANTIC_LEXICON_CACHE: dict[str, Any] | None = None
+
+
+def _semantic_lexicon() -> dict[str, Any]:
+    global _SEMANTIC_LEXICON_CACHE
+    if _SEMANTIC_LEXICON_CACHE is None:
+        data = _load_json(SEMANTIC_LEXICON_PATH, {})
+        _SEMANTIC_LEXICON_CACHE = data if isinstance(data, dict) else {}
+    return _SEMANTIC_LEXICON_CACHE
+
+
+def _lexicon_dict(name: str) -> dict[str, list[str]]:
+    raw = _semantic_lexicon().get(name)
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for key, values in raw.items():
+        if isinstance(values, list):
+            out[str(key)] = [str(item) for item in values if str(item)]
+    return out
+
+
+def _lexicon_list(name: str) -> list[str]:
+    raw = _semantic_lexicon().get(name)
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if str(item)]
 
 
 def _now() -> str:
@@ -209,10 +237,12 @@ def _normalize_state_token(value: Any) -> str:
         return ""
     if re.fullmatch(r"[A-Z][A-Z0-9_]{1,23}", token):
         return token
+    state_tokens = {item.lower() for item in _lexicon_list("state_tokens")} or ENGLISH_STATE_TOKENS
     if re.fullmatch(r"[a-z][a-z0-9_]{1,23}", low):
-        return token if low in ENGLISH_STATE_TOKENS else ""
+        return token if low in state_tokens else ""
     if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", token):
-        return token if any(marker in token for marker in CHINESE_STATE_HINTS) else ""
+        state_hints = _lexicon_list("state_hints") or list(CHINESE_STATE_HINTS)
+        return token if any(marker in token for marker in state_hints) else ""
     return ""
 
 
@@ -964,28 +994,30 @@ def _ticket_rows(text: str, payload: Any, source_id: str, source_type: str) -> l
 
 def _rule_type_from_text(text: str) -> str:
     norm = _norm(text)
-    if any(term in norm for term in RISK_TERMS["permission_boundary"]):
+    risk_terms = _lexicon_dict("risk_terms") or RISK_TERMS
+    if any(_norm(term) in norm for term in risk_terms.get("permission_boundary", [])):
         return "permission"
-    if any(term in norm for term in RISK_TERMS["async_event"]):
+    if any(_norm(term) in norm for term in risk_terms.get("async_event", [])):
         return "async_event"
-    if any(term in norm for term in RISK_TERMS["data_conservation"]):
+    if any(_norm(term) in norm for term in risk_terms.get("data_conservation", [])):
         return "conservation"
-    if any(term in norm for term in RISK_TERMS["data_reconciliation"]):
+    if any(_norm(term) in norm for term in risk_terms.get("data_reconciliation", [])):
         return "reconciliation"
-    if any(term in norm for term in RISK_TERMS["state_machine"]):
+    if any(_norm(term) in norm for term in risk_terms.get("state_machine", [])):
         return "state_transition"
-    if any(term in norm for term in RISK_TERMS["idempotency"]):
+    if any(_norm(term) in norm for term in risk_terms.get("idempotency", [])):
         return "idempotency"
     return "business_rule"
 
 
 def _risk_type_from_text(text: str) -> str:
     norm = _norm(text)
-    if any(term in norm for term in RISK_TERMS["async_event"]):
+    risk_terms = _lexicon_dict("risk_terms") or RISK_TERMS
+    if any(_norm(term) in norm for term in risk_terms.get("async_event", [])):
         return "async_event"
-    if any(term in norm for term in RISK_TERMS["idempotency"]):
+    if any(_norm(term) in norm for term in risk_terms.get("idempotency", [])):
         return "idempotency"
-    for name, terms in RISK_TERMS.items():
+    for name, terms in risk_terms.items():
         if name in {"async_event", "idempotency"}:
             continue
         if any(_norm(term) in norm for term in terms):
@@ -1028,7 +1060,8 @@ def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[s
 def _roles_from_text(text: str, source_id: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     lower = _norm(text)
-    for role, words in ROLE_WORDS.items():
+    role_words = _lexicon_dict("role_words") or ROLE_WORDS
+    for role, words in role_words.items():
         evidence = next((word for word in words if _norm(word) in lower), "")
         if evidence:
             out.append({"role_id": f"role:{source_id}:{role}", "source_id": source_id, "role": role, "evidence": evidence})

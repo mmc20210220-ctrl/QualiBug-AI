@@ -94,6 +94,8 @@ def test_campaign_store_projects_safe_governance_to_command_center_snapshot(tmp_
     assert projected["current_run"]["remaining_slice_count"] == 4
     assert "attempted_slice_ids" not in projected["campaign"]
     assert "confirmation_receipts" not in projected["campaign"]
+    assert campaign.public_contract()["attempted_slice_count"] == 0
+    assert campaign.public_contract()["round_count"] == 0
 
 
 def test_confirmed_slice_requires_complete_real_receipt():

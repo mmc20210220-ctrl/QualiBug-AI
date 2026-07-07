@@ -9,7 +9,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from .business_state_graph import BusinessStateGraph, StateTransition, behavior_slice_id
+from .business_state_graph import BusinessStateGraph, StateTransition, _api_facts, behavior_slice_id
+from .real_id_resolver import path_has_placeholders
 
 
 @dataclass
@@ -100,9 +101,15 @@ class SemanticScenarioGenerator:
         api_doc: str = "",
         active_slice_ids: set[str] | None = None,
         discovery_round: int = 1,
+        active_slices: list[dict[str, Any]] | None = None,
+        allow_source_runtime: bool = False,
     ) -> list[ExecutableScenario]:
-        del api_doc  # Source bindings already live on the graph; never infer another route here.
         round_number = max(1, int(discovery_round or 1))
+        active_slice_map = {
+            str(item.get("slice_id") or ""): dict(item)
+            for item in active_slices or []
+            if isinstance(item, dict) and str(item.get("slice_id") or "")
+        }
         results: list[ExecutableScenario] = []
         for entity, graph in sorted((graphs or {}).items()):
             if not isinstance(graph, BusinessStateGraph):
@@ -113,9 +120,21 @@ class SemanticScenarioGenerator:
                     results.append(item)
             for state, node in graph.states.items():
                 for invariant in node.invariants:
-                    item = self._invariant(entity, state, invariant, node.source_refs, round_number)
+                    slice_id = behavior_slice_id("invariant", entity, state, invariant)
+                    item = self._invariant(
+                        entity,
+                        state,
+                        invariant,
+                        node.source_refs,
+                        round_number,
+                        slice_meta=active_slice_map.get(slice_id) if allow_source_runtime else None,
+                    )
                     if active_slice_ids is None or item.behavior_slice_id in active_slice_ids:
                         results.append(item)
+        if allow_source_runtime:
+            for item in self._source_observations(api_doc, round_number):
+                if active_slice_ids is None or item.behavior_slice_id in active_slice_ids:
+                    results.append(item)
         deduped: list[ExecutableScenario] = []
         seen: set[str] = set()
         for item in results:
@@ -124,6 +143,41 @@ class SemanticScenarioGenerator:
                 seen.add(fingerprint)
                 deduped.append(item)
         return deduped
+
+    def _source_observations(self, api_doc: str, discovery_round: int) -> list[ExecutableScenario]:
+        _entities, _states, endpoints = _api_facts(api_doc, __import__("re").compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", __import__("re").I))
+        grouped: dict[str, list[dict[str, str]]] = {}
+        for item in endpoints:
+            if str(item.get("method") or "").upper() not in {"GET", "HEAD", "OPTIONS"}:
+                continue
+            entity = str(item.get("entity") or "")
+            path = str(item.get("path") or "")
+            if entity and path.startswith("/"):
+                grouped.setdefault(entity, []).append(item)
+        results: list[ExecutableScenario] = []
+        for entity, items in sorted(grouped.items()):
+            paths = list(dict.fromkeys(str(item.get("path") or "") for item in items if str(item.get("path") or "")))
+            if not paths:
+                continue
+            first = paths[0]
+            results.append(ExecutableScenario(
+                id=self._id(entity, "source_observation", first),
+                title=f"[Source observation] {entity}: {first}",
+                description="Read-only source-bound endpoint observation for runtime evidence capture.",
+                category="source_observation",
+                severity="P2",
+                entity=entity,
+                steps=[ScenarioStep(order=1, action="observe_source_endpoint", api_method="GET", api_path=first, expected_status=200, actor="readonly")],
+                oracle_rules=["RuntimeObservation.source_endpoint_reachable"],
+                confidence=0.5,
+                execution_policy="safe_read_only",
+                evidence_gaps=[],
+                source_refs=[{"source_type": "openapi", "locator": first, "quote": first}],
+                behavior_slice_id=behavior_slice_id("source_observation", entity, ",".join(paths)),
+                behavior_slice_kind="source_observation",
+                discovery_round=discovery_round,
+            ))
+        return results
 
     def _transition(self, entity: str, transition: StateTransition, discovery_round: int) -> ExecutableScenario:
         forbidden = bool(transition.is_forbidden)
@@ -166,7 +220,32 @@ class SemanticScenarioGenerator:
         invariant: str,
         refs: list[dict[str, str]],
         discovery_round: int,
+        *,
+        slice_meta: dict[str, Any] | None = None,
     ) -> ExecutableScenario:
+        slice_id = behavior_slice_id("invariant", entity, state, invariant)
+        observation_path = self._preferred_read_endpoint((slice_meta or {}).get("endpoints") or [])
+        if observation_path:
+            return ExecutableScenario(
+                id=self._id(entity, state, invariant),
+                title=f"[来源约束不变量] {entity}: {state}",
+                description=invariant[:300],
+                category="invariant",
+                severity="P1",
+                entity=entity,
+                preconditions=[f"需要 {entity} 的来源可追溯运行时样本"],
+                actors=["readonly"],
+                steps=[ScenarioStep(order=1, action="observe_bound_entity", api_method="GET", api_path=observation_path, expected_status=200, actor="readonly")],
+                expected_state=state,
+                oracle_rules=["ConsistencyOracle.source_grounded_invariant", invariant[:300]],
+                confidence=0.55 if refs else 0.3,
+                execution_policy="safe_read_only",
+                evidence_gaps=[],
+                source_refs=list(refs),
+                behavior_slice_id=slice_id,
+                behavior_slice_kind="invariant",
+                discovery_round=discovery_round,
+            )
         return ExecutableScenario(
             id=self._id(entity, state, invariant),
             title=f"[来源约束不变量] {entity}: {state}",
@@ -180,10 +259,18 @@ class SemanticScenarioGenerator:
             confidence=0.45 if refs else 0.2,
             evidence_gaps=["OBSERVATION_ROUTE_NOT_SOURCE_BOUND", "ACTOR_BINDING_MISSING"],
             source_refs=list(refs),
-            behavior_slice_id=behavior_slice_id("invariant", entity, state, invariant),
+            behavior_slice_id=slice_id,
             behavior_slice_kind="invariant",
             discovery_round=discovery_round,
         )
+
+    @staticmethod
+    def _preferred_read_endpoint(endpoints: list[Any]) -> str:
+        candidates = [str(item or "").strip() for item in endpoints if str(item or "").strip().startswith("/")]
+        for path in candidates:
+            if not path_has_placeholders(path):
+                return path
+        return ""
 
     @staticmethod
     def _id(*parts: Any) -> str:
