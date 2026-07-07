@@ -78,6 +78,35 @@ def _prepare_customer_project(tmp_path: Path) -> dict[str, Any]:
     )
 
 
+def _runtime_scenario_contract() -> dict[str, Any]:
+    return {
+        "schema_version": "runtime-scenario-contract-v1",
+        "execution_policy": "safe_read_only",
+        "actor": {"id": "customer_qa_lead"},
+        "scenarios": [
+            {
+                "id": "SCN_LIVE_ORDERS_READ",
+                "title": "Live read approved orders",
+                "entity": "orders",
+                "category": "runtime_contract",
+                "severity": "P2",
+                "steps": [
+                    {
+                        "order": 1,
+                        "action": "list_orders",
+                        "method": "GET",
+                        "path": "/api/orders",
+                        "expected_status": 200,
+                        "actor": "customer_qa_lead",
+                    }
+                ],
+                "expected_state": "orders_observed",
+                "oracle_rules": ["HTTP read succeeds"],
+            }
+        ],
+    }
+
+
 def _issue_live_execution_approval(tmp_path: Path, manifest: dict[str, Any], base_url: str) -> dict[str, Any]:
     from ai_test_asset_center.enterprise_campaign import EnterpriseCampaign, source_snapshot_hash
     from ai_test_asset_center.execution_approvals import issue_execution_approval
@@ -124,6 +153,7 @@ def test_p2_live_execution_requires_approval_before_http_traffic(tmp_path: Path)
                 "environment_ref": ENVIRONMENT_REF,
                 "test_data_contract": {"strategy": "synthetic_read_only", "write_approved": False},
                 "execution_mode": "safe_read_only",
+                "runtime_scenario_contract": _runtime_scenario_contract(),
             },
         )
 
@@ -135,40 +165,9 @@ def test_p2_live_execution_requires_approval_before_http_traffic(tmp_path: Path)
     assert _CustomerApiHandler.calls == []
 
 
-def test_p2_live_execution_hits_fake_customer_api_with_approval(tmp_path: Path, monkeypatch) -> None:
+def test_p2_live_execution_hits_fake_customer_api_with_runtime_contract(tmp_path: Path) -> None:
     from ai_test_asset_center.__main__ import scan
-    from ai_test_asset_center.semantic_scenario_generator import ExecutableScenario, ScenarioStep, SemanticScenarioGenerator
 
-    def _generate_live_scenario(self: SemanticScenarioGenerator, graphs: dict, api_doc: str = "", active_slice_ids: set[str] | None = None, discovery_round: int = 1) -> list[ExecutableScenario]:
-        slice_id = next(iter(active_slice_ids or {"live_orders_slice"}))
-        return [
-            ExecutableScenario(
-                id="SCN_LIVE_ORDERS_READ",
-                title="Live read approved orders",
-                category="state_machine",
-                severity="P2",
-                entity="orders",
-                steps=[
-                    ScenarioStep(
-                        order=1,
-                        action="list_orders",
-                        api_method="GET",
-                        api_path="/api/orders",
-                        expected_status=200,
-                        actor="customer_qa_lead",
-                    )
-                ],
-                expected_state="orders_observed",
-                oracle_rules=["HTTP read succeeds"],
-                confidence=0.9,
-                execution_policy="safe_read_only",
-                behavior_slice_id=slice_id,
-                behavior_slice_kind="transition",
-                discovery_round=discovery_round,
-            )
-        ]
-
-    monkeypatch.setattr(SemanticScenarioGenerator, "generate", _generate_live_scenario)
     manifest = _prepare_customer_project(tmp_path)
     with _LiveCustomerApi() as base_url:
         approval = _issue_live_execution_approval(tmp_path, manifest, base_url)
@@ -185,6 +184,7 @@ def test_p2_live_execution_hits_fake_customer_api_with_approval(tmp_path: Path, 
                 "test_data_contract": {"strategy": "synthetic_read_only", "write_approved": False},
                 "execution_mode": "safe_read_only",
                 "execution_approval_id": approval["approval_id"],
+                "runtime_scenario_contract": _runtime_scenario_contract(),
             },
         )
 
@@ -192,6 +192,8 @@ def test_p2_live_execution_hits_fake_customer_api_with_approval(tmp_path: Path, 
     assert result["runtime_contract"]["status"] == "approved"
     assert result["runtime_contract"]["execution_approval"]["status"] == "approved"
     assert result["execution_status"] == "completed"
+    assert result["v12"]["phases"]["scenario_generation"]["runtime_scenario_contract_present"] is True
+    assert result["v12"]["phases"]["scenario_generation"]["runtime_contract_scenarios"] >= 1
     assert result["v12"]["phases"]["execution"]["executed"] >= 1
     assert result["auto_har"]["status"] == "captured"
     assert result["auto_har"]["total_calls"] >= 1
@@ -199,4 +201,5 @@ def test_p2_live_execution_hits_fake_customer_api_with_approval(tmp_path: Path, 
     assert Path(result["report_path"]).exists()
     saved = json.loads((tmp_path / "platform_outputs" / PROJECT / "scan_result.json").read_text(encoding="utf-8"))
     assert saved["runtime_contract"]["execution_approval"]["status"] == "approved"
+    assert saved["v12"]["phases"]["scenario_generation"]["runtime_scenario_contract_present"] is True
     assert saved["auto_har"]["status"] == "captured"
