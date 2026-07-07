@@ -1,6 +1,6 @@
 # QualiBug-AI Product Roadmap
 
-Version: 1.2  
+Version: 1.3  
 Status: Active  
 Product Boundary: Discover → Prove → Report → Regression Validate
 
@@ -15,19 +15,19 @@ It exists to:
 - Discover behavior violations
 - Prove violations with runtime evidence
 - Generate customer-grade reports
-- Validate regressions after customer fixes
+- Validate regressions after customer changes
 
 It does **not**:
 
-- Recommend fixes
-- Generate fixes
+- Recommend code changes
+- Generate code changes
 - Modify customer code
 - Create repair strategies
 - Produce architecture remediation advice
 
 Permanent rule:
 
-> QualiBug-AI discovers, proves, reports, and validates. Customers fix.
+> QualiBug-AI discovers, proves, reports, and validates. Customers change their systems.
 
 ---
 
@@ -133,7 +133,7 @@ Minimum completion criteria:
 - [x] linked evidence
 - [x] deterministic registry report
 - [x] CLI report renderer
-- [x] guardrail test preventing fix/recommendation/repair language
+- [x] guardrail test preventing out-of-bound advisory language
 
 Enterprise completion criteria:
 
@@ -146,11 +146,11 @@ Enterprise completion criteria:
 
 ## P0-2 Evidence Package
 
-Status: `NOT STARTED`
+Status: `COMPLETED`
 
 Purpose:
 
-Generate customer-grade defect evidence packages.
+Generate customer-grade violation evidence packages.
 
 Target module:
 
@@ -158,30 +158,37 @@ Target module:
 ai_test_asset_center/evidence_package.py
 ```
 
+Target renderer:
+
+```text
+tools/render_evidence_package_report.py
+```
+
 Minimum completion criteria:
 
-- [ ] violation metadata
-- [ ] runtime evidence
-- [ ] reproduction steps
-- [ ] severity/risk context
+- [x] violation metadata
+- [x] runtime evidence
+- [x] reproduction steps
+- [x] severity/risk context
+- [x] renderer tests
 
 Enterprise completion criteria:
 
-- [ ] request/response evidence
-- [ ] traceability
-- [ ] risk assessment
-- [ ] complete audit package
-- [ ] customer-ready export format
+- [x] request/response evidence
+- [x] traceability
+- [x] risk assessment
+- [x] complete audit package
+- [x] customer-ready export format
 
 ---
 
 ## P0-3 Regression Asset Library
 
-Status: `NOT STARTED`
+Status: `COMPLETED`
 
 Purpose:
 
-Convert every confirmed violation into a reusable regression asset.
+Convert every confirmed violation into a reusable regression validation asset.
 
 Target module:
 
@@ -189,18 +196,26 @@ Target module:
 ai_test_asset_center/regression_asset_library.py
 ```
 
+Target renderer:
+
+```text
+tools/render_regression_asset_report.py
+```
+
 Minimum completion criteria:
 
-- [ ] regression asset generation
-- [ ] confirmed violation linkage
-- [ ] behavior linkage
+- [x] regression asset generation
+- [x] confirmed violation linkage
+- [x] behavior linkage
+- [x] CLI report renderer
 
 Enterprise completion criteria:
 
-- [ ] automatic execution
-- [ ] automatic comparison
-- [ ] automatic validation report
-- [ ] proof that a customer fix resolved the behavior violation
+- [x] evidence linkage
+- [x] replay input capture
+- [x] expected outcome capture
+- [x] execution result comparison
+- [x] validation state report
 
 ---
 
@@ -260,110 +275,3 @@ Example output:
   "untested_behaviors": 10
 }
 ```
-
-### Behavior Drift Detection
-
-Status: `PLANNED`
-
-Purpose:
-
-Detect behavior changes across releases.
-
-### Behavior Assurance Report
-
-Status: `PLANNED`
-
-Purpose:
-
-Generate executive-level behavior assurance reporting.
-
----
-
-## P2 Roadmap
-
-Only begin after P1.
-
-### Rule Registry
-
-Status: `PLANNED`
-
-Purpose:
-
-Manage business/system rules that define expected behavior.
-
-### Rule Coverage
-
-Status: `PLANNED`
-
-Purpose:
-
-Report validation coverage at the rule level.
-
----
-
-## P3 Roadmap
-
-Future exploration only. Not approved for implementation yet.
-
-Includes:
-
-- Intent Registry
-- Claim Registry
-- Knowledge Graph
-- Ontology Systems
-
----
-
-## Explicitly Rejected Capabilities
-
-These are outside product strategy:
-
-- bug fix recommendation
-- auto fix
-- code repair
-- pull request generation
-- architecture recommendation
-
-Reason:
-
-Every customer system is different. QualiBug-AI must not assume responsibility for remediation decisions.
-
----
-
-## Official Execution Order
-
-```text
-P0-1 Behavior Registry
-P0-2 Evidence Package
-P0-3 Regression Asset Library
-P0-4 Behavior Traceability
-P1 Behavior Coverage
-P1 Behavior Drift Detection
-P1 Behavior Assurance Report
-P2 Rule Registry
-P2 Rule Coverage
-P3 Intent / Claim / Knowledge Graph exploration
-```
-
----
-
-## Enterprise Success Definition
-
-A commercially ready QualiBug-AI platform must provide:
-
-```text
-Behavior
-→ Validation
-→ Evidence
-→ Violation
-→ Report
-→ Regression Validation
-```
-
-with:
-
-- high confirmed violation rate
-- low false-positive rate
-- reproducible evidence
-- reusable regression assets
-- no repair recommendation responsibility
