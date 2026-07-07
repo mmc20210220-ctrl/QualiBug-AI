@@ -7,18 +7,23 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ai_test_asset_center.regression_asset_library import build_regression_asset_library
+from ai_test_asset_center.regression_asset_library import build_regression_asset_report
 
 
-CONTAINER_KEYS = (
+SOURCE_KEYS = (
     "violations",
     "confirmed_violations",
     "bugs",
     "confirmed_bugs",
     "findings",
     "packages",
-    "results",
     "verification_results",
+)
+
+RESULT_KEYS = (
+    "regression_results",
+    "execution_results",
+    "validation_results",
 )
 
 
@@ -35,15 +40,28 @@ def extract_regression_sources(payload: Any) -> list[dict[str, Any]]:
         return _as_list(payload)
     if not isinstance(payload, dict):
         return []
-    for key in CONTAINER_KEYS:
+    for key in SOURCE_KEYS:
         extracted = _as_list(payload.get(key))
         if extracted:
             return extracted
     return [payload]
 
 
+def extract_regression_results(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    for key in RESULT_KEYS:
+        extracted = _as_list(payload.get(key))
+        if extracted:
+            return extracted
+    return []
+
+
 def render_regression_asset_report(payload: Any) -> dict[str, Any]:
-    return build_regression_asset_library(extract_regression_sources(payload))
+    return build_regression_asset_report(
+        extract_regression_sources(payload),
+        extract_regression_results(payload),
+    )
 
 
 def main() -> int:
