@@ -35,3 +35,9 @@ try:
     install_p5_evidence_story_scan_patch()
 except Exception:
     pass
+
+try:
+    from .p6_delivery_scan_patch import install_p6_delivery_scan_patch
+    install_p6_delivery_scan_patch()
+except Exception:
+    pass
