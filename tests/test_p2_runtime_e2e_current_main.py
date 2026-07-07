@@ -162,7 +162,7 @@ def _read_contract() -> dict[str, Any]:
     }
 
 
-def _write_contract(*, cleanup: bool = True) -> dict[str, Any]:
+def _write_contract(*, cleanup: bool = True, contract_write_approved: bool = True) -> dict[str, Any]:
     scenario: dict[str, Any] = {
         "id": "SCN_P2_CREATE_ORDER",
         "entity": "orders",
@@ -179,12 +179,14 @@ def _write_contract(*, cleanup: bool = True) -> dict[str, Any]:
     }
     if cleanup:
         scenario["cleanup_steps"] = [{"method": "DELETE", "path": "/api/orders/{id}", "expected_status": 204}]
-    return {
+    contract = {
         "execution_policy": "approved_sandbox_write",
-        "write_approved": True,
         "actor": {"id": "customer_qa_lead"},
         "scenarios": [scenario],
     }
+    if contract_write_approved:
+        contract["write_approved"] = True
+    return contract
 
 
 def _base_context(manifest: dict[str, Any], *, execution_mode: str, approval_id: str = "", contract: dict[str, Any], write_approved: bool = False) -> dict[str, Any]:
@@ -237,7 +239,7 @@ def test_p2_write_runtime_contract_is_blocked_without_cleanup_or_write_approval(
             campaign_context=_base_context(
                 manifest,
                 execution_mode="approved_sandbox_write",
-                contract=_write_contract(cleanup=False),
+                contract=_write_contract(cleanup=False, contract_write_approved=False),
                 write_approved=False,
             ),
         )
@@ -267,7 +269,7 @@ def test_p2_approved_sandbox_write_runtime_contract_executes_post(tmp_path: Path
                 manifest,
                 execution_mode="approved_sandbox_write",
                 approval_id=approval["approval_id"],
-                contract=_write_contract(cleanup=True),
+                contract=_write_contract(cleanup=True, contract_write_approved=True),
                 write_approved=True,
             ),
         )
