@@ -329,6 +329,13 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     return campaign, store, mode
 
 
+def _count_by(items: list[Any], field: str) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for item in items:
+        counts[str(getattr(item, field, "") or "unknown")] += 1
+    return dict(counts)
+
+
 def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None) -> dict[str, Any]:
     global _v12_har_entries
     _v12_har_entries = []
@@ -462,7 +469,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         }
         scenario_started = time.time()
         from .semantic_scenario_generator import SemanticScenarioGenerator
-        scenarios = SemanticScenarioGenerator().generate(graphs, api_spec_text, active_slice_ids=selected_ids, discovery_round=settings["round_number"])
+        runtime_scenario_contract = _dict(context.get("runtime_scenario_contract"))
+        scenarios = SemanticScenarioGenerator().generate(
+            graphs,
+            api_spec_text,
+            active_slice_ids=selected_ids,
+            discovery_round=settings["round_number"],
+            runtime_scenario_contract=runtime_scenario_contract,
+        )
         executable = [scenario for scenario in scenarios if _scenario_executable(scenario)]
         plan_only = [scenario for scenario in scenarios if scenario not in executable]
         result["phases"]["scenario_generation"] = {
@@ -470,6 +484,8 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "total_scenarios": len(scenarios),
             "executable_scenarios": len(executable),
             "plan_only_scenarios": len(plan_only),
+            "runtime_contract_scenarios": sum(1 for scenario in executable if getattr(scenario, "behavior_slice_kind", "") == "runtime_contract"),
+            "runtime_scenario_contract_present": bool(runtime_scenario_contract),
             "by_category": _count_by(scenarios, "category"),
             "by_severity": _count_by(scenarios, "severity"),
             "forbidden_paths": sum(1 for scenario in scenarios if getattr(scenario, "is_forbidden_path", False)),
@@ -621,58 +637,38 @@ def _replace(value: Any, bindings: dict[str, Any]) -> Any:
         return {key: _replace(item, bindings) for key, item in value.items()}
     if isinstance(value, list):
         return [_replace(item, bindings) for item in value]
-    if not isinstance(value, str):
-        return value
-    for key, item in bindings.items():
-        value = value.replace("{" + key + "}", str(item))
+    if isinstance(value, str):
+        result = value
+        for key, item in bindings.items():
+            result = result.replace("{" + key + "}", str(item))
+        return result
     return value
 
 
-def _extract(value: Any, field: str) -> Any:
-    if not field:
-        return None
-    current = value
-    if "." in field:
-        for part in field.split("."):
-            if not isinstance(current, dict) or part not in current:
-                current = None
-                break
-            current = current[part]
-        if current is not None:
-            return current
-    if isinstance(value, dict):
-        if field in value:
-            return value[field]
-        for item in value.values():
-            found = _extract(item, field)
-            if found is not None:
-                return found
-    elif isinstance(value, list):
-        for item in value:
-            found = _extract(item, field)
-            if found is not None:
-                return found
-    return None
+def _extract(body: Any, field: str) -> Any:
+    current = body
+    for part in str(field or "").split("."):
+        if not part:
+            continue
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+        else:
+            return None
+    return current
 
 
 def _json_or_text(raw: str) -> Any:
     try:
-        return json.loads(raw)
+        return json.loads(raw or "null")
     except Exception:
         return raw[:5000]
 
 
-def _count_by(items: list[Any], attr: str) -> dict[str, int]:
-    result: dict[str, int] = defaultdict(int)
-    for item in items:
-        result[str(getattr(item, attr, "unknown"))] += 1
-    return dict(result)
-
-
 def _redact(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(key): ("<REDACTED>" if str(key).lower().replace("-", "_") in _SENSITIVE else _redact(item)) for key, item in value.items()}
+        return {key: ("***" if any(token in str(key).lower() for token in _SENSITIVE) else _redact(item)) for key, item in value.items()}
     if isinstance(value, list):
-        return [_redact(item) for item in value[:25]]
-    text = str(value)
-    return text[:1000] + "…" if len(text) > 1000 else value
+        return [_redact(item) for item in value]
+    return value
