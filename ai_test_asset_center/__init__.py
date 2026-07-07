@@ -27,3 +27,10 @@ try:  # pragma: no cover - import-time P4 pilot success gate shim
     install_p4_pilot_success_scan_patch()
 except Exception:
     pass
+
+try:  # pragma: no cover - import-time P5 executive readout shim
+    from .p5_readout_scan_patch import install_p5_readout_scan_patch
+
+    install_p5_readout_scan_patch()
+except Exception:
+    pass
