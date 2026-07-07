@@ -181,13 +181,14 @@ class SemanticScenarioGenerator:
         if not steps:
             return None
         cleanup_steps = self._contract_steps(row.get("cleanup_steps") or row.get("cleanup"), "approved_sandbox_write", actor_id)
-        slice_id = str(row.get("behavior_slice_id") or "").strip()
+        declared_slice_id = str(row.get("behavior_slice_id") or "").strip()
+        if declared_slice_id and active_slice_ids is not None and declared_slice_id not in active_slice_ids:
+            # A customer-bound contract for a specific source slice must not jump discovery rounds.
+            return None
+        slice_id = declared_slice_id
         if not slice_id:
             first = steps[0]
             slice_id = behavior_slice_id("runtime_contract", str(row.get("entity") or "runtime"), first.api_method, first.api_path)
-        if active_slice_ids is not None and slice_id not in active_slice_ids:
-            # Contract scenario is explicit but not selected in this discovery round.
-            return None
         return ExecutableScenario(
             id=str(row.get("id") or self._id("runtime_contract", index, slice_id)),
             title=str(row.get("title") or f"[运行合同] {steps[0].api_method} {steps[0].api_path}")[:160],
