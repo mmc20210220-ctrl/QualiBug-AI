@@ -61,3 +61,41 @@ def test_tampered_artifact_invalidates_bundle(tmp_path):
 
     assert result["valid"] is False
     assert result["code"] == "EVIDENCE_ARTIFACT_HASH_MISMATCH"
+
+
+def test_db_snapshot_only_findings_still_mark_bundle_as_runtime_captured(tmp_path):
+    bundle = persist_evidence_bundle(
+        "enterprise-project",
+        root=tmp_path,
+        run_id="scan-db-1",
+        campaign={"campaign_id": "CMP_DB_1"},
+        runtime_contract={"source_manifest": {"source_id": "api", "source_hash": "b" * 64}},
+        execution_status="executed",
+        auto_har={"status": "no_traffic"},
+        evidence_graphs=[],
+        findings=[
+            {
+                "execution_status": "executed",
+                "db_evidence": {
+                    "table": "orders",
+                    "db_assertion": "orders row count changed 1->2",
+                    "before_db_snapshot": {"row_count": 1},
+                    "after_db_snapshot": {"row_count": 2},
+                },
+                "raw_evidence": {
+                    "request_raw": {"method": "POST", "path": "/api/v1/orders"},
+                    "db_snapshot": {
+                        "table": "orders",
+                        "assertion": "orders row count changed 1->2",
+                        "before": {"row_count": 1},
+                        "after": {"row_count": 2},
+                    },
+                },
+            }
+        ],
+    )
+
+    manifest = load_evidence_bundle("enterprise-project", bundle["bundle_id"], root=tmp_path)
+
+    assert bundle["evidence_level"] == "runtime_captured"
+    assert manifest["evidence_level"] == "runtime_captured"

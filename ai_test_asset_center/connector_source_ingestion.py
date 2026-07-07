@@ -76,4 +76,10 @@ def ingest_connector_snapshot(
         external_ref=external_ref,
         metadata={"connector_id": connector, "sync_cursor": _text(sync_cursor, 240)},
     )
-    return {**manifest, "connector_id": connector, "external_ref": _text(external_ref, 500), "sync_cursor": _text(sync_cursor, 240)}
+    return {
+        **manifest,
+        "source_origin": "connector_snapshot",
+        "connector_id": connector,
+        "external_ref": _text(external_ref, 500),
+        "sync_cursor": _text(sync_cursor, 240),
+    }

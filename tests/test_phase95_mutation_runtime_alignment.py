@@ -209,6 +209,42 @@ def test_conservation_probe_validates_accepted_negative_write_payload_marker() -
     assert "business payload shows" in verdict["reason"]
 
 
+def test_write_observation_promotes_db_snapshot_diff_into_db_evidence() -> None:
+    probe = _grounded_write_probe(
+        "conservation_probe",
+        {"mutation_kind": "resource_negative_value", "field_selector": "resource", "value": -1},
+    )
+
+    verdict = _verify_write_observation(
+        probe,
+        [
+            {
+                "status_code": 200,
+                "payload": {
+                    "ok": True,
+                    "observed_bug_id": "ORD-C08-DB",
+                    "expected_should_have_rejected": True,
+                    "actual_behavior": "accepted_or_returned_business_data",
+                    "resource": {"id": "srv_order_1", "status": "accepted_despite_negative_probe"},
+                },
+            }
+        ],
+        {
+            "before": [],
+            "after": [],
+            "db": {
+                "diffs": [{"table": "orders", "detail": "orders: 1->2 (+1 -0 ~0)", "added_rows": 1, "removed_rows": 0, "modified_rows": 0}],
+                "before_snapshots": [{"table": "orders", "row_count": 1}],
+                "after_snapshots": [{"table": "orders", "row_count": 2}],
+            },
+        },
+    )
+
+    assert verdict["db_evidence"]["business_operation"] == "POST /api/v1/orders"
+    assert verdict["db_evidence"]["table"] == "orders"
+    assert "1->2" in verdict["db_evidence"]["db_assertion"]
+
+
 def test_query_surface_fallback_does_not_override_working_post_search(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 

@@ -57,6 +57,14 @@ export type CampaignGovernance = {
   automatic_round_limit?: number;
   attempted_slice_count?: number;
   confirmed_slice_count?: number;
+  current_campaign_confirmed_slice_count?: number;
+  current_campaign_customer_ready_defect_count?: number;
+  current_campaign_bundle_finding_count_raw?: number;
+  family_customer_ready_defect_count?: number;
+  family_report_real_finding_count?: number;
+  family_historical_carryover_defect_count?: number;
+  confirmed_shelf_alignment_status?: string;
+  confirmed_shelf_reporting_scope?: string;
   coverage_deferred_reason?: string;
   next_campaign_reason?: string;
 };
@@ -297,6 +305,19 @@ export async function getFindings(projectId: string): Promise<JsonRecord> {
     if (message.includes('404')) return emptyFindingsSnapshot(resolvedProjectId);
     throw error;
   }
+}
+
+export async function replayFinding(projectId: string, findingId: string, baseUrl = ''): Promise<unknown> {
+  const resolvedProjectId = await resolveProjectId(projectId);
+  if (!resolvedProjectId || !findingId.trim()) return { ok: false, error: '缺少 project_id 或 finding_id' };
+  return fetchJSON<unknown>(`${API_V1_BASE}/replay`, {
+    method: 'POST',
+    body: JSON.stringify({
+      project_id: resolvedProjectId,
+      finding_id: findingId.trim(),
+      ...(baseUrl.trim() ? { base_url: baseUrl.trim() } : {}),
+    }),
+  });
 }
 
 export async function getKnowledgeAsset(projectId: string): Promise<unknown> {

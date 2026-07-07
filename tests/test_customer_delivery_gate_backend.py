@@ -171,3 +171,18 @@ def test_backend_gate_splits_non_ready_items_into_internal_clues() -> None:
     assert "BUSINESS_EVIDENCE_NOT_VALIDATED" in clues[0]["customer_delivery_gate_reasons"]
     assert clues[0]["customer_delivery_gate_explanations"][0]["label"]
     assert clues[0]["customer_delivery_gate_explanations"][0]["next_action"]
+
+
+def test_backend_gate_accepts_db_snapshot_replay_asset_without_har() -> None:
+    finding = _ready_finding()
+    finding["raw_evidence"]["response_raw"] = {}
+    finding["raw_evidence"]["db_snapshot"] = {
+        "table": "orders",
+        "assertion": "orders row count changed 1->2",
+        "before": {"row_count": 1},
+        "after": {"row_count": 2},
+    }
+    finding["reproduction"]["har_evidence"] = {}
+
+    assert is_customer_deliverable_defect(finding) is True
+    assert customer_delivery_rejection_reasons(finding) == []

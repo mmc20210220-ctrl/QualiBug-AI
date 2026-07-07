@@ -17,6 +17,8 @@ import json
 from typing import Any
 from urllib.parse import urlparse
 
+from .real_id_resolver import normalize_path_placeholders
+
 
 def _extract_api_path(url: str) -> str:
     """Extract /api/... path from a full URL."""
@@ -28,6 +30,8 @@ def _extract_api_path(url: str) -> str:
 
 def _path_similarity(path_a: str, path_b: str) -> float:
     """Calculate path similarity (0-1) for fuzzy matching."""
+    path_a = normalize_path_placeholders(path_a or "")
+    path_b = normalize_path_placeholders(path_b or "")
     if path_a == path_b:
         return 1.0
     if not path_a or not path_b:
@@ -45,6 +49,20 @@ def _path_similarity(path_a: str, path_b: str) -> float:
     if max_len == 0:
         return 0.0
     return common / max_len
+
+
+def _declared_path_matches(path_pattern: str, observed_path: str) -> bool:
+    declared = normalize_path_placeholders(str(path_pattern or "")).split("?", 1)[0]
+    observed = normalize_path_placeholders(str(observed_path or "")).split("?", 1)[0]
+    if not declared or not observed:
+        return False
+    if declared == observed:
+        return True
+    if re.search(r"\{[A-Za-z_]\w*\}", declared):
+        pattern = re.escape(declared)
+        pattern = re.sub(r"\\\{[A-Za-z_]\w*\\\}", r"[^/]+", pattern)
+        return bool(re.fullmatch(pattern, observed))
+    return False
 
 
 def match_finding_to_har(
@@ -68,6 +86,7 @@ def match_finding_to_har(
     text = f"{title} {desc}"
     method = (finding.get("_api_method") or finding.get("repro_method") or "").upper()
     path = finding.get("_api_path") or finding.get("repro_path") or ""
+    normalized_path = normalize_path_placeholders(str(path or ""))
     category = finding.get("category") or finding.get("risk_type") or ""
     
     # Also try to extract path from description/title
@@ -75,6 +94,7 @@ def match_finding_to_har(
         path_match = re.search(r'(/api/[\w/{}\.\-%:]+)', text)
         if path_match:
             path = path_match.group(1)
+            normalized_path = normalize_path_placeholders(str(path or ""))
 
     # No declared path and no path mention in the claim means we do not have a
     # reliable request identity. In that case, binding the finding to an
@@ -91,33 +111,35 @@ def match_finding_to_har(
         entry_method = req.get("method", "").upper()
         entry_path = _extract_api_path(entry_url)
         entry_status = entry.get("response", {}).get("status", 0)
+        declared_path_match = bool(normalized_path and _declared_path_matches(normalized_path, entry_path))
         
         score = 0.0
         binding_signal = False
         
         # 1. Exact path + method match (highest weight)
-        if path and method and entry_method == method and entry_path == path:
+        if declared_path_match and method and entry_method == method:
             score += 10.0
             binding_signal = True
-        elif path and entry_path == path:
+        elif declared_path_match:
             score += 8.0
             binding_signal = True
         
-        # 2. Path substring match in finding text
-        if path and path in entry_url:
+        # 2. Once the finding already declares a request identity, only reward
+        # weaker textual/path similarity signals after the declared path matched.
+        if declared_path_match and normalize_path_placeholders(entry_path) == normalized_path:
             score += 5.0
-            binding_signal = True
-        if entry_path and entry_path in text:
+        elif declared_path_match and path and path in entry_url:
+            score += 5.0
+        if declared_path_match and entry_path and entry_path in text:
             score += 4.0
-            binding_signal = True
         
         # 3. Method match (weaker signal)
         if method and entry_method == method:
             score += 2.0
         
         # 4. Path similarity
-        if path and entry_path:
-            sim = _path_similarity(path, entry_path)
+        if declared_path_match and normalized_path and entry_path:
+            sim = _path_similarity(normalized_path, entry_path)
             score += sim * 3.0
         
         # 5. Error responses are more likely to be bug-related
@@ -138,11 +160,11 @@ def match_finding_to_har(
             "data_integrity": ["/products/"],
         }
         cat_paths = category_paths.get(category, [])
-        for cp in cat_paths:
-            if cp in entry_path:
-                score += 1.5
-                binding_signal = True
-                break
+        if declared_path_match:
+            for cp in cat_paths:
+                if cp in entry_path:
+                    score += 1.5
+                    break
 
         # Error responses are only meaningful after we have bound the runtime
         # row to the finding. Otherwise a random login 401 will hijack a

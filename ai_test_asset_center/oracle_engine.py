@@ -19,6 +19,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+_COLLECTION_RESPONSE_KEYS = {"items", "rows", "records", "results", "list", "series", "buckets"}
+
 
 @dataclass
 class OracleResult:
@@ -122,11 +124,21 @@ class RequiredFieldOracle(BaseOracle):
         for s in trace.get("steps", []):
             body = s.get("response", {}).get("body", {}) if isinstance(s.get("response"), dict) else {}
             if isinstance(body, dict) and body:
+                if _looks_like_aggregate_or_collection_response(body):
+                    continue
                 for field in ("id", "status", "created_at"):
-                    if body.get(field) is None and s.get("expected_status") == 200:
+                    if field in body and body.get(field) is None and s.get("expected_status") == 200:
                         return OracleResult(False, "RequiredFieldOracle", "L1", "null_required",
                             f"必填字段{field}不应为null", f"{field}=null", "P1", 0.80)
         return OracleResult(True, "RequiredFieldOracle", "L1")
+
+
+def _looks_like_aggregate_or_collection_response(body: dict[str, Any]) -> bool:
+    for key, value in body.items():
+        normalized = str(key or "").strip().lower()
+        if normalized in _COLLECTION_RESPONSE_KEYS and isinstance(value, list):
+            return True
+    return False
 
 
 class ErrorCodeOracle(BaseOracle):

@@ -21,6 +21,7 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
             "execution_mode": "safe_read_only",
             "test_data_contract": {"strategy": "blocked_with_testability_gap"},
             "release_policy": {"block_on_p0": True},
+            "external_signal_requests": [{"provider": "schemathesis", "report_path": "platform_outputs/signals.json"}],
         }
     )
 
@@ -33,6 +34,7 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
     assert context["execution_mode"] == "safe_read_only"
     assert context["test_data_contract"] == {"strategy": "blocked_with_testability_gap"}
     assert context["release_policy"] == {"block_on_p0": True}
+    assert context["external_signal_requests"] == [{"provider": "schemathesis", "report_path": "platform_outputs/signals.json"}]
 
 
 def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp_path: Path) -> None:
@@ -129,6 +131,35 @@ def test_scan_body_defaults_to_write_sandbox_only_for_non_production_targets() -
         "write_approved": True,
         "disposable_scope_ref": "checkout-scope",
     }
+
+
+def test_scan_body_preserves_explicit_ui_execution_requests_without_autogen_override() -> None:
+    from ai_test_asset_center.private_pilot_scan_context_contract import build_campaign_context_from_scan_body
+
+    explicit = [
+        {
+            "request_id": "explicit_ui_repro",
+            "provider": "page_agent",
+            "task": "Replay checkout failure",
+            "start_url": "http://127.0.0.1:8000/checkout",
+            "execution_mode": "safe_read_only",
+            "metadata": {"bridge_mode": "page_agent_browser_plan", "auto_generated": False},
+        }
+    ]
+
+    context = build_campaign_context_from_scan_body(
+        {
+            "base_url": "http://127.0.0.1:8000",
+            "scope_id": "checkout-scope",
+            "environment_ref": "local-benchmark",
+            "page_agent_bridge": {"url": "http://127.0.0.1:8797/execute"},
+            "ui_execution_requests": explicit,
+        }
+    )
+
+    assert context["ui_execution_requests"] == explicit
+    assert context["ui_execution_requests"][0]["request_id"] == "explicit_ui_repro"
+    assert context["ui_execution_requests"][0]["metadata"]["auto_generated"] is False
 
 
 def test_install_patch_replaces_continuous_loop_and_reports_status() -> None:

@@ -115,3 +115,55 @@ class TestBlockedRoutesNotReadyBug:
         bug_status = _compute_bug_status(finding, evidence_quality, evidence_completeness)
         result = _enforce_evidence_gate(finding, bug_status, evidence_completeness)
         assert result["gate_passed"] is False
+
+
+class TestDBClueVsEvidence:
+    """SQL 提示和表线索不能冒充已验证 DB 证据。"""
+
+    def test_sql_verify_hint_does_not_count_as_verified_db_evidence(self):
+        finding = _make_minimal_finding(
+            expected="库存应扣减",
+            actual="接口返回 200，但需要进一步核验数据库",
+            evidence={"status_code": 200, "body": {"ok": True}},
+            investigation_guidance={
+                "relevant_tables": ["inventory"],
+                "sql_verify": "SELECT stock FROM inventory WHERE sku='SKU-1';",
+            },
+        )
+        evidence_completeness = _compute_evidence_completeness(finding)
+        dims = {d["key"]: d["present"] for d in evidence_completeness["dimensions"]}
+        bug_status = _compute_bug_status(finding, _compute_evidence_quality(finding, "/api/test"), evidence_completeness)
+
+        assert dims["db_evidence"] is False
+        assert bug_status["status"] != "reproduced"
+
+
+class TestValidatedEvidenceQualityCanonicalization:
+    """Validated customer-ready findings must not keep stale "待补强证据" labels."""
+
+    def test_validated_upstream_quality_overrides_stale_label_and_summary(self):
+        finding = _make_minimal_finding(
+            gate_passed=True,
+            evidence_quality={
+                "level": "validated",
+                "score": 95,
+                "label": "待补强证据",
+                "summary": "已有部分定位信息，但缺少关键运行时证据，暂不应作为已验证缺陷交付。",
+                "missing": [],
+                "next_actions": ["补充更多证据"],
+                "can_reproduce": True,
+            },
+            evidence_status={
+                "semantic_verdict": "SEMANTIC_CONFIRMED",
+                "business_evidence_status": "VALIDATED",
+            },
+        )
+
+        quality = _compute_evidence_quality(finding, "/api/test")
+
+        assert quality["level"] == "validated"
+        assert quality["can_reproduce"] is True
+        assert quality["label"] == "可交付证据"
+        assert quality["summary"] == "证据完整，可直接提交研发修复。"
+        assert quality["missing"] == []
+        assert quality["next_actions"] == []

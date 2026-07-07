@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from .auto_test_data_factory import load_openapi_from_input
+from .real_id_resolver import infer_path_params, normalize_path_placeholders, path_has_placeholders
 
-PATH_PARAM_RE = re.compile(r"\{([^{}]+)\}")
 QUERY_SAFE_RE = re.compile(r"^[A-Za-z0-9_.:\-@]+$")
 
 RISK_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -63,11 +63,16 @@ BUSINESS_KEY_RE = re.compile(r"business|order|payment|external|event|request|ide
 
 def _paths(spec: dict[str, Any]) -> dict[str, Any]:
     paths = spec.get("paths") if isinstance(spec, dict) else {}
-    return paths if isinstance(paths, dict) else {}
+    if not isinstance(paths, dict):
+        return {}
+    return {
+        normalize_path_placeholders(str(path or "")): ops
+        for path, ops in paths.items()
+    }
 
 
 def _canonical_suffix(path: str) -> str:
-    p = str(path or "")
+    p = normalize_path_placeholders(path)
     p = re.sub(r"^/api/v\d+(?:/[^/]+)?", "", p)
     return p or str(path or "")
 
@@ -75,11 +80,11 @@ def _canonical_suffix(path: str) -> str:
 def _path_tokens(path: str) -> list[str]:
     suffix = _canonical_suffix(path).lower()
     raw = [t for t in re.split(r"[^a-z0-9\u4e00-\u9fff]+", suffix) if t]
-    return [t for t in raw if not t.startswith("{")]
+    return [t for t in raw if not (t.startswith("{") and t.endswith("}"))]
 
 
 def _collection_prefix(path: str) -> str:
-    parts = str(path or "").strip("/").split("/")
+    parts = normalize_path_placeholders(path).strip("/").split("/")
     out: list[str] = []
     for part in parts:
         if part.startswith("{"):
@@ -138,7 +143,7 @@ def _observer_kind(path: str, risk_type: str) -> str:
         return "workflow_history_projection"
     if any(k in text for k in ("tenant", "org", "owner", "scope", "permission", "member", "租户", "组织", "归属")):
         return "tenant_ownership_projection"
-    if not PATH_PARAM_RE.search(path):
+    if not path_has_placeholders(path):
         if str(risk_type) in {"idempotency_replay_probe", "async_external_event_probe"}:
             return "idempotency_collection_projection"
         return "collection_projection"
@@ -173,9 +178,9 @@ def _base_score(target_path: str, candidate_path: str, risk_type: str, query_nam
     target_without_action = re.sub(r"/(?:transition|submit|pay|cancel|approve|complete|retry|refund|release|close|confirm|reject)$", "", _canonical_suffix(target_path), flags=re.I)
     if _canonical_suffix(candidate_path) == target_without_action:
         score += 55
-    if PATH_PARAM_RE.search(candidate_path):
+    if path_has_placeholders(candidate_path):
         score += 12
-    if not PATH_PARAM_RE.search(candidate_path) and query_names:
+    if not path_has_placeholders(candidate_path) and query_names:
         score += 10
     lower = candidate_path.lower()
     for kw in _risk_keywords(risk_type):
@@ -321,13 +326,13 @@ def plan_snapshot_observers_for_probe(
     for candidate_path, ops in _paths(openapi).items():
         if not isinstance(ops, dict) or "get" not in ops:
             continue
-        path = str(candidate_path)
+        path = normalize_path_placeholders(str(candidate_path))
         op = _operation(openapi, "GET", path)
         query_names = _query_parameters(op)
         score = _base_score(target_path, path, risk_type, query_names)
         if score < 24:
             continue
-        path_params = {name: _param_value(name, primary_fixture_id, seed, probe) for name in PATH_PARAM_RE.findall(path)}
+        path_params = {name: _param_value(name, primary_fixture_id, seed, probe) for name in infer_path_params(path)}
         kind = _observer_kind(path, risk_type)
         query = _build_query(query_names, primary_fixture_id, seed, probe)
         observers.append({

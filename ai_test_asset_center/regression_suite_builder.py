@@ -102,6 +102,16 @@ def _load_fix_regression_probes(project: str, root: Path) -> list[dict[str, Any]
             if isinstance(item, dict) and item.get("approved") is True
         )
 
+    ui_high_conf = root / "platform_workspace" / project / "defect_discovery" / "ui_high_confidence_regression_candidates.json"
+    ui_high_conf_data = _load_json_safe(ui_high_conf, {})
+    ui_high_conf_items = ui_high_conf_data.get("items") if isinstance(ui_high_conf_data, dict) else ui_high_conf_data
+    if isinstance(ui_high_conf_items, list):
+        probes.extend(
+            {**item, "source": item.get("source") or "ui_high_confidence_candidate"}
+            for item in ui_high_conf_items
+            if isinstance(item, dict) and item.get("approved") is True
+        )
+
     if probes:
         return probes
 

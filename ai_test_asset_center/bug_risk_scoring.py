@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -35,6 +36,9 @@ def _status_code(finding: dict[str, Any]) -> int | None:
                 return int(value)
         except (TypeError, ValueError):
             continue
+    text_match = re.search(r"\b([45]\d{2})\b", _text_blob(finding))
+    if text_match:
+        return int(text_match.group(1))
     return None
 
 
@@ -63,7 +67,7 @@ def score_bug_risk(finding: dict[str, Any]) -> dict[str, Any]:
         reasons.append("major runtime or data-integrity symptom")
 
     if any(term in text for term in medium_terms):
-        score += 15
+        score += 30
         reasons.append("functional correctness symptom")
 
     if status_code is not None:

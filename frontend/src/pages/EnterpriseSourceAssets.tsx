@@ -153,7 +153,7 @@ export function EnterpriseSourceAssets() {
 
       <section className="card">
         <h2>已登记来源资产</h2>
-        {!loading && sortedAssets.length === 0 && <p className="muted">当前项目暂无来源资产。完成登记后可前往“受控 Campaign”选择版本生成计划。</p>}
+        {!loading && sortedAssets.length === 0 && <p className="muted">当前项目暂无来源资产。完成登记后可前往“运行中心”绑定来源并发起受控执行。</p>}
         {sortedAssets.length > 0 && <div className="table-wrap"><table><thead><tr><th>来源标识</th><th>类型</th><th>当前版本</th><th>哈希</th><th>版本数</th><th>更新时间</th></tr></thead><tbody>{sortedAssets.map((asset) => <tr key={asset.source_id}><td>{asset.source_id}</td><td>{asset.source_type}</td><td>{asset.latest_version_id}</td><td title={asset.latest_source_hash}>{shortHash(asset.latest_source_hash)}</td><td>{asset.version_count}</td><td>{formatDate(asset.updated_at_utc)}</td></tr>)}</tbody></table></div>}
       </section>
     </div>

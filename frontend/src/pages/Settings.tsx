@@ -154,6 +154,21 @@ function extractDbConfig(config?: SavedServiceConfig | null) {
   };
 }
 
+function hasConfiguredAuthMaterial(config?: SavedServiceConfig | null) {
+  const auth = asRecord(config?.auth);
+  if (asString(auth.bearer_token) || asString(auth.api_key)) return true;
+  return Object.entries(auth).some(([key, value]) => {
+    if (AUTH_METADATA_KEYS.has(key)) return false;
+    const entry = asRecord(value);
+    return Boolean(asString(entry.username) || asString(entry.password));
+  });
+}
+
+function hasConfiguredDbMaterial(config?: SavedServiceConfig | null) {
+  const db = asRecord(config?.db);
+  return Boolean(asString(db.host) && asString(db.name));
+}
+
 function findMatchingServiceConfig(connector: ConnectorRecord, services: SavedServiceConfig[]) {
   const endpoint = normalizeKey(connector.endpoint_ref || '');
   const displayName = normalizeKey(connector.display_name || '');
@@ -535,6 +550,35 @@ export function Settings() {
   const workspaceLabel = workspaceOptions.find((item) => item.id === project)?.label || '未选择客户';
   const enabledConnectors = topology.enabledConnectors;
   const disabledConnectors = topology.disabledConnectors;
+  const readinessBackendVerified = Boolean(health);
+  const readinessAuthCount = serviceConfigs.filter((service) => hasConfiguredAuthMaterial(service)).length;
+  const readinessDbCount = serviceConfigs.filter((service) => hasConfiguredDbMaterial(service)).length;
+  const readinessChecks = [
+    {
+      label: '后端联通',
+      value: readinessBackendVerified ? '已验证' : '待验证',
+      note: readinessBackendVerified ? '当前页面已通过真实健康检查拿到后端状态。' : '尚未通过真实健康检查确认服务在线。',
+      tone: readinessBackendVerified ? 'success' : 'warning',
+    },
+    {
+      label: '接入服务',
+      value: enabledConnectors > 0 ? `${enabledConnectors} 个已启用` : '待配置',
+      note: enabledConnectors > 0 ? '已登记的服务可用于标准扫描和受控执行。' : '请先维护被测服务 URL 和模块信息。',
+      tone: enabledConnectors > 0 ? 'success' : 'warning',
+    },
+    {
+      label: '鉴权材料',
+      value: readinessAuthCount > 0 ? `${readinessAuthCount} 组可复用` : '待配置',
+      note: readinessAuthCount > 0 ? '已保存账号、Token 或 API Key，可直接复用执行。' : '未发现可复用鉴权信息，真实执行易被登录阻断。',
+      tone: readinessAuthCount > 0 ? 'success' : 'warning',
+    },
+    {
+      label: '数据库校验',
+      value: readinessDbCount > 0 ? `${readinessDbCount} 组已配置` : '可选',
+      note: readinessDbCount > 0 ? '可为证据链补充 DB 一致性验证。' : '未配置数据库时仅做接口或页面侧验证。',
+      tone: readinessDbCount > 0 ? 'success' : 'neutral',
+    },
+  ];
   const llmHealthy = llmStatus === 'ok' || llmL.includes('online') || llmL.includes('OK');
   const llmStateText = llmStatus==='verifying'
     ? '检测中...'
@@ -643,6 +687,16 @@ export function Settings() {
           ))}
         </div>
       </section>
+
+      <div className="customer-summary-grid mb-4">
+        {readinessChecks.map((item) => (
+          <article key={item.label} className={`customer-summary-card tone-${item.tone}`}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <small>{item.note}</small>
+          </article>
+        ))}
+      </div>
 
       <div className="settings-layout">
         <SettingsCustomerSection

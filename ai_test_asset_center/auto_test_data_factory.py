@@ -22,8 +22,9 @@ from urllib.parse import urlparse
 
 import yaml
 
+from .real_id_resolver import infer_path_params, normalize_path_placeholders, path_has_placeholders
+
 BLOCKED_INPUT_PART_RE = re.compile(r"(?:oracle|ground[_-]?truth|bug[_-]?matrix|answer|solution|seed)", re.I)
-PATH_PARAM_RE = re.compile(r"\{([^{}]+)\}")
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 READ_METHODS = {"GET", "HEAD"}
 FIXTURE_BACKED_READ_RISKS = {
@@ -44,6 +45,9 @@ MUTATION_DEFAULT_FIELD = {
     "idempotency": "idempotency_key",
     "state": "status",
 }
+SQL_CREATE_TABLE_RE = re.compile(r"CREATE TABLE\s+([A-Za-z_][\w]*)\s*\((.*?)\);", re.I | re.S)
+SQL_REFERENCE_RE = re.compile(r"\bREFERENCES\s+([A-Za-z_][\w]*)\s*\(", re.I)
+SQL_SKIP_COLUMN_PREFIX_RE = re.compile(r"^(?:constraint|primary\s+key|foreign\s+key|unique|check)\b", re.I)
 
 
 def _now_seed() -> str:
@@ -93,6 +97,19 @@ def load_openapi_from_input(input_dir: str | Path | None) -> dict[str, Any]:
                 return {}
     return {}
 
+def _normalize_openapi_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(spec, dict):
+        return {}
+    paths = spec.get("paths")
+    if not isinstance(paths, dict):
+        return spec
+    normalized_paths: dict[str, Any] = {}
+    for raw_path, operations in paths.items():
+        normalized_paths[normalize_path_placeholders(str(raw_path or ""))] = operations
+    normalized = dict(spec)
+    normalized["paths"] = normalized_paths
+    return normalized
+
 
 def _resolve_ref(ref: str, spec: dict[str, Any]) -> dict[str, Any]:
     if not ref.startswith("#/"):
@@ -106,18 +123,18 @@ def _resolve_ref(ref: str, spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _canonical_suffix(path: str) -> str:
-    p = str(path or "")
+    p = normalize_path_placeholders(path)
     p = re.sub(r"^/api/v\d+(?:/[^/]+)?", "", p)
     return p or str(path or "")
 
 
 def _path_tokens(path: str) -> list[str]:
     suffix = _canonical_suffix(path)
-    return [t for t in re.split(r"/", suffix.strip("/")) if t and not t.startswith("{")]
+    return [t for t in re.split(r"/", suffix.strip("/")) if t and not (t.startswith("{") and t.endswith("}"))]
 
 
 def _collection_prefix(path: str) -> str:
-    parts = str(path or "").strip("/").split("/")
+    parts = normalize_path_placeholders(path).strip("/").split("/")
     out: list[str] = []
     for part in parts:
         if part.startswith("{"):
@@ -419,7 +436,7 @@ def _score_related_path(target: str, candidate: str) -> int:
     cp = _collection_prefix(target)
     if cp and _canonical_suffix(candidate).startswith(_canonical_suffix(cp)):
         score += 20
-    if PATH_PARAM_RE.search(candidate):
+    if path_has_placeholders(candidate):
         score += 5
     return score
 
@@ -430,7 +447,7 @@ def _find_create_endpoint(spec: dict[str, Any], target_path: str) -> str:
     for p, ops in _paths(spec).items():
         if not isinstance(ops, dict) or "post" not in ops:
             continue
-        if PATH_PARAM_RE.search(str(p)):
+        if path_has_placeholders(str(p)):
             continue
         score = _score_related_path(target_path, str(p))
         if target_collection and _canonical_suffix(str(p)) == _canonical_suffix(target_collection):
@@ -447,7 +464,7 @@ def _find_read_endpoint(spec: dict[str, Any], target_path: str) -> str:
     for p, ops in _paths(spec).items():
         if not isinstance(ops, dict) or "get" not in ops:
             continue
-        if not PATH_PARAM_RE.search(str(p)):
+        if not path_has_placeholders(str(p)):
             continue
         score = _score_related_path(target_path, str(p))
         if _canonical_suffix(str(p)) == _canonical_suffix(target_path):
@@ -462,7 +479,7 @@ def _find_delete_endpoint(spec: dict[str, Any], target_path: str) -> str:
     for p, ops in _paths(spec).items():
         if not isinstance(ops, dict) or "delete" not in ops:
             continue
-        if not PATH_PARAM_RE.search(str(p)):
+        if not path_has_placeholders(str(p)):
             continue
         score = _score_related_path(target_path, str(p))
         if _canonical_suffix(str(p)) == _canonical_suffix(target_path):
@@ -472,26 +489,216 @@ def _find_delete_endpoint(spec: dict[str, Any], target_path: str) -> str:
     return best[1] if best[0] >= 15 else ""
 
 
+def _find_patch_cleanup_endpoint(spec: dict[str, Any], target_path: str) -> str:
+    best: tuple[int, str] = (0, "")
+    target_collection = normalize_path_placeholders(_collection_prefix(target_path)).rstrip("/")
+    target_suffix = _canonical_suffix(target_path)
+    for p, ops in _paths(spec).items():
+        if not isinstance(ops, dict) or "patch" not in ops:
+            continue
+        if not path_has_placeholders(str(p)):
+            continue
+        candidate = normalize_path_placeholders(str(p)).rstrip("/")
+        score = _score_related_path(target_path, str(p))
+        if target_collection and candidate.startswith(target_collection + "/"):
+            score += 25
+        if _canonical_suffix(str(p)) == target_suffix:
+            score += 50
+        if score > best[0]:
+            best = (score, str(p))
+    return best[1] if best[0] >= 25 else ""
+
+
+def _find_cleanup_endpoint(spec: dict[str, Any], target_path: str) -> tuple[str, str]:
+    delete_path = _find_delete_endpoint(spec, target_path)
+    if delete_path:
+        return "DELETE", delete_path
+    best: tuple[int, str, str] = (0, "", "")
+    normalized_target = normalize_path_placeholders(target_path).rstrip("/")
+    cleanup_action_re = re.compile(r"/(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|delete)$", re.I)
+    for p, ops in _paths(spec).items():
+        if not isinstance(ops, dict) or not path_has_placeholders(str(p)):
+            continue
+        if not cleanup_action_re.search(str(p)):
+            continue
+        for method in ("post", "patch"):
+            if method not in ops:
+                continue
+            score = _score_related_path(target_path, str(p))
+            if normalized_target and normalize_path_placeholders(str(p)).startswith(normalized_target + "/"):
+                score += 35
+            if score > best[0]:
+                best = (score, method.upper(), str(p))
+    if best[0] >= 20:
+        return best[1], best[2]
+    patch_path = _find_patch_cleanup_endpoint(spec, target_path)
+    if patch_path:
+        return "PATCH", patch_path
+    return "", ""
+
+
 
 
 def _fixture_backed_read_probe(probe: dict[str, Any], method: str, path: str) -> bool:
     if str(method or "").upper() not in READ_METHODS:
         return False
-    if not PATH_PARAM_RE.search(str(path or "")):
+    if not path_has_placeholders(str(path or "")):
         return False
     risk = str(probe.get("risk_type") or "")
     plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
     return risk in FIXTURE_BACKED_READ_RISKS or isinstance(plan.get("auth_boundary"), dict)
 
 def _bind_path_params(path: str, generated_id: str) -> dict[str, str]:
-    return {name: generated_id for name in PATH_PARAM_RE.findall(path)}
+    return {name: generated_id for name in infer_path_params(path)}
 
 
-def _make_setup_body(spec: dict[str, Any], create_path: str, seed: str, generated_id: str, probe: dict[str, Any]) -> dict[str, Any]:
+def _deep_merge_dict(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_dict(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _placeholder_body_value(name: str, seed: str, generated_id: str) -> str:
+    lname = str(name or "").strip().lower()
+    if not lname:
+        return generated_id
+    if any(token in lname for token in ("sku", "product", "goods", "item")):
+        return "SKU-PHONE-001"
+    if "coupon" in lname:
+        return "NEW100"
+    if "address" in lname:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"qualibug:address:{seed}"))
+    if "uuid" in lname:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"qualibug:{lname}:{seed}"))
+    if any(token in lname for token in ("amount", "price", "total")):
+        return "1"
+    if any(token in lname for token in ("id", "uuid", "key", "code", "no", "number")):
+        return generated_id
+    return f"qb_auto_{re.sub(r'[^a-z0-9_]+', '_', lname).strip('_') or 'value'}_{seed}"
+
+
+def _materialize_example_placeholders(value: Any, seed: str, generated_id: str, field_name: str = "") -> Any:
+    if isinstance(value, dict):
+        return {str(key): _materialize_example_placeholders(child, seed, generated_id, str(key)) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_materialize_example_placeholders(child, seed, generated_id, field_name) for child in value]
+    if not isinstance(value, str):
+        return value
+
+    def repl(match: re.Match[str]) -> str:
+        placeholder = str(match.group(1) or "").strip()
+        return _placeholder_body_value(placeholder or field_name, seed, generated_id)
+
+    rendered = re.sub(r"<([A-Za-z_]\w*)>", repl, value)
+    return rendered
+
+
+def _markdown_request_example(api_doc_text: str, method: str, path: str) -> dict[str, Any]:
+    lines = str(api_doc_text or "").splitlines()
+    if not lines:
+        return {}
+    target_method = str(method or "").upper()
+    target_path = normalize_path_placeholders(path).strip()
+    header_re = re.compile(r"^###\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)", re.I)
+    current_method = ""
+    current_path = ""
+    in_request_block = False
+    in_json = False
+    buffer: list[str] = []
+    for raw in lines:
+        line = str(raw or "")
+        header = header_re.match(line.strip())
+        if header:
+            if in_json and current_method == target_method and current_path == target_path and buffer:
+                try:
+                    parsed = json.loads("\n".join(buffer))
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    return {}
+            current_method = str(header.group(1) or "").upper()
+            current_path = normalize_path_placeholders(str(header.group(2) or "").strip())
+            in_request_block = False
+            in_json = False
+            buffer = []
+            continue
+        if current_method != target_method or current_path != target_path:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("响应"):
+            in_request_block = False
+        if stripped.startswith("请求"):
+            in_request_block = True
+            continue
+        if in_request_block and stripped.startswith("```json"):
+            in_json = True
+            buffer = []
+            continue
+        if in_json and stripped.startswith("```"):
+            try:
+                parsed = json.loads("\n".join(buffer))
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        if in_json:
+            buffer.append(line)
+    return {}
+
+
+def _request_example_body(api_doc_text: str, method: str, path: str, seed: str, generated_id: str) -> dict[str, Any]:
+    example = _markdown_request_example(api_doc_text, method, path)
+    if not isinstance(example, dict):
+        return {}
+    rendered = _materialize_example_placeholders(example, seed, generated_id)
+    return rendered if isinstance(rendered, dict) else {}
+
+
+def _resource_identity_value(field: str, seed: str, generated_id: str) -> Any:
+    lname = str(field or "").strip().lower()
+    if "sku" in lname:
+        return f"qb_auto_sku_{seed}"
+    if any(token in lname for token in ("code", "no", "number", "key")):
+        return f"qb_auto_{re.sub(r'[^a-z0-9_]+', '_', lname).strip('_') or 'code'}_{seed}"
+    if any(token in lname for token in ("id", "uuid")):
+        return generated_id
+    return _placeholder_body_value(field, seed, generated_id)
+
+
+def _resource_identity_defaults(path: str, seed: str, generated_id: str) -> dict[str, Any]:
+    defaults: dict[str, Any] = {}
+    for name in infer_path_params(path):
+        field = str(name or "").strip()
+        if not field:
+            continue
+        value = _resource_identity_value(field, seed, generated_id)
+        defaults.setdefault(field, value)
+        camel = _snake_to_camel(field)
+        if camel and camel != field:
+            defaults.setdefault(camel, value)
+    return defaults
+
+
+def _make_setup_body(
+    spec: dict[str, Any],
+    create_path: str,
+    seed: str,
+    generated_id: str,
+    probe: dict[str, Any],
+    api_doc_text: str = "",
+    *,
+    target_path: str = "",
+) -> dict[str, Any]:
     schema = _schema_for_endpoint(spec, "POST", create_path)
     body = _schema_value("fixture_body", schema, seed) if schema else {}
     if not isinstance(body, dict):
         body = {"value": body}
+    example = _request_example_body(api_doc_text, "POST", create_path, seed, generated_id)
+    if example:
+        body = _deep_merge_dict(body, example)
     # Give the target every common ID/name field it might accept.  Test targets
     # commonly accept client-generated IDs in disposable fixtures; if they ignore
     # these fields, response IDs are still captured in receipts.
@@ -500,10 +707,328 @@ def _make_setup_body(spec: dict[str, Any], create_path: str, seed: str, generate
         "object_id": generated_id,
         "entity_id": generated_id,
         "name": f"qb_auto_fixture_{seed}",
-        "status": "cancelled" if str(probe.get("risk_type")) == "state_transition_probe" else body.get("status", "active"),
         "qualibug_test_run_id": f"qb_auto_run_{seed}",
     })
+    if str(probe.get("risk_type")) == "state_transition_probe":
+        body["status"] = "cancelled"
+    for field, value in _resource_identity_defaults(target_path or create_path, seed, generated_id).items():
+        body.setdefault(field, value)
     return body
+
+
+def _cleanup_transition_body(spec: dict[str, Any], method: str, cleanup_path: str, seed: str, generated_id: str) -> dict[str, Any]:
+    op_schema = _schema_for_endpoint(spec, method, cleanup_path)
+    props = op_schema.get("properties") if isinstance(op_schema.get("properties"), dict) else {}
+    terminal_values = (
+        "DELETED",
+        "CANCELLED",
+        "CLOSED",
+        "OFF_SALE",
+        "DISABLED",
+        "INACTIVE",
+        "ARCHIVED",
+        "REMOVED",
+        "REJECTED",
+        "VOID",
+    )
+    for field in ("status", "state", "phase", "stage"):
+        prop = props.get(field) if isinstance(props, dict) else None
+        if not isinstance(prop, dict):
+            continue
+        enum_values = [str(item) for item in (prop.get("enum") or []) if item not in (None, "")]
+        for candidate in terminal_values:
+            if candidate in enum_values:
+                return {field: candidate}
+        if enum_values:
+            return {field: enum_values[-1]}
+    return {"status": "DELETED"}
+
+
+def _load_schema_text(input_dir: str | Path | None) -> str:
+    if not input_dir:
+        return ""
+    root = Path(input_dir).resolve()
+    if not root.exists():
+        return ""
+    chunks: list[str] = []
+    for path in sorted(root.glob("*.sql")):
+        if _contains_blocked_path(path, root):
+            continue
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="replace")[:1_000_000])
+        except OSError:
+            continue
+    return "\n\n".join(chunks)
+
+
+def _snake_to_camel(name: str) -> str:
+    parts = [part for part in str(name or "").strip().split("_") if part]
+    if not parts:
+        return ""
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+
+def _normalized_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
+
+
+def _parse_sql_tables(schema_text: str) -> dict[str, dict[str, Any]]:
+    tables: dict[str, dict[str, Any]] = {}
+    for match in SQL_CREATE_TABLE_RE.finditer(str(schema_text or "")):
+        table_name = str(match.group(1) or "").strip().lower()
+        body = str(match.group(2) or "")
+        if not table_name or not body:
+            continue
+        columns: dict[str, dict[str, Any]] = {}
+        foreign_keys: dict[str, str] = {}
+        for raw_line in body.splitlines():
+            line = str(raw_line or "").strip().rstrip(",")
+            if not line or SQL_SKIP_COLUMN_PREFIX_RE.match(line):
+                continue
+            column_match = re.match(r"^([A-Za-z_][\w]*)\s+(.+)$", line)
+            if not column_match:
+                continue
+            column_name = str(column_match.group(1) or "").strip().lower()
+            definition = str(column_match.group(2) or "").strip()
+            if not column_name or not definition:
+                continue
+            reference_match = SQL_REFERENCE_RE.search(definition)
+            reference_table = str(reference_match.group(1) or "").strip().lower() if reference_match else ""
+            column_meta = {
+                "type": str(definition.split()[0] if definition.split() else "").strip().lower(),
+                "definition": definition,
+                "not_null": "NOT NULL" in definition.upper(),
+                "has_default": "DEFAULT" in definition.upper(),
+                "references": reference_table,
+            }
+            columns[column_name] = column_meta
+            if reference_table:
+                foreign_keys[column_name] = reference_table
+        if columns:
+            tables[table_name] = {"columns": columns, "foreign_keys": foreign_keys}
+    return tables
+
+
+def _infer_table_from_path(path: str, tables: dict[str, dict[str, Any]]) -> str:
+    table_names = {str(name).lower() for name in tables.keys()}
+    for token in reversed(_path_tokens(path)):
+        candidate = str(token or "").strip().lower()
+        if candidate in table_names:
+            return candidate
+    return ""
+
+
+def _body_has_any_field(value: Any, aliases: set[str]) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _normalized_name(str(key)) in aliases:
+                return True
+            if _body_has_any_field(child, aliases):
+                return True
+    elif isinstance(value, list):
+        return any(_body_has_any_field(child, aliases) for child in value[:20])
+    return False
+
+
+def _replace_body_fields(value: Any, aliases: set[str], replacement: Any) -> Any:
+    if isinstance(value, dict):
+        rendered: dict[str, Any] = {}
+        for key, child in value.items():
+            if _normalized_name(str(key)) in aliases and not isinstance(child, (dict, list)):
+                rendered[str(key)] = replacement
+            else:
+                rendered[str(key)] = _replace_body_fields(child, aliases, replacement)
+        return rendered
+    if isinstance(value, list):
+        return [_replace_body_fields(child, aliases, replacement) for child in value]
+    return value
+
+
+def _column_fixture_value(column_name: str, column_meta: dict[str, Any], seed: str) -> Any:
+    lname = str(column_name or "").strip().lower()
+    ctype = str((column_meta or {}).get("type") or "").strip().lower()
+    definition = str((column_meta or {}).get("definition") or "")
+    if lname in {"id", "created_at", "updated_at", "deleted_at", "paid_at", "cancelled_at"}:
+        return None
+    if (column_meta or {}).get("references"):
+        return None
+    if lname in {"status", "state", "phase", "stage"}:
+        enum_match = re.search(r"\bIN\s*\(([^)]+)\)", definition, re.I)
+        if enum_match:
+            enum_values = [item.strip().strip("'\"") for item in str(enum_match.group(1) or "").split(",")]
+            enum_values = [item for item in enum_values if item]
+            if enum_values:
+                return enum_values[0]
+    if "bool" in ctype:
+        return True
+    if any(token in ctype for token in ("int", "numeric", "decimal", "float", "double", "real")):
+        return 1
+    if any(token in lname for token in ("phone", "mobile")):
+        return "15500000000"
+    if "email" in lname:
+        return f"qb-auto-{seed}@qualibug.local"
+    if any(token in lname for token in ("province", "state", "region")):
+        return "qb_auto_region"
+    if "city" in lname:
+        return "qb_auto_city"
+    if any(token in lname for token in ("detail", "address", "street")):
+        return f"qb_auto_detail_{seed}"
+    if any(token in lname for token in ("receiver", "contact", "consignee", "name")):
+        return f"qb_auto_{lname}_{seed}"
+    if "uuid" in ctype:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"qualibug:{lname}:{seed}"))
+    return _placeholder_body_value(lname, seed, f"qb_auto_{lname}_{seed}")
+
+
+def _dependency_setup_body(table: str, tables: dict[str, dict[str, Any]], seed: str) -> dict[str, Any]:
+    table_meta = tables.get(str(table or "").lower()) if isinstance(tables, dict) else {}
+    columns = table_meta.get("columns") if isinstance(table_meta, dict) else {}
+    if not isinstance(columns, dict):
+        return {}
+    body: dict[str, Any] = {}
+    for column_name, column_meta in columns.items():
+        if not isinstance(column_meta, dict):
+            continue
+        required = bool(column_meta.get("not_null")) and not bool(column_meta.get("has_default"))
+        if not required:
+            continue
+        value = _column_fixture_value(str(column_name), column_meta, seed)
+        if value is None:
+            continue
+        body[str(column_name)] = value
+        camel_name = _snake_to_camel(str(column_name))
+        if camel_name and camel_name != column_name:
+            body[camel_name] = value
+    return body
+
+
+def _api_prefix_candidates(path: str) -> list[str]:
+    normalized = normalize_path_placeholders(path)
+    match = re.match(r"^(/api(?:/v\d+)?)\b", normalized)
+    prefixes = [str(match.group(1))] if match else []
+    if "/api" not in prefixes:
+        prefixes.append("/api")
+    prefixes.append("")
+    unique: list[str] = []
+    for prefix in prefixes:
+        if prefix not in unique:
+            unique.append(prefix)
+    return unique
+
+
+def _resource_suffix_candidates(
+    table_name: str,
+    tables: dict[str, dict[str, Any]],
+    *,
+    with_id: bool,
+    max_depth: int = 2,
+    _visited: set[str] | None = None,
+) -> list[str]:
+    resource = str(table_name or "").strip().strip("/").lower()
+    if not resource:
+        return []
+    visited = set(_visited or set())
+    if resource in visited:
+        return []
+    visited.add(resource)
+    base_suffix = f"/{resource}" + ("/{id}" if with_id else "")
+    suffixes: list[str] = [base_suffix]
+    if max_depth <= 0:
+        return suffixes
+    table_meta = tables.get(resource) if isinstance(tables, dict) else {}
+    foreign_keys = table_meta.get("foreign_keys") if isinstance(table_meta, dict) else {}
+    if not isinstance(foreign_keys, dict):
+        return suffixes
+    parent_tables = [str(parent or "").strip().lower() for parent in foreign_keys.values() if str(parent or "").strip()]
+    for parent in dict.fromkeys(parent_tables):
+        for parent_suffix in _resource_suffix_candidates(parent, tables, with_id=False, max_depth=max_depth - 1, _visited=visited):
+            nested = f"{parent_suffix}/{resource}" + ("/{id}" if with_id else "")
+            if nested not in suffixes:
+                suffixes.append(nested)
+    return suffixes
+
+
+def _resource_path_candidates(reference_table: str, base_path: str, tables: dict[str, dict[str, Any]], *, with_id: bool) -> list[str]:
+    paths: list[str] = []
+    suffixes = _resource_suffix_candidates(reference_table, tables, with_id=with_id)
+    ordered_suffixes = sorted(
+        suffixes,
+        key=lambda item: (-item.count("/"), 0 if item.startswith("/users/") else 1, item),
+    )
+    for prefix in _api_prefix_candidates(base_path):
+        for suffix in ordered_suffixes:
+            candidate = f"{prefix}{suffix}" if prefix else suffix
+            normalized = normalize_path_placeholders(candidate)
+            if normalized not in paths:
+                paths.append(normalized)
+    return paths
+
+
+def _plan_fk_dependency_fixtures(
+    *,
+    input_dir: str | Path | None,
+    create_path: str,
+    seed: str,
+    setup_body: dict[str, Any],
+    target_body: dict[str, Any],
+    path_params: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    schema_text = _load_schema_text(input_dir)
+    tables = _parse_sql_tables(schema_text)
+    target_table = _infer_table_from_path(create_path, tables)
+    if not target_table:
+        return setup_body, target_body, [], []
+    table_meta = tables.get(target_table) if isinstance(tables, dict) else {}
+    foreign_keys = table_meta.get("foreign_keys") if isinstance(table_meta, dict) else {}
+    if not isinstance(foreign_keys, dict):
+        return setup_body, target_body, [], []
+    current_setup = dict(setup_body)
+    current_target = dict(target_body)
+    setup_requests: list[dict[str, Any]] = []
+    cleanup_requests: list[dict[str, Any]] = []
+    target_defaults = _dependency_setup_body(target_table, tables, seed)
+    for key, value in target_defaults.items():
+        current_setup.setdefault(key, value)
+    for column_name, reference_table in foreign_keys.items():
+        bind_field = str(column_name or "").strip().lower()
+        reference = str(reference_table or "").strip().lower()
+        if not bind_field or not reference:
+            continue
+        aliases = {_normalized_name(bind_field)}
+        camel_alias = _snake_to_camel(bind_field)
+        if camel_alias:
+            aliases.add(_normalized_name(camel_alias))
+        if not _body_has_any_field(current_setup, aliases) and not _body_has_any_field(current_target, aliases):
+            continue
+        placeholder = f"qb_auto_ref_{bind_field}_{uuid.uuid4().hex[:8]}"
+        path_params[bind_field] = placeholder
+        current_setup = _replace_body_fields(current_setup, aliases, placeholder)
+        current_target = _replace_body_fields(current_target, aliases, placeholder)
+        dependency_body = _dependency_setup_body(reference, tables, seed)
+        create_candidates = _resource_path_candidates(reference, create_path, tables, with_id=False)
+        delete_candidates = _resource_path_candidates(reference, create_path, tables, with_id=True)
+        if create_candidates:
+            setup_requests.append(
+                {
+                    "purpose": f"create_dependency_fixture_{reference}",
+                    "method": "POST",
+                    "path": create_candidates[0],
+                    "path_candidates": create_candidates,
+                    "body": dependency_body,
+                    "bind_response_id_to": [bind_field],
+                }
+            )
+        if delete_candidates:
+            cleanup_requests.append(
+                {
+                    "purpose": f"cleanup_dependency_fixture_{reference}",
+                    "method": "DELETE",
+                    "path": delete_candidates[0],
+                    "path_candidates": delete_candidates,
+                    "path_params": {"id": placeholder},
+                }
+            )
+    return current_setup, current_target, setup_requests, cleanup_requests
 
 
 def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -520,6 +1045,16 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     cid = str(probe.get("candidate_id") or "probe")
     seed = re.sub(r"[^A-Za-z0-9_]+", "_", f"{cid}_{_now_seed()}")
     spec = load_openapi_from_input(input_dir or cfg.get("input_dir") or cfg.get("project_input_dir"))
+    if not spec:
+        api_doc_text = str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or "").strip()
+        if api_doc_text:
+            try:
+                from .universal_api_parser import parse_to_openapi
+
+                spec = parse_to_openapi(api_doc_text)
+            except Exception:
+                spec = {}
+    spec = _normalize_openapi_spec(spec)
 
     generated_id = f"qb_auto_{re.sub(r'[^a-z0-9_]+', '_', cid.lower()).strip('_')}_{uuid.uuid4().hex[:8]}"
     path_params = _bind_path_params(path, generated_id)
@@ -527,6 +1062,9 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     body = _schema_value("request_body", schema, seed) if schema else {}
     if not isinstance(body, dict):
         body = {"value": body}
+    example_body = _request_example_body(str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or ""), method, path, seed, generated_id)
+    if example_body:
+        body = _deep_merge_dict(body, example_body)
     body.update(_risk_augmented_body(probe, seed, path_params))
     body, mutation_application = _apply_mutation_to_body(body, probe, seed)
 
@@ -545,15 +1083,34 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     fixture_backed_read = _fixture_backed_read_probe(probe, method, path)
     if spec and (method in WRITE_METHODS or fixture_backed_read):
         create_path = _materialize_spec_path(spec, _find_create_endpoint(spec, path))
-        read_path = path if method in READ_METHODS and PATH_PARAM_RE.search(path) else _materialize_spec_path(spec, _find_read_endpoint(spec, path))
-        delete_path = _materialize_spec_path(spec, _find_delete_endpoint(spec, path))
+        read_path = normalize_path_placeholders(path) if method in READ_METHODS and path_has_placeholders(path) else _materialize_spec_path(spec, _find_read_endpoint(spec, path))
+        cleanup_method, cleanup_path = _find_cleanup_endpoint(spec, path)
+        cleanup_path = _materialize_spec_path(spec, cleanup_path)
         if create_path:
+            primary_setup_body = _make_setup_body(
+                spec,
+                create_path,
+                seed,
+                generated_id,
+                probe,
+                str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or ""),
+                target_path=path,
+            )
+            primary_setup_body, body, dependency_setup_requests, dependency_cleanup_requests = _plan_fk_dependency_fixtures(
+                input_dir=input_dir or cfg.get("input_dir") or cfg.get("project_input_dir"),
+                create_path=create_path,
+                seed=seed,
+                setup_body=primary_setup_body,
+                target_body=body,
+                path_params=path_params,
+            )
+            setup_requests.extend(dependency_setup_requests)
             setup_requests.append({
                 "purpose": "create_disposable_qb_auto_fixture",
                 "method": "POST",
                 "path": create_path,
-                "body": _make_setup_body(spec, create_path, seed, generated_id, probe),
-                "bind_response_id_to": list(PATH_PARAM_RE.findall(path)) or ["id"],
+                "body": primary_setup_body,
+                "bind_response_id_to": infer_path_params(path) or ["id"],
             })
 
         # Phase92Q: plan multiple read-only observers instead of relying on only
@@ -584,8 +1141,12 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
         elif read_path:
             snapshot_req = {"method": "GET", "path": read_path, "path_params": _bind_path_params(read_path, generated_id), "observer_kind": "primary_resource_detail", "source": "phase92q_fallback_direct_read_endpoint"}
             snapshots = {"before": [snapshot_req], "after": [snapshot_req], "note": "auto-inferred from OpenAPI GET resource endpoint", "planner": observer_plan.get("planner"), "coverage": ["primary_resource_detail"]}
-        if delete_path:
-            cleanup_requests.append({"method": "DELETE", "path": delete_path, "path_params": _bind_path_params(delete_path, generated_id), "purpose": "cleanup_qb_auto_fixture"})
+        if cleanup_method and cleanup_path:
+            cleanup_request = {"method": cleanup_method, "path": cleanup_path, "path_params": _bind_path_params(cleanup_path, generated_id), "purpose": "cleanup_qb_auto_fixture"}
+            if cleanup_method in {"PATCH", "PUT"}:
+                cleanup_request["body"] = _cleanup_transition_body(spec, cleanup_method, cleanup_path, seed, generated_id)
+            cleanup_requests.append(cleanup_request)
+        cleanup_requests.extend(dependency_cleanup_requests if 'dependency_cleanup_requests' in locals() else [])
 
     return {
         "mode": "auto_generated_by_qualibug",

@@ -316,37 +316,42 @@ def _prepare_scan_body_for_campaign(project: str, root: Path, body: dict[str, An
 
 
 def _build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any]:
-    """Build the V12 campaign_context from the frontend scan contract."""
-    context: dict[str, Any] = {}
-    manifest = _source_manifest_from_body(body)
-    if manifest:
-        context["source_manifest"] = manifest
+    """Build the V12 campaign_context from the shared private-pilot contract helper."""
+    try:
+        from ai_test_asset_center.private_pilot_scan_context_contract import build_campaign_context_from_scan_body
 
-    for key in (
-        "base_url",
-        "scope_id",
-        "environment_ref",
-        "target_environment",
-        "execution_approval_id",
-        "execution_mode",
-    ):
-        value = _text(body.get(key))
-        if value:
-            context[key] = value
+        return build_campaign_context_from_scan_body(body)
+    except Exception:
+        context: dict[str, Any] = {}
+        manifest = _source_manifest_from_body(body)
+        if manifest:
+            context["source_manifest"] = manifest
 
-    if "execution_mode" not in context:
-        context["execution_mode"] = "safe_read_only"
+        for key in (
+            "base_url",
+            "scope_id",
+            "environment_ref",
+            "target_environment",
+            "execution_approval_id",
+            "execution_mode",
+        ):
+            value = _text(body.get(key))
+            if value:
+                context[key] = value
 
-    test_data_contract = _dict(body.get("test_data_contract"))
-    if test_data_contract:
-        context["test_data_contract"] = test_data_contract
-    elif _text(body.get("test_data_strategy")):
-        context["test_data_contract"] = {"strategy": _text(body.get("test_data_strategy"))}
+        if "execution_mode" not in context:
+            context["execution_mode"] = "safe_read_only"
 
-    release_policy = _dict(body.get("release_policy"))
-    if release_policy:
-        context["release_policy"] = release_policy
-    return context
+        test_data_contract = _dict(body.get("test_data_contract"))
+        if test_data_contract:
+            context["test_data_contract"] = test_data_contract
+        elif _text(body.get("test_data_strategy")):
+            context["test_data_contract"] = {"strategy": _text(body.get("test_data_strategy"))}
+
+        release_policy = _dict(body.get("release_policy"))
+        if release_policy:
+            context["release_policy"] = release_policy
+        return context
 
 
 def _append_unique(values: Any, item: str) -> list[str]:
@@ -658,4 +663,8 @@ def restore_customer_delivery_gate_patch() -> None:
 
 def run_server() -> None:
     install_customer_delivery_gate_patch()
-    _service.run_server()
+    server = _service.run_private_pilot_service()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()

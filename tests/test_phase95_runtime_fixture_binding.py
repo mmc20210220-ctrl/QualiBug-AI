@@ -123,3 +123,100 @@ def test_auth_boundary_fixture_setup_uses_control_headers_but_target_is_negative
     assert cleanup_call["headers"]["Authorization"] == "Bearer sandbox-admin"
     assert "Authorization" not in target_call["headers"]
     assert "X-Tenant-Id" not in target_call["headers"]
+
+
+def test_setup_request_falls_back_to_next_path_candidate_on_route_not_found(monkeypatch) -> None:
+    probe = _probe()
+    config = _config(probe)
+    config["_auto_fixture_runtime"][probe["candidate_id"]]["setup_requests"] = [
+        {
+            "purpose": "create_disposable_qb_auto_fixture",
+            "method": "POST",
+            "path": "/api/v1/orders",
+            "body": {"id": "qb_auto_client_1", "name": "fixture"},
+            "bind_response_id_to": ["order_id"],
+        },
+        {
+            "purpose": "create_dependency_fixture_address",
+            "method": "POST",
+            "path": "/api/addresses",
+            "path_candidates": ["/api/addresses", "/addresses"],
+            "body": {"receiver": "qb_auto_receiver", "phone": "15500000000"},
+            "bind_response_id_to": ["address_id"],
+        },
+    ]
+    config["_auto_fixture_runtime"][probe["candidate_id"]]["request_body"]["address_id"] = "qb_auto_address_1"
+    calls: list[dict[str, Any]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body: Any = None, timeout: float = 10.0) -> dict[str, Any]:
+        calls.append({"method": method, "url": url, "headers": dict(headers), "body": body})
+        if method == "POST" and url.endswith("/api/v1/orders"):
+            return {"status_code": 201, "payload": {"id": "srv_order_123"}, "duration_ms": 1}
+        if method == "POST" and url.endswith("/api/addresses"):
+            return {"status_code": 404, "payload": {"error": "not found"}, "duration_ms": 1}
+        if method == "POST" and url.endswith("/addresses"):
+            return {"status_code": 201, "payload": {"id": "srv_address_456"}, "duration_ms": 1}
+        return {"status_code": 200, "payload": {"id": "srv_order_123", "status": "ok"}, "duration_ms": 1}
+
+    monkeypatch.setattr(gpe, "_http_request", fake_http)
+
+    result = _execute_write_probe(probe, _decision(probe), config, "http://sandbox", timeout=3.0)
+
+    address_receipt = result["fixture_receipts"][1]
+    assert address_receipt["accepted"] is True
+    assert address_receipt["path"] == "/addresses"
+    assert address_receipt["path_candidates_tried"] == ["/api/addresses", "/addresses"]
+    assert any(c["url"].endswith("/api/addresses") for c in calls)
+    assert any(c["url"].endswith("/addresses") for c in calls)
+
+
+def test_later_setup_request_uses_runtime_id_from_earlier_setup_response(monkeypatch) -> None:
+    probe = _probe()
+    config = _config(probe)
+    config["_auto_fixture_runtime"][probe["candidate_id"]]["request_body"]["addressId"] = "qb_auto_address_1"
+    config["_auto_fixture_runtime"][probe["candidate_id"]]["path_params"]["address_id"] = "qb_auto_address_1"
+    config["_auto_fixture_runtime"][probe["candidate_id"]]["setup_requests"] = [
+        {
+            "purpose": "create_dependency_fixture_address",
+            "method": "POST",
+            "path": "/api/v1/addresses",
+            "body": {"receiver": "qb_auto_receiver", "phone": "15500000000"},
+            "bind_response_id_to": ["address_id"],
+        },
+        {
+            "purpose": "create_disposable_qb_auto_fixture",
+            "method": "POST",
+            "path": "/api/v1/orders",
+            "body": {"addressId": "qb_auto_address_1", "status": "draft"},
+            "bind_response_id_to": ["order_id"],
+        },
+    ]
+    config["_auto_fixture_runtime"][probe["candidate_id"]]["cleanup_requests"] = [
+        {
+            "method": "POST",
+            "path": "/api/v1/orders/{order_id}/cancel",
+            "path_params": {"order_id": "qb_auto_client_1"},
+            "purpose": "cleanup_qb_auto_fixture",
+        }
+    ]
+    calls: list[dict[str, Any]] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body: Any = None, timeout: float = 10.0) -> dict[str, Any]:
+        calls.append({"method": method, "url": url, "headers": dict(headers), "body": body})
+        if method == "POST" and url.endswith("/api/v1/addresses"):
+            return {"status_code": 201, "payload": {"id": "srv_addr_456"}, "duration_ms": 1}
+        if method == "POST" and url.endswith("/api/v1/orders"):
+            assert body["addressId"] == "srv_addr_456"
+            return {"status_code": 201, "payload": {"id": "srv_order_123"}, "duration_ms": 1}
+        if method == "POST" and url.endswith("/api/v1/orders/srv_order_123/cancel"):
+            return {"status_code": 200, "payload": {"id": "srv_order_123", "status": "CANCELLED"}, "duration_ms": 1}
+        return {"status_code": 200, "payload": {"id": "srv_order_123", "status": "ok"}, "duration_ms": 1}
+
+    monkeypatch.setattr(gpe, "_http_request", fake_http)
+
+    _execute_write_probe(probe, _decision(probe), config, "http://sandbox", timeout=3.0)
+
+    order_setup_call = next(c for c in calls if c["method"] == "POST" and c["url"].endswith("/api/v1/orders"))
+    cleanup_call = next(c for c in calls if c["method"] == "POST" and c["url"].endswith("/cancel"))
+    assert order_setup_call["body"]["addressId"] == "srv_addr_456"
+    assert cleanup_call["url"].endswith("/api/v1/orders/srv_order_123/cancel")

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105L: frontend experience delivery bundle for QualiBug.
 
@@ -153,7 +153,10 @@ def _scan_files(root: Path, patterns: Sequence[str]) -> list[str]:
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in {".html", ".css", ".js", ".json", ".md", ".txt", ".yml", ".yaml"}:
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except FileNotFoundError:
+            continue
         for pattern in patterns:
             if pattern in text:
                 leaks.append(f"{path.relative_to(root)} contains forbidden pattern {pattern}")
@@ -539,4 +542,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-

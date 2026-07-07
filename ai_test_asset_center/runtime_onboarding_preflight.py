@@ -69,6 +69,7 @@ def _check(name: str, ok: bool, message: str, *, severity: str = "info", skipped
         "status": _status(bool(ok), failed_is_blocking=severity == "blocking", skipped=skipped),
         "severity": severity,
         "message": message,
+        "skipped": bool(skipped),
     }
     item.update({k: v for k, v in extra.items() if v is not None})
     return item
@@ -258,6 +259,73 @@ def _auth_readiness(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _service_credentials_readiness(config: dict[str, Any]) -> dict[str, Any]:
+    raw_services = config.get("services") or config.get("service_credentials") or []
+    services = [svc for svc in raw_services if isinstance(svc, dict)] if isinstance(raw_services, list) else []
+    enabled_services = [svc for svc in services if svc.get("enabled", True) is not False]
+    configured_auth = 0
+    verified_auth = 0
+    configured_db = 0
+    verified_db = 0
+    unverified: list[str] = []
+    for svc in enabled_services:
+        name = str(svc.get("name") or svc.get("service") or "service")
+        auth = svc.get("auth") if isinstance(svc.get("auth"), dict) else {}
+        db = svc.get("db") if isinstance(svc.get("db"), dict) else {}
+        auth_check = svc.get("auth_check") if isinstance(svc.get("auth_check"), dict) else {}
+        db_check = svc.get("db_check") if isinstance(svc.get("db_check"), dict) else {}
+        role_auth_configured = any(
+            isinstance(value, dict) and (value.get("username") or value.get("password") or value.get("password_configured"))
+            for value in auth.values()
+        )
+        service_auth_configured = bool(
+            svc.get("bearer_token") or svc.get("api_key") or svc.get("admin_user")
+            or auth.get("bearer_token") or auth.get("api_key")
+            or auth.get("bearer_token_configured") or auth.get("api_key_configured")
+            or role_auth_configured
+        )
+        service_auth_verified = bool(
+            svc.get("status") == "verified"
+            or svc.get("auth_verified") is True
+            or auth_check.get("all_ok") is True
+        )
+        service_db_configured = bool(
+            svc.get("db_host") or svc.get("db_name")
+            or db.get("host") or db.get("name") or db.get("password_configured")
+        )
+        service_db_verified = bool(
+            svc.get("db_verified") is True
+            or db_check.get("ok") is True
+            or svc.get("db_test_status") == "ok"
+        )
+        if service_auth_configured:
+            configured_auth += 1
+            if service_auth_verified:
+                verified_auth += 1
+            else:
+                unverified.append(f"{name}:auth")
+        if service_db_configured:
+            configured_db += 1
+            if service_db_verified:
+                verified_db += 1
+            else:
+                unverified.append(f"{name}:db")
+    return {
+        "configured_service_count": len(enabled_services),
+        "configured_auth_count": configured_auth,
+        "verified_auth_count": verified_auth,
+        "configured_db_count": configured_db,
+        "verified_db_count": verified_db,
+        "unverified": unverified[:20],
+        "ok": bool(
+            enabled_services
+            and (configured_auth == 0 or verified_auth == configured_auth)
+            and (configured_db == 0 or verified_db == configured_db)
+        ),
+        "message": "configured service credentials were verified" if enabled_services and not unverified else ("configured service credentials still need auth/db health verification" if enabled_services else "no service credentials configured"),
+    }
+
+
 def _sandbox_readiness(config: dict[str, Any], allow_write_sandbox: bool) -> dict[str, Any]:
     sandbox = config.get("disposable_sandbox") or config.get("sandbox") or config.get("test_environment") or {}
     if not isinstance(sandbox, dict):
@@ -382,6 +450,7 @@ def run_runtime_onboarding_preflight(
         ):
             auth_config["_auth_runtime"] = discovered_runtime
     auth = _auth_readiness(auth_config)
+    service_credentials = _service_credentials_readiness(config)
     roles = _role_coverage(config)
     sandbox = _sandbox_readiness(config, allow_write_sandbox)
     snapshots = _snapshot_readiness(config, probes)
@@ -407,6 +476,7 @@ def run_runtime_onboarding_preflight(
         _check("non_production_target", not prod_like, prod_reason, severity="blocking"),
         _check("probe_plan_grounded", counts["total"] > 0 and counts["strictly_grounded"] == counts["total"], f"{counts['strictly_grounded']}/{counts['total']} probes have strict document grounding", severity="blocking"),
         _check("auth_session_ready", bool(auth.get("ok")), auth.get("message") or "auth readiness unknown", severity="warning", mode=auth.get("mode"), successful_session_count=auth.get("successful_session_count"), token_acquired_count=auth.get("token_acquired_count"), cookie_acquired_count=auth.get("cookie_acquired_count"), session_health_verified_count=auth.get("session_health_verified_count"), interactive_auth_blocker_count=interactive_auth_blocker_count),
+        _check("service_credentials_verified", bool(service_credentials.get("ok")), service_credentials.get("message") or "service credential readiness unknown", severity="warning", skipped=not bool(service_credentials.get("configured_service_count")), service_credentials=service_credentials),
         _check("interactive_auth_not_blocked", interactive_auth_blocker_count == 0, "no browser-only SSO/MFA/CAPTCHA/proxy/mTLS auth blocker was detected" if interactive_auth_blocker_count == 0 else "interactive auth blocker detected; provide a non-interactive auth path before runtime probes", severity="warning", skipped=interactive_auth_blocker_count == 0, interactive_auth_blocker_count=interactive_auth_blocker_count),
         _check("token_cookie_or_session_acquired", int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0, "token/cookie/session material was acquired" if int(auth_runtime.get("successful_session_count") or auth.get("successful_session_count") or 0) > 0 else "no token/cookie/session material acquired yet", severity="warning", mode=auth_runtime.get("mode") or auth.get("mode"), successful_session_count=auth_runtime.get("successful_session_count") or auth.get("successful_session_count")),
         _check("session_health_verified", int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0, "authenticated session was verified by health/me endpoint" if int(auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count") or 0) > 0 else "session health endpoint was not verified", severity="warning", session_health_verified_count=auth_runtime.get("session_health_verified_count") or auth.get("session_health_verified_count")),
@@ -429,7 +499,7 @@ def run_runtime_onboarding_preflight(
     ]
 
     blocking = [c for c in checks if c.get("severity") == "blocking" and not c.get("ok") and not c.get("skipped")]
-    warnings = [c for c in checks if c.get("severity") != "blocking" and not c.get("ok")]
+    warnings = [c for c in checks if c.get("severity") != "blocking" and not c.get("ok") and not c.get("skipped")]
     high_value_runtime_requested = counts["high_value_runtime"] > 0 and (execute_readonly or allow_write_sandbox)
     ready_for_p0_p1 = bool(
         high_value_runtime_requested
@@ -462,6 +532,7 @@ def run_runtime_onboarding_preflight(
         "blocking_reasons": [c.get("name") for c in blocking],
         "warning_reasons": [c.get("name") for c in warnings],
         "auth_readiness": auth,
+        "service_credentials_readiness": service_credentials,
         "connectivity_auth_preflight": connectivity_auth,
         "role_coverage": roles,
         "sandbox_readiness": sandbox,

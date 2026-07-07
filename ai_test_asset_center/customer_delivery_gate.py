@@ -182,7 +182,10 @@ def has_customer_facing_hard_evidence(item: dict[str, Any]) -> bool:
     reproduction = _dict(item.get("reproduction"))
     request_raw = _dict(raw_evidence.get("request_raw"))
     response_raw = _dict(raw_evidence.get("response_raw"))
+    db_snapshot = _dict(raw_evidence.get("db_snapshot"))
     har = _dict(reproduction.get("har_evidence"))
+    if not har:
+        har = _dict(item.get("har_evidence"))
 
     has_request = bool(request_raw.get("method") and request_raw.get("path")) or bool(
         reproduction.get("method") and reproduction.get("path")
@@ -190,6 +193,9 @@ def has_customer_facing_hard_evidence(item: dict[str, Any]) -> bool:
     has_response = bool(
         response_raw.get("status_code")
         or response_raw.get("body")
+        or db_snapshot.get("before")
+        or db_snapshot.get("after")
+        or db_snapshot.get("assertion")
         or har.get("status_code")
         or har.get("response_body")
     )
@@ -200,15 +206,28 @@ def has_customer_facing_hard_evidence(item: dict[str, Any]) -> bool:
 
 
 def has_customer_replay_asset(item: dict[str, Any]) -> bool:
+    raw_evidence = _dict(item.get("raw_evidence"))
     reproduction = _dict(item.get("reproduction"))
+    db_snapshot = _dict(raw_evidence.get("db_snapshot"))
     har = _dict(reproduction.get("har_evidence"))
+    if not har:
+        har = _dict(item.get("har_evidence"))
     method = _text(reproduction.get("method") or item.get("repro_method")).upper()
     path = _text(reproduction.get("path") or item.get("repro_path"))
+    if not method or not path:
+        request_raw = _dict(raw_evidence.get("request_raw"))
+        method = _text(request_raw.get("method")).upper()
+        path = _text(request_raw.get("path"))
     if not method or not path:
         return False
     if bool(reproduction.get("is_synthetic")):
         return False
-    return bool(har.get("status_code") or har.get("response_body"))
+    if har.get("status_code") or har.get("response_body"):
+        return True
+    return bool(
+        (db_snapshot.get("before") and db_snapshot.get("after"))
+        or db_snapshot.get("assertion")
+    )
 
 
 def customer_delivery_rejection_reasons(item: dict[str, Any]) -> list[str]:

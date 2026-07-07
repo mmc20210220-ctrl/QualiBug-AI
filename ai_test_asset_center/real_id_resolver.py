@@ -12,30 +12,51 @@ _PAGINATION_SUFFIXES = (
     "?offset=0&limit=1",
     "?current=1&pageSize=1",
 )
+_NORMALIZED_PARAM_RE = re.compile(r"\{([A-Za-z_]\w*)\}")
+_PLACEHOLDER_PATTERNS: tuple[tuple[re.Pattern[str], Callable[[re.Match[str]], str]], ...] = (
+    (
+        re.compile(r"\$\{([A-Za-z_]\w*)\}"),
+        lambda match: "{" + str(match.group(1) or "").strip() + "}",
+    ),
+    (
+        re.compile(r"<([A-Za-z_]\w*)>"),
+        lambda match: "{" + str(match.group(1) or "").strip() + "}",
+    ),
+    (
+        re.compile(r"\{([A-Za-z_]\w*)(?::[^{}]+)?\}"),
+        lambda match: "{" + str(match.group(1) or "").strip() + "}",
+    ),
+    (
+        re.compile(r"(?<=/):([A-Za-z_]\w*)\b"),
+        lambda match: "{" + str(match.group(1) or "").strip() + "}",
+    ),
+)
+
+
+def normalize_path_placeholders(path: str) -> str:
+    normalized = str(path or "")
+    for pattern, replacer in _PLACEHOLDER_PATTERNS:
+        normalized = pattern.sub(replacer, normalized)
+    return normalized
 
 
 def infer_path_params(path: str, declared: Iterable[str] | None = None) -> list[str]:
     values = [str(item) for item in (declared or []) if str(item)]
     if values:
         return values
-    inferred = re.findall(r"\{(\w+)\}", str(path or ""))
-    if not inferred:
-        inferred = re.findall(r":([A-Za-z_]\w*)", str(path or ""))
+    inferred = _NORMALIZED_PARAM_RE.findall(normalize_path_placeholders(path))
     return [str(item) for item in inferred if str(item)]
 
 
 def path_has_placeholders(path: str) -> bool:
-    return bool(
-        re.search(r"\{(\w+)\}", str(path or ""))
-        or re.search(r":[A-Za-z_]\w*", str(path or ""))
-    )
+    return bool(_NORMALIZED_PARAM_RE.search(normalize_path_placeholders(path)))
 
 
 def collection_path(path: str) -> str:
-    normalized = str(path or "").split("?", 1)[0]
+    normalized = normalize_path_placeholders(path).split("?", 1)[0]
     if not normalized.startswith("/"):
         return ""
-    placeholder_match = re.search(r"/(?:\{[^}]+\}|:[A-Za-z_]\w*)", normalized)
+    placeholder_match = re.search(r"/\{[A-Za-z_]\w*\}", normalized)
     if placeholder_match:
         return normalized[:placeholder_match.start()] or ""
     return normalized

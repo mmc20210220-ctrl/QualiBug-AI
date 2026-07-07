@@ -41,6 +41,27 @@ function explainGateReason(reason: string): string {
   return GATE_REASON_LABELS[reason] || reason.replace(/_/g, ' ').toLowerCase();
 }
 
+function uniqueText(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function getClueReasonCodes(item: unknown): string[] {
+  const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+  const reasons = Array.isArray(record.customer_delivery_gate_reasons) ? record.customer_delivery_gate_reasons : [];
+  const gateFailures = Array.isArray(record.gate_failures) ? record.gate_failures : [];
+  const evidenceStatus = record.evidence_status && typeof record.evidence_status === 'object' ? record.evidence_status as Record<string, unknown> : {};
+  const missingRequirements = Array.isArray(evidenceStatus.missing_requirements) ? evidenceStatus.missing_requirements : [];
+  return uniqueText([
+    ...reasons.map(String),
+    ...gateFailures.map(String),
+    ...missingRequirements.map((value) => `MISSING_${String(value)}`),
+    record.execution_block ? `BLOCKED_${String(record.execution_block)}` : undefined,
+    record.block_reason ? `BLOCKED_${String(record.block_reason)}` : undefined,
+    record.confirmation_status ? `CONFIRMATION_${String(record.confirmation_status)}` : undefined,
+    record.value_lane ? `LANE_${String(record.value_lane)}` : undefined,
+  ]);
+}
+
 function getGateExplanations(item: unknown, reasonCodes: string[]): GateExplanation[] {
   const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
   const explanations = Array.isArray(record.customer_delivery_gate_explanations) ? record.customer_delivery_gate_explanations : [];
@@ -62,7 +83,7 @@ export function InternalClues() {
   const riskClueCount = clues.filter((f) => f.bug_status === 'risk_clue').length;
   const notReproducedCount = clues.filter((f) => f.bug_status === 'not_reproduced').length;
   const p0Count = clues.filter((f) => f.severity === 'P0').length;
-  const missingEvidenceCount = clues.filter((f) => (f.evidence_quality?.missing?.length || 0) > 0 || (f.customer_delivery_gate_reasons?.length || 0) > 0).length;
+  const missingEvidenceCount = clues.filter((f) => (f.evidence_quality?.missing?.length || 0) > 0 || getClueReasonCodes(f).length > 0).length;
 
   const filters: Array<{ label: string; value: ClueFilter }> = [
     { label: `全部 (${clues.length})`, value: 'all' },
@@ -96,6 +117,7 @@ export function InternalClues() {
         </div>
         <div className="findings-repro-actions">
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看客户缺陷</button>
+          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/campaigns', project)}>进入运行中心补证</button>
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>继续扫描</button>
         </div>
       </div>
@@ -122,7 +144,7 @@ export function InternalClues() {
       {displayData.map((item) => {
         const isOpen = expandedId === item.id;
         const missing = item.evidence_quality?.missing || [];
-        const gateReasons = item.customer_delivery_gate_reasons || [];
+        const gateReasons = getClueReasonCodes(item);
         const gateExplanations = getGateExplanations(item, gateReasons);
         const nextActions = item.evidence_quality?.next_actions || [];
         const reproduction = item.reproduction || { method: '', path: '', steps: [], is_synthetic: false };
@@ -135,6 +157,7 @@ export function InternalClues() {
             {gateExplanations.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">未进入客户缺陷的原因</div><div className="findings-investigation-body"><ul className="findings-steps">{gateExplanations.map((reason, index) => <li key={`${reason.code || reason.label}-${index}`}><strong>{reason.label || explainGateReason(reason.code || '')}</strong>{reason.detail ? <span>：{reason.detail}</span> : null}{reason.next_action ? <small>下一步：{reason.next_action}</small> : null}</li>)}</ul></div></div>}
             {nextActions.length > 0 && <div className="findings-investigation-card"><div className="findings-panel-kicker warning">下一步建议</div><div className="findings-investigation-body"><ol className="findings-steps">{nextActions.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ol></div></div>}
             {(reproduction.path || investigation.log_search || investigation.sql_verify || investigation.relevant_tables?.length || investigation.relevant_apis?.length) && <div className="findings-investigation-card"><div className="findings-panel-kicker">补证入口</div><div className="findings-investigation-body">{reproduction.path && <div>优先复验：<code>{reproduction.method} {reproduction.path}</code></div>}{investigation.relevant_apis?.length > 0 && <div>关联接口：{investigation.relevant_apis.join('、')}</div>}{investigation.relevant_tables?.length > 0 && <div>关联数据表：{investigation.relevant_tables.join('、')}</div>}{investigation.log_search && <div><code>{investigation.log_search}</code></div>}{investigation.sql_verify && <div><code>{investigation.sql_verify}</code></div>}</div></div>}
+            <div className="findings-investigation-card"><div className="findings-panel-kicker">补证动作</div><div className="findings-repro-actions"><button type="button" className="btn btn-primary btn-sm" onClick={() => navigateToProjectPath('/campaigns', project)}>进入运行中心补证</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/materials', project)}>补充来源资料</button></div></div>
           </div>
         </div>;
       })}

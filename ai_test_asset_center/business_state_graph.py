@@ -11,7 +11,40 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+SEMANTIC_LEXICON_PATH = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+_SEMANTIC_LEXICON_CACHE: dict[str, Any] | None = None
+
+
+def _semantic_lexicon() -> dict[str, Any]:
+    global _SEMANTIC_LEXICON_CACHE
+    if _SEMANTIC_LEXICON_CACHE is None:
+        try:
+            payload = json.loads(SEMANTIC_LEXICON_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        _SEMANTIC_LEXICON_CACHE = payload if isinstance(payload, dict) else {}
+    return _SEMANTIC_LEXICON_CACHE
+
+
+def _lexicon_list(name: str) -> list[str]:
+    raw = _semantic_lexicon().get(name)
+    return [str(item) for item in raw if str(item)] if isinstance(raw, list) else []
+
+
+def _lexicon_groups(name: str) -> list[set[str]]:
+    raw = _semantic_lexicon().get(name)
+    if not isinstance(raw, list):
+        return []
+    groups: list[set[str]] = []
+    for item in raw:
+        if isinstance(item, list):
+            group = {_entity(value) for value in item if str(value).strip()}
+            if group:
+                groups.append(group)
+    return groups
 
 
 @dataclass
@@ -279,6 +312,7 @@ class BusinessStateGraphBuilder:
 
         known = {entity: set(api_states.get(entity, {})) | set(db_states.get(entity, {})) for entity in self.graphs}
         source_fields = _source_field_index(api_spec_text, db_schema_text)
+        _augment_source_fields_from_endpoints(source_fields, endpoints, set(known))
         for section in self._sections(prd_text):
             entity, binding_mode = _best_entity_for_section(section, known, source_fields)
             if not entity:
@@ -348,6 +382,15 @@ class BusinessStateGraphBuilder:
     def build_slices(self) -> list[BehaviorSlice]:
         """Create deterministic source-bound slices without routes or actors."""
         slices: list[BehaviorSlice] = []
+        adjacency: dict[str, set[str]] = defaultdict(set)
+        for entity, graph in self.graphs.items():
+            adjacency.setdefault(_entity(entity), set())
+            for edge in graph.edges:
+                source_entity = _entity(edge.source_entity)
+                target_entity = _entity(edge.target_entity)
+                if source_entity and target_entity:
+                    adjacency[source_entity].add(target_entity)
+                    adjacency[target_entity].add(source_entity)
         for entity, graph in sorted(self.graphs.items()):
             for transition in graph.transitions:
                 slice_id = transition.behavior_slice_id or behavior_slice_id(
@@ -372,6 +415,8 @@ class BusinessStateGraphBuilder:
             for state_name, node in graph.states.items():
                 for invariant in node.invariants:
                     observation_endpoints = _observation_endpoints(entity, self.endpoint_catalog)
+                    if not observation_endpoints:
+                        observation_endpoints = _adjacent_observation_endpoints(entity, self.endpoint_catalog, adjacency)
                     gaps = [] if observation_endpoints else ["OBSERVATION_ROUTE_NOT_SOURCE_BOUND"]
                     slices.append(BehaviorSlice(
                         slice_id=behavior_slice_id("invariant", entity, state_name, invariant),
@@ -384,17 +429,26 @@ class BusinessStateGraphBuilder:
                         evidence_gaps=gaps,
                     ))
             for edge in graph.edges:
+                dependency_endpoints = _dependency_endpoints(entity, edge.target_entity, self.endpoint_catalog)
+                if not dependency_endpoints:
+                    dependency_endpoints = _unique(
+                        _adjacent_observation_endpoints(entity, self.endpoint_catalog, adjacency)
+                        + _adjacent_observation_endpoints(edge.target_entity, self.endpoint_catalog, adjacency)
+                    )
+                gaps = [] if dependency_endpoints else ["CROSS_ENTITY_OBSERVATION_CONTRACT_MISSING"]
                 slices.append(BehaviorSlice(
                     slice_id=behavior_slice_id("dependency", entity, edge.source_state, edge.target_entity, edge.target_state, edge.relation),
                     entity=entity,
                     kind="dependency",
                     states=_unique([edge.source_state, edge.target_state]),
-                    endpoints=[],
+                    endpoints=dependency_endpoints,
                     priority=max(float(edge.risk_score or 0.0), 0.4),
                     source_refs=_refs(edge.source_refs or graph.source_refs),
-                    evidence_gaps=["CROSS_ENTITY_OBSERVATION_CONTRACT_MISSING"],
+                    evidence_gaps=gaps,
                 ))
             observation_endpoints = _observation_endpoints(entity, self.endpoint_catalog)
+            if not observation_endpoints:
+                observation_endpoints = _adjacent_observation_endpoints(entity, self.endpoint_catalog, adjacency)
             has_entity_slice = any(item.entity == entity and item.endpoints for item in slices)
             if observation_endpoints and not has_entity_slice:
                 slices.append(BehaviorSlice(
@@ -409,6 +463,8 @@ class BusinessStateGraphBuilder:
                 ))
         for item in self.bound_invariants:
             observation_endpoints = _observation_endpoints(str(item["entity"]), self.endpoint_catalog)
+            if not observation_endpoints:
+                observation_endpoints = _adjacent_observation_endpoints(str(item["entity"]), self.endpoint_catalog, adjacency)
             gaps = ["STATE_ANCHOR_NOT_SOURCE_BOUND"]
             if not observation_endpoints:
                 gaps.insert(0, "OBSERVATION_ROUTE_NOT_SOURCE_BOUND")
@@ -526,11 +582,53 @@ def _line_states(line: str) -> set[str]:
 
 def _entity(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "_", str(value or "").strip().lower()).strip("_")
+    parts = [_singularize_entity_segment(part) for part in text.split("_") if part]
+    return "_".join(parts)[:80]
+
+
+def _singularize_entity_segment(value: str) -> str:
+    text = str(value or "").strip().lower()
     if text.endswith("ies") and len(text) > 4:
-        text = text[:-3] + "y"
-    elif text.endswith("s") and len(text) > 3 and not text.endswith("ss"):
-        text = text[:-1]
-    return text[:80]
+        return text[:-3] + "y"
+    if text.endswith("ses") and len(text) > 4 and not text.endswith(("ases", "eses", "ises", "oses", "uses")):
+        return text[:-1]
+    if text.endswith(("sses", "shes", "ches", "xes", "zes")) and len(text) > 4:
+        return text[:-2]
+    if text.endswith("s") and len(text) > 3 and not text.endswith(("ss", "us", "is")):
+        return text[:-1]
+    return text
+
+
+def _entity_aliases(value: Any) -> set[str]:
+    entity = _entity(value)
+    if not entity:
+        return set()
+    aliases = {entity}
+    for group in _lexicon_groups("entity_alias_groups"):
+        if entity in group:
+            aliases.update(group)
+    parts = [part for part in entity.split("_") if part]
+    aliases.update(parts)
+    if len(parts) > 1:
+        aliases.add("".join(parts))
+    if entity.endswith("_usage"):
+        aliases.add(entity[: -len("_usage")])
+    if entity.endswith("_item"):
+        aliases.add(entity[: -len("_item")])
+    aliases.update(_identifier_tokens(entity))
+    return {_entity(alias) for alias in aliases if alias}
+
+
+def _endpoint_supports_observation(item: dict[str, str]) -> bool:
+    method = str(item.get("method") or "").upper()
+    if method in {"GET", "HEAD", "OPTIONS"}:
+        return True
+    if method != "POST":
+        return False
+    action = _entity(item.get("action") or "")
+    summary_tokens = {_entity(token) for token in _text_tokens(" ".join(str(item.get(key) or "") for key in ("summary", "path", "action")))}
+    observation_markers = {_entity(token) for token in _lexicon_list("observation_action_markers")}
+    return bool(action in observation_markers or summary_tokens & observation_markers)
 
 
 def _ref(kind: str, locator: str, quote: str) -> dict[str, str]:
@@ -571,8 +669,21 @@ def _observation_endpoints(entity: str, endpoints: list[dict[str, str]]) -> list
     return list(dict.fromkeys(
         str(item.get("path") or "")
         for item in endpoints
-        if str(item.get("entity") or "") == entity and str(item.get("method") or "").upper() in {"GET", "HEAD", "OPTIONS"} and str(item.get("path") or "").startswith("/")
+        if _endpoint_relates_to_entity(item, entity)
+        and _endpoint_supports_observation(item)
+        and str(item.get("path") or "").startswith("/")
     ))
+
+
+def _dependency_endpoints(source_entity: str, target_entity: str, endpoints: list[dict[str, str]]) -> list[str]:
+    return _unique(_observation_endpoints(target_entity, endpoints) + _observation_endpoints(source_entity, endpoints))
+
+
+def _adjacent_observation_endpoints(entity: str, endpoints: list[dict[str, str]], adjacency: dict[str, set[str]]) -> list[str]:
+    related: list[str] = []
+    for neighbor in sorted(adjacency.get(_entity(entity), set())):
+        related.extend(_observation_endpoints(neighbor, endpoints))
+    return _unique(related)
 
 
 def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dict[str, str]]], dict[str, dict[str, list[dict[str, str]]]], list[dict[str, str]]]:
@@ -600,12 +711,48 @@ def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dic
                             if token:
                                 states[_entity(name)][token].append(_ref("openapi", f"components.schemas.{name}.properties.{field}", token))
         return entities, states, endpoints
-    for match in re.finditer(r"(?im)^###\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/[A-Za-z0-9_:\-{}./]+)", str(text or "")):
-        entity, action = _path(match.group(2), "")
+    lines = str(text or "").splitlines()
+    current: dict[str, str] | None = None
+    current_description: list[str] = []
+    current_line = 0
+
+    def flush_current() -> None:
+        nonlocal current, current_description, current_line
+        if not current:
+            return
+        entity = str(current.get("entity") or "")
+        action = str(current.get("action") or "")
+        path = str(current.get("path") or "")
+        method = str(current.get("method") or "")
+        summary = " ".join(part.strip() for part in current_description if part.strip())
         if entity:
-            ref = _ref("api_document", f"line:{str(text).count(chr(10), 0, match.start()) + 1}", match.group(0))
+            ref_quote = summary or f"{method} {path}"
+            ref = _ref("api_document", f"line:{current_line}", ref_quote)
             entities[entity].append(ref)
-            endpoints.append({"entity": entity, "action": action, "path": match.group(2), "method": match.group(1).upper()})
+            endpoints.append({"entity": entity, "action": action, "path": path, "method": method, "summary": summary})
+        current = None
+        current_description = []
+        current_line = 0
+
+    for line_number, raw in enumerate(lines, 1):
+        line = str(raw or "").strip()
+        header = re.match(r"^###\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/[A-Za-z0-9_:\-{}./]+)", line, re.I)
+        if header:
+            flush_current()
+            entity, action = _path(header.group(2), "")
+            current = {"entity": entity, "action": action, "path": header.group(2), "method": header.group(1).upper()}
+            current_line = line_number
+            continue
+        if current is None:
+            continue
+        if line.startswith("### ") or line.startswith("## "):
+            flush_current()
+            continue
+        if line.startswith("```"):
+            continue
+        if line:
+            current_description.append(line)
+    flush_current()
     return entities, states, endpoints
 
 
@@ -665,45 +812,99 @@ def _source_field_index(api_spec_text: str, db_schema_text: str) -> dict[str, se
     return result
 
 
+def _augment_source_fields_from_endpoints(source_fields: dict[str, set[str]], endpoints: list[dict[str, str]], known_entities: set[str]) -> None:
+    for item in endpoints:
+        text = " ".join(
+            str(part or "")
+            for part in (item.get("path"), item.get("action"), item.get("summary"))
+            if str(part or "").strip()
+        )
+        tokens = _text_tokens(text)
+        entity = _entity(item.get("entity") or "")
+        if entity and tokens:
+            source_fields.setdefault(entity, set()).update(tokens)
+        for known in sorted(known_entities):
+            if known and known in tokens:
+                source_fields.setdefault(known, set()).update(tokens)
+
+
 def _identifier_tokens(value: str) -> set[str]:
     raw = {token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{1,63}", str(value or ""))}
-    parts = {part for token in raw for part in token.split("_") if len(part) >= 4}
-    return raw | parts
+    canonical = {_entity(token) for token in raw if token}
+    parts = {
+        _singularize_entity_segment(part)
+        for token in raw
+        for part in token.split("_")
+        if len(part) >= 4
+    }
+    return {token for token in (raw | canonical | parts) if token}
 
 
-def _invariant_tokens(section: dict[str, Any]) -> set[str]:
-    ignored = {"must", "shall", "cannot", "equal", "only", "true", "false", "with", "from", "that", "this", "where", "when", "then", "status", "state", "type", "name", "code", "date", "time", "value", "count", "total", "amount", "identifier"}
+def _text_tokens(value: str) -> set[str]:
+    text = str(value or "")
+    tokens = set(_identifier_tokens(text))
+    for phrase in re.findall(r"[\u4e00-\u9fff]{2,24}", text):
+        tokens.add(phrase)
+        compact = phrase.strip()
+        if len(compact) <= 8:
+            for size in range(2, min(4, len(compact)) + 1):
+                for index in range(0, len(compact) - size + 1):
+                    tokens.add(compact[index:index + size])
+    return {token for token in tokens if str(token).strip()}
+
+
+def _section_tokens(section: dict[str, Any]) -> set[str]:
+    ignored = {_entity(token) for token in _lexicon_list("binding_stop_words")}
     tokens: set[str] = set()
+    tokens.update(_text_tokens(str(section.get("title") or "")))
     for invariant, _ in section.get("invariants", []):
-        for token in _identifier_tokens(str(invariant)):
-            if token not in ignored and ("_" in token or len(token) >= 8):
-                tokens.add(token)
-    return tokens
+        tokens.update(_text_tokens(str(invariant)))
+    for row in section.get("transitions", []):
+        tokens.update(_text_tokens(str(row.get("line") or "")))
+    return {
+        token for token in tokens
+        if token not in ignored and (re.search(r"[\u4e00-\u9fff]", token) or "_" in token or len(token) >= 4)
+    }
 
 
 def _best_entity_for_section(section: dict[str, Any], known: dict[str, set[str]], source_fields: dict[str, set[str]]) -> tuple[str, str]:
     state_entity = _best_entity(section.get("states", set()), known)
     if state_entity:
         return state_entity, "state_overlap"
-    title_entity = _entity(section.get("title") or "")
+    title = str(section.get("title") or "")
+    title_entity = _entity(title)
+    title_tokens = _text_tokens(title)
     for entity in sorted(known):
         if entity and (title_entity == entity or title_entity.startswith(f"{entity}_") or title_entity.endswith(f"_{entity}")):
             return entity, "section_title"
-    tokens = _invariant_tokens(section)
+    tokens = _section_tokens(section)
     if not tokens:
         return "", ""
-    candidates: list[tuple[int, int, str]] = []
+    candidates: list[tuple[int, int, int, int, str]] = []
     for entity, fields in source_fields.items():
         overlap = tokens & fields
+        title_overlap = title_tokens & fields
+        title_direct = entity in title_tokens or any(token == entity for token in title_tokens)
         weighted = sum(2 if "_" in token else 1 for token in overlap)
+        weighted += sum(3 if "_" in token else 2 for token in title_overlap)
+        if title_direct:
+            weighted += 3
         if weighted:
-            candidates.append((weighted, len(overlap), entity))
-    candidates.sort(key=lambda row: (-row[0], -row[1], row[2]))
+            candidates.append((weighted, len(overlap), len(known.get(entity, set())), len(fields), entity))
+    candidates.sort(key=lambda row: (-row[0], -row[1], -row[2], -row[3], row[4]))
     if not candidates:
         return "", ""
-    best_weight, best_count, entity = candidates[0]
-    second_weight = candidates[1][0] if len(candidates) > 1 else 0
-    if best_weight >= 2 and best_weight > second_weight and best_count >= 1:
+    best_weight, best_count, best_state_count, best_field_count, entity = candidates[0]
+    second_weight, second_count, second_state_count, second_field_count = candidates[1][:4] if len(candidates) > 1 else (0, 0, -1, -1)
+    best_overlap = tokens & source_fields.get(entity, set())
+    title_overlap = title_tokens & source_fields.get(entity, set())
+    has_cjk_overlap = any(re.search(r"[\u4e00-\u9fff]", token) for token in (best_overlap | title_overlap))
+    title_direct = entity in title_tokens or any(token == entity for token in title_tokens)
+    if (
+        ((best_weight >= 2) or has_cjk_overlap or title_direct)
+        and (best_weight, best_count, best_state_count, best_field_count) > (second_weight, second_count, second_state_count, second_field_count)
+        and (best_count >= 1 or title_direct or bool(title_overlap))
+    ):
         return entity, "source_field_overlap"
     return "", ""
 
@@ -712,6 +913,21 @@ def _best_entity(values: set[str], known: dict[str, set[str]]) -> str:
     candidates = [(len(values & states) / len(values | states), entity) for entity, states in known.items() if values and states and values & states]
     candidates.sort(key=lambda row: (-row[0], row[1]))
     return candidates[0][1] if candidates and candidates[0][0] >= 0.15 else ""
+
+
+def _endpoint_relates_to_entity(item: dict[str, str], entity: str) -> bool:
+    endpoint_entity = _entity(item.get("entity") or "")
+    entity_aliases = _entity_aliases(entity)
+    endpoint_aliases = _entity_aliases(endpoint_entity)
+    if endpoint_entity == entity or entity_aliases & endpoint_aliases:
+        return True
+    tokens = _text_tokens(" ".join(
+        str(part or "")
+        for part in (item.get("path"), item.get("action"), item.get("summary"))
+        if str(part or "").strip()
+    ))
+    normalized_tokens = {_entity(token) for token in tokens}
+    return bool(entity_aliases & normalized_tokens)
 
 
 def _source_action(line: str, entity: str, endpoints: list[dict[str, str]]) -> tuple[str, str]:

@@ -10,6 +10,7 @@ QualiBug DB Verifier — 数据库验证层
 """
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,17 +25,36 @@ class DBProbeResult:
     evidence: str
 
 
-class MESDBVerifier:
-    """MES BugLab 数据库验证器"""
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PROJECT_ID = os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project")
 
-    def __init__(self, db_path: str = None):
-        if db_path is None:
-            # 默认 MES 数据库路径
-            db_path = str(
-                Path(__file__).resolve().parents[1]
-                / "mes_target/mes-buglab-target/data/mes_buglab.db"
-            )
-        self.db_path = db_path
+
+def _resolve_default_db_path(project_id: str | None = None) -> str:
+    clean_project = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
+    configured = str(os.environ.get("QUALIBUG_DEFAULT_DB_PATH") or "").strip()
+    if configured:
+        return configured
+    search_dirs = [
+        REPO_ROOT / "platform_workspace" / clean_project / "data",
+        REPO_ROOT / "platform_inputs" / clean_project,
+        REPO_ROOT / "projects" / clean_project / "data",
+        REPO_ROOT / "data",
+    ]
+    for directory in search_dirs:
+        if not directory.exists() or not directory.is_dir():
+            continue
+        for candidate in ("app.db", "test.db", "sqlite.db", "mes_buglab.db"):
+            path = directory / candidate
+            if path.exists() and path.is_file():
+                return str(path)
+    return str(REPO_ROOT / "data" / "app.db")
+
+
+class DBVerifier:
+    """数据库验证器，默认从项目工作区或环境变量解析数据库路径。"""
+
+    def __init__(self, db_path: str | None = None, *, project_id: str | None = None):
+        self.db_path = str(db_path or _resolve_default_db_path(project_id))
         self.results: list[DBProbeResult] = []
 
     def _query(self, sql: str, params=None) -> list[dict]:
@@ -410,8 +430,11 @@ class MESDBVerifier:
                 "hit_rate": round(confirmed / max(len(self.results), 1) * 100, 1)}
 
 
+MESDBVerifier = DBVerifier
+
+
 if __name__ == "__main__":
-    v = MESDBVerifier()
+    v = DBVerifier()
     v.run_all()
     print(f"\n{'='*60}")
     print(json.dumps(v.summary(), indent=2, ensure_ascii=False))

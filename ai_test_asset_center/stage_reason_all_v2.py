@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Any
 
 from .console_output import safe_print as print
+from .reasoner_quality_report import build_executable_quality_report
 
 # ═══════════════════════════════════════════════════════════════════
 # Constants
@@ -34,6 +35,15 @@ MIN_REASONER_TIMEOUT_SECONDS = 300
 MIN_REASONER_MAX_TOKENS = 32768
 MAX_REASONER_MAX_TOKENS = 100000
 MAX_HYPOTHESES_HARD_LIMIT = 15
+EXECUTABLE_QUALITY_REPORT_FIELDS = (
+    "executable_hypotheses",
+    "non_executable_hypotheses",
+    "executable_hypothesis_ratio",
+    "per_engine_executable_hypotheses",
+    "per_engine_non_executable_hypotheses",
+    "per_engine_executable_ratio",
+    "engines_with_no_executable_output",
+)
 
 SIDE_PATH_REASONER_ENGINES = (
     ("business_outcome", "outcome"),
@@ -412,8 +422,11 @@ def _filter_low_quality_hypotheses(hypotheses: list[dict[str, Any]]) -> list[dic
         title = str(h.get("title", "") or "").strip()
         has_title = len(title) > 3
 
-        # Keep if it has a title AND (verification_method OR evidence)
         if has_title and (has_vm or has_evidence):
+            filtered.append(h)
+        elif has_title and not str(h.get("description", "") or "").strip():
+            h.setdefault("execution_block", "missing_executable_binding")
+            h.setdefault("confirmation_status", "needs_executable_evidence")
             filtered.append(h)
         else:
             dropped += 1
@@ -821,6 +834,11 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             bootstrap_error = str(exc)[:200]
         else:
             bootstrap_error = ""
+        local_executable_quality_report = build_executable_quality_report(
+            {"local_bootstrap": {"hypotheses": local_hypotheses}},
+            ["local_bootstrap"],
+            local_hypotheses,
+        )
         self._last_engine_report = {
             "total_engines": 1,
             "successful_engines": [],
@@ -850,6 +868,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             "max_hypotheses_per_engine": max_hypotheses_per_engine,
             "max_hypothesis_chars": max_hypothesis_chars,
         }
+        self._last_engine_report.update(local_executable_quality_report)
         print(f"    [WARN] [local_bootstrap_only] {len(local_hypotheses)} read-only hypotheses", flush=True)
         return local_hypotheses
 
@@ -1092,6 +1111,11 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         )
 
     # ── Build engine health report ──
+    executable_quality_report = build_executable_quality_report(
+        results_by_engine,
+        engine_names_for_report,
+        all_hypotheses,
+    )
     self._last_engine_report = {
         "total_engines": len(engine_names_for_report),
         "successful_engines": [e for e in engine_names_for_report if results_by_engine.get(e, {}).get("status") == "success"],
@@ -1120,6 +1144,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "max_hypotheses_per_engine": max_hypotheses_per_engine,
         "max_hypothesis_chars": max_hypothesis_chars,
     }
+    self._last_engine_report.update(executable_quality_report)
 
     print(f"  [OK] 生成了 {len(all_hypotheses)} 条假设 (across {len(engines)} engines)", flush=True)
     return all_hypotheses

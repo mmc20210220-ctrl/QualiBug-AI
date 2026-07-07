@@ -14,10 +14,12 @@ QualiBug AI 发现普通端点测试经常遗漏的高价值缺陷：跨系统�
 
 - 产品版本：`95.0.0`
 - 默认后端端口：`8088`
+- 正式客户前端：`frontend/` React 控制台
 - 标准健康检查：`/api/health`
 - 兼容健康检查：`/health`
 - 标准私有服务入口：`ai_test_asset_center.private_pilot_entrypoint`
 - Docker 镜像标签：`qualibug-ai:95.0.0-private-pilot`
+- `backend/main.py` 仅保留为兼容/实验接口，不是正式真实执行主入口
 
 证据管道保持四层状态保留（自 Phase92A 起持续生效）：
 
@@ -60,11 +62,21 @@ python -m ai_test_asset_center.private_pilot_entrypoint
 # 或使用安装后的脚本入口
 qualibug-server
 
+# 7. 启动正式客户前端（React 控制台）
 # 前端固定端口：5174
 cd frontend && npm run dev
 # 或使用 CLI（发布验证、扫描等）
 qualibug verify-release
 ```
+
+正式产品主线为：
+
+1. `frontend/src/pages/Settings.tsx` 维护项目、服务、鉴权和数据库配置
+2. `frontend/src/pages/EnterpriseMaterials.tsx` 导入企业资料并沉淀知识资产
+3. `frontend/src/pages/EnterpriseCampaigns.tsx` 作为统一运行中心发起标准扫描或受控执行
+4. `frontend/src/pages/Dashboard.tsx`、`Findings.tsx`、`EvidenceChain.tsx` 查看真实结果与证据链
+
+Phase105 静态前端产物保留为演示包、预览包和导出资产，不再作为正式产品主界面。
 
 ### 私有部署 Doctor
 

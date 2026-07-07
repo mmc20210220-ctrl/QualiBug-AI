@@ -281,6 +281,222 @@ def test_prepare_v12_scan_body_keeps_production_like_targets_read_only(tmp_path)
     assert "test_data_contract" not in prepared
 
 
+def test_prepare_v12_scan_body_auto_generates_page_agent_ui_observation_request_when_bridge_is_configured(tmp_path, monkeypatch):
+    register_source_asset("demo", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    monkeypatch.setenv("QUALIBUG_PAGE_AGENT_BRIDGE_URL", "http://127.0.0.1:8797/execute")
+
+    prepared = service._prepare_v12_scan_body(
+        "demo",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {
+            "base_url": "http://127.0.0.1:8080",
+            "scope_id": "checkout-scope",
+            "environment_ref": "local-benchmark",
+        },
+        local_dev_mode=False,
+    )
+
+    request = prepared["ui_execution_requests"][0]
+    assert request["provider"] == "page_agent"
+    assert request["start_url"] == "http://127.0.0.1:8080"
+    assert request["execution_mode"] == "safe_read_only"
+    assert request["metadata"]["bridge_mode"] == "page_agent_browser_plan"
+    assert request["metadata"]["auto_generated"] is True
+    assert request["browser_plan"]["steps"][0]["action"] == "goto"
+    assert request["browser_plan"]["steps"][0]["url"] == "http://127.0.0.1:8080"
+    assert "checkout-scope" in request["page_hints"][0]
+
+
+def test_prepare_v12_scan_body_prefers_followup_ui_execution_requests_asset_when_present(tmp_path, monkeypatch):
+    register_source_asset("demo", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    monkeypatch.setenv("QUALIBUG_PAGE_AGENT_BRIDGE_URL", "http://127.0.0.1:8797/execute")
+    asset_path = tmp_path / "platform_workspace" / "demo" / "defect_discovery" / "ui_followup_execution_requests.json"
+    asset_path.parent.mkdir(parents=True, exist_ok=True)
+    asset_path.write_text(
+        json.dumps(
+            {
+                "version": "ui_followup_execution_requests_v1",
+                "project_id": "demo",
+                "items": [
+                    {
+                        "request_template_id": "UIFOLLOW_1",
+                        "title": "复现场景：订单详情页异常",
+                        "severity": "P1",
+                        "path": "/orders/123",
+                        "task": "Re-open order details and collect deterministic UI evidence.",
+                        "page_hints": ["候选路径：/orders/123"],
+                        "browser_plan": {
+                            "execution_mode": "safe_read_only",
+                            "steps": [{"action": "goto", "url": "/orders/123", "wait_until": "networkidle"}],
+                        },
+                        "metadata": {
+                            "bridge_mode": "page_agent_browser_plan",
+                            "verification": {
+                                "kind": "http_get",
+                                "path": "/orders/{object_id}",
+                                "expected_statuses": [200],
+                                "body_contains": "{object_id}",
+                            },
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = service._prepare_v12_scan_body(
+        "demo",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {
+            "base_url": "http://127.0.0.1:8080",
+            "scope_id": "checkout-scope",
+            "environment_ref": "local-benchmark",
+        },
+        local_dev_mode=False,
+    )
+
+    assert len(prepared["ui_execution_requests"]) == 1
+    request = prepared["ui_execution_requests"][0]
+    assert request["request_id"] == "UIFOLLOW_1"
+    assert request["start_url"] == "http://127.0.0.1:8080/orders/123"
+    assert request["metadata"]["request_origin"] == "private_pilot_service_followup_asset"
+    assert request["metadata"]["verification"]["kind"] == "http_get"
+    assert request["metadata"]["verification"]["path"] == "/orders/{object_id}"
+    assert request["metadata"]["verification"]["body_contains"] == "{object_id}"
+    assert request["browser_plan"]["steps"][0]["url"] == "/orders/123"
+
+
+def test_prepare_v12_scan_body_loads_only_executable_followup_ui_test_data_requests(tmp_path, monkeypatch):
+    register_source_asset("demo", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    monkeypatch.setenv("QUALIBUG_PAGE_AGENT_BRIDGE_URL", "http://127.0.0.1:8797/execute")
+    asset_path = tmp_path / "platform_workspace" / "demo" / "defect_discovery" / "ui_followup_test_data_requests.json"
+    asset_path.parent.mkdir(parents=True, exist_ok=True)
+    asset_path.write_text(
+        json.dumps(
+            {
+                "version": "ui_followup_test_data_requests_v1",
+                "project_id": "demo",
+                "items": [
+                    {
+                        "request_template_id": "UITESTDATA_EXEC",
+                        "title": "可执行 UI 造数补位",
+                        "path": "/orders/new",
+                        "task": "Create disposable order data via UI",
+                        "browser_plan": {
+                            "steps": [
+                                {"action": "goto", "url": "/orders/new", "wait_until": "networkidle"},
+                                {"action": "screenshot", "full_page": True},
+                            ]
+                        },
+                        "metadata": {"bridge_mode": "page_agent_browser_plan", "executable": True},
+                    },
+                    {
+                        "request_template_id": "UITESTDATA_PLAN_ONLY",
+                        "title": "仅计划 UI 造数补位",
+                        "path": "/orders/new",
+                        "task": "Create disposable order data via UI",
+                        "browser_plan": {},
+                        "metadata": {"bridge_mode": "page_agent_browser_plan", "executable": False},
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = service._prepare_v12_scan_body(
+        "demo",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {
+            "base_url": "http://127.0.0.1:8080",
+            "scope_id": "checkout-scope",
+            "environment_ref": "local-benchmark",
+        },
+        local_dev_mode=False,
+    )
+
+    assert len(prepared["ui_test_data_requests"]) == 1
+    request = prepared["ui_test_data_requests"][0]
+    assert request["request_id"] == "UITESTDATA_EXEC"
+    assert request["execution_mode"] == "approved_sandbox_write"
+    assert request["start_url"] == "http://127.0.0.1:8080/orders/new"
+    assert request["browser_plan"]["write_approved"] is True
+    assert request["metadata"]["request_origin"] == "private_pilot_service_followup_test_data_asset"
+
+
+def test_prepare_v12_scan_body_promotes_approved_followup_ui_test_data_request(tmp_path, monkeypatch):
+    register_source_asset("demo", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    monkeypatch.setenv("QUALIBUG_PAGE_AGENT_BRIDGE_URL", "http://127.0.0.1:8797/execute")
+    asset_path = tmp_path / "platform_workspace" / "demo" / "defect_discovery" / "ui_followup_test_data_requests.json"
+    asset_path.parent.mkdir(parents=True, exist_ok=True)
+    asset_path.write_text(
+        json.dumps(
+            {
+                "version": "ui_followup_test_data_requests_v1",
+                "project_id": "demo",
+                "items": [
+                    {
+                        "request_template_id": "UITESTDATA_PROMOTED",
+                        "title": "已确认 selector 的 UI 造数补位",
+                        "path": "/orders/new",
+                        "task": "Create disposable order data via UI",
+                        "browser_plan": {},
+                        "metadata": {"bridge_mode": "page_agent_browser_plan", "executable": False},
+                        "promotion": {
+                            "status": "approved",
+                            "approved_by": "qa_reviewer",
+                            "confirmed_field_bindings": [
+                                {
+                                    "field": "customerId",
+                                    "selector": "[name='customerId']",
+                                    "action": "fill",
+                                }
+                            ],
+                            "approved_browser_plan": {
+                                "steps": [
+                                    {"action": "goto", "url": "/orders/new", "wait_until": "networkidle"},
+                                    {"action": "fill", "selector": "[name='customerId']", "value": "cust_001"},
+                                    {"action": "click", "selector": "[data-testid='submit-order']"},
+                                    {"action": "screenshot", "full_page": True},
+                                ]
+                            },
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = service._prepare_v12_scan_body(
+        "demo",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {
+            "base_url": "http://127.0.0.1:8080",
+            "scope_id": "checkout-scope",
+            "environment_ref": "local-benchmark",
+        },
+        local_dev_mode=False,
+    )
+
+    assert len(prepared["ui_test_data_requests"]) == 1
+    request = prepared["ui_test_data_requests"][0]
+    assert request["request_id"] == "UITESTDATA_PROMOTED"
+    assert request["browser_plan"]["write_approved"] is True
+    assert request["browser_plan"]["steps"][1]["action"] == "fill"
+    assert request["metadata"]["request_origin"] == "private_pilot_service_promoted_followup_test_data_asset"
+    assert request["metadata"]["promotion_status"] == "approved"
+    assert request["metadata"]["approved_by"] == "qa_reviewer"
+
+
 def test_validate_scan_base_url_allows_loopback_for_local_private_service():
     service._validate_scan_base_url("http://127.0.0.1:8080", local_dev_mode=True)
 

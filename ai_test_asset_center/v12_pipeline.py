@@ -341,6 +341,154 @@ def _selection_result(*, status: str, stop_reason: str, selected: list[dict[str,
     }
 
 
+def _slice_has_source_executable_route(item: dict[str, Any]) -> bool:
+    endpoints = item.get("endpoints") if isinstance(item, dict) else []
+    if not isinstance(endpoints, list):
+        return False
+    return any(str(path or "").strip().startswith("/") for path in endpoints)
+
+
+def _scenario_selection_score(scenario: Any) -> float:
+    score = 0.0
+    execution_policy = str(getattr(scenario, "execution_policy", "") or "")
+    category = str(getattr(scenario, "category", "") or "")
+    severity = str(getattr(scenario, "severity", "") or "")
+    evidence_gaps = list(getattr(scenario, "evidence_gaps", []) or [])
+    steps = list(getattr(scenario, "steps", []) or [])
+    confidence = float(getattr(scenario, "confidence", 0.0) or 0.0)
+
+    if execution_policy == "approved_sandbox_write":
+        score += 6.0
+    elif execution_policy in {"runtime_approved", "safe_read_only"}:
+        score += 3.0
+
+    if bool(getattr(scenario, "is_forbidden_path", False)):
+        score += 3.0
+    if bool(getattr(scenario, "is_boundary_path", False)):
+        score += 1.0
+    if bool(getattr(scenario, "is_concurrent", False)) or category == "concurrency":
+        score += 2.0
+    elif category == "state_machine":
+        score += 1.5
+    elif category == "dependency":
+        score += 1.0
+    elif category == "source_observation":
+        score -= 1.0
+
+    severity_boost = {"P0": 3.0, "P1": 2.0, "P2": 1.0}.get(severity, 0.0)
+    score += severity_boost
+    score += min(len(steps), 6) * 0.15
+    score += min(max(confidence, 0.0), 1.0)
+    score -= min(len(evidence_gaps), 4) * 0.5
+    return score
+
+
+def _normalize_selection_family(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"^(\[[^\]]*\]\s*)+", "", text)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"'[^']+'", "'<id>'", text)
+    text = re.sub(r'"[^"]+"', '"<id>"', text)
+    text = re.sub(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<id>", text, flags=re.I)
+    text = re.sub(r"\b\d{6,}\b", "<id>", text)
+    return text.strip()
+
+
+def _slice_selection_family(item: dict[str, Any]) -> str:
+    family = _normalize_selection_family(item.get("_selection_family"))
+    if family:
+        return family
+    entity = str(item.get("entity") or "").strip().lower()
+    kind = str(item.get("kind") or "").strip().lower()
+    states = ",".join(str(value).strip().lower() for value in (item.get("states") or []) if str(value).strip())
+    endpoints = ",".join(str(value).strip().lower() for value in (item.get("endpoints") or []) if str(value).strip())
+    return "|".join(part for part in (entity, kind, states, endpoints) if part) or str(item.get("slice_id") or "")
+
+
+def _take_diverse_slice_batch(items: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
+    if budget <= 0 or not items:
+        return []
+    selected: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    seen_families: set[str] = set()
+    for item in items:
+        family = _slice_selection_family(item)
+        if family and family not in seen_families:
+            seen_families.add(family)
+            selected.append(item)
+        else:
+            deferred.append(item)
+        if len(selected) >= budget:
+            return selected
+    if len(selected) >= budget:
+        return selected[:budget]
+    for item in deferred:
+        selected.append(item)
+        if len(selected) >= budget:
+            break
+    return selected
+
+
+def _rank_behavior_slices_for_selection(slices: list[dict[str, Any]], scenarios: list[Any] | None = None) -> list[dict[str, Any]]:
+    scenario_scores: dict[str, float] = {}
+    scenario_families: dict[str, str] = {}
+    scenario_selection_origins: dict[str, str] = {}
+    for scenario in scenarios or []:
+        slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
+        if not slice_id:
+            continue
+        scenario_scores[slice_id] = max(scenario_scores.get(slice_id, float("-inf")), _scenario_selection_score(scenario))
+        title_family = _normalize_selection_family(getattr(scenario, "title", "") or getattr(scenario, "description", ""))
+        if title_family and slice_id not in scenario_families:
+            scenario_families[slice_id] = title_family
+        selection_origin = str(getattr(scenario, "selection_origin", "") or "").strip().lower()
+        if selection_origin:
+            scenario_selection_origins[slice_id] = selection_origin
+
+    def sort_key(item: dict[str, Any]) -> tuple[int, float, float, int, str, str]:
+        slice_id = str(item.get("slice_id") or "")
+        selection_origin = str(item.get("_selection_origin") or "").strip().lower()
+        materialized_boost = 1 if selection_origin == "active_slice_fallback_materialized" else 0
+        dynamic = scenario_scores.get(slice_id, float("-inf"))
+        base = float(item.get("priority") or 0.0)
+        kind = str(item.get("kind") or "")
+        kind_rank = {"transition": 0, "invariant": 1, "dependency": 2, "source_observation": 3}.get(kind, 9)
+        return (
+            materialized_boost,
+            dynamic,
+            base,
+            -kind_rank,
+            -len(item.get("source_refs") or []),
+            0.0,
+        )
+
+    ranked = []
+    for item in slices:
+        if not isinstance(item, dict):
+            continue
+        normalized = dict(item)
+        slice_id = str(normalized.get("slice_id") or "")
+        if slice_id and slice_id in scenario_families:
+            normalized["_selection_family"] = scenario_families[slice_id]
+        if slice_id and slice_id in scenario_selection_origins:
+            normalized["_selection_origin"] = scenario_selection_origins[slice_id]
+        ranked.append(normalized)
+    ranked.sort(
+        key=lambda item: (
+            -sort_key(item)[0],
+            -sort_key(item)[1],
+            -sort_key(item)[2],
+            sort_key(item)[3],
+            sort_key(item)[4],
+            str(item.get("entity") or ""),
+            str(item.get("slice_id") or ""),
+        )
+    )
+    return ranked
+
+
 def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, int], history: list[dict[str, Any]] | None) -> dict[str, Any]:
     attempted, confirmed = _slice_history(history)
     all_slices = [item for item in slices if isinstance(item, dict) and str(item.get("slice_id") or "")]
@@ -354,13 +502,23 @@ def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, 
         return _selection_result(status="stopped", stop_reason="configured_round_limit_reached", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="round_limit")
     unattempted = [item for item in pending if str(item["slice_id"]) not in attempted]
     if attempted:
+        executable_pending = [item for item in pending if _slice_has_source_executable_route(item)]
+        executable_unattempted = [item for item in unattempted if _slice_has_source_executable_route(item)]
+        if executable_unattempted:
+            selected = _take_diverse_slice_batch(executable_unattempted, budget)
+            remaining = len(executable_unattempted) - len(selected)
+            return _selection_result(status="planned", stop_reason="slice_budget_reached" if remaining else "selected_final_unattempted_slice_batch", selected=selected, pending=executable_unattempted, attempted=attempted, confirmed=confirmed, next_round=round_number + 1 if remaining and round_number < round_limit else None, selection_mode="next_unattempted_executable_after_history")
+        if unattempted:
+            return _selection_result(status="stopped", stop_reason="remaining_unattempted_slices_not_source_executable", selected=[], pending=unattempted, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="history_exhausted")
         if not unattempted:
+            if executable_pending:
+                selected = _take_diverse_slice_batch(executable_pending, budget)
+                remaining = len(executable_pending) - len(selected)
+                return _selection_result(status="planned", stop_reason="slice_budget_reached" if remaining else "selected_retryable_executable_slice_batch", selected=selected, pending=executable_pending, attempted=attempted, confirmed=confirmed, next_round=round_number + 1 if remaining and round_number < round_limit else None, selection_mode="retry_executable_after_history")
             return _selection_result(status="stopped", stop_reason="all_pending_slices_attempted_needs_new_evidence_or_policy", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="history_exhausted")
-        selected = unattempted[:budget]
-        remaining = len(unattempted) - len(selected)
-        return _selection_result(status="planned", stop_reason="slice_budget_reached" if remaining else "selected_final_unattempted_slice_batch", selected=selected, pending=unattempted, attempted=attempted, confirmed=confirmed, next_round=round_number + 1 if remaining and round_number < round_limit else None, selection_mode="next_unattempted_after_history")
+        return _selection_result(status="stopped", stop_reason="all_pending_slices_attempted_needs_new_evidence_or_policy", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="history_exhausted")
     offset = (round_number - 1) * budget
-    selected = pending[offset:offset + budget]
+    selected = _take_diverse_slice_batch(pending[offset:], budget)
     if not selected:
         return _selection_result(status="stopped", stop_reason="no_remaining_slice_in_configured_round", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="round_paging")
     remaining = len(pending) - offset - len(selected)
@@ -379,6 +537,8 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     policy_version = str(context.get("policy_version") or _active_policy_version())[:120]
     scope_id = str(context.get("scope_id") or f"project_scope_{hashlib.sha256(project.encode()).hexdigest()[:12]}")[:160]
     environment_ref = str(context.get("environment_ref") or context.get("target_environment") or (f"target_{hashlib.sha256(base_url.encode()).hexdigest()[:16]}" if base_url else "unbound_environment"))[:160]
+    rerun_key = str(context.get("campaign_rerun_key") or context.get("campaign_restart_key") or "")[:120]
+    rerun_reason = str(context.get("campaign_rerun_reason") or context.get("campaign_restart_reason") or "")[:240]
     snapshot = source_snapshot_hash(prd_text, api_spec_text, db_schema_text, scope_id, environment_ref)
     source_manifest, source_issues = _source_manifest_details(context, submitted_api_spec_text)
     candidate = EnterpriseCampaign.create(
@@ -389,6 +549,8 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
         source_id=source_manifest["source_id"] if not source_issues else "",
         source_hash=source_manifest["source_hash"] if not source_issues else "",
         policy_version=policy_version,
+        rerun_key=rerun_key,
+        rerun_reason=rerun_reason,
         slice_budget=settings["slice_budget"],
         automatic_round_limit=settings["round_limit"],
     )
@@ -397,6 +559,77 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     campaign.slice_budget = min(campaign.slice_budget, settings["slice_budget"], 15)
     campaign.automatic_round_limit = min(campaign.automatic_round_limit, settings["round_limit"], 12)
     return campaign, store, mode
+
+
+def _behavior_contract_rerun_key(behavior_contract: dict[str, Any]) -> str:
+    slices_payload: list[dict[str, Any]] = []
+    for item in behavior_contract.get("slices", []) if isinstance(behavior_contract, dict) else []:
+        row = _dict(item)
+        slice_id = str(row.get("slice_id") or "").strip()
+        if not slice_id:
+            continue
+        slices_payload.append({
+            "slice_id": slice_id,
+            "entity": str(row.get("entity") or "").strip(),
+            "kind": str(row.get("kind") or "").strip(),
+            "states": sorted(str(state or "").strip() for state in row.get("states", []) if str(state or "").strip()),
+            "endpoints": sorted(str(path or "").strip() for path in row.get("endpoints", []) if str(path or "").strip()),
+            "evidence_gaps": sorted(str(gap or "").strip() for gap in row.get("evidence_gaps", []) if str(gap or "").strip()),
+        })
+    gap_payload: list[dict[str, str]] = []
+    for item in behavior_contract.get("coverage_gaps", []) if isinstance(behavior_contract, dict) else []:
+        row = _dict(item)
+        gap_payload.append({
+            "kind": str(row.get("kind") or "").strip(),
+            "title": str(row.get("title") or "").strip(),
+            "entity": str(row.get("entity") or "").strip(),
+            "reason": str(row.get("reason") or "").strip(),
+        })
+    payload = {
+        "schema": "behavior_contract_rerun_v1",
+        "slices": sorted(slices_payload, key=lambda item: item["slice_id"]),
+        "coverage_gaps": sorted(gap_payload, key=lambda item: (item["kind"], item["entity"], item["title"], item["reason"])),
+    }
+    digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
+    return f"behavior_contract:{digest}"
+
+
+def _maybe_start_behavior_contract_rerun(
+    project: str,
+    prd_text: str,
+    api_spec_text: str,
+    db_schema_text: str,
+    base_url: str,
+    settings: dict[str, int],
+    context: dict[str, Any],
+    root: Path,
+    submitted_api_spec_text: Any,
+    behavior_contract: dict[str, Any],
+    campaign: EnterpriseCampaign,
+    campaign_store: EnterpriseCampaignStore,
+    campaign_mode: str,
+) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
+    explicit_rerun_key = str(context.get("campaign_rerun_key") or context.get("campaign_restart_key") or "").strip()
+    if explicit_rerun_key or campaign.status != "completed":
+        return campaign, campaign_store, campaign_mode
+    derived_rerun_key = _behavior_contract_rerun_key(behavior_contract)
+    if not derived_rerun_key or campaign.rerun_key == derived_rerun_key:
+        return campaign, campaign_store, campaign_mode
+    rerun_context = dict(context)
+    rerun_context["campaign_rerun_key"] = derived_rerun_key
+    rerun_context.setdefault("campaign_rerun_reason", "re-evaluate current behavior contract")
+    rerun_campaign, rerun_store, rerun_mode = _campaign_context(
+        project,
+        prd_text,
+        api_spec_text,
+        db_schema_text,
+        base_url,
+        settings,
+        rerun_context,
+        root,
+        submitted_api_spec_text,
+    )
+    return rerun_campaign, rerun_store, rerun_mode
 
 
 def _recover_stale_campaign_state(campaign: EnterpriseCampaign, slices: list[dict[str, Any]] | None = None) -> bool:
@@ -408,6 +641,7 @@ def _recover_stale_campaign_state(campaign: EnterpriseCampaign, slices: list[dic
         "configured_round_limit_reached",
         "slice_budget_reached",
         "automatic_campaign_budget_exhausted",
+        "remaining_unattempted_slices_not_source_executable",
     }
     if deferred_reason and deferred_reason not in recoverable_reasons:
         return False
@@ -440,6 +674,10 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         "enabled": True,
         "phases": {},
         "findings": [],
+        "external_findings": [],
+        "external_signal_execution": {},
+        "ui_findings": [],
+        "ui_execution": {},
         "evidence_graphs": [],
         "risk_clues_saved": 0,
         "behavior_slice_ledger": {},
@@ -460,10 +698,26 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         graph_started = time.time()
         from .business_state_graph import BusinessStateGraphBuilder
         builder = BusinessStateGraphBuilder()
-        graphs = builder.build(prd_text, api_spec_text, db_schema_text)
+        graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+        graphs = builder.build(prd_text, graph_api_doc, db_schema_text)
         behavior_contract = builder.behavior_contract()
         settings = _behavior_slice_settings()
         campaign, campaign_store, campaign_mode = _campaign_context(project, prd_text, api_spec_text, db_schema_text, approved_base_url, settings, context, root, submitted_api_spec_text)
+        campaign, campaign_store, campaign_mode = _maybe_start_behavior_contract_rerun(
+            project,
+            prd_text,
+            api_spec_text,
+            db_schema_text,
+            approved_base_url,
+            settings,
+            context,
+            root,
+            submitted_api_spec_text,
+            behavior_contract,
+            campaign,
+            campaign_store,
+            campaign_mode,
+        )
         recovered_stale_campaign = _recover_stale_campaign_state(campaign, behavior_contract["slices"])
         approval = _execution_approval_contract(context, campaign, approved_base_url, root)
         if approved_base_url and approval.get("status") != "approved":
@@ -479,8 +733,22 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         else:
             runtime_contract = {**runtime_contract, "execution_approval": approval}
         result["runtime_contract"] = runtime_contract
+        ranked_behavior_slices = list(behavior_contract["slices"])
+        if runtime_contract.get("status") == "approved":
+            from .semantic_scenario_generator import SemanticScenarioGenerator
+
+            preview_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+            preview_scenarios = SemanticScenarioGenerator().generate(
+                graphs,
+                preview_api_doc,
+                active_slice_ids=None,
+                active_slices=behavior_contract["slices"],
+                discovery_round=settings["round_number"],
+                allow_source_runtime=True,
+            )
+            ranked_behavior_slices = _rank_behavior_slices_for_selection(behavior_contract["slices"], preview_scenarios)
         if campaign.status in {"coverage_deferred", "completed", "blocked"}:
-            selection = _selection_result(status="stopped", stop_reason=f"campaign_{campaign.status}", selected=[], pending=behavior_contract["slices"], attempted=set(campaign.attempted_slice_ids), confirmed=set(campaign.confirmation_receipts), next_round=None, selection_mode="campaign_terminal")
+            selection = _selection_result(status="stopped", stop_reason=f"campaign_{campaign.status}", selected=[], pending=ranked_behavior_slices, attempted=set(campaign.attempted_slice_ids), confirmed=set(campaign.confirmation_receipts), next_round=None, selection_mode="campaign_terminal")
         else:
             history: list[dict[str, Any]] = [campaign.history_item()]
             if existing_findings is not None:
@@ -491,7 +759,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 settings["round_number"] = min(campaign.round_count + 1, campaign.automatic_round_limit + 1)
             settings["slice_budget"] = min(settings["slice_budget"], campaign.slice_budget)
             settings["round_limit"] = min(settings["round_limit"], campaign.automatic_round_limit)
-            selection = _schedule_behavior_slices(behavior_contract["slices"], settings, history)
+            selection = _schedule_behavior_slices(ranked_behavior_slices, settings, history)
         selected_ids = set(selection["selected_slice_ids"])
         result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
         result["behavior_slice_ledger"] = {
@@ -510,7 +778,11 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "next_round": selection["next_round"],
             "stop_reason": selection["stop_reason"],
         }
-        ledger_for_persistence = dict(result["behavior_slice_ledger"])
+        skip_history_persistence = (
+            str(runtime_contract.get("status") or "") == "blocked"
+            and str(runtime_contract.get("reason") or "") == "execution_approval_required"
+        )
+        ledger_for_persistence = None if skip_history_persistence else dict(result["behavior_slice_ledger"])
         result["phases"]["state_graph"] = {
             "status": "completed",
             "entities": sorted(graphs),
@@ -574,10 +846,11 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "duration_ms": int((time.time() - fuzz_started) * 1000),
         }
         scenario_started = time.time()
+        scenario_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
         from .semantic_scenario_generator import SemanticScenarioGenerator
         scenarios = SemanticScenarioGenerator().generate(
             graphs,
-            api_spec_text,
+            scenario_api_doc,
             active_slice_ids=selected_ids,
             active_slices=selection["selected"],
             discovery_round=settings["round_number"],
@@ -587,7 +860,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         runtime_token = _read_only_runtime_token(approved_base_url, catalog, project, root) if executable else ""
         if runtime_token:
             for scenario in executable:
-                if str(getattr(scenario, "execution_policy", "") or "") == "safe_read_only" and not str(getattr(scenario, "actor_token", "") or ""):
+                if str(getattr(scenario, "execution_policy", "") or "") in {"safe_read_only", "approved_sandbox_write"} and not str(getattr(scenario, "actor_token", "") or ""):
                     scenario.actor_token = runtime_token
         plan_only = [scenario for scenario in scenarios if scenario not in executable]
         result["phases"]["scenario_generation"] = {
@@ -648,6 +921,85 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 except Exception:
                     failed += 1
             result["phases"]["execution"] = {"status": "completed", "executed": len(traces), "failed": failed, "planned_only": len(plan_only), "duration_ms": int((time.time() - execution_started) * 1000)}
+        try:
+            from .ui_execution_adapter import execute_ui_execution_requests
+
+            ui_execution = execute_ui_execution_requests(
+                project,
+                context.get("ui_execution_requests"),
+                runtime_contract,
+                root=root,
+                run_id=f"{campaign.campaign_id or project}_round_{settings['round_number']}",
+                execution_context=context,
+            )
+        except Exception as exc:
+            ui_execution = {
+                "status": "failed",
+                "requested": 0,
+                "executed": 0,
+                "failed": 1,
+                "blocked": 0,
+                "provider_distribution": {},
+                "results": [],
+                "findings": [],
+                "artifacts": [],
+                "duration_ms": 0,
+                "reason": f"ui_execution_adapter_error:{type(exc).__name__}",
+            }
+        result["ui_execution"] = ui_execution
+        normalized_ui_findings, ui_evidence_graphs = _normalize_ui_execution_findings(
+            ui_execution,
+            campaign_id=campaign.campaign_id,
+            discovery_round=settings["round_number"],
+        )
+        result["ui_findings"] = normalized_ui_findings
+        result["evidence_graphs"].extend(ui_evidence_graphs)
+        result["phases"]["ui_execution"] = {
+            "status": str(ui_execution.get("status") or "not_requested"),
+            "requested": int(ui_execution.get("requested") or 0),
+            "executed": int(ui_execution.get("executed") or 0),
+            "failed": int(ui_execution.get("failed") or 0),
+            "blocked": int(ui_execution.get("blocked") or 0),
+            "provider_distribution": dict(ui_execution.get("provider_distribution") or {}),
+            "findings": len(normalized_ui_findings),
+            "duration_ms": int(ui_execution.get("duration_ms") or 0),
+        }
+        try:
+            from .external_signal_adapter import execute_external_signal_requests
+
+            external_signal_execution = execute_external_signal_requests(
+                project,
+                context.get("external_signal_requests"),
+                runtime_contract,
+                root=root,
+                run_id=f"{campaign.campaign_id or project}_round_{settings['round_number']}",
+                execution_context=context,
+            )
+        except Exception as exc:
+            external_signal_execution = {
+                "status": "failed",
+                "requested": 0,
+                "imported": 0,
+                "failed": 1,
+                "blocked": 0,
+                "provider_distribution": {},
+                "results": [],
+                "findings": [],
+                "artifacts": [],
+                "duration_ms": 0,
+                "reason": f"external_signal_adapter_error:{type(exc).__name__}",
+            }
+        result["external_signal_execution"] = external_signal_execution
+        result["external_findings"] = list(external_signal_execution.get("findings") or [])
+        result["phases"]["external_signals"] = {
+            "status": str(external_signal_execution.get("status") or "not_requested"),
+            "requested": int(external_signal_execution.get("requested") or 0),
+            "imported": int(external_signal_execution.get("imported") or 0),
+            "failed": int(external_signal_execution.get("failed") or 0),
+            "blocked": int(external_signal_execution.get("blocked") or 0),
+            "provider_distribution": dict(external_signal_execution.get("provider_distribution") or {}),
+            "duration_ms": int(external_signal_execution.get("duration_ms") or 0),
+        }
         oracle_started = time.time()
         from .oracle_engine import EvidenceGraphBuilder, OracleEngine
         oracle, evidence_builder = OracleEngine(), EvidenceGraphBuilder()
@@ -657,21 +1009,15 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     continue
                 evidence = evidence_builder.build(scenario.to_dict(), trace, None, [oracle_result])
                 result["evidence_graphs"].append(evidence.to_dict())
-                result["findings"].append({
-                    "severity": oracle_result.severity,
-                    "title": f"[V12 {oracle_result.oracle_name}] {scenario.title}",
-                    "category": scenario.category,
-                    "source": "v12_state_graph",
-                    "description": oracle_result.explanation,
-                    "confidence_score": oracle_result.confidence,
-                    "evidence_id": evidence.evidence_id,
-                    "oracle": oracle_result.to_dict(),
-                    "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
-                    "discovery_round": settings["round_number"],
-                    "campaign_id": campaign.campaign_id,
-                    "execution_status": "executed",
-                    "confirmation_status": "candidate",
-                })
+                result["findings"].append(_confirmed_oracle_finding(
+                    scenario,
+                    trace,
+                    oracle_result,
+                    evidence,
+                    campaign_id=campaign.campaign_id,
+                    discovery_round=settings["round_number"],
+                    base_url=approved_base_url,
+                ))
         result["phases"]["oracle"] = {"status": "completed", "total_evaluated": len(traces), "violations_found": len(result["findings"]), "duration_ms": int((time.time() - oracle_started) * 1000)}
         try:
             from .risk_clue_pool import save_risk_clues
@@ -679,21 +1025,22 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         except Exception:
             pass
         execution_status = str(result["phases"]["execution"].get("status") or "")
-        campaign.record_cycle(
-            round_number=settings["round_number"],
-            selection=selection,
-            findings=result["findings"],
-            coverage_gap_count=len(behavior_contract["coverage_gaps"]),
-            execution_status=execution_status,
-            attempted_slice_ids=sorted(attempted_slice_ids),
-        )
-        campaign_store.save(campaign)
-        result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
-        result["behavior_slice_ledger"]["campaign_status"] = campaign.status
-        result["behavior_slice_ledger"]["attempted_slice_ids"] = list(campaign.attempted_slice_ids)
-        result["behavior_slice_ledger"]["confirmed_slice_ids"] = sorted(campaign.confirmation_receipts)
-        result["phases"]["incremental_discovery"]["campaign_status"] = campaign.status
-        ledger_for_persistence = dict(result["behavior_slice_ledger"])
+        if not skip_history_persistence:
+            campaign.record_cycle(
+                round_number=settings["round_number"],
+                selection=selection,
+                findings=result["findings"],
+                coverage_gap_count=len(behavior_contract["coverage_gaps"]),
+                execution_status=execution_status,
+                attempted_slice_ids=sorted(attempted_slice_ids),
+            )
+            campaign_store.save(campaign)
+            result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
+            result["behavior_slice_ledger"]["campaign_status"] = campaign.status
+            result["behavior_slice_ledger"]["attempted_slice_ids"] = list(campaign.attempted_slice_ids)
+            result["behavior_slice_ledger"]["confirmed_slice_ids"] = sorted(campaign.confirmation_receipts)
+            result["phases"]["incremental_discovery"]["campaign_status"] = campaign.status
+            ledger_for_persistence = dict(result["behavior_slice_ledger"])
     except Exception as exc:
         result["error"] = str(exc)[:500]
     if ledger_for_persistence is not None and not result.get("error"):
@@ -711,6 +1058,9 @@ def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2) -> dic
         try:
             return __execute_scenario_once(scenario, base_url)
         except Exception as exc:
+            # #region debug-point D:scenario-retry
+            exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'D', 'location': 'v12_pipeline.py:_execute_scenario', 'msg': '[DEBUG] scenario raised before retry handling', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'attempt': attempt, 'error': str(exc)}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
+            # #endregion
             if attempt < max_retries:
                 time.sleep(0.5 * (attempt + 1))
                 continue
@@ -721,6 +1071,9 @@ def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2) -> dic
 def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
     trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}
     bindings: dict[str, Any] = {}
+    # #region debug-point A:scenario-start
+    exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'A', 'location': 'v12_pipeline.py:__execute_scenario_once:start', 'msg': '[DEBUG] scenario execution started', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'step_count': len(getattr(scenario, 'steps', []) or [])}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
+    # #endregion
     for step in getattr(scenario, "steps", []) or []:
         method = str(getattr(step, "api_method", "") or "").upper()
         path = str(getattr(step, "api_path", "") or "")
@@ -736,6 +1089,9 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         started, url = time.time(), base_url.rstrip("/") + path
+        # #region debug-point B:before-request
+        exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'B', 'location': 'v12_pipeline.py:__execute_scenario_once:before_request', 'msg': '[DEBUG] step request about to send', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'action': getattr(step, 'action', ''), 'method': method, 'path': path, 'actor': actor}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
+        # #endregion
         try:
             request = urllib.request.Request(url, method=method, data=data, headers=headers)
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -747,6 +1103,9 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
         except Exception as exc:
             status, response_body, response_headers = 0, {"error": str(exc)}, {}
             trace["errors"].append(str(exc))
+        # #region debug-point C:after-request
+        exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'C', 'location': 'v12_pipeline.py:__execute_scenario_once:after_request', 'msg': '[DEBUG] step request completed', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'action': getattr(step, 'action', ''), 'method': method, 'path': path, 'status': status, 'elapsed_ms': int((time.time() - started) * 1000), 'error': trace['errors'][-1] if trace.get('errors') else ''}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
+        # #endregion
         _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
         for field in getattr(step, "extract_from_response", []) or []:
             value = _extract(response_body, str(field))
@@ -814,6 +1173,400 @@ def _count_by(items: list[Any], attr: str) -> dict[str, int]:
     for item in items:
         result[str(getattr(item, attr, "unknown"))] += 1
     return dict(result)
+
+
+def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, Any]:
+    steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
+    if not steps:
+        return {}
+    rule = str(getattr(oracle_result, "violated_rule", "") or "").strip().lower()
+    if rule == "non_idempotent" and len(steps) >= 2:
+        return steps[-1] if isinstance(steps[-1], dict) else {}
+    for step in reversed(steps):
+        if not isinstance(step, dict):
+            continue
+        status = int(step.get("status") or 0)
+        expected = int(step.get("expected_status") or 0)
+        if expected and status != expected:
+            return step
+    return steps[-1] if isinstance(steps[-1], dict) else {}
+
+
+def _trace_before_after_snapshot(trace: dict[str, Any]) -> dict[str, Any]:
+    steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
+    runtime_steps = [step for step in steps if isinstance(step, dict) and isinstance(step.get("response"), dict)]
+    if not runtime_steps:
+        return {}
+
+    def _snapshot(step: dict[str, Any]) -> dict[str, Any]:
+        response = step.get("response") if isinstance(step.get("response"), dict) else {}
+        return {
+            "action": str(step.get("action") or ""),
+            "method": str(step.get("method") or "").upper(),
+            "path": str(step.get("path") or ""),
+            "status_code": int(response.get("status_code") or step.get("status") or 0),
+            "body": response.get("body"),
+            "expected_status": int(step.get("expected_status") or 0),
+        }
+
+    before_step = runtime_steps[0]
+    after_step = runtime_steps[-1]
+    return {
+        "before": _snapshot(before_step),
+        "after": _snapshot(after_step),
+    }
+
+
+def _confirmed_oracle_finding(
+    scenario: Any,
+    trace: dict[str, Any],
+    oracle_result: Any,
+    evidence: Any,
+    *,
+    campaign_id: str,
+    discovery_round: int,
+    base_url: str,
+) -> dict[str, Any]:
+    step = _trace_primary_step(trace, oracle_result)
+    path = str(step.get("path") or "")
+    method = str(step.get("method") or "").upper()
+    response = step.get("response") if isinstance(step.get("response"), dict) else {}
+    status = int(response.get("status_code") or step.get("status") or 0)
+    actor = str(getattr(scenario, "actor_token", "") or "")
+    actor_label = str((getattr(scenario, "actors", []) or ["readonly"])[0] or "readonly")
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    reproduction_steps = [line for line in str(getattr(evidence, "reproduction_steps", "") or "").splitlines() if str(line).strip()]
+    if not reproduction_steps and method and path:
+        reproduction_steps = [f"{method} {path}"]
+    assertion = str(getattr(oracle_result, "expected", "") or "").strip()
+    actual = str(getattr(oracle_result, "actual", "") or "").strip()
+    target = (base_url.rstrip("/") + path) if base_url and path.startswith("/") else (base_url or path)
+    before_after_snapshot = _trace_before_after_snapshot(trace)
+    if not before_after_snapshot and isinstance(trace.get("before_after_snapshot"), dict):
+        before_after_snapshot = dict(trace.get("before_after_snapshot") or {})
+    business_invariant_evaluation = (
+        dict(trace.get("business_invariant_evaluation") or {})
+        if isinstance(trace.get("business_invariant_evaluation"), dict)
+        else {}
+    )
+    db_evidence = dict(trace.get("db_evidence") or {}) if isinstance(trace.get("db_evidence"), dict) else {}
+    evidence_strength = "runtime"
+    if before_after_snapshot and db_evidence:
+        evidence_strength = "runtime_and_db"
+    elif before_after_snapshot:
+        evidence_strength = "runtime_before_after"
+    elif db_evidence:
+        evidence_strength = "db"
+    runtime_confirmable = (
+        _scenario_executable(scenario)
+        and bool(method and path and status)
+        and bool(reproduction_steps)
+        and not (trace.get("errors") if isinstance(trace, dict) else [])
+        and bool(getattr(evidence, "vote_summary", {}).get("confirmation_threshold_met"))
+    )
+    confirmation_status = "confirmed" if runtime_confirmable else "candidate"
+    gate_passed = bool(runtime_confirmable)
+    raw_request = {"method": method, "path": path}
+    if actor_label:
+        raw_request["actor"] = actor_label
+    raw_response = {"status_code": status, "body": response.get("body")}
+    finding = {
+        "severity": getattr(oracle_result, "severity", "P1"),
+        "title": f"[V12 {getattr(oracle_result, 'oracle_name', 'Oracle')}] {getattr(scenario, 'title', '')}",
+        "category": getattr(scenario, "category", "scenario_flow"),
+        "source": "v12_state_graph",
+        "description": str(getattr(oracle_result, "explanation", "") or ""),
+        "confidence_score": float(getattr(oracle_result, "confidence", 0.0) or 0.0),
+        "evidence_id": str(getattr(evidence, "evidence_id", "") or ""),
+        "oracle": oracle_result.to_dict() if hasattr(oracle_result, "to_dict") else {},
+        "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
+        "discovery_round": discovery_round,
+        "campaign_id": campaign_id,
+        "execution_status": "executed",
+        "confirmation_status": confirmation_status,
+        "gate_passed": gate_passed,
+        "bug_status": "reproduced" if gate_passed else "suspected",
+        "customer_delivery_status": "defect",
+        "expected": assertion,
+        "actual": actual,
+        "timestamp": timestamp,
+        "failed_assertions": [actual] if actual else [],
+        "evidence": {
+            "request": f"{method} {path}",
+            "response": f"HTTP {status}",
+            "assertion": assertion or actual or str(getattr(oracle_result, "violated_rule", "") or "oracle_violation"),
+            "timestamp": timestamp,
+            "target": target,
+            "actor": actor_label,
+            "reproduction_steps": reproduction_steps,
+        },
+        "raw_evidence": {
+            "has_real_evidence": bool(method and path and status),
+            "timestamp": timestamp,
+            "request_raw": raw_request,
+            "response_raw": raw_response,
+            "execution_trace": {"evidence_id": str(getattr(evidence, "evidence_id", "") or ""), "layers": list(getattr(evidence, "layers_triggered", []) or [])},
+            "db_snapshot": db_evidence if db_evidence else {},
+        },
+        "reproduction": {
+            "method": method,
+            "path": path,
+            "is_synthetic": False,
+            "har_evidence": {"status_code": status, "response_body": response.get("body")},
+        },
+        "evidence_quality": {
+            "level": "validated" if gate_passed else "needs_evidence",
+            "score": 95 if gate_passed else 70,
+            "can_reproduce": bool(gate_passed),
+        },
+        "evidence_status": {
+            "semantic_verdict": "SEMANTIC_CONFIRMED" if gate_passed else "SEMANTIC_CANDIDATE",
+            "business_evidence_status": "VALIDATED" if gate_passed else "PENDING_EVIDENCE",
+            "final_review_status": "VALIDATED_CANDIDATE" if gate_passed else "NEEDS_MORE_EVIDENCE",
+            "missing_requirements": [],
+        },
+        "reproduction_steps": reproduction_steps,
+        "before_after_snapshot": before_after_snapshot,
+        "business_invariant_evaluation": business_invariant_evaluation,
+        "db_evidence": db_evidence,
+        "evidence_strength": evidence_strength,
+    }
+    if actor:
+        finding["evidence"]["actor_token_present"] = True
+    return finding
+
+
+def _normalize_ui_execution_findings(
+    ui_execution: dict[str, Any] | None,
+    *,
+    campaign_id: str,
+    discovery_round: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    execution = _dict(ui_execution)
+    findings: list[dict[str, Any]] = []
+    graphs: list[dict[str, Any]] = []
+    for result in execution.get("results") if isinstance(execution.get("results"), list) else []:
+        if not isinstance(result, dict):
+            continue
+        bridge_findings = result.get("findings") if isinstance(result.get("findings"), list) else []
+        if bridge_findings:
+            for item in bridge_findings:
+                if not isinstance(item, dict):
+                    continue
+                normalized = _ui_bridge_finding(
+                    item,
+                    request_result=result,
+                    campaign_id=campaign_id,
+                    discovery_round=discovery_round,
+                )
+                findings.append(normalized)
+                graphs.append(_ui_evidence_graph(normalized, result))
+            continue
+        status = str(result.get("status") or "")
+        if status not in {"failed", "blocked"}:
+            continue
+        normalized = _ui_execution_status_finding(
+            result,
+            campaign_id=campaign_id,
+            discovery_round=discovery_round,
+        )
+        findings.append(normalized)
+        graphs.append(_ui_evidence_graph(normalized, result))
+    return findings, graphs
+
+
+def _normalize_ui_created_data(request_result: dict[str, Any]) -> dict[str, Any]:
+    created_data = _dict(request_result.get("created_data"))
+    if not created_data:
+        return {}
+    object_id = str(
+        created_data.get("object_id")
+        or created_data.get("entity_id")
+        or created_data.get("resource_id")
+        or created_data.get("id")
+        or ""
+    ).strip()
+    object_type = str(
+        created_data.get("object_type")
+        or created_data.get("entity")
+        or created_data.get("resource_type")
+        or created_data.get("type")
+        or ""
+    ).strip()
+    current_url = str(request_result.get("current_url") or request_result.get("start_url") or "").strip()
+    object_url = str(created_data.get("object_url") or created_data.get("url") or current_url or "").strip()
+    data_scope_ref = str(
+        created_data.get("data_scope_ref")
+        or created_data.get("scope_ref")
+        or (f"{object_type}:{object_id}" if object_type and object_id else "")
+    ).strip()
+    normalized = dict(created_data)
+    if object_id:
+        normalized["object_id"] = object_id
+    if object_type:
+        normalized["object_type"] = object_type
+    if data_scope_ref:
+        normalized["data_scope_ref"] = data_scope_ref
+    if object_url:
+        normalized["object_url"] = object_url
+    return normalized
+
+
+def _ui_execution_evidence_payload(request_result: dict[str, Any]) -> dict[str, Any]:
+    artifacts = request_result.get("artifacts") if isinstance(request_result.get("artifacts"), list) else []
+    artifact_refs: list[str] = []
+    artifact_types: list[str] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        ref = str(artifact.get("ref") or "").strip()
+        if ref and ref not in artifact_refs:
+            artifact_refs.append(ref)
+        artifact_type = str(artifact.get("artifact_type") or "").strip()
+        if artifact_type and artifact_type not in artifact_types:
+            artifact_types.append(artifact_type)
+    return {
+        "request_id": str(request_result.get("request_id") or ""),
+        "provider": str(request_result.get("provider") or ""),
+        "bridge_provider": str(request_result.get("bridge_provider") or ""),
+        "status": str(request_result.get("status") or ""),
+        "reason": str(request_result.get("reason") or ""),
+        "current_url": str(request_result.get("current_url") or request_result.get("start_url") or ""),
+        "artifact_dir": str(request_result.get("artifact_dir") or ""),
+        "artifact_refs": artifact_refs,
+        "artifact_types": artifact_types,
+        "history_count": len(request_result.get("history") if isinstance(request_result.get("history"), list) else []),
+        "console_count": len(request_result.get("console") if isinstance(request_result.get("console"), list) else []),
+        "network_count": len(request_result.get("network") if isinstance(request_result.get("network"), list) else []),
+        "metadata": dict(request_result.get("metadata") or {}) if isinstance(request_result.get("metadata"), dict) else {},
+    }
+
+
+def _ui_bridge_finding(
+    item: dict[str, Any],
+    *,
+    request_result: dict[str, Any],
+    campaign_id: str,
+    discovery_round: int,
+) -> dict[str, Any]:
+    finding = dict(item)
+    created_data = _normalize_ui_created_data(request_result)
+    ui_execution_result = _ui_execution_evidence_payload(request_result)
+    finding.setdefault("severity", "P2")
+    finding.setdefault("title", f"[UI] {str(request_result.get('title') or request_result.get('request_id') or 'ui_request')[:120]}")
+    finding.setdefault("category", "ui_execution")
+    finding.setdefault("source", "ui_execution_bridge")
+    finding.setdefault("description", str(request_result.get("reason") or "ui_execution_signal"))
+    finding.setdefault("confidence_score", 0.7)
+    finding.setdefault("campaign_id", campaign_id)
+    finding.setdefault("discovery_round", discovery_round)
+    finding.setdefault("execution_status", "executed" if str(request_result.get("status") or "") == "executed" else str(request_result.get("status") or "not_executed"))
+    finding.setdefault("confirmation_status", "candidate")
+    evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+    evidence.setdefault("request", str(request_result.get("task") or request_result.get("title") or "ui_request"))
+    evidence.setdefault("response", str(request_result.get("status") or ""))
+    evidence.setdefault("target", str(request_result.get("current_url") or request_result.get("start_url") or ""))
+    evidence.setdefault("ui_artifacts", request_result.get("artifacts") if isinstance(request_result.get("artifacts"), list) else [])
+    evidence.setdefault("reproduction_steps", [str(request_result.get("task") or request_result.get("title") or "ui_request")])
+    finding["evidence"] = evidence
+    finding.setdefault(
+        "raw_evidence",
+        {
+            "has_real_evidence": bool(
+                ui_execution_result.get("artifact_dir")
+                or ui_execution_result.get("current_url")
+                or ui_execution_result.get("artifact_refs")
+                or created_data
+            ),
+            "ui_execution_result": ui_execution_result,
+            "created_data": created_data,
+        },
+    )
+    return finding
+
+
+def _ui_execution_status_finding(
+    request_result: dict[str, Any],
+    *,
+    campaign_id: str,
+    discovery_round: int,
+) -> dict[str, Any]:
+    status = str(request_result.get("status") or "blocked")
+    request_id = str(request_result.get("request_id") or "ui_request")
+    title = str(request_result.get("title") or request_id or "ui_request")
+    current_url = str(request_result.get("current_url") or request_result.get("start_url") or "")
+    severity = "P1" if status == "failed" else "P2"
+    created_data = _normalize_ui_created_data(request_result)
+    ui_execution_result = _ui_execution_evidence_payload(request_result)
+    return {
+        "severity": severity,
+        "title": f"[UI Execution {status.upper()}] {title[:120]}",
+        "category": "ui_execution",
+        "source": "ui_execution_adapter",
+        "description": str(request_result.get("reason") or f"ui_execution_{status}"),
+        "confidence_score": 0.6 if status == "failed" else 0.45,
+        "campaign_id": campaign_id,
+        "discovery_round": discovery_round,
+        "execution_status": status,
+        "confirmation_status": "candidate",
+        "evidence": {
+            "request": str(request_result.get("task") or title),
+            "response": status,
+            "target": current_url,
+            "ui_artifacts": request_result.get("artifacts") if isinstance(request_result.get("artifacts"), list) else [],
+            "reproduction_steps": [str(request_result.get("task") or title)],
+        },
+        "raw_evidence": {
+            "has_real_evidence": bool(current_url or ui_execution_result.get("artifact_dir") or ui_execution_result.get("artifact_refs") or created_data),
+            "ui_execution_result": ui_execution_result,
+            "created_data": created_data,
+        },
+    }
+
+
+def _ui_evidence_graph(finding: dict[str, Any], request_result: dict[str, Any]) -> dict[str, Any]:
+    request_id = str(request_result.get("request_id") or "ui_request")
+    current_url = str(request_result.get("current_url") or request_result.get("start_url") or "")
+    history = request_result.get("history") if isinstance(request_result.get("history"), list) else []
+    console = request_result.get("console") if isinstance(request_result.get("console"), list) else []
+    network = request_result.get("network") if isinstance(request_result.get("network"), list) else []
+    return {
+        "bug_id": f"UI_{request_id}",
+        "title": str(finding.get("title") or request_id),
+        "severity": str(finding.get("severity") or "P2"),
+        "confidence": float(finding.get("confidence_score") or 0.0),
+        "scenario": {
+            "id": request_id,
+            "category": "ui_execution",
+            "title": str(request_result.get("title") or request_id),
+            "provider": str(request_result.get("provider") or ""),
+            "task": str(request_result.get("task") or ""),
+        },
+        "request_chain": [{"url": current_url, "task": str(request_result.get("task") or "")}],
+        "response_chain": [{"status": str(request_result.get("status") or ""), "reason": str(request_result.get("reason") or "")}],
+        "state_diff": {},
+        "execution_trace": {
+            "current_url": current_url,
+            "artifact_dir": str(request_result.get("artifact_dir") or ""),
+            "history": history,
+            "console": console,
+            "network": network,
+        },
+        "before_snapshot": {},
+        "after_snapshot": {},
+        "oracle_results": [],
+        "reproduction_steps": "\n".join(finding.get("evidence", {}).get("reproduction_steps", []) if isinstance(finding.get("evidence"), dict) else []),
+        "evidence_id": str(finding.get("evidence_id") or f"ui_evidence_{request_id}"),
+        "layers_triggered": ["UI"],
+        "vote_summary": {
+            "total_votes": 1,
+            "failed_votes": 1,
+            "passed_votes": 0,
+            "failure_weight": 1.0,
+            "total_weight": 1.0,
+            "confirmation_threshold_met": False,
+        },
+    }
 
 
 def _redact(value: Any) -> Any:

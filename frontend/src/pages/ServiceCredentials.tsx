@@ -12,6 +12,7 @@ import {
 /* ------------------------------------------------------------------ */
 
 type AuthType = 'password_login' | 'bearer_token' | 'api_key';
+type ServiceStatus = 'verified' | 'configured_unverified' | 'no_token' | 'no_config';
 
 interface ServiceConfig {
   name: string;
@@ -30,11 +31,22 @@ interface ServiceConfig {
   db_pass: string;
   db_test_status: 'idle' | 'testing' | 'ok' | 'fail';
   db_test_msg: string;
-  status: 'ok' | 'no_token' | 'no_config';
+  status: ServiceStatus;
 }
 
+type ServiceCredentialRecord = Partial<ServiceConfig> & {
+  auth?: Record<string, unknown>;
+  db?: Record<string, unknown>;
+};
+
 type ServiceCredentialsResponse = {
-  services?: Partial<ServiceConfig>[];
+  services?: ServiceCredentialRecord[];
+};
+
+type SaveServiceCredentialsResponse = {
+  auth_check?: {
+    all_ok?: boolean;
+  };
 };
 
 const BLANK_SERVICE: ServiceConfig = {
@@ -57,6 +69,54 @@ const BLANK_SERVICE: ServiceConfig = {
   status: 'no_config',
 };
 
+function hasAuthMaterial(service: Partial<ServiceConfig>): boolean {
+  return Boolean(service.bearer_token || service.api_key || service.admin_user);
+}
+
+function hasNestedAuthMaterial(service: { auth?: Record<string, unknown> }): boolean {
+  const auth = service.auth || {};
+  const admin = auth.admin && typeof auth.admin === 'object' ? auth.admin as Record<string, unknown> : {};
+  return Boolean(
+    auth.bearer_token_configured || auth.api_key_configured ||
+    auth.bearer_token || auth.api_key ||
+    admin.username || admin.password_configured || admin.password,
+  );
+}
+
+function serviceStatusFromRecord(service: Partial<ServiceConfig> & { auth?: Record<string, unknown> }): ServiceStatus {
+  if (service.status === 'verified') return 'verified';
+  if (service.status === 'configured_unverified') return 'configured_unverified';
+  if (hasAuthMaterial(service) || hasNestedAuthMaterial(service)) return 'configured_unverified';
+  return service.base_url ? 'no_token' : 'no_config';
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function normalizeServiceConfig(service: ServiceCredentialRecord): ServiceConfig {
+  const auth = service.auth && typeof service.auth === 'object' ? service.auth : {};
+  const admin = auth.admin && typeof auth.admin === 'object' ? auth.admin as Record<string, unknown> : {};
+  const db = service.db && typeof service.db === 'object' ? service.db : {};
+  const authType = text(service.auth_type) || text(auth.type) || BLANK_SERVICE.auth_type;
+  return {
+    ...BLANK_SERVICE,
+    ...service,
+    login_api: text(service.login_api) || text(auth.login_api) || BLANK_SERVICE.login_api,
+    auth_type: (['password_login', 'bearer_token', 'api_key'] as AuthType[]).includes(authType as AuthType) ? authType as AuthType : BLANK_SERVICE.auth_type,
+    admin_user: text(service.admin_user) || text(admin.username),
+    admin_pass: text(service.admin_pass) || (admin.password_configured ? '********' : ''),
+    bearer_token: text(service.bearer_token) || (auth.bearer_token_configured ? '********' : ''),
+    api_key: text(service.api_key) || (auth.api_key_configured ? '********' : ''),
+    db_host: text(service.db_host) || text(db.host),
+    db_port: text(service.db_port) || (db.port == null ? '' : String(db.port)),
+    db_name: text(service.db_name) || text(db.name),
+    db_user: text(service.db_user) || text(db.user),
+    db_pass: text(service.db_pass) || (db.password_configured ? '********' : ''),
+    status: serviceStatusFromRecord(service),
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* Component                                                           */
 /* ------------------------------------------------------------------ */
@@ -77,12 +137,7 @@ export function ServiceCredentials() {
     setLoading(true);
     try {
       const data = await getServiceCredentials(project) as ServiceCredentialsResponse;
-      const svcs: ServiceConfig[] = (Array.isArray(data?.services) ? data.services : []).map((s) => ({
-        ...BLANK_SERVICE,
-        ...s,
-        status: s.bearer_token || s.api_key || s.admin_user ? 'ok'
-             : s.base_url ? 'no_token' : 'no_config',
-      }));
+      const svcs: ServiceConfig[] = (Array.isArray(data?.services) ? data.services : []).map(normalizeServiceConfig);
       setServices(svcs.length ? svcs : []);
     } catch {
       setServices([]);
@@ -99,7 +154,7 @@ export function ServiceCredentials() {
     if (!svc?.name.trim() || !svc?.base_url.trim()) return;
     setSaving(svc.name);
     try {
-      await saveServiceCredentials({
+      const result = await saveServiceCredentials({
         project,
         service: {
           name: svc.name.trim(),
@@ -117,8 +172,9 @@ export function ServiceCredentials() {
           db_user: svc.db_user.trim(),
           db_pass: svc.db_pass,
         },
-      });
-      setServices(prev => prev.map((s, i) => i === index ? { ...s, status: 'ok' as const } : s));
+      }) as SaveServiceCredentialsResponse;
+      const verified = Boolean(result.auth_check?.all_ok);
+      setServices(prev => prev.map((s, i) => i === index ? { ...s, status: verified ? 'verified' as const : 'configured_unverified' as const } : s));
     } catch {
       // keep editing open so user can fix
     } finally {
@@ -198,7 +254,8 @@ export function ServiceCredentials() {
               </div>
             </div>
             <div className="svc-card-header-right">
-              {svc.status === 'ok' && <span className="svc-badge svc-badge--ok">已配置</span>}
+              {svc.status === 'verified' && <span className="svc-badge svc-badge--ok">已验证</span>}
+              {svc.status === 'configured_unverified' && <span className="svc-badge svc-badge--warn">已配置待验证</span>}
               {svc.status === 'no_token' && <span className="svc-badge svc-badge--warn">待认证</span>}
               {svc.status === 'no_config' && <span className="svc-badge svc-badge--new">未配置</span>}
               <span className="svc-card-chevron">{editing === index ? '▲' : '▼'}</span>

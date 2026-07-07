@@ -6,7 +6,7 @@ import { hasCustomerFacingHardEvidence, hasRealReplayAsset, isCustomerReadyFindi
 import { formatActorName, formatDurationMs } from '../lib/display';
 import { usePageTitle } from '../lib/page-title';
 import { buildProjectPath } from '../lib/project-navigation';
-import type { Finding } from '../types';
+import type { CommercialAssets, Finding } from '../types';
 
 const ReplayViewer = lazy(() => import('../components/ReplayViewer'));
 type EvidenceFilter = 'all' | 'API' | 'DB' | '文档';
@@ -34,10 +34,54 @@ function acceptanceHeadline(count: number, replayReady: number, clues: number): 
   return clues ? '当前不建议向客户交付验收材料。' : '当前暂无客户验收动作。';
 }
 
+function commercialHandoffLabel(assets: CommercialAssets | null): string {
+  const status = assets?.commercial_handoff.status || assets?.status || '';
+  if (status === 'commercial_handoff_ready_with_validated_findings') return '商业交付已就绪';
+  if (status === 'ready_for_customer_acceptance') return '待客户验收';
+  if (status === 'materialized') return '交付资产已生成';
+  if (status === 'empty') return '尚未生成';
+  return status || '未上报';
+}
+
+function trackerSyncLabel(assets: CommercialAssets | null): string {
+  const status = assets?.tracker_sync.payload_status || '';
+  if (status === 'external_tracker_sync_payloads_blocked_or_empty') return '仅保留待同步草稿';
+  if (status === 'external_tracker_sync_payloads_ready') return '同步载荷已就绪';
+  return status || '未上报';
+}
+
+function hasDatabaseEvidence(finding: Finding): boolean {
+  return finding.risk_type.includes('db') || finding.defect_family === 'data_integrity';
+}
+
+function acceptanceDecision(finding: Finding): { label: string; status: string; note: string } {
+  const replayable = hasRealReplayAsset(finding);
+  const ready = isCustomerReadyFinding(finding);
+  if (ready && replayable) {
+    return {
+      label: '可进入客户复验',
+      status: '可复验',
+      note: '证据链与真实复验入口已闭合。',
+    };
+  }
+  if (replayable) {
+    return {
+      label: '待补强证据',
+      status: '待补证',
+      note: '已有真实复验入口，但仍需补齐关键验收证据。',
+    };
+  }
+  return {
+    label: '待补充真实复验入口',
+    status: '待补证',
+    note: '当前缺少真实复验入口，不能直接进入客户验收。',
+  };
+}
+
 export function EvidenceChain() {
   usePageTitle('证据链');
   const [params] = useSearchParams(); const project = params.get('project')?.trim() || '';
-  const { findings, clues, loading } = useFindingsData(project);
+  const { findings, clues, commercialAssets, loading } = useFindingsData(project);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [personaByFinding, setPersonaByFinding] = useState<Record<string, PersonaView>>({});
   const [filter, setFilter] = useState<EvidenceFilter>('all');
@@ -45,19 +89,26 @@ export function EvidenceChain() {
 
   const customerFindings = findings.filter(isCustomerReadyFinding);
   const withEvidence = customerFindings.filter((finding) => hasCustomerFacingHardEvidence(finding) && finding.evidence_chain.length > 0);
-  const replayReady = withEvidence.filter(hasRealReplayAsset).length;
+  const replayReady = withEvidence.filter((finding) => acceptanceDecision(finding).label === '可进入客户复验').length;
   const apiEvidence = withEvidence.filter(hasRealReplayAsset).length;
-  const dbEvidence = withEvidence.filter((finding) => finding.risk_type.includes('db') || finding.defect_family === 'data_integrity').length;
-  const documentEvidence = withEvidence.length - apiEvidence - dbEvidence;
+  const dbEvidence = withEvidence.filter(hasDatabaseEvidence).length;
+  const documentEvidence = withEvidence.filter((finding) => !hasRealReplayAsset(finding) && !hasDatabaseEvidence(finding)).length;
   const validated = withEvidence.filter((finding) => finding.evidence_quality.level === 'validated').length;
   const closedLoop = Math.round((validated / Math.max(withEvidence.length, 1)) * 100);
-  const display = withEvidence.filter((finding) => filter === 'all' || filter === 'API' && hasRealReplayAsset(finding) || filter === 'DB' && (finding.risk_type.includes('db') || finding.defect_family === 'data_integrity') || filter === '文档' && !hasRealReplayAsset(finding) && !(finding.risk_type.includes('db') || finding.defect_family === 'data_integrity'));
+  const display = withEvidence.filter((finding) => filter === 'all' || filter === 'API' && hasRealReplayAsset(finding) || filter === 'DB' && hasDatabaseEvidence(finding) || filter === '文档' && !hasRealReplayAsset(finding) && !hasDatabaseEvidence(finding));
 
   return <div>
     <section className="customer-showcase evidence-showcase mb-4">
-      <div className="customer-showcase-main"><span className="panel-kicker">客户验收证据包</span><h1>{acceptanceHeadline(withEvidence.length, replayReady, clues.length)}</h1><p>{withEvidence.length ? `当前共有 ${withEvidence.length} 条客户证据包，其中 ${replayReady} 条具备真实复验入口，${validated} 条达到高质量证据标准。` : clues.length ? `当前有 ${clues.length} 条线索仍在补采真实请求、响应、日志、数据观测或文档出处，它们不会包装成客户验收材料。` : '当前项目尚未形成客户可验收的证据包。'}</p><div className="page-summary-strip"><span className="summary-pill strong">可验收证据包 {withEvidence.length}</span><span className="summary-pill">真实复验入口 {replayReady}</span><span className="summary-pill">闭环率 {closedLoop}%</span><span className="summary-pill">待验证线索 {clues.length}</span></div><div className="customer-showcase-actions"><Link className="btn btn-primary" to={buildProjectPath('/findings', project)}>查看整改清单</Link>{clues.length > 0 && <Link className="btn btn-secondary" to={buildProjectPath('/clues', project)}>查看内部线索</Link>}<Link className="btn btn-secondary" to={buildProjectPath('/materials', project)}>查看企业资料</Link></div></div>
-      <div className="customer-showcase-side"><div className={`customer-status-card ${replayReady ? 'success' : withEvidence.length ? 'warning' : 'danger'}`}><span>验收建议</span><strong>{replayReady ? '可进入客户复验' : withEvidence.length ? '先补齐真实复验入口' : '当前不建议交付验收'}</strong><p>{replayReady ? `${replayReady} 条证据包已具备真实客户复验入口。` : '没有完整真实证据时，不能把候选或模拟结果作为客户缺陷交付。'}</p></div><div className="customer-status-meta"><span><em>API 证据</em><b>{apiEvidence}</b></span><span><em>数据证据</em><b>{dbEvidence}</b></span><span><em>文档证据</em><b>{documentEvidence}</b></span></div></div>
+      <div className="customer-showcase-main"><span className="panel-kicker">客户验收证据包</span><h1>{acceptanceHeadline(withEvidence.length, replayReady, clues.length)}</h1><p>{withEvidence.length ? `当前共有 ${withEvidence.length} 条客户证据包，其中 ${replayReady} 条具备真实复验入口，${validated} 条达到高质量证据标准。` : clues.length ? `当前有 ${clues.length} 条线索仍在补采真实请求、响应、日志、数据观测或文档出处，它们不会包装成客户验收材料。` : '当前项目尚未形成客户可验收的证据包。'}</p><div className="page-summary-strip"><span className="summary-pill strong">可验收证据包 {withEvidence.length}</span><span className="summary-pill">真实复验入口 {replayReady}</span><span className="summary-pill">闭环率 {closedLoop}%</span><span className="summary-pill">待验证线索 {clues.length}</span>{commercialAssets && <span className="summary-pill">商业交付 {commercialHandoffLabel(commercialAssets)}</span>}</div><div className="customer-showcase-actions"><Link className="btn btn-primary" to={buildProjectPath('/findings', project)}>查看整改清单</Link>{clues.length > 0 && <Link className="btn btn-secondary" to={buildProjectPath('/clues', project)}>查看内部线索</Link>}<Link className="btn btn-secondary" to={buildProjectPath('/materials', project)}>查看企业资料</Link></div></div>
+      <div className="customer-showcase-side"><div className={`customer-status-card ${replayReady ? 'success' : withEvidence.length ? 'warning' : 'danger'}`}><span>验收建议</span><strong>{replayReady ? '可进入客户复验' : withEvidence.length ? '先补齐真实复验入口' : '当前不建议交付验收'}</strong><p>{replayReady ? `${replayReady} 条证据包已具备真实客户复验入口。` : '没有完整真实证据时，不能把候选或模拟结果作为客户缺陷交付。'}</p></div><div className="customer-status-meta"><span><em>API 证据</em><b>{apiEvidence}</b></span><span><em>数据证据</em><b>{dbEvidence}</b></span><span><em>文档证据</em><b>{documentEvidence}</b></span>{commercialAssets && <><span><em>商业交付</em><b>{commercialHandoffLabel(commercialAssets)}</b></span><span><em>Tracker 同步</em><b>{trackerSyncLabel(commercialAssets)}</b></span></>}</div></div>
     </section>
+
+    {commercialAssets && <div className="customer-summary-grid evidence-summary-grid mb-4">{[
+      { label: '商业交付状态', value: commercialHandoffLabel(commercialAssets), tone: commercialAssets.status === 'materialized' ? 'success' : 'warning', note: commercialAssets.commercial_handoff.acceptance_status || '等待商业交付状态' },
+      { label: '交付包', value: commercialAssets.delivery_package.status === 'created' ? '已创建' : '未创建', tone: commercialAssets.delivery_package.status === 'created' ? 'success' : 'warning', note: commercialAssets.delivery_package.package_ref || '尚未生成交付包路径' },
+      { label: 'Tracker 同步', value: trackerSyncLabel(commercialAssets), tone: commercialAssets.tracker_sync.payload_status ? 'neutral' : 'warning', note: commercialAssets.tracker_sync.payload_gate_status || '等待同步 Gate' },
+      { label: '客户复验资产', value: commercialAssets.customer_ready_reproduction_count, tone: commercialAssets.customer_ready_reproduction_count > 0 ? 'primary' : 'warning', note: `覆盖 ${commercialAssets.finding_count} 条商业交付 finding` },
+    ].map((item) => <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.value}</strong><small>{item.note}</small></article>)}</div>}
 
     {withEvidence.length > 0 && <><div className="customer-summary-grid evidence-summary-grid mb-4">{[
       { label: '可验收证据包', value: withEvidence.length, tone: 'primary', note: '仅统计真实运行证据完整的缺陷' },
@@ -75,12 +126,13 @@ export function EvidenceChain() {
       const persona = personaByFinding[finding.id] || 'business';
       const quality = finding.evidence_quality; const reproduction = finding.reproduction; const business = finding.business_impact; const investigation = finding.investigation_guidance;
       const replayable = hasRealReplayAsset(finding); const command = replayable ? quality.curl_command : '';
+      const decision = acceptanceDecision(finding);
       const chain = persona === 'business' ? finding.evidence_chain_business || finding.evidence_chain : persona === 'test' ? finding.evidence_chain_test || finding.evidence_chain : finding.evidence_chain_dev || finding.evidence_chain;
       return <article key={finding.id} className={`evidence-delivery-card severity-${finding.severity.toLowerCase()} evidence-quality-${quality.level}${open ? ' open' : ''}`}>
-        <div className="evidence-delivery-head" onClick={() => setExpandedId(open ? null : finding.id)}><div className="evidence-delivery-title"><div className="evidence-delivery-badges"><span className={`severity ${finding.severity.toLowerCase()}`}>{finding.severity}</span><span className={`bug-status-badge bug-status-${finding.bug_status}`}>{finding.bug_status_label}</span><span className="evidence-delivery-badge subtle">{moduleName(finding)}</span></div><h2>{finding.title}</h2><p>{quality.summary || business.summary || finding.business_summary}</p></div><div className="evidence-delivery-meta"><span><em>验收结论</em><b>{quality.label || '待补证'}</b></span><span><em>证据评分</em><b>{quality.score}/100</b></span><span><em>复验入口</em><b>{replayable ? `${reproduction.method} ${reproduction.path}` : '待补充真实复验入口'}</b></span><button type="button" className="btn btn-secondary btn-sm" onClick={(event) => { event.stopPropagation(); setExpandedId(open ? null : finding.id); }}>{open ? '收起细节' : '查看细节'}</button></div></div>
-        <div className="evidence-delivery-strip"><div className="evidence-delivery-strip-item"><span>验收判断</span><strong>{replayable ? '可直接复验' : '需先补齐复验条件'}</strong></div><div className="evidence-delivery-strip-item"><span>影响范围</span><strong>{finding.affected_scope || `${moduleName(finding)}相关流程`}</strong></div><div className="evidence-delivery-strip-item"><span>下一步动作</span><strong>{quality.next_actions[0] || finding.recommended_fix || '补齐证据后复验。'}</strong></div><div className="evidence-delivery-strip-item"><span>证据来源</span><strong>{evidenceSource(finding)}</strong></div></div>
+        <div className="evidence-delivery-head" onClick={() => setExpandedId(open ? null : finding.id)}><div className="evidence-delivery-title"><div className="evidence-delivery-badges"><span className={`severity ${finding.severity.toLowerCase()}`}>{finding.severity}</span><span className={`bug-status-badge bug-status-${finding.bug_status}`}>{finding.bug_status_label}</span><span className="evidence-delivery-badge subtle">{moduleName(finding)}</span></div><h2>{finding.title}</h2><p>{quality.summary || business.summary || finding.business_summary}</p></div><div className="evidence-delivery-meta"><span><em>验收结论</em><b>{decision.label}</b></span><span><em>证据评分</em><b>{quality.score}/100</b></span><span><em>复验入口</em><b>{replayable ? `${reproduction.method} ${reproduction.path}` : '待补充真实复验入口'}</b></span><button type="button" className="btn btn-secondary btn-sm" onClick={(event) => { event.stopPropagation(); setExpandedId(open ? null : finding.id); }}>{open ? '收起细节' : '查看细节'}</button></div></div>
+        <div className="evidence-delivery-strip"><div className="evidence-delivery-strip-item"><span>验收判断</span><strong>{decision.status}</strong></div><div className="evidence-delivery-strip-item"><span>影响范围</span><strong>{finding.affected_scope || `${moduleName(finding)}相关流程`}</strong></div><div className="evidence-delivery-strip-item"><span>下一步动作</span><strong>{quality.next_actions[0] || finding.recommended_fix || decision.note}</strong></div><div className="evidence-delivery-strip-item"><span>证据来源</span><strong>{evidenceSource(finding)}</strong></div></div>
         <div className="evidence-body"><div className="evidence-acceptance-grid"><div className="findings-compare-card"><span className="findings-compare-label">客户验收看到的结论</span><p>{business.summary || finding.business_summary || finding.actual}</p></div><div className="findings-compare-card"><span className="findings-compare-label">复验动作</span><p>{replayable ? `${reproduction.method} ${reproduction.path}` : '当前未沉淀真实复验入口，建议先补齐。'}</p></div><div className="findings-compare-card"><span className="findings-compare-label">预期 vs 实际</span><p>{finding.expected_actual_comparison.difference || finding.actual}</p></div><div className="findings-compare-card danger"><span className="findings-compare-label">验收缺口</span><p>{quality.missing.length ? quality.missing.join('；') : '当前未发现显著验收缺口。'}</p></div></div>
-        {open && <><div className={`evidence-dossier ${quality.level}`}><div className="evidence-dossier-head"><div><span className="panel-kicker">证据闭环概要</span><strong>{quality.label} · {quality.score}/100</strong></div><span className="evidence-dossier-status">{replayable ? '可复验' : '待补证'}</span></div>{chain.length > 0 && <EvidenceTimeline steps={chain} />}<div className="evidence-dossier-proof"><span><em>复现入口</em><strong>{replayable ? `${reproduction.method} ${reproduction.path}` : '待补充真实复现'}</strong></span><span><em>预期规则</em><strong>{finding.expected ? '已记录' : '待关联'}</strong></span><span><em>实际结果</em><strong>{finding.actual ? '已记录' : '待采集'}</strong></span><span><em>验收缺口</em><strong>{quality.missing.length}</strong></span></div></div>
+        {open && <><div className={`evidence-dossier ${quality.level}`}><div className="evidence-dossier-head"><div><span className="panel-kicker">证据闭环概要</span><strong>{decision.label} · {quality.score}/100</strong></div><span className="evidence-dossier-status">{decision.status}</span></div>{chain.length > 0 && <EvidenceTimeline steps={chain} />}<div className="evidence-dossier-proof"><span><em>复现入口</em><strong>{replayable ? `${reproduction.method} ${reproduction.path}` : '待补充真实复现'}</strong></span><span><em>预期规则</em><strong>{finding.expected ? '已记录' : '待关联'}</strong></span><span><em>实际结果</em><strong>{finding.actual ? '已记录' : '待采集'}</strong></span><span><em>验收缺口</em><strong>{quality.missing.length}</strong></span></div></div>
         <div className="persona-tabs">{([{ key: 'business', label: '业务视角' }, { key: 'test', label: '测试视角' }, { key: 'dev', label: '研发视角' }] as Array<{ key: PersonaView; label: string }>).map((tab) => <button key={tab.key} onClick={(event) => { event.stopPropagation(); setPersonaByFinding((previous) => ({ ...previous, [finding.id]: tab.key })); }} className={`persona-tab${persona === tab.key ? ' active' : ''}`}>{tab.label}</button>)}</div>
         {persona === 'business' && <div className="persona-panel"><div className="persona-section hero"><div className="persona-kicker">业务影响</div><p className="persona-summary">{business.summary || finding.actual}</p><div className="persona-inline-meta"><span><em>影响模块</em><strong>{business.module || moduleName(finding)}</strong></span><span><em>紧急程度</em><strong>{business.urgency || finding.severity}</strong></span></div></div><div className="persona-section warning"><div className="persona-kicker">需求来源</div>{finding.doc_refs.length ? finding.doc_refs.slice(0, 3).map((document, index) => <div key={`${document.source_id || document.display_name || 'document'}-${index}`} className="persona-doc-card"><span>{document.display_name || '文档'}</span>{document.excerpt && <div className="persona-doc-excerpt">{document.excerpt}</div>}</div>) : <p>尚未关联资料出处。</p>}</div></div>}
         {persona === 'test' && <div className="persona-panel"><div className="persona-section success"><div className="persona-kicker">复现状态</div><div className="repro-status-bar"><span className={`repro-status-badge ${finding.is_reproducible ? 'reproducible' : 'not-reproducible'}`}>{finding.is_reproducible ? '✓ 可稳定复现' : '✗ 未通过复现门控'}</span><span className="repro-confidence">复现置信度: {Math.round(finding.confidence * 100)}%</span></div>{reproduction.steps.length ? <ol className="persona-step-list">{reproduction.steps.map((step, index) => <li key={`${step}-${index}`}><code>{step}</code></li>)}</ol> : <p>当前没有真实复现步骤。</p>}</div>{replayable && <button className="btn btn-primary btn-sm" onClick={() => setReplayFinding(finding)}>点击复现</button>}</div>}

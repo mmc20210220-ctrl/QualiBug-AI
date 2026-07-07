@@ -967,6 +967,14 @@ def build_evidence_bundle(risk: Mapping[str, Any], raw_evidence: Mapping[str, An
     request = raw.get("request_summary") if isinstance(raw.get("request_summary"), Mapping) else {}
     response = raw.get("response_summary") if isinstance(raw.get("response_summary"), Mapping) else {}
     risk_type = str(risk.get("risk_type") or "business_flow_blocker")
+    snapshots = raw.get("snapshots")
+    if not isinstance(snapshots, Mapping):
+        snapshots = {"before": raw.get("before_snapshot") or {}, "after": raw.get("after_snapshot") or {}}
+    db_snapshot = raw.get("db_snapshot") if isinstance(raw.get("db_snapshot"), Mapping) else {}
+    if db_snapshot:
+        merged_snapshots = dict(snapshots)
+        merged_snapshots["database"] = db_snapshot
+        snapshots = merged_snapshots
     return {
         "evidence_id": raw.get("evidence_id") or _slug([risk_id, raw], "ev", 12),
         "risk_id": risk_id,
@@ -986,7 +994,7 @@ def build_evidence_bundle(risk: Mapping[str, Any], raw_evidence: Mapping[str, An
             "body_redacted": True,
             "observed_issue": _safe_text(response.get("observed_issue") or raw.get("observed_issue") or risk.get("business_impact"), 260),
         },
-        "snapshots": redact_value(raw.get("snapshots") or {"before": raw.get("before_snapshot") or {}, "after": raw.get("after_snapshot") or {}}),
+        "snapshots": redact_value(snapshots),
         "reproduction_steps": _reproduction_steps_for_risk(risk, raw),
         "suggested_fix": _suggested_fix_for_risk(risk_type),
         "closure_criteria": _closure_criteria_for_risk(risk_type),
@@ -1335,11 +1343,16 @@ def _quality_health_score(environment_report: Mapping[str, Any], flow_summary: M
 
 
 def _risk_priority_score(risk: Mapping[str, Any]) -> float:
+    explicit = _safe_float(risk.get("priority_score"), -1.0)
+    if explicit >= 0:
+        return explicit + (15 if risk.get("high_confidence_candidate") else 0) + (10 if str(risk.get("verification_badge") or "") == "ui_verified" else 0)
     return (
         (100 if risk.get("launch_blocking") else 0)
         + SEVERITY_WEIGHTS.get(str(risk.get("severity", "info")), 2)
         + _safe_float(risk.get("reproducibility_score"), 0.5) * 10
         + _safe_float(risk.get("evidence_score"), 0.5) * 10
+        + (15 if risk.get("high_confidence_candidate") else 0)
+        + (10 if str(risk.get("verification_badge") or "") == "ui_verified" else 0)
     )
 
 
@@ -1373,6 +1386,10 @@ def generate_executive_report(
             "evidence_score": risk.get("evidence_score"),
             "reproducibility_score": risk.get("reproducibility_score"),
             "suggested_action": risk.get("suggested_action"),
+            "priority_score": risk.get("priority_score"),
+            "priority_label": risk.get("priority_label"),
+            "defect_intake_recommended": risk.get("defect_intake_recommended"),
+            "defect_intake_priority": risk.get("defect_intake_priority"),
         }
         for risk in risks[:10]
     ]

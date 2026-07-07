@@ -123,6 +123,17 @@ export interface Finding {
   customer_delivery_label?: string;
   customer_visible?: boolean;
   customer_delivery_gate_reasons?: string[];
+  customer_delivery_gate_explanations?: Array<{
+    code?: string;
+    label?: string;
+    detail?: string;
+    next_action?: string;
+  }>;
+  confirmation_status?: string;
+  execution_status?: string;
+  execution_block?: string;
+  block_reason?: string;
+  value_lane?: string;
 
   // 兼容字段（后端同时返回）
   expected: string;
@@ -132,6 +143,79 @@ export interface Finding {
   source_entity: string;
   source_value: string;
   evidence_hint: string;
+  regression?: {
+    included_in_suite: boolean;
+    suite_modes: string[];
+    latest_status: string;
+    latest_status_label: string;
+    last_run_at: string;
+    last_run_mode: string;
+    gate_status: string;
+    reason: string;
+    regression_probe_id: string;
+    issue_id: string;
+  };
+}
+
+export interface RegressionSummary {
+  suite_exists: boolean;
+  run_exists: boolean;
+  headline: string;
+  customer_ready_defect_count: number;
+  covered_defect_count: number;
+  passed_defect_count: number;
+  failed_defect_count: number;
+  needs_review_defect_count: number;
+  pending_defect_count: number;
+  skipped_defect_count: number;
+  not_covered_defect_count: number;
+  defect_status_counts: Record<string, number>;
+  suite: {
+    generated_at: string;
+    total_probe_count: number;
+    smoke_count: number;
+    release_count: number;
+    full_count: number;
+    mode_counts: Record<string, number>;
+  };
+  latest_run: {
+    generated_at: string;
+    suite_mode: string;
+    suite_mode_label: string;
+    gate_status: string;
+    ci_message: string;
+    total_probe_count: number;
+    executed_count: number;
+    passed_count: number;
+    failed_count: number;
+    needs_review_count: number;
+    skipped_count: number;
+    run_status_counts: Record<string, number>;
+    reopen_issue_ids: string[];
+  };
+}
+
+export interface CommercialAssets {
+  status: string;
+  finding_count: number;
+  customer_ready_reproduction_count: number;
+  commercial_handoff: {
+    status: string;
+    acceptance_status: string;
+    safe_for_customer: boolean;
+  };
+  tracker_sync: {
+    payload_status: string;
+    payload_gate_status: string;
+  };
+  delivery_package: {
+    status: string;
+    package_id: string;
+    package_ref: string;
+    release_verdict: string;
+    evidence_bundle_id: string;
+  };
+  artifact_refs: Record<string, string>;
 }
 
 export interface EvidenceStep {

@@ -649,6 +649,8 @@ def _strict_verifier_for_issue(issue: dict[str, Any]) -> dict[str, Any]:
     if not actual:
         result["failed_gates"].append("missing_actual_behavior")
         result["reasons"].append("缺少实际行为，无法证明系统当前表现与预期不一致")
+    if not expected and not actual:
+        result["failed_gates"].append("no_expected_actual")
 
     # ── Gate 4: failed_assertions ──
     failed_assertions = issue.get("failed_assertions") or []

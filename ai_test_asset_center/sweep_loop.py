@@ -20,10 +20,41 @@ from typing import Any
 
 from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
 from .scenario_runner import ScenarioRunner
-from .db_verifier import MESDBVerifier
+from .db_verifier import DBVerifier
 
 # ── 心跳 (供 Loop Watchdog 读取) ──────────────────────────
-HEARTBEAT_FILE = "platform_outputs/real_project_demo/.loop_heartbeat.json"
+DEFAULT_PROJECT_ID = os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project")
+DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8000")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+HEARTBEAT_FILE_TEMPLATE = "platform_outputs/{project_id}/.loop_heartbeat.json"
+_ACTIVE_PROJECT_ID = DEFAULT_PROJECT_ID
+
+
+def _resolve_default_project_doc_path(project_id: str, candidates: list[str]) -> str:
+    clean_project = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
+    search_dirs = [
+        REPO_ROOT / "platform_workspace" / clean_project / "input",
+        REPO_ROOT / "platform_inputs" / clean_project,
+        REPO_ROOT / "projects" / clean_project / "input",
+        REPO_ROOT / "input",
+    ]
+    for directory in search_dirs:
+        if not directory.exists() or not directory.is_dir():
+            continue
+        for candidate in candidates:
+            path = directory / candidate
+            if path.exists() and path.is_file():
+                return str(path)
+    return ""
+
+
+def _read_optional_text(file_path: str | Path | None) -> str:
+    if not file_path:
+        return ""
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
 
 def _tick(step: str, detail: str = "", round_num: int = 0):
     """写心跳文件，让 watchdog 知道 sweep loop 还活着"""
@@ -35,8 +66,9 @@ def _tick(step: str, detail: str = "", round_num: int = 0):
         "pid": os.getpid(),
     }
     try:
-        Path(HEARTBEAT_FILE).parent.mkdir(parents=True, exist_ok=True)
-        with open(HEARTBEAT_FILE, "w", encoding="utf-8") as f:
+        heartbeat_file = HEARTBEAT_FILE_TEMPLATE.format(project_id=_ACTIVE_PROJECT_ID)
+        Path(heartbeat_file).parent.mkdir(parents=True, exist_ok=True)
+        with open(heartbeat_file, "w", encoding="utf-8") as f:
             json.dump(hb, f)
     except Exception:
         pass
@@ -76,19 +108,28 @@ class DiscoverySweep:
     STAGNATION_LIMIT = 3
 
     def __init__(self, prd_path: str = None, api_path: str = None,
-                 base_url: str = "http://127.0.0.1:8000/api"):
+                 base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID):
         # Load inputs
+        global _ACTIVE_PROJECT_ID
+        self.project_id = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
+        _ACTIVE_PROJECT_ID = self.project_id
         if prd_path is None:
-            prd_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/PRD.md")
+            prd_path = _resolve_default_project_doc_path(
+                self.project_id,
+                ["PRD.md", "prd.md", "requirements.md", "business_requirements.md"],
+            )
         if api_path is None:
-            api_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/API.md")
+            api_path = _resolve_default_project_doc_path(
+                self.project_id,
+                ["openapi.json", "openapi.yaml", "openapi.yml", "API_SPEC.md", "API.md"],
+            )
 
-        self.prd = Path(prd_path).read_text(encoding="utf-8") if Path(prd_path).exists() else ""
-        self.api = Path(api_path).read_text(encoding="utf-8") if Path(api_path).exists() else ""
-        self.base_url = base_url
-        self.engine = AutonomousDiscoveryEngine(base_url=base_url)
-        self.scenarios = ScenarioRunner(base_url=base_url)
-        self.db = MESDBVerifier()
+        self.prd = _read_optional_text(prd_path)
+        self.api = _read_optional_text(api_path)
+        self.base_url = str(base_url or DEFAULT_BASE_URL)
+        self.engine = AutonomousDiscoveryEngine(base_url=self.base_url)
+        self.scenarios = ScenarioRunner(base_url=self.base_url)
+        self.db = DBVerifier(project_id=self.project_id)
         self.rounds: list[SweepRound] = []
 
     def _run_round(self, round_num: int, prior_findings: list[dict] = None) -> SweepRound:
@@ -244,9 +285,9 @@ class DiscoverySweep:
 
 
 def run_sweep(prd_path: str = None, api_path: str = None,
-              base_url: str = "http://127.0.0.1:8000/api") -> SweepResult:
+              base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID) -> SweepResult:
     """Convenience entry point"""
-    sweeper = DiscoverySweep(prd_path, api_path, base_url)
+    sweeper = DiscoverySweep(prd_path, api_path, base_url, project_id=project_id)
     return sweeper.sweep()
 
 

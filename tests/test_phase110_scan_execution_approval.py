@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from ai_test_asset_center.__main__ import scan
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
@@ -51,3 +52,144 @@ def test_scan_blocks_target_traffic_without_campaign_execution_approval(tmp_path
     assert result["execution_status"] == "blocked"
     assert result["auto_har"]["status"] == "no_traffic"
     assert result["release_gate"]["verdict"] == "fail"
+
+
+def test_scan_auto_issues_local_execution_approval_for_loopback_runtime(tmp_path, monkeypatch):
+    manifest = register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    calls: list[dict[str, object]] = []
+
+    def fake_run_preflight(config, api_doc_text):
+        return {"ready": True, "checks": [], "summary": "ok"}
+
+    def fake_persist(*args, **kwargs):
+        return {"status": "persisted", "bundle_id": "bundle_1"}
+
+    def fake_release_gate(**kwargs):
+        return {"verdict": "not_ready", "status": "ready"}
+
+    def fake_v12_pipeline(*, project, root, prd_text, api_spec_text, db_schema_text, base_url, campaign_context):
+        context = dict(campaign_context or {})
+        calls.append({"base_url": base_url, "campaign_context": context})
+        campaign = {
+            "campaign_id": "camp_local_1",
+            "scope_id": "case-lifecycle",
+            "environment_ref": "approved-test",
+            "source_hash": manifest["source_hash"],
+        }
+        if not str(context.get("execution_approval_id") or "").strip():
+            return {
+                "runtime_contract": {
+                    "status": "blocked",
+                    "reason": "execution_approval_required",
+                    "missing_requirements": ["EXECUTION_APPROVAL_MISSING"],
+                    "execution_approval": {"code": "EXECUTION_APPROVAL_MISSING"},
+                },
+                "phases": {
+                    "execution": {"status": "blocked", "missing_requirements": ["EXECUTION_APPROVAL_MISSING"]},
+                    "state_graph": {},
+                    "incremental_discovery": {"selected_slices": []},
+                },
+                "campaign": campaign,
+                "findings": [],
+                "auto_har": {"status": "no_traffic"},
+            }
+        return {
+            "runtime_contract": {
+                "status": "approved",
+                "reason": "",
+                "execution_approval": {"approval_id": str(context.get("execution_approval_id") or "")},
+            },
+            "phases": {
+                "execution": {"status": "completed", "executed": 1},
+                "state_graph": {},
+                "incremental_discovery": {"selected_slices": []},
+            },
+            "campaign": campaign,
+            "findings": [],
+            "auto_har": {"status": "captured"},
+            "total_duration_ms": 1,
+        }
+
+    monkeypatch.setenv("QUALIBUG_LOCAL_DEV_ACTOR", "1")
+    monkeypatch.delenv("QUALIBUG_ALLOW_PUBLIC_BIND", raising=False)
+    monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
+    monkeypatch.setattr("ai_test_asset_center.__main__._persist_execution_evidence", fake_persist)
+    monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
+    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        base_url="http://127.0.0.1:8080",
+        campaign_context={
+            "scope_id": "case-lifecycle",
+            "environment_ref": "approved-test",
+            "source_manifest": manifest,
+            "execution_mode": "approved_sandbox_write",
+        },
+    )
+
+    assert result["grade"] == "inconclusive"
+    assert result["execution_status"] == "completed"
+    assert len(calls) == 2
+    assert not calls[0]["campaign_context"].get("execution_approval_id")
+    second_approval_id = str(calls[1]["campaign_context"].get("execution_approval_id") or "")
+    assert second_approval_id.startswith("eap_")
+    approvals_path = tmp_path / "platform_workspace" / "enterprise-project" / "execution_approvals" / "approvals.json"
+    assert approvals_path.exists()
+
+
+def test_scan_prefers_project_prd_asset_before_source_catalog_fallback(tmp_path, monkeypatch):
+    manifest = register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    input_dir = tmp_path / "platform_workspace" / "enterprise-project" / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    (input_dir / "PRD.md").write_text("### 支付\n支付成功后订单状态变为 PAID。", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def fake_run_preflight(config, api_doc_text):
+        return {"ready": True, "checks": [], "summary": "ok"}
+
+    def fake_persist(*args, **kwargs):
+        return {"status": "persisted", "bundle_id": "bundle_1"}
+
+    def fake_release_gate(**kwargs):
+        return {"verdict": "not_ready", "status": "ready"}
+
+    def fake_v12_pipeline(*, project, root, prd_text, api_spec_text, db_schema_text, base_url, campaign_context):
+        calls.append({"prd_text": prd_text, "api_spec_text": api_spec_text})
+        return {
+            "runtime_contract": {"status": "plan_only", "reason": ""},
+            "phases": {
+                "execution": {"status": "skipped", "executed": 0},
+                "state_graph": {"coverage_gaps": []},
+                "incremental_discovery": {"selected_slices": []},
+            },
+            "campaign": {
+                "campaign_id": "camp_prd_1",
+                "scope_id": "case-lifecycle",
+                "environment_ref": "approved-test",
+                "source_hash": manifest["source_hash"],
+            },
+            "findings": [],
+            "auto_har": {"status": "no_traffic"},
+            "total_duration_ms": 1,
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
+    monkeypatch.setattr("ai_test_asset_center.__main__._persist_execution_evidence", fake_persist)
+    monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
+    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        campaign_context={
+            "scope_id": "case-lifecycle",
+            "environment_ref": "approved-test",
+            "source_manifest": manifest,
+        },
+    )
+
+    assert result["grade"] == "inconclusive"
+    assert len(calls) == 1
+    assert "支付成功后订单状态变为 PAID" in str(calls[0]["prd_text"] or "")

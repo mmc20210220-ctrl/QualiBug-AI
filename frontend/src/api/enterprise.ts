@@ -58,6 +58,20 @@ export type ReleaseGate = {
   reasons?: Array<{ code: string; detail: string }>;
 };
 
+export type ScanPreflightGuide = {
+  status?: string;
+  runtime_contract_status?: string;
+  missing?: string[];
+  healthy_claim_allowed?: boolean;
+  checks?: Array<{
+    key?: string;
+    label?: string;
+    status?: string;
+    required?: boolean;
+    detail?: string;
+  }>;
+};
+
 export type EnterpriseScanResult = {
   success: boolean;
   scan_id: string;
@@ -70,6 +84,10 @@ export type EnterpriseScanResult = {
   test_data_plan: JsonRecord;
   evidence_bundle: JsonRecord;
   release_gate: ReleaseGate;
+  scan_preflight_guide?: ScanPreflightGuide;
+  auto_har?: JsonRecord;
+  execution_evidence_summary?: JsonRecord;
+  ui_execution_summary?: JsonRecord;
   coverage_gaps: JsonRecord[];
   input_gaps: JsonRecord[];
   report_path?: string;

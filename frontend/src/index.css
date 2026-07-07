@@ -5779,7 +5779,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 .svc-card-header-left { display: flex; align-items: center; gap: 12px; }
 .svc-card-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.svc-dot--ok { background: #22c55e; }
+.svc-dot--ok,
+.svc-dot--verified { background: #22c55e; }
+.svc-dot--configured_unverified { background: #f59e0b; }
 .svc-dot--no_token { background: #f59e0b; }
 .svc-dot--no_config { background: #d1d5db; }
 

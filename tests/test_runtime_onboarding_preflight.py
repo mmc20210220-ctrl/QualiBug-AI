@@ -74,6 +74,65 @@ def test_account_login_runtime_marks_auth_verified() -> None:
     assert auth_check["ok"] is True
 
 
+def test_configured_service_credentials_do_not_count_as_verified_runtime_ready() -> None:
+    report = run_runtime_onboarding_preflight(
+        plan=_grounded_read_plan(),
+        config={
+            "environment_kind": "sandbox",
+            "services": [
+                {
+                    "name": "orders",
+                    "base_url": "http://127.0.0.1:8011",
+                    "auth": {"type": "bearer_token", "bearer_token_configured": True},
+                    "db": {"host": "127.0.0.1", "name": "orders", "password_configured": True},
+                }
+            ],
+        },
+        base_url="http://127.0.0.1:8011",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_requester,
+    )
+
+    service_check = next(check for check in report["checks"] if check["name"] == "service_credentials_verified")
+
+    assert service_check["ok"] is False
+    assert "orders:auth" in report["service_credentials_readiness"]["unverified"]
+    assert "orders:db" in report["service_credentials_readiness"]["unverified"]
+    assert "service_credentials_verified" in report["warning_reasons"]
+    assert report["status"] == "degraded"
+
+
+def test_verified_service_credentials_clear_service_preflight_warning() -> None:
+    report = run_runtime_onboarding_preflight(
+        plan=_grounded_read_plan(),
+        config={
+            "environment_kind": "sandbox",
+            "_auth_runtime": {"mode": "account_login", "successful_session_count": 1, "session_health_verified_count": 1},
+            "services": [
+                {
+                    "name": "orders",
+                    "base_url": "http://127.0.0.1:8011",
+                    "auth": {"type": "bearer_token", "bearer_token_configured": True},
+                    "auth_check": {"all_ok": True},
+                    "db": {"host": "127.0.0.1", "name": "orders", "password_configured": True},
+                    "db_check": {"ok": True},
+                }
+            ],
+        },
+        base_url="http://127.0.0.1:8011",
+        execute_readonly=True,
+        allow_write_sandbox=False,
+        requester=_requester,
+    )
+
+    service_check = next(check for check in report["checks"] if check["name"] == "service_credentials_verified")
+
+    assert service_check["ok"] is True
+    assert report["service_credentials_readiness"]["unverified"] == []
+    assert "service_credentials_verified" not in report["warning_reasons"]
+
+
 def _benchmark_auth_requester(method: str, url: str, headers: dict[str, str], body: Any, timeout: float) -> dict[str, Any]:
     if url.endswith("/api/login"):
         role_map = {

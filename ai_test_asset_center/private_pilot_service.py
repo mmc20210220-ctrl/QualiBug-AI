@@ -10,6 +10,7 @@ credential values; connectors only receive secret references.
 
 import json
 import os
+import re
 import time
 import traceback
 import uuid
@@ -17,7 +18,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from .enterprise_pilot_runtime import (
     build_enterprise_pilot_overview,
@@ -26,13 +27,27 @@ from .enterprise_pilot_runtime import (
 )
 from . import db_persistence as db_persist
 from . import jwt_auth
+from .real_id_resolver import normalize_path_placeholders
 from .real_project_onboarding import ROOT, _safe_project_id
+from .scan_counter import increment_scan_counter
 
 
 CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
 KNOWLEDGE_MANAGER_ROLES = {"knowledge_admin", "project_owner", "qa_lead", "admin"}
 SETTINGS_MANAGER_ROLES = {"project_owner", "security_owner", "testops_admin", "admin"}
 PROJECT_SCOPE_HEADER = "X-QualiBug-Project-Scopes"
+MASKED_CREDENTIAL_VALUE = "********"
+
+
+def _is_masked_credential_value(value: Any) -> bool:
+    return str(value or "").strip() == MASKED_CREDENTIAL_VALUE
+
+
+def _credential_update_value(incoming: Any, previous: Any = "") -> str:
+    text = str(incoming or "").strip()
+    if not text or _is_masked_credential_value(text):
+        return str(previous or "")
+    return text
 
 # #region debug-point Z:debug-client
 _DBG_ENV_CACHE: tuple[str, str] | None = None
@@ -42,7 +57,7 @@ def _dbg_env() -> tuple[str, str]:
     global _DBG_ENV_CACHE
     if _DBG_ENV_CACHE is not None:
         return _DBG_ENV_CACHE
-    url = "http://127.0.0.1:7777/event"
+    url = str(os.environ.get("QUALIBUG_DEBUG_SERVER_URL") or "").strip()
     session_id = str(os.environ.get("QUALIBUG_DEBUG_SESSION_ID") or "command-center-502").strip() or "command-center-502"
     env_path = Path(__file__).resolve().parents[1] / ".dbg" / f"{session_id}.env"
     try:
@@ -63,6 +78,8 @@ def _dbg_report(*, hypothesis_id: str, msg: str, data: dict[str, Any] | None = N
         return
     try:
         url, session_id = _dbg_env()
+        if not url:
+            return
         payload = {
             "sessionId": session_id,
             "runId": run_id,
@@ -114,6 +131,185 @@ def _first_text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _read_json_safe(path: Path, default: Any) -> Any:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8", errors="replace") or "null")
+    except Exception:
+        return default
+    return default
+
+
+def _regression_lookup_keys(*values: Any) -> set[str]:
+    keys: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        keys.add(text)
+        keys.add(text.lower())
+        keys.add(text.upper())
+    return keys
+
+
+def _regression_status_label(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    return {
+        "passed": "回归通过",
+        "failed": "回归失败",
+        "needs_review": "待人工复核",
+        "skipped": "回归已跳过",
+        "pending": "待执行回归",
+        "not_covered": "未纳入回归",
+    }.get(normalized, normalized or "未知")
+
+
+def _regression_summary_title(summary: dict[str, Any]) -> str:
+    gate_status = str(summary.get("gate_status") or "").strip().lower()
+    failed = int(summary.get("failed_defect_count") or 0)
+    pending = int(summary.get("pending_defect_count") or 0)
+    if gate_status == "failed":
+        return f"最近一次回归发现 {failed} 个缺陷重新失败。"
+    if failed > 0:
+        return f"最近一次回归发现 {failed} 个缺陷未通过。"
+    if pending > 0:
+        return f"当前有 {pending} 个缺陷已纳入回归但尚未执行。"
+    if int(summary.get("passed_defect_count") or 0) > 0:
+        return "最近一次回归已验证部分缺陷不再复现。"
+    if int(summary.get("covered_defect_count") or 0) > 0:
+        return "缺陷已纳入回归套件，等待首次执行。"
+    return "当前还没有与客户缺陷关联的回归结果。"
+
+
+def _load_regression_projection(root: Path, project_id: str, defects: list[dict[str, Any]]) -> dict[str, Any]:
+    suite_candidates = [
+        root / "platform_outputs" / project_id / "regression_suite" / "regression_suite.json",
+        root / "platform_workspace" / project_id / "defect_discovery" / "regression_suite.json",
+    ]
+    run_candidates = [
+        root / "platform_outputs" / project_id / "regression_run" / "regression_run_result.json",
+        root / "platform_workspace" / project_id / "defect_discovery" / "regression_run_result.json",
+    ]
+    suite = next((_read_json_safe(path, {}) for path in suite_candidates if path.exists()), {})
+    run = next((_read_json_safe(path, {}) for path in run_candidates if path.exists()), {})
+
+    suite_modes = suite.get("modes") if isinstance(suite, dict) else {}
+    suite_index: dict[str, set[str]] = {}
+    suite_mode_counts: dict[str, int] = {}
+    if isinstance(suite_modes, dict):
+        for mode_name, mode_payload in suite_modes.items():
+            items = mode_payload.get("items") if isinstance(mode_payload, dict) and isinstance(mode_payload.get("items"), list) else []
+            suite_mode_counts[str(mode_name)] = len(items)
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                lookup_keys = _regression_lookup_keys(item.get("issue_id"), item.get("regression_probe_id"), item.get("path"), item.get("title"))
+                for lookup_key in lookup_keys:
+                    suite_index.setdefault(lookup_key, set()).add(str(mode_name))
+
+    run_items = run.get("items") if isinstance(run, dict) and isinstance(run.get("items"), list) else []
+    run_index: dict[str, dict[str, Any]] = {}
+    run_status_counts: dict[str, int] = {}
+    for item in run_items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower() or "unknown"
+        run_status_counts[status] = run_status_counts.get(status, 0) + 1
+        lookup_keys = _regression_lookup_keys(item.get("issue_id"), item.get("regression_probe_id"), item.get("path"), item.get("title"))
+        for lookup_key in lookup_keys:
+            run_index.setdefault(lookup_key, item)
+
+    annotated_defects = 0
+    covered_defects = 0
+    defect_status_counts = {key: 0 for key in ("passed", "failed", "needs_review", "skipped", "pending", "not_covered")}
+    latest_run_summary = run.get("summary") if isinstance(run, dict) and isinstance(run.get("summary"), dict) else {}
+    latest_ci_feedback = run.get("ci_feedback") if isinstance(run, dict) and isinstance(run.get("ci_feedback"), dict) else {}
+
+    for defect in defects:
+        if not isinstance(defect, dict):
+            continue
+        annotated_defects += 1
+        lookup_keys = _regression_lookup_keys(
+            defect.get("id"),
+            defect.get("issue_id"),
+            defect.get("repro_path"),
+            defect.get("title"),
+        )
+        matched_suite_modes: set[str] = set()
+        matched_run_item: dict[str, Any] | None = None
+        for lookup_key in lookup_keys:
+            matched_suite_modes.update(suite_index.get(lookup_key, set()))
+            if matched_run_item is None and lookup_key in run_index:
+                matched_run_item = run_index[lookup_key]
+        if matched_suite_modes:
+            covered_defects += 1
+        latest_status = (
+            str(matched_run_item.get("status") or "").strip().lower()
+            if isinstance(matched_run_item, dict)
+            else "pending" if matched_suite_modes else "not_covered"
+        ) or "not_covered"
+        if latest_status not in defect_status_counts:
+            defect_status_counts[latest_status] = 0
+        defect_status_counts[latest_status] += 1
+        defect["regression"] = {
+            "included_in_suite": bool(matched_suite_modes),
+            "suite_modes": sorted(matched_suite_modes),
+            "latest_status": latest_status,
+            "latest_status_label": _regression_status_label(latest_status),
+            "last_run_at": _first_text(latest_run_summary.get("generated_at")),
+            "last_run_mode": _first_text(latest_run_summary.get("suite_mode")),
+            "gate_status": _first_text(latest_ci_feedback.get("gate_status")),
+            "reason": (
+                _first_text(matched_run_item.get("reason"))
+                if isinstance(matched_run_item, dict)
+                else "该缺陷已纳入回归套件，等待执行。"
+                if matched_suite_modes
+                else "当前还没有与该缺陷关联的回归探针。"
+            ),
+            "regression_probe_id": _first_text(matched_run_item.get("regression_probe_id")) if isinstance(matched_run_item, dict) else "",
+            "issue_id": _first_text(matched_run_item.get("issue_id"), defect.get("id")) if isinstance(matched_run_item, dict) else _first_text(defect.get("id")),
+        }
+
+    summary = {
+        "suite_exists": bool(isinstance(suite, dict) and suite),
+        "run_exists": bool(isinstance(run, dict) and run),
+        "suite": {
+            "generated_at": _first_text(suite.get("generated_at") if isinstance(suite, dict) else ""),
+            "total_probe_count": int(suite.get("summary", {}).get("total_probe_count") or 0) if isinstance(suite, dict) and isinstance(suite.get("summary"), dict) else 0,
+            "smoke_count": int(suite.get("summary", {}).get("smoke_count") or 0) if isinstance(suite, dict) and isinstance(suite.get("summary"), dict) else 0,
+            "release_count": int(suite.get("summary", {}).get("release_count") or 0) if isinstance(suite, dict) and isinstance(suite.get("summary"), dict) else 0,
+            "full_count": int(suite.get("summary", {}).get("full_count") or 0) if isinstance(suite, dict) and isinstance(suite.get("summary"), dict) else 0,
+            "mode_counts": suite_mode_counts,
+        },
+        "latest_run": {
+            "generated_at": _first_text(latest_run_summary.get("generated_at")),
+            "suite_mode": _first_text(latest_run_summary.get("suite_mode")),
+            "suite_mode_label": _first_text(latest_run_summary.get("suite_mode_label")),
+            "gate_status": _first_text(latest_ci_feedback.get("gate_status")),
+            "ci_message": _first_text(latest_ci_feedback.get("ci_message")),
+            "total_probe_count": int(latest_run_summary.get("total_probe_count") or 0),
+            "executed_count": int(latest_run_summary.get("executed_count") or 0),
+            "passed_count": int(latest_run_summary.get("passed_count") or 0),
+            "failed_count": int(latest_run_summary.get("failed_count") or 0),
+            "needs_review_count": int(latest_run_summary.get("needs_review_count") or 0),
+            "skipped_count": int(latest_run_summary.get("skipped_count") or 0),
+            "run_status_counts": run_status_counts,
+            "reopen_issue_ids": list(latest_ci_feedback.get("reopen_issue_ids") or []),
+        },
+        "customer_ready_defect_count": annotated_defects,
+        "covered_defect_count": covered_defects,
+        "passed_defect_count": int(defect_status_counts.get("passed") or 0),
+        "failed_defect_count": int(defect_status_counts.get("failed") or 0),
+        "needs_review_defect_count": int(defect_status_counts.get("needs_review") or 0),
+        "pending_defect_count": int(defect_status_counts.get("pending") or 0),
+        "skipped_defect_count": int(defect_status_counts.get("skipped") or 0),
+        "not_covered_defect_count": int(defect_status_counts.get("not_covered") or 0),
+        "defect_status_counts": defect_status_counts,
+    }
+    summary["headline"] = _regression_summary_title(summary)
+    return summary
 
 
 def _is_local_private_service(server: Any) -> bool:
@@ -340,6 +536,7 @@ def _maybe_issue_local_runtime_approval(project: str, root: Path, actor: dict[st
 def _prepare_v12_scan_body(project: str, root: Path, actor: dict[str, str], body: dict[str, Any], *, local_dev_mode: bool) -> dict[str, Any]:
     from .private_pilot_scan_context_contract import (
         default_scan_execution_mode,
+        default_scan_ui_execution_requests,
         default_scan_test_data_contract,
         prepare_scan_body_for_campaign,
     )
@@ -361,10 +558,178 @@ def _prepare_v12_scan_body(project: str, root: Path, actor: dict[str, str], body
             test_data_contract = default_scan_test_data_contract(prepared)
             if test_data_contract:
                 prepared["test_data_contract"] = test_data_contract
+        if not (isinstance(prepared.get("ui_execution_requests"), list) and prepared.get("ui_execution_requests")):
+            ui_execution_requests = _load_followup_ui_execution_requests(project, root, prepared)
+            if not ui_execution_requests:
+                ui_execution_requests = default_scan_ui_execution_requests(prepared)
+            if ui_execution_requests:
+                prepared["ui_execution_requests"] = ui_execution_requests
+        if not (isinstance(prepared.get("ui_test_data_requests"), list) and prepared.get("ui_test_data_requests")):
+            ui_test_data_requests = _load_followup_ui_test_data_requests(project, root, prepared)
+            if ui_test_data_requests:
+                prepared["ui_test_data_requests"] = ui_test_data_requests
     approval_id = _maybe_issue_local_runtime_approval(project, root, actor, prepared, local_dev_mode=local_dev_mode)
     if approval_id:
         prepared["execution_approval_id"] = approval_id
     return prepared
+
+
+def _load_followup_ui_execution_requests(project: str, root: Path, body: dict[str, Any]) -> list[dict[str, Any]]:
+    if body.get("disable_ui_execution_autogen") is True:
+        return []
+    base_url = str(body.get("base_url") or "").strip()
+    if not base_url:
+        return []
+    bridge = body.get("page_agent_bridge") if isinstance(body.get("page_agent_bridge"), dict) else {}
+    bridge_url = str(bridge.get("url") or os.environ.get("QUALIBUG_PAGE_AGENT_BRIDGE_URL") or "").strip()
+    if not bridge_url:
+        return []
+    asset_path = root / "platform_workspace" / _safe_project_id(project) / "defect_discovery" / "ui_followup_execution_requests.json"
+    if not asset_path.exists():
+        return []
+    try:
+        payload = json.loads(asset_path.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return []
+    items = payload.get("items") if isinstance(payload, dict) and isinstance(payload.get("items"), list) else []
+    severity_rank = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    ranked = sorted(
+        (dict(item) for item in items if isinstance(item, dict)),
+        key=lambda item: (
+            severity_rank.get(str(item.get("severity") or "P2").strip().upper(), 9),
+            -float(item.get("confidence_score") or item.get("confidence") or 0.0),
+            str(item.get("title") or ""),
+        ),
+    )
+    requests: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in ranked[:5]:
+        path = str(item.get("path") or "").strip() or "/"
+        start_url = path if path.startswith(("http://", "https://")) else urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+        title = str(item.get("title") or item.get("request_template_id") or "UI follow-up request").strip() or "UI follow-up request"
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        browser_plan = item.get("browser_plan") if isinstance(item.get("browser_plan"), dict) else {}
+        request_id = str(item.get("request_template_id") or item.get("request_id") or "").strip()
+        if not request_id:
+            request_id = f"ui_followup_{len(requests) + 1}"
+        if request_id in seen:
+            continue
+        seen.add(request_id)
+        requests.append(
+            {
+                "request_id": request_id,
+                "title": title,
+                "provider": "page_agent",
+                "task": str(item.get("task") or f"Re-open the candidate target and capture UI evidence for: {title}").strip(),
+                "start_url": start_url,
+                "execution_mode": "safe_read_only",
+                "browser_plan": browser_plan
+                or {
+                    "execution_mode": "safe_read_only",
+                    "steps": [
+                        {"action": "goto", "url": path, "wait_until": "networkidle"},
+                        {"action": "wait_for_load", "state": "networkidle"},
+                        {"action": "screenshot", "full_page": True},
+                    ],
+                },
+                "page_hints": [str(value).strip()[:500] for value in item.get("page_hints", []) if str(value).strip()],
+                "success_criteria": dict(item.get("success_criteria") or {}) if isinstance(item.get("success_criteria"), dict) else {},
+                "metadata": {
+                    **metadata,
+                    "auto_generated": True,
+                    "request_origin": "private_pilot_service_followup_asset",
+                    "bridge_mode": str(metadata.get("bridge_mode") or "page_agent_browser_plan"),
+                },
+            }
+        )
+    return requests
+
+
+def _load_followup_ui_test_data_requests(project: str, root: Path, body: dict[str, Any]) -> list[dict[str, Any]]:
+    if body.get("disable_ui_execution_autogen") is True:
+        return []
+    base_url = str(body.get("base_url") or "").strip()
+    if not base_url:
+        return []
+    bridge = body.get("page_agent_bridge") if isinstance(body.get("page_agent_bridge"), dict) else {}
+    bridge_url = str(bridge.get("url") or os.environ.get("QUALIBUG_PAGE_AGENT_BRIDGE_URL") or "").strip()
+    if not bridge_url:
+        return []
+    asset_path = root / "platform_workspace" / _safe_project_id(project) / "defect_discovery" / "ui_followup_test_data_requests.json"
+    if not asset_path.exists():
+        return []
+    try:
+        payload = json.loads(asset_path.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return []
+    items = payload.get("items") if isinstance(payload, dict) and isinstance(payload.get("items"), list) else []
+    requests: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        promotion = item.get("promotion") if isinstance(item.get("promotion"), dict) else {}
+        browser_plan, request_origin, promoted_metadata = _resolve_followup_ui_test_data_browser_plan(metadata, item, promotion)
+        if not browser_plan:
+            continue
+        path = str(item.get("path") or "").strip() or "/"
+        start_url = path if path.startswith(("http://", "https://")) else urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+        request_id = str(item.get("request_template_id") or item.get("request_id") or "").strip() or "ui_test_data_followup"
+        requests.append(
+            {
+                "request_id": request_id,
+                "title": str(item.get("title") or request_id).strip(),
+                "provider": "page_agent",
+                "task": str(item.get("task") or "").strip(),
+                "start_url": start_url,
+                "execution_mode": "approved_sandbox_write",
+                "browser_plan": {
+                    **browser_plan,
+                    "execution_mode": "approved_sandbox_write",
+                    "write_approved": True,
+                },
+                "page_hints": [str(value).strip()[:500] for value in item.get("page_hints", []) if str(value).strip()],
+                "success_criteria": dict(item.get("success_criteria") or {}) if isinstance(item.get("success_criteria"), dict) else {},
+                "metadata": {
+                    **promoted_metadata,
+                    "auto_generated": True,
+                    "request_origin": request_origin,
+                    "bridge_mode": str(promoted_metadata.get("bridge_mode") or "page_agent_browser_plan"),
+                },
+            }
+        )
+    return requests[:3]
+
+
+def _resolve_followup_ui_test_data_browser_plan(
+    metadata: dict[str, Any],
+    item: dict[str, Any],
+    promotion: dict[str, Any],
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    browser_plan = item.get("browser_plan") if isinstance(item.get("browser_plan"), dict) else {}
+    if metadata.get("executable") is True and browser_plan:
+        return browser_plan, "private_pilot_service_followup_test_data_asset", dict(metadata)
+    approved_browser_plan = (
+        promotion.get("approved_browser_plan") if isinstance(promotion.get("approved_browser_plan"), dict) else {}
+    )
+    confirmed_field_bindings = (
+        promotion.get("confirmed_field_bindings") if isinstance(promotion.get("confirmed_field_bindings"), list) else []
+    )
+    approved_by = str(promotion.get("approved_by") or "").strip()
+    if (
+        str(promotion.get("status") or "").strip().lower() == "approved"
+        and approved_by
+        and confirmed_field_bindings
+        and approved_browser_plan
+    ):
+        promoted_metadata = {
+            **metadata,
+            "executable": True,
+            "promotion_status": "approved",
+            "approved_by": approved_by,
+        }
+        return approved_browser_plan, "private_pilot_service_promoted_followup_test_data_asset", promoted_metadata
+    return {}, "", dict(metadata)
 
 
 def _has_campaign_id_mismatch(result: dict[str, Any]) -> bool:
@@ -498,6 +863,452 @@ def _validate_api_path(path: str) -> str:
     if not any(s[0].isalpha() for s in segments):
         return ""
     return p
+
+
+def _extract_step_calls(steps: list[str]) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    pattern = re.compile(r"\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+((?:/api)?/[A-Za-z0-9_/\-{}:.@]+)", re.I)
+    for step in steps:
+        if not isinstance(step, str):
+            continue
+        match = pattern.search(step)
+        if not match:
+            continue
+        method = str(match.group(1) or "").strip().upper()
+        path = _validate_api_path(str(match.group(2) or "").strip())
+        if method and path:
+            rows.append((method, path))
+    return rows
+
+
+def _claim_request_identity(
+    title: str,
+    description: str,
+    expected: str,
+    actual: str,
+    assertion: str,
+    suggested_action: str,
+    steps: list[str],
+) -> tuple[str, str]:
+    claim_text = " ".join(
+        part for part in (title, description, expected, actual, assertion, suggested_action)
+        if str(part or "").strip()
+    )
+    path_match = re.search(r"(/api/[A-Za-z0-9_/\-{}:.@]+|/[A-Za-z0-9{}.-]+/[A-Za-z0-9_/\-{}:.@]+)", claim_text)
+    claim_path = _validate_api_path(path_match.group(1) if path_match else "")
+    claim_method_match = re.search(r"\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b", claim_text, re.I)
+    claim_method = str(claim_method_match.group(1) or "").strip().upper() if claim_method_match else ""
+    step_calls = _extract_step_calls(steps)
+    if claim_path:
+        normalized_claim = normalize_path_placeholders(claim_path)
+        for method, path in step_calls:
+            if normalize_path_placeholders(path) == normalized_claim:
+                return method, claim_path
+    if claim_path:
+        return claim_method, claim_path
+    if step_calls:
+        return step_calls[-1]
+    return claim_method, claim_path
+
+
+def _materialized_path_matches(template_path: str, observed_path: str) -> bool:
+    declared = _validate_api_path(template_path)
+    observed = _validate_api_path(observed_path)
+    if not declared or not observed:
+        return False
+    if normalize_path_placeholders(declared) == normalize_path_placeholders(observed):
+        return True
+    declared_parts = [part for part in normalize_path_placeholders(declared).strip("/").split("/") if part]
+    observed_parts = [part for part in normalize_path_placeholders(observed).strip("/").split("/") if part]
+    if len(declared_parts) != len(observed_parts):
+        return False
+    for declared_part, observed_part in zip(declared_parts, observed_parts):
+        if declared_part.startswith("{") and declared_part.endswith("}"):
+            continue
+        if declared_part != observed_part:
+            return False
+    return True
+
+
+def _finding_request_identity(item: dict[str, Any]) -> tuple[str, str]:
+    reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+    raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
+    request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+    method = str(
+        reproduction.get("method")
+        or item.get("repro_method")
+        or request_raw.get("method")
+        or item.get("_api_method")
+        or item.get("method")
+        or ""
+    ).strip().upper()
+    path = _validate_api_path(str(
+        reproduction.get("path")
+        or item.get("repro_path")
+        or request_raw.get("path")
+        or item.get("_api_path")
+        or item.get("path")
+        or ""
+    ).strip())
+    if path:
+        path = _normalize_summary_path(path)
+    return method, path
+
+
+def _normalize_summary_path(path: str) -> str:
+    validated = _validate_api_path(path)
+    if not validated:
+        return ""
+    normalized = normalize_path_placeholders(validated)
+    parts = normalized.strip("/").split("/")
+    rewritten: list[str] = []
+    for part in parts:
+        token = str(part or "").strip()
+        if not token:
+            continue
+        if token.startswith("{") and token.endswith("}"):
+            rewritten.append(token)
+            continue
+        lower = token.lower()
+        looks_like_identifier = (
+            any(ch.isdigit() for ch in token)
+            or bool(re.fullmatch(r"[0-9a-f]{8,}", lower))
+            or bool(re.fullmatch(r"[0-9a-f]{8,}(?:-[0-9a-f]{4,}){1,}", lower))
+        )
+        rewritten.append("{id}" if looks_like_identifier else token)
+    return "/" + "/".join(rewritten)
+
+
+def _build_defect_grouped_summary(defects: list[dict[str, Any]]) -> dict[str, Any]:
+    by_risk_type: dict[str, dict[str, Any]] = {}
+    by_endpoint: dict[str, dict[str, Any]] = {}
+    for item in defects:
+        if not isinstance(item, dict):
+            continue
+        risk_type = str(item.get("risk_type") or item.get("category") or "uncategorized").strip() or "uncategorized"
+        method, path = _finding_request_identity(item)
+        endpoint_key = f"{method} {path}".strip() if method or path else "UNKNOWN /"
+        endpoint_bucket = by_endpoint.setdefault(endpoint_key, {
+            "method": method,
+            "path": path or "/",
+            "count": 0,
+            "risk_type_counts": {},
+        })
+        endpoint_bucket["count"] += 1
+        endpoint_bucket["risk_type_counts"][risk_type] = int(endpoint_bucket["risk_type_counts"].get(risk_type) or 0) + 1
+
+        risk_bucket = by_risk_type.setdefault(risk_type, {
+            "risk_type": risk_type,
+            "count": 0,
+            "endpoints": {},
+        })
+        risk_bucket["count"] += 1
+        endpoint_summary = risk_bucket["endpoints"].setdefault(endpoint_key, {
+            "method": method,
+            "path": path or "/",
+            "count": 0,
+        })
+        endpoint_summary["count"] += 1
+
+    return {
+        "total_defects": len([item for item in defects if isinstance(item, dict)]),
+        "by_risk_type": [
+            {
+                "risk_type": bucket["risk_type"],
+                "count": bucket["count"],
+                "endpoints": sorted(bucket["endpoints"].values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("path") or ""), str(item.get("method") or ""))),
+            }
+            for bucket in sorted(by_risk_type.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("risk_type") or "")))
+        ],
+        "by_endpoint": sorted(
+            by_endpoint.values(),
+            key=lambda item: (-int(item.get("count") or 0), str(item.get("path") or ""), str(item.get("method") or "")),
+        ),
+    }
+
+
+def _build_defect_priority_summary(defects: list[dict[str, Any]]) -> dict[str, Any]:
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in defects:
+        if not isinstance(item, dict):
+            continue
+        risk_type = str(item.get("risk_type") or item.get("category") or "uncategorized").strip() or "uncategorized"
+        severity = str(item.get("severity") or "P2").strip().upper() or "P2"
+        method, path = _finding_request_identity(item)
+        key = (risk_type, method, path or "/")
+        bucket = groups.setdefault(key, {
+            "risk_type": risk_type,
+            "method": method,
+            "path": path or "/",
+            "count": 0,
+            "p0_count": 0,
+            "p1_count": 0,
+            "sample_titles": [],
+            "sample_ids": [],
+        })
+        bucket["count"] += 1
+        if severity == "P0":
+            bucket["p0_count"] += 1
+        elif severity == "P1":
+            bucket["p1_count"] += 1
+        title = str(item.get("title") or "").strip()
+        if title and title not in bucket["sample_titles"] and len(bucket["sample_titles"]) < 2:
+            bucket["sample_titles"].append(title)
+        sample_id = str(item.get("id") or item.get("risk_id") or "").strip()
+        if sample_id and sample_id not in bucket["sample_ids"] and len(bucket["sample_ids"]) < 3:
+            bucket["sample_ids"].append(sample_id)
+
+    top_groups = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(item.get("p0_count") or 0),
+            -int(item.get("p1_count") or 0),
+            -int(item.get("count") or 0),
+            str(item.get("risk_type") or ""),
+            str(item.get("path") or ""),
+            str(item.get("method") or ""),
+        ),
+    )
+    ranked_groups: list[dict[str, Any]] = []
+    for index, bucket in enumerate(top_groups, start=1):
+        top_severity = "P0" if int(bucket.get("p0_count") or 0) > 0 else ("P1" if int(bucket.get("p1_count") or 0) > 0 else "P2")
+        ranked_groups.append({
+            "rank": index,
+            "risk_type": bucket["risk_type"],
+            "method": bucket["method"],
+            "path": bucket["path"],
+            "count": bucket["count"],
+            "p0_count": bucket["p0_count"],
+            "p1_count": bucket["p1_count"],
+            "top_severity": top_severity,
+            "sample_titles": list(bucket["sample_titles"]),
+            "sample_ids": list(bucket["sample_ids"]),
+        })
+    return {
+        "total_defects": len([item for item in defects if isinstance(item, dict)]),
+        "top_groups": ranked_groups,
+    }
+
+
+def _build_defect_repro_summary(defects: list[dict[str, Any]], top_limit: int = 3) -> dict[str, Any]:
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for item in defects:
+        if not isinstance(item, dict):
+            continue
+        risk_type = str(item.get("risk_type") or item.get("category") or "uncategorized").strip() or "uncategorized"
+        method, path = _finding_request_identity(item)
+        key = (risk_type, method, path or "/")
+        groups.setdefault(key, []).append(item)
+
+    ranked_groups: list[dict[str, Any]] = []
+    for (risk_type, method, path), items in groups.items():
+        p0_count = sum(1 for item in items if str(item.get("severity") or "").strip().upper() == "P0")
+        p1_count = sum(1 for item in items if str(item.get("severity") or "").strip().upper() == "P1")
+        ranked_groups.append({
+            "risk_type": risk_type,
+            "method": method,
+            "path": path,
+            "count": len(items),
+            "p0_count": p0_count,
+            "p1_count": p1_count,
+            "items": items,
+        })
+    ranked_groups.sort(
+        key=lambda item: (
+            -int(item.get("p0_count") or 0),
+            -int(item.get("p1_count") or 0),
+            -int(item.get("count") or 0),
+            str(item.get("risk_type") or ""),
+            str(item.get("path") or ""),
+            str(item.get("method") or ""),
+        )
+    )
+
+    top_groups: list[dict[str, Any]] = []
+    for index, bucket in enumerate(ranked_groups[:top_limit], start=1):
+        representative = bucket["items"][0] if bucket["items"] else {}
+        expected_actual = representative.get("expected_actual_comparison") if isinstance(representative.get("expected_actual_comparison"), dict) else {}
+        raw_evidence = representative.get("raw_evidence") if isinstance(representative.get("raw_evidence"), dict) else {}
+        request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+        response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+        technical_details = representative.get("technical_details") if isinstance(representative.get("technical_details"), dict) else {}
+        api_endpoint = technical_details.get("api_endpoint") if isinstance(technical_details.get("api_endpoint"), dict) else {}
+        evidence_source = str(
+            response_raw.get("source")
+            or request_raw.get("source")
+            or ((representative.get("reproduction") or {}).get("har_evidence") or {}).get("source")
+            or ""
+        ).strip()
+        regression_suggestions = representative.get("regression_suggestions") if isinstance(representative.get("regression_suggestions"), list) else []
+        top_groups.append({
+            "rank": index,
+            "risk_type": bucket["risk_type"],
+            "method": bucket["method"],
+            "path": bucket["path"],
+            "count": bucket["count"],
+            "p0_count": bucket["p0_count"],
+            "p1_count": bucket["p1_count"],
+            "top_severity": "P0" if int(bucket["p0_count"] or 0) > 0 else ("P1" if int(bucket["p1_count"] or 0) > 0 else "P2"),
+            "title": str(representative.get("title") or "").strip(),
+            "trigger_request": {
+                "method": str(request_raw.get("method") or api_endpoint.get("method") or bucket["method"] or "").strip().upper(),
+                "path": str(request_raw.get("path") or api_endpoint.get("path") or bucket["path"] or "").strip(),
+                "actor": str(request_raw.get("actor") or api_endpoint.get("actor") or "").strip(),
+            },
+            "expected": str(expected_actual.get("expected") or representative.get("expected") or "").strip(),
+            "actual": str(expected_actual.get("actual") or representative.get("actual") or "").strip(),
+            "difference": str(expected_actual.get("difference") or "").strip(),
+            "test_summary": str(representative.get("test_summary") or "").strip(),
+            "dev_summary": str(representative.get("dev_summary") or "").strip(),
+            "evidence_source": evidence_source,
+            "response_status": response_raw.get("status_code") if response_raw.get("status_code") is not None else technical_details.get("response_status"),
+            "sample_ids": [str(item.get("id") or item.get("risk_id") or "").strip() for item in bucket["items"][:3] if str(item.get("id") or item.get("risk_id") or "").strip()],
+            "regression_suggestions": [str(item).strip() for item in regression_suggestions[:3] if str(item).strip()],
+        })
+
+    return {
+        "total_defects": len([item for item in defects if isinstance(item, dict)]),
+        "top_groups": top_groups,
+    }
+
+
+def _build_defect_delivery_cards(defects: list[dict[str, Any]], top_limit: int = 3) -> dict[str, Any]:
+    repro_summary = _build_defect_repro_summary(defects, top_limit=top_limit)
+    cards: list[dict[str, Any]] = []
+    for item in repro_summary.get("top_groups") or []:
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method") or "").strip().upper()
+        path = str(item.get("path") or "").strip()
+        risk_type = str(item.get("risk_type") or "").strip()
+        trigger_request = item.get("trigger_request") if isinstance(item.get("trigger_request"), dict) else {}
+        cards.append({
+            "rank": int(item.get("rank") or len(cards) + 1),
+            "title": str(item.get("title") or f"{risk_type} · {method} {path}").strip(),
+            "group_key": f"{risk_type}|{method}|{path}",
+            "risk_type": risk_type,
+            "severity": str(item.get("top_severity") or "").strip(),
+            "affected_count": int(item.get("count") or 0),
+            "endpoint": {
+                "method": method,
+                "path": path,
+            },
+            "risk_summary": str(item.get("difference") or item.get("actual") or "").strip(),
+            "expected_behavior": str(item.get("expected") or "").strip(),
+            "actual_behavior": str(item.get("actual") or "").strip(),
+            "repro_entry": {
+                "method": str(trigger_request.get("method") or method).strip().upper(),
+                "path": str(trigger_request.get("path") or path).strip(),
+                "actor": str(trigger_request.get("actor") or "").strip(),
+            },
+            "evidence": {
+                "source": str(item.get("evidence_source") or "").strip(),
+                "response_status": item.get("response_status"),
+                "sample_ids": list(item.get("sample_ids") or []),
+            },
+            "delivery_notes": {
+                "test_summary": str(item.get("test_summary") or "").strip(),
+                "dev_summary": str(item.get("dev_summary") or "").strip(),
+                "regression_suggestions": list(item.get("regression_suggestions") or []),
+            },
+        })
+    return {
+        "total_cards": len(cards),
+        "cards": cards,
+    }
+
+
+def _augment_continuous_discovery_campaign(
+    payload: dict[str, Any],
+    *,
+    current_report_breakdown: dict[str, Any],
+    delivery_defects: list[dict[str, Any]],
+    current_campaign_customer_ready_defect_count: int = 0,
+    current_campaign_bundle_finding_count_raw: int = 0,
+) -> dict[str, Any]:
+    campaign_payload = dict(payload or {})
+    if not campaign_payload:
+        return {}
+    campaign = dict(campaign_payload.get("campaign") or {}) if isinstance(campaign_payload.get("campaign"), dict) else {}
+    summary = dict(campaign_payload.get("summary") or {}) if isinstance(campaign_payload.get("summary"), dict) else {}
+    current_run = dict(campaign_payload.get("current_run") or {}) if isinstance(campaign_payload.get("current_run"), dict) else {}
+    current_confirmed = summary.get("confirmed_slice_count")
+    if current_confirmed in (None, ""):
+        current_confirmed = current_run.get("confirmed_slice_count")
+    if current_confirmed in (None, ""):
+        current_confirmed = campaign.get("confirmed_slice_count")
+    try:
+        current_confirmed_count = max(0, int(current_confirmed or 0))
+    except (TypeError, ValueError):
+        current_confirmed_count = 0
+    family_customer_ready_defect_count = len([item for item in delivery_defects if isinstance(item, dict)])
+    try:
+        family_report_real_finding_count = max(0, int((current_report_breakdown or {}).get("total_findings") or 0))
+    except (TypeError, ValueError):
+        family_report_real_finding_count = 0
+    alignment_status = (
+        "aligned"
+        if family_customer_ready_defect_count == current_confirmed_count
+        else "family_expands_beyond_current_campaign"
+        if family_customer_ready_defect_count > current_confirmed_count
+        else "current_campaign_exceeds_family_shelf"
+    )
+    summary["current_campaign_confirmed_slice_count"] = current_confirmed_count
+    summary["current_campaign_customer_ready_defect_count"] = max(0, int(current_campaign_customer_ready_defect_count or 0))
+    summary["current_campaign_bundle_finding_count_raw"] = max(0, int(current_campaign_bundle_finding_count_raw or 0))
+    summary["family_customer_ready_defect_count"] = family_customer_ready_defect_count
+    summary["family_report_real_finding_count"] = family_report_real_finding_count
+    summary["family_historical_carryover_defect_count"] = max(0, family_customer_ready_defect_count - max(0, int(current_campaign_customer_ready_defect_count or 0)))
+    summary["confirmed_shelf_alignment_status"] = alignment_status
+    summary["confirmed_shelf_reporting_scope"] = "campaign_confirmed=current_campaign; defect_shelf=family_aggregated"
+    current_run["current_campaign_confirmed_slice_count"] = current_confirmed_count
+    current_run["current_campaign_customer_ready_defect_count"] = max(0, int(current_campaign_customer_ready_defect_count or 0))
+    current_run["current_campaign_bundle_finding_count_raw"] = max(0, int(current_campaign_bundle_finding_count_raw or 0))
+    current_run["family_customer_ready_defect_count"] = family_customer_ready_defect_count
+    current_run["family_report_real_finding_count"] = family_report_real_finding_count
+    campaign_payload["summary"] = summary
+    campaign_payload["current_run"] = current_run
+    return campaign_payload
+
+
+def _current_campaign_bundle_finding_stats(
+    project_id: str,
+    root: Path,
+    campaign_payload: dict[str, Any],
+) -> dict[str, int]:
+    campaign = campaign_payload.get("campaign") if isinstance(campaign_payload.get("campaign"), dict) else {}
+    campaign_id = str(campaign.get("campaign_id") or "").strip()
+    if not campaign_id:
+        return {"raw": 0, "deduped": 0}
+    bundle_root = root / "platform_workspace" / _safe_project_id(project_id) / "evidence_bundles"
+    if not bundle_root.exists():
+        return {"raw": 0, "deduped": 0}
+    deduped_keys: set[str] = set()
+    raw_count = 0
+    for bundle_dir in bundle_root.iterdir():
+        if not bundle_dir.is_dir():
+            continue
+        campaign_path = bundle_dir / "campaign.json"
+        findings_path = bundle_dir / "findings.json"
+        if not campaign_path.exists() or not findings_path.exists():
+            continue
+        try:
+            bundle_campaign = json.loads(campaign_path.read_text(encoding="utf-8") or "{}")
+            bundle_findings = json.loads(findings_path.read_text(encoding="utf-8") or "[]")
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(bundle_campaign, dict) or str(bundle_campaign.get("campaign_id") or "").strip() != campaign_id:
+            continue
+        if not isinstance(bundle_findings, list):
+            continue
+        raw_count += len([item for item in bundle_findings if isinstance(item, dict)])
+        for finding in bundle_findings:
+            if not isinstance(finding, dict):
+                continue
+            key = PrivatePilotHandler._report_finding_dedupe_key(finding)
+            if key:
+                deduped_keys.add(key)
+    return {"raw": raw_count, "deduped": len(deduped_keys)}
 KNOWLEDGE_INGEST_SOURCE_TYPES = (
     "prd",
     "mrd",
@@ -587,6 +1398,7 @@ def _has_customer_facing_hard_evidence(item: dict[str, Any]) -> bool:
     reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
     har = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
     response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+    db_snapshot = raw_evidence.get("db_snapshot") if isinstance(raw_evidence.get("db_snapshot"), dict) else {}
     return bool(
         raw_evidence.get("has_real_evidence")
         or response_raw
@@ -598,15 +1410,23 @@ def _has_customer_facing_hard_evidence(item: dict[str, Any]) -> bool:
 
 
 def _has_customer_replay_asset(item: dict[str, Any]) -> bool:
+    raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
     reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+    db_snapshot = raw_evidence.get("db_snapshot") if isinstance(raw_evidence.get("db_snapshot"), dict) else {}
     har = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
-    method = str(reproduction.get("method") or item.get("repro_method") or "").strip().upper()
-    path = str(reproduction.get("path") or item.get("repro_path") or "").strip()
+    request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+    method = str(reproduction.get("method") or item.get("repro_method") or request_raw.get("method") or "").strip().upper()
+    path = str(reproduction.get("path") or item.get("repro_path") or request_raw.get("path") or "").strip()
     if not method or not path:
         return False
     if bool(reproduction.get("is_synthetic")):
         return False
-    return bool(har)
+    if bool(har):
+        return True
+    return bool(
+        (db_snapshot.get("before") and db_snapshot.get("after"))
+        or db_snapshot.get("assertion")
+    )
 
 
 def _is_customer_delivery_risk(item: dict[str, Any]) -> bool:
@@ -626,21 +1446,23 @@ def _partition_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[dict[s
         if not isinstance(item, dict):
             continue
         if _is_customer_delivery_risk(item):
-            defects.append({
+            defects.append(_annotate_ui_risk_item({
                 **item,
                 "delivery_track": "defect",
                 "customer_delivery_status": "defect",
                 "customer_delivery_label": "客户可交付缺陷",
                 "customer_visible": True,
-            })
+            }))
         else:
-            clues.append({
+            clues.append(_annotate_ui_risk_item({
                 **item,
                 "delivery_track": "clue",
                 "customer_delivery_status": "clue",
                 "customer_delivery_label": "内部待验证线索",
                 "customer_visible": False,
-            })
+            }))
+    defects.sort(key=lambda item: (-float(item.get("priority_score") or 0.0), str(item.get("title") or "")))
+    clues.sort(key=lambda item: (-float(item.get("priority_score") or 0.0), str(item.get("title") or "")))
     return defects, clues
 
 
@@ -697,6 +1519,325 @@ def _build_internal_clue_contract(
     }
 
 
+def _ui_verification_stats(items: Any) -> dict[str, int]:
+    stats = {
+        "ui_total": 0,
+        "ui_candidate_total": 0,
+        "ui_verified_candidate_total": 0,
+        "ui_unverified_candidate_total": 0,
+        "ui_high_confidence_candidate_total": 0,
+    }
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        if not _is_ui_risk_item(item):
+            continue
+        stats["ui_total"] += 1
+        gate = item.get("ui_candidate_gate") if isinstance(item.get("ui_candidate_gate"), dict) else {}
+        verification = item.get("ui_verification") if isinstance(item.get("ui_verification"), dict) else {}
+        if gate.get("passed") is True:
+            stats["ui_candidate_total"] += 1
+            if verification.get("status") == "verified":
+                stats["ui_verified_candidate_total"] += 1
+            else:
+                stats["ui_unverified_candidate_total"] += 1
+        if item.get("high_confidence_candidate") is True:
+            stats["ui_high_confidence_candidate_total"] += 1
+    return stats
+
+
+def _is_ui_risk_item(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if isinstance(item.get("ui_verification"), dict) or isinstance(item.get("ui_candidate_gate"), dict):
+        return True
+    if item.get("high_confidence_candidate") is True:
+        return True
+    badge = str(item.get("verification_badge") or "").strip().lower()
+    if badge in {"ui_verified", "ui_candidate", "ui_signal"}:
+        return True
+    candidate_tier = str(item.get("candidate_tier") or "").strip().lower()
+    if candidate_tier in {"ui_candidate", "high_confidence_ui_candidate"}:
+        return True
+    defect_family = str(item.get("defect_family") or "").strip().lower()
+    risk_type = str(item.get("risk_type") or "").strip().lower()
+    return defect_family == "ui" or risk_type in {"frontend_ui", "ui_execution", "frontend_execution_runtime"}
+
+
+def _defect_intake_stats(items: Any) -> dict[str, int]:
+    stats = {
+        "defect_intake_recommended_total": 0,
+        "customer_defect_intake_total": 0,
+        "internal_defect_intake_total": 0,
+    }
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("defect_intake_recommended") is True:
+            stats["defect_intake_recommended_total"] += 1
+            route = str(item.get("defect_intake_route") or "")
+            if route == "customer_defect":
+                stats["customer_defect_intake_total"] += 1
+            elif route == "internal_defect_intake":
+                stats["internal_defect_intake_total"] += 1
+    return stats
+
+
+def _command_center_priority_score(item: dict[str, Any]) -> float:
+    severity = str(item.get("severity") or "P2").upper()
+    severity_score = {"P0": 100.0, "P1": 80.0, "P2": 50.0, "P3": 25.0}.get(severity, 40.0)
+    try:
+        confidence = max(0.0, min(1.0, float(item.get("confidence_score") or item.get("confidence") or 0.0)))
+    except Exception:
+        confidence = 0.0
+    verification = item.get("ui_verification") if isinstance(item.get("ui_verification"), dict) else {}
+    evidence_quality = item.get("evidence_quality") if isinstance(item.get("evidence_quality"), dict) else {}
+    verification_status = str(verification.get("status") or "").strip().lower()
+    verification_bonus = 18.0 if verification_status == "verified" else 10.0 if item.get("verification_badge") == "ui_candidate" else 0.0
+    high_conf_bonus = 25.0 if item.get("high_confidence_candidate") is True else 0.0
+    cross_verified_bonus = 12.0 if str(evidence_quality.get("level") or "").strip().lower() in {"cross_verified", "validated"} else 0.0
+    reproduced_bonus = 10.0 if str(item.get("bug_status") or "").strip().lower() == "reproduced" else 0.0
+    gate_bonus = 8.0 if bool(item.get("gate_passed")) else 0.0
+    return round(severity_score + confidence * 20.0 + verification_bonus + high_conf_bonus + cross_verified_bonus + reproduced_bonus + gate_bonus, 3)
+
+
+def _command_center_priority_label(item: dict[str, Any], score: float) -> str:
+    if bool(item.get("launch_blocking")) or str(item.get("severity") or "").upper() == "P0":
+        return "P0"
+    if item.get("high_confidence_candidate") is True or score >= 105:
+        return "P1"
+    if score >= 75:
+        return "P2"
+    return "P3"
+
+
+def _defect_intake_fields(item: dict[str, Any], score: float) -> dict[str, Any]:
+    severity = str(item.get("severity") or "").upper()
+    reproduced = str(item.get("bug_status") or "").strip().lower() == "reproduced"
+    high_conf = item.get("high_confidence_candidate") is True
+    gate_passed = bool(item.get("gate_passed"))
+    recommended = False
+    route = "collect_more_evidence"
+    reason = "证据尚未达到正式入账门槛，先留在线索池继续采证。"
+    if reproduced and gate_passed:
+        recommended = True
+        route = "customer_defect"
+        reason = "已复现且通过客户交付门禁，建议直接进入正式缺陷入账。"
+    elif high_conf:
+        recommended = True
+        route = "internal_defect_intake"
+        reason = "UI 候选已完成二次验真且证据质量较高，建议优先进入内部缺陷入账或复核队列。"
+    return {
+        "defect_intake_recommended": recommended,
+        "defect_intake_route": route,
+        "defect_intake_priority": "P0" if severity == "P0" else "P1" if recommended else "P2" if score >= 75 else "P3",
+        "defect_intake_reason": reason,
+    }
+
+
+def _annotate_ui_risk_item(item: dict[str, Any]) -> dict[str, Any]:
+    row = dict(item or {})
+    is_ui = _is_ui_risk_item(row)
+    verification = row.get("ui_verification") if isinstance(row.get("ui_verification"), dict) else {}
+    gate = row.get("ui_candidate_gate") if isinstance(row.get("ui_candidate_gate"), dict) else {}
+    status = str(verification.get("status") or "not_requested")
+    if is_ui and status == "verified":
+        row.setdefault("customer_evidence_label", "UI 二次验真通过")
+        row.setdefault("verification_label", "已二次验真")
+        row.setdefault("verification_badge", "ui_verified")
+    elif is_ui and gate.get("passed") is True:
+        row.setdefault("customer_evidence_label", "UI 候选待二次验真")
+        row.setdefault("verification_label", "待二次验真")
+        row.setdefault("verification_badge", "ui_candidate")
+    elif is_ui:
+        row.setdefault("customer_evidence_label", "UI 观测信号")
+        row.setdefault("verification_label", "仅 UI 信号")
+        row.setdefault("verification_badge", "ui_signal")
+    priority_score = _command_center_priority_score(row)
+    row["priority_score"] = priority_score
+    row["priority_label"] = _command_center_priority_label(row, priority_score)
+    row.update(_defect_intake_fields(row, priority_score))
+    return row
+
+
+def _normalize_commercial_assets(value: Any) -> dict[str, Any]:
+    row = value if isinstance(value, dict) else {}
+    if not row:
+        return {}
+    commercial_handoff = row.get("commercial_handoff") if isinstance(row.get("commercial_handoff"), dict) else {}
+    tracker_sync = row.get("tracker_sync") if isinstance(row.get("tracker_sync"), dict) else {}
+    delivery = row.get("delivery_package") if isinstance(row.get("delivery_package"), dict) else {}
+    artifact_refs = {
+        "commercial_handoff_bundle_ref": _first_text(row.get("commercial_handoff_bundle_ref")),
+        "commercial_handoff_acceptance_gate_ref": _first_text(row.get("commercial_handoff_acceptance_gate_ref")),
+        "handoff_archive_manifest_ref": _first_text(row.get("handoff_archive_manifest_ref")),
+        "commercial_audit_exports_ref": _first_text(row.get("commercial_audit_exports_ref")),
+        "external_tracker_sync_payloads_ref": _first_text(row.get("external_tracker_sync_payloads_ref")),
+        "delivery_package_ref": _first_text(delivery.get("package_ref")),
+    }
+    return {
+        "status": _first_text(row.get("status"), "empty"),
+        "finding_count": int(row.get("finding_count") or 0),
+        "customer_ready_reproduction_count": int(row.get("customer_ready_reproduction_count") or 0),
+        "commercial_handoff": {
+            "status": _first_text(row.get("commercial_handoff_status"), commercial_handoff.get("status")),
+            "acceptance_status": _first_text(row.get("commercial_handoff_acceptance_status"), commercial_handoff.get("acceptance_status")),
+            "safe_for_customer": bool(
+                row.get("commercial_handoff_safe_for_customer")
+                if row.get("commercial_handoff_safe_for_customer") is not None
+                else commercial_handoff.get("safe_for_customer")
+            ),
+        },
+        "tracker_sync": {
+            "payload_status": _first_text(row.get("external_tracker_sync_payload_status"), tracker_sync.get("payload_status")),
+            "payload_gate_status": _first_text(row.get("external_tracker_sync_payload_gate_status"), tracker_sync.get("payload_gate_status")),
+        },
+        "delivery_package": {
+            "status": _first_text(delivery.get("status"), "not_created"),
+            "package_id": _first_text(delivery.get("package_id")),
+            "package_ref": _first_text(delivery.get("package_ref")),
+            "release_verdict": _first_text(delivery.get("release_verdict")),
+            "evidence_bundle_id": _first_text(delivery.get("evidence_bundle_id")),
+        },
+        "artifact_refs": {key: value for key, value in artifact_refs.items() if value},
+    }
+
+
+def _commercial_assets_signal(value: Any) -> int:
+    row = value if isinstance(value, dict) else {}
+    if not row:
+        return 0
+    normalized = _normalize_commercial_assets(row)
+    if not normalized:
+        return 0
+    score = 1
+    if _first_text(normalized.get("status")) == "materialized":
+        score += 100
+    score += min(int(normalized.get("finding_count") or 0), 50)
+    score += min(int(normalized.get("customer_ready_reproduction_count") or 0), 20)
+    if _first_text((normalized.get("commercial_handoff") or {}).get("status")):
+        score += 10
+    if _first_text((normalized.get("tracker_sync") or {}).get("payload_status")):
+        score += 10
+    if _first_text((normalized.get("delivery_package") or {}).get("status")) == "created":
+        score += 20
+    score += len((normalized.get("artifact_refs") or {}))
+    return score
+
+
+def _select_commercial_assets(*values: Any) -> dict[str, Any]:
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for value in values:
+        normalized = _normalize_commercial_assets(value)
+        if normalized:
+            candidates.append((_commercial_assets_signal(value), normalized))
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _normalize_execution_evidence_summary(*values: Any) -> dict[str, Any]:
+    candidate = next((value for value in values if isinstance(value, dict) and value), {})
+    row = dict(candidate) if isinstance(candidate, dict) else {}
+    if not row:
+        return {}
+    results = row.get("results") if isinstance(row.get("results"), list) else []
+    artifacts = row.get("artifacts") if isinstance(row.get("artifacts"), list) else []
+    findings = row.get("findings") if isinstance(row.get("findings"), list) else []
+    requested = int(row.get("requested") or row.get("total_items") or len(results) or 0)
+    executed = int(row.get("executed") or 0)
+    failed = int(row.get("failed") or 0)
+    blocked = int(row.get("blocked") or 0)
+    artifact_count = int(row.get("artifact_count") or len(artifacts))
+    finding_count = int(row.get("finding_count") or len(findings))
+    created_data_count = int(row.get("created_data_count") or 0)
+    evidence_captured_count = int(row.get("evidence_captured_count") or 0)
+    provider_distribution = (
+        {str(key): int(value or 0) for key, value in row.get("provider_distribution", {}).items()}
+        if isinstance(row.get("provider_distribution"), dict)
+        else {}
+    )
+    bridge_provider_distribution = (
+        {str(key): int(value or 0) for key, value in row.get("bridge_provider_distribution", {}).items()}
+        if isinstance(row.get("bridge_provider_distribution"), dict)
+        else {}
+    )
+    current_url_samples = [str(item).strip() for item in row.get("current_url_samples", []) if str(item).strip()][:3]
+    artifact_refs = [str(item).strip() for item in row.get("artifact_refs", []) if str(item).strip()][:3]
+    if not artifact_refs:
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            ref = str(item.get("ref") or "").strip()
+            if ref and ref not in artifact_refs:
+                artifact_refs.append(ref)
+            if len(artifact_refs) >= 3:
+                break
+    if not created_data_count or not evidence_captured_count or not bridge_provider_distribution or not current_url_samples:
+        rebuilt_created_data_count = 0
+        rebuilt_evidence_captured_count = 0
+        rebuilt_bridge_provider_distribution = dict(bridge_provider_distribution)
+        rebuilt_current_url_samples = list(current_url_samples)
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            if isinstance(result.get("created_data"), dict) and result.get("created_data"):
+                rebuilt_created_data_count += 1
+            provider = str(result.get("bridge_provider") or result.get("provider") or "").strip()
+            if provider:
+                rebuilt_bridge_provider_distribution[provider] = rebuilt_bridge_provider_distribution.get(provider, 0) + 1
+            current_url = str(result.get("current_url") or "").strip()
+            if current_url and current_url not in rebuilt_current_url_samples and len(rebuilt_current_url_samples) < 3:
+                rebuilt_current_url_samples.append(current_url)
+            has_evidence = bool(
+                isinstance(result.get("artifacts"), list) and result.get("artifacts")
+                or isinstance(result.get("findings"), list) and result.get("findings")
+                or isinstance(result.get("created_data"), dict) and result.get("created_data")
+                or isinstance(result.get("history"), list) and result.get("history")
+                or isinstance(result.get("console"), list) and result.get("console")
+                or isinstance(result.get("network"), list) and result.get("network")
+            )
+            if has_evidence:
+                rebuilt_evidence_captured_count += 1
+        if not created_data_count:
+            created_data_count = rebuilt_created_data_count
+        if not evidence_captured_count:
+            evidence_captured_count = rebuilt_evidence_captured_count
+        bridge_provider_distribution = rebuilt_bridge_provider_distribution
+        current_url_samples = rebuilt_current_url_samples
+    status = str(row.get("status") or ("not_requested" if requested <= 0 else "completed")).strip() or "not_requested"
+    summary = str(row.get("summary") or "").strip()
+    if not summary:
+        summary = (
+            "UI execution not requested."
+            if requested <= 0
+            else (
+                f"UI execution {status}: requested {requested}, executed {executed}, failed {failed}, "
+                f"blocked {blocked}, evidence captured {evidence_captured_count}, artifacts {artifact_count}, "
+                f"findings {finding_count}"
+                + (f", created data {created_data_count}" if created_data_count else "")
+                + "."
+            )
+        )
+    return {
+        "status": status,
+        "requested": requested,
+        "executed": executed,
+        "failed": failed,
+        "blocked": blocked,
+        "finding_count": finding_count,
+        "artifact_count": artifact_count,
+        "created_data_count": created_data_count,
+        "evidence_captured_count": evidence_captured_count,
+        "provider_distribution": provider_distribution,
+        "bridge_provider_distribution": bridge_provider_distribution,
+        "artifact_refs": artifact_refs,
+        "current_url_samples": current_url_samples,
+        "summary": summary,
+    }
+
+
 def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
@@ -704,71 +1845,182 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
     if not isinstance(data, dict):
         return payload
 
+    def _keep_customer_risk(item: Any) -> bool:
+        return isinstance(item, dict) and not bool(item.get("_summary_only"))
+
     raw_defects = data.get("defects")
     raw_clues = data.get("clues")
     legacy_risks = data.get("risks") if isinstance(data.get("risks"), list) else []
+    commercial_assets = _select_commercial_assets(data.get("commercial_assets"), data.get("external_commercial_assets"))
 
     if isinstance(raw_defects, list) or isinstance(raw_clues, list):
-        defects = [item for item in (raw_defects if isinstance(raw_defects, list) else []) if isinstance(item, dict)]
-        clues = [item for item in (raw_clues if isinstance(raw_clues, list) else []) if isinstance(item, dict)]
+        defects = [item for item in (raw_defects if isinstance(raw_defects, list) else []) if _keep_customer_risk(item)]
+        clues = [item for item in (raw_clues if isinstance(raw_clues, list) else []) if _keep_customer_risk(item)]
     else:
-        legacy_items = [item for item in legacy_risks if isinstance(item, dict)]
+        legacy_items = [item for item in legacy_risks if _keep_customer_risk(item)]
         defects, clues = _partition_delivery_tracks(legacy_items)
+    defects = [_annotate_ui_risk_item(dict(item)) for item in defects if isinstance(item, dict)]
+    clues = [_annotate_ui_risk_item(dict(item)) for item in clues if isinstance(item, dict)]
+    ui_stats = _ui_verification_stats(defects + clues)
+    intake_stats = _defect_intake_stats(defects + clues)
+    execution_evidence_summary = _normalize_execution_evidence_summary(
+        data.get("execution_evidence_summary"),
+        data.get("ui_execution_summary"),
+        data.get("ui_execution"),
+    )
 
     contract_base = data.get("data_contract") if isinstance(data.get("data_contract"), dict) else {}
     customer_contract = _rebuild_customer_display_contract(contract_base, defects)
     clue_contract = _build_internal_clue_contract(contract_base, clues)
 
     severity_counts = customer_contract.get("severity_counts") if isinstance(customer_contract.get("severity_counts"), dict) else {}
+    existing_scan_meta = dict(data.get("scan_meta") or {}) if isinstance(data.get("scan_meta"), dict) else {}
+    existing_value_metrics = dict(data.get("value_metrics") or {}) if isinstance(data.get("value_metrics"), dict) else {}
+    existing_executive_summary = dict(data.get("executive_summary") or {}) if isinstance(data.get("executive_summary"), dict) else {}
+    current_report_breakdown = (
+        existing_scan_meta.get("current_report_breakdown")
+        if isinstance(existing_scan_meta.get("current_report_breakdown"), dict)
+        else existing_value_metrics.get("current_report_breakdown")
+        if isinstance(existing_value_metrics.get("current_report_breakdown"), dict)
+        else existing_executive_summary.get("current_report_breakdown")
+        if isinstance(existing_executive_summary.get("current_report_breakdown"), dict)
+        else contract_base.get("current_report_breakdown")
+        if isinstance(contract_base.get("current_report_breakdown"), dict)
+        else {}
+    )
+
+    def _scope_count(*values: Any, fallback: int = 0) -> int:
+        for value in values:
+            try:
+                if value not in (None, ""):
+                    return max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+        return max(0, int(fallback or 0))
+
+    current_scope_total_findings = _scope_count(
+        existing_scan_meta.get("current_report_total_findings"),
+        current_report_breakdown.get("total_findings") if isinstance(current_report_breakdown, dict) else None,
+        existing_scan_meta.get("total_findings"),
+        existing_executive_summary.get("total_findings"),
+        fallback=len(defects),
+    )
+    current_scope_customer_ready_defects = _scope_count(
+        existing_scan_meta.get("current_report_customer_ready_defect_count"),
+        existing_scan_meta.get("current_campaign_customer_ready_defect_count"),
+        existing_scan_meta.get("customer_ready_defects"),
+        existing_executive_summary.get("customer_ready_defects"),
+        fallback=len(defects),
+    )
+    current_scope_materialized_findings = _scope_count(
+        existing_scan_meta.get("current_report_materialized_findings"),
+        existing_scan_meta.get("materialized_findings"),
+        existing_executive_summary.get("materialized_findings"),
+        fallback=current_scope_total_findings,
+    )
+    current_scope_ready_bug_count = _scope_count(
+        existing_scan_meta.get("ready_bug_count"),
+        existing_value_metrics.get("ready_bug_count"),
+        existing_executive_summary.get("ready_bugs"),
+        existing_executive_summary.get("total_bugs_found"),
+        fallback=current_scope_customer_ready_defects,
+    )
+    family_customer_ready_defect_count = len(defects)
     p0_count = int(severity_counts.get("P0") or sum(1 for item in defects if item.get("severity") == "P0"))
     p1_count = int(severity_counts.get("P1") or sum(1 for item in defects if item.get("severity") == "P1"))
     p2_count = max(0, len(defects) - p0_count - p1_count)
-    ready_bug_count = len(defects)
+    ready_bug_count = current_scope_ready_bug_count
     needs_validation_count = int(clue_contract.get("needs_validation_count") or 0)
     not_reproduced_count = int(clue_contract.get("not_reproduced_count") or 0)
 
     value_metrics = dict(data.get("value_metrics") or {})
-    value_metrics["canonical_risk_count"] = len(defects)
-    value_metrics["materialized_risk_count"] = len(defects)
-    value_metrics["raw_candidate_risk_count"] = int(customer_contract.get("raw_candidate_risk_count") or len(defects))
+    value_metrics["canonical_risk_count"] = current_scope_total_findings
+    value_metrics["materialized_risk_count"] = current_scope_materialized_findings
+    value_metrics["raw_candidate_risk_count"] = int(customer_contract.get("raw_candidate_risk_count") or current_scope_total_findings)
     value_metrics["ready_bug_count"] = ready_bug_count
     value_metrics["needs_validation_count"] = needs_validation_count
     value_metrics["not_reproduced_count"] = not_reproduced_count
-    value_metrics["defect_count"] = len(defects)
+    value_metrics["defect_count"] = family_customer_ready_defect_count
     value_metrics["clue_count"] = len(clues)
     value_metrics["p0_count"] = p0_count
     value_metrics["p1_count"] = p1_count
     value_metrics["p2_count"] = p2_count
     value_metrics["ready_p0_count"] = p0_count
     value_metrics["ready_p1_count"] = p1_count
+    value_metrics["current_report_total_findings"] = current_scope_total_findings
+    value_metrics["current_report_customer_ready_defect_count"] = current_scope_customer_ready_defects
+    value_metrics["family_customer_ready_defect_count"] = family_customer_ready_defect_count
     value_metrics["status_counts"] = customer_contract.get("status_counts") if isinstance(customer_contract.get("status_counts"), dict) else {}
+    value_metrics["commercial_asset_materialized"] = 1 if commercial_assets.get("status") == "materialized" else 0
+    value_metrics["commercial_delivery_package_created"] = 1 if _first_text((commercial_assets.get("delivery_package") or {}).get("status")) == "created" else 0
+    if execution_evidence_summary:
+        value_metrics["ui_execution_requested"] = int(execution_evidence_summary.get("requested") or 0)
+        value_metrics["ui_execution_executed"] = int(execution_evidence_summary.get("executed") or 0)
+        value_metrics["ui_execution_evidence_captured"] = int(execution_evidence_summary.get("evidence_captured_count") or 0)
+        value_metrics["ui_execution_artifact_count"] = int(execution_evidence_summary.get("artifact_count") or 0)
+    value_metrics.update(ui_stats)
+    value_metrics.update(intake_stats)
 
     executive_summary = dict(data.get("executive_summary") or {})
-    executive_summary["total_findings"] = len(defects)
+    executive_summary["total_findings"] = current_scope_total_findings
     executive_summary["total_bugs_found"] = ready_bug_count
     executive_summary["ready_bugs"] = ready_bug_count
-    executive_summary["customer_ready_defects"] = len(defects)
+    executive_summary["customer_ready_defects"] = current_scope_customer_ready_defects
+    executive_summary["family_customer_ready_defects"] = family_customer_ready_defect_count
     executive_summary["internal_clues"] = len(clues)
     executive_summary["needs_validation_findings"] = needs_validation_count
     executive_summary["not_reproduced_findings"] = not_reproduced_count
-    executive_summary["raw_candidate_findings"] = int(customer_contract.get("raw_candidate_risk_count") or len(defects))
+    executive_summary["raw_candidate_findings"] = int(customer_contract.get("raw_candidate_risk_count") or current_scope_total_findings)
     executive_summary["critical_bugs"] = p0_count
     executive_summary["high_priority_bugs"] = p1_count
-    executive_summary["materialized_findings"] = len(defects)
+    executive_summary["materialized_findings"] = current_scope_materialized_findings
+    executive_summary["ui_candidate_findings"] = ui_stats["ui_candidate_total"]
+    executive_summary["ui_verified_candidates"] = ui_stats["ui_verified_candidate_total"]
+    executive_summary["ui_high_confidence_candidates"] = ui_stats["ui_high_confidence_candidate_total"]
+    executive_summary["defect_intake_recommended"] = intake_stats["defect_intake_recommended_total"]
+    executive_summary["internal_defect_intake_candidates"] = intake_stats["internal_defect_intake_total"]
+    if execution_evidence_summary:
+        executive_summary["ui_execution_requested"] = int(execution_evidence_summary.get("requested") or 0)
+        executive_summary["ui_execution_executed"] = int(execution_evidence_summary.get("executed") or 0)
+        executive_summary["ui_execution_evidence_captured"] = int(execution_evidence_summary.get("evidence_captured_count") or 0)
+        executive_summary["ui_execution_summary"] = str(execution_evidence_summary.get("summary") or "")
+    executive_summary["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
+    executive_summary["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
 
     scan_meta = dict(data.get("scan_meta") or {})
-    scan_meta["total_findings"] = len(defects)
-    scan_meta["materialized_findings"] = len(defects)
-    scan_meta["raw_candidate_findings"] = int(customer_contract.get("raw_candidate_risk_count") or len(defects))
+    scan_meta["total_findings"] = current_scope_total_findings
+    scan_meta["materialized_findings"] = current_scope_materialized_findings
+    scan_meta["raw_candidate_findings"] = int(customer_contract.get("raw_candidate_risk_count") or current_scope_total_findings)
     scan_meta["ready_bug_count"] = ready_bug_count
     scan_meta["needs_validation_findings"] = needs_validation_count
     scan_meta["not_reproduced_findings"] = not_reproduced_count
-    scan_meta["customer_ready_defects"] = len(defects)
+    scan_meta["customer_ready_defects"] = current_scope_customer_ready_defects
+    scan_meta["current_report_total_findings"] = current_scope_total_findings
+    scan_meta["current_report_materialized_findings"] = current_scope_materialized_findings
+    scan_meta["current_report_customer_ready_defect_count"] = current_scope_customer_ready_defects
+    scan_meta["family_customer_ready_defect_count"] = family_customer_ready_defect_count
+    scan_meta["family_materialized_findings"] = family_customer_ready_defect_count
     scan_meta["internal_clue_count"] = len(clues)
+    scan_meta["ui_candidate_findings"] = ui_stats["ui_candidate_total"]
+    scan_meta["ui_verified_candidates"] = ui_stats["ui_verified_candidate_total"]
+    scan_meta["ui_high_confidence_candidates"] = ui_stats["ui_high_confidence_candidate_total"]
+    scan_meta["defect_intake_recommended"] = intake_stats["defect_intake_recommended_total"]
+    if execution_evidence_summary:
+        scan_meta["ui_execution_requested"] = int(execution_evidence_summary.get("requested") or 0)
+        scan_meta["ui_execution_executed"] = int(execution_evidence_summary.get("executed") or 0)
+        scan_meta["ui_execution_evidence_captured"] = int(execution_evidence_summary.get("evidence_captured_count") or 0)
+        scan_meta["ui_execution_artifact_count"] = int(execution_evidence_summary.get("artifact_count") or 0)
+    scan_meta["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
+    scan_meta["external_tracker_sync_payload_status"] = _first_text((commercial_assets.get("tracker_sync") or {}).get("payload_status"))
+    scan_meta["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
 
     data["defects"] = defects
     data["clues"] = clues
     data["risks"] = defects
+    if commercial_assets:
+        data["commercial_assets"] = commercial_assets
+    if execution_evidence_summary:
+        data["execution_evidence_summary"] = execution_evidence_summary
     data["scan_meta"] = scan_meta
     data["value_metrics"] = value_metrics
     data["data_contract"] = {
@@ -1089,6 +2341,18 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         import json as _json
         history_path = root / "platform_outputs" / project / "pipeline_reports" / "scan_history.json"
         if not history_path.exists():
+            latest_path = root / "platform_outputs" / project / "pipeline_reports" / "latest_pipeline_report.json"
+            if latest_path.exists():
+                try:
+                    latest = _json.loads(latest_path.read_text(encoding="utf-8"))
+                except Exception:
+                    latest = {}
+                return {
+                    "ok": True,
+                    "history": [latest],
+                    "compatibility_mode": "legacy_findings_report_v1",
+                    "canonical_api_family": "/api/v1/projects/{projectId}/*",
+                }
             return {"ok": True, "history": []}
         try:
             return {"ok": True, "history": _json.loads(history_path.read_text(encoding="utf-8"))}
@@ -1945,8 +3209,6 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 prepared_body["base_url"] = base_url
             if not str(body.get("execution_mode") or "").strip():
                 prepared_body.pop("execution_mode", None)
-            if not isinstance(body.get("test_data_contract"), dict) and not str(body.get("test_data_strategy") or "").strip():
-                prepared_body.pop("test_data_contract", None)
             prepared_body = _prepare_v12_scan_body(
                 project,
                 root,
@@ -2083,17 +3345,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 )
             except Exception:
                 merge_result = {}
-            # Increment scan counter
+            # Increment scan counter through the shared helper so CLI and HTTP
+            # entrypoints project the same run metadata into command center.
             try:
-                import json as _j2, time as _t
-                counter_path = root / "platform_outputs" / project / "scan_counter.json"
-                c = {"count": 1, "first_scan_at": _t.strftime('%Y-%m-%dT%H:%M:%SZ', _t.gmtime())}
-                if counter_path.exists():
-                    try: c = _j2.loads(counter_path.read_text(encoding="utf-8"))
-                    except: pass
-                c["count"] = c.get("count", 0) + 1
-                c["last_scan_at"] = _t.strftime('%Y-%m-%dT%H:%M:%SZ', _t.gmtime())
-                counter_path.write_text(_j2.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
+                increment_scan_counter(root / "platform_outputs" / project / "scan_counter.json")
             except Exception:
                 pass
             # Also write raw findings for frontend Dashboard/Findings compatibility
@@ -2275,6 +3530,20 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 workspace_report,
             ))
 
+        # When the latest scan_result only contains the current scan delta, a
+        # completed campaign can legitimately produce 0 new findings while
+        # historical confirmed defects still exist in a related evidence bundle.
+        # Recover the strongest same-snapshot/lineage evidence bundle so the
+        # command center reflects real customer-visible defects instead of a
+        # misleading empty list.
+        anchor_candidate = max(candidate_payloads, key=lambda item: (item[1], item[0])) if candidate_payloads else None
+        anchor_report = anchor_candidate[2] if anchor_candidate else {}
+        related_bundle_candidates = self._load_evidence_bundle_report_candidates(project, root, anchor_report)
+        candidate_payloads.extend(related_bundle_candidates)
+        aggregate_candidate = self._aggregate_related_report_candidate(anchor_candidate, related_bundle_candidates)
+        if aggregate_candidate is not None:
+            candidate_payloads.append(aggregate_candidate)
+
         if candidate_payloads:
             candidate_payloads.sort(key=lambda item: (item[0], item[1]), reverse=True)
             return candidate_payloads[0][2]
@@ -2299,6 +3568,193 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     "report_source_path": "benchmark_outputs/batch_report.json",
                 }
         return {}
+
+    def _load_current_scan_report(self, project_id: str, root: Path) -> dict[str, Any]:
+        project = _safe_project_id(project_id)
+        candidates = [
+            root / "platform_outputs" / project / "scan_result.json",
+            root / "platform_workspace" / project / "scan_result.json",
+        ]
+        chosen: tuple[float, dict[str, Any]] | None = None
+        for path in candidates:
+            if not path.exists():
+                continue
+            payload = self._read_json_dict(path)
+            if not payload:
+                continue
+            payload.setdefault("report_source_path", str(path.relative_to(root)) if path.is_relative_to(root) else str(path))
+            score = path.stat().st_mtime
+            if chosen is None or score > chosen[0]:
+                chosen = (score, payload)
+        return chosen[1] if chosen else {}
+
+    def _load_evidence_bundle_report_candidates(
+        self,
+        project_id: str,
+        root: Path,
+        anchor_report: dict[str, Any] | None = None,
+    ) -> list[tuple[int, float, dict[str, Any]]]:
+        project = _safe_project_id(project_id)
+        bundle_root = root / "platform_workspace" / project / "evidence_bundles"
+        if not bundle_root.exists():
+            return []
+        anchor = anchor_report if isinstance(anchor_report, dict) else {}
+        anchor_campaign = anchor.get("campaign") if isinstance(anchor.get("campaign"), dict) else {}
+        anchor_campaign_id = self._first_text(anchor_campaign.get("campaign_id"), anchor.get("campaign_id"))
+        anchor_lineage_id = self._first_text(anchor_campaign.get("lineage_campaign_id"))
+        anchor_snapshot = self._first_text(anchor_campaign.get("source_snapshot_hash"), (anchor.get("behavior_slice_ledger") or {}).get("source_snapshot_hash") if isinstance(anchor.get("behavior_slice_ledger"), dict) else "")
+        anchor_source_hash = self._first_text(anchor_campaign.get("source_hash"), (anchor.get("runtime_contract") or {}).get("source_manifest", {}).get("source_hash") if isinstance((anchor.get("runtime_contract") or {}).get("source_manifest"), dict) else "")
+        anchor_scope_id = self._first_text(anchor_campaign.get("scope_id"), anchor.get("scope_id"))
+        anchor_environment_ref = self._first_text(anchor_campaign.get("environment_ref"), anchor.get("environment_ref"))
+        anchored = bool(anchor_campaign_id or anchor_snapshot or anchor_source_hash)
+        candidates: list[tuple[int, float, dict[str, Any]]] = []
+        for manifest_path in sorted(bundle_root.glob("evb_*/manifest.json")):
+            manifest = self._read_json_dict(manifest_path)
+            if not manifest or self._first_text(manifest.get("project_id")) != project:
+                continue
+            campaign = self._read_json_dict(manifest_path.with_name("campaign.json"))
+            findings_path = manifest_path.with_name("findings.json")
+            if not findings_path.exists():
+                continue
+            try:
+                raw_findings = json.loads(findings_path.read_text(encoding="utf-8") or "[]")
+            except Exception:
+                continue
+            if not isinstance(raw_findings, list):
+                continue
+            findings = [item for item in raw_findings if isinstance(item, dict)]
+            if not findings:
+                continue
+            bundle_campaign_id = self._first_text(campaign.get("campaign_id"), manifest.get("campaign_id"))
+            bundle_lineage_id = self._first_text(campaign.get("lineage_campaign_id"))
+            bundle_snapshot = self._first_text(campaign.get("source_snapshot_hash"))
+            bundle_source_hash = self._first_text(campaign.get("source_hash"), (manifest.get("source_manifest") or {}).get("source_hash") if isinstance(manifest.get("source_manifest"), dict) else "")
+            bundle_scope_id = self._first_text(campaign.get("scope_id"), manifest.get("scope_id"))
+            bundle_environment_ref = self._first_text(campaign.get("environment_ref"), manifest.get("environment_ref"))
+            family_ids = {value for value in (anchor_campaign_id, anchor_lineage_id) if value}
+            bundle_family_ids = {value for value in (bundle_campaign_id, bundle_lineage_id) if value}
+            family_match = bool(family_ids and bundle_family_ids.intersection(family_ids))
+            scope_match = not (anchor_scope_id and bundle_scope_id) or anchor_scope_id == bundle_scope_id
+            environment_match = not (anchor_environment_ref and bundle_environment_ref) or anchor_environment_ref == bundle_environment_ref
+            source_match = bool(
+                (anchor_snapshot and bundle_snapshot == anchor_snapshot)
+                or (anchor_source_hash and bundle_source_hash == anchor_source_hash)
+            )
+            if anchored:
+                if family_ids:
+                    if not (family_match and scope_match and environment_match):
+                        continue
+                elif not (source_match and scope_match and environment_match):
+                    continue
+            created_at = self._first_text(manifest.get("created_at_utc"), self._mtime_utc(findings_path))
+            payload = {
+                "project_id": project,
+                "project_name": project_id,
+                "generated_at_utc": created_at,
+                "system_grade": self._first_text(anchor.get("system_grade"), anchor.get("grade")),
+                "overall_score": self._coerce_float(anchor.get("overall_score"), self._coerce_float(anchor.get("score"), 0.0)),
+                "total_findings": len(findings),
+                "raw_total": len(findings),
+                "real_findings": findings,
+                "bug_scores": findings,
+                "summary": f"从 evidence bundle 回填 {len(findings)} 条历史确认结果。",
+                "report_source_path": str(findings_path.relative_to(root)) if findings_path.is_relative_to(root) else str(findings_path),
+                "campaign": campaign,
+                "evidence_bundle": {
+                    "bundle_id": self._first_text(manifest.get("bundle_id"), manifest_path.parent.name),
+                    "manifest_ref": str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root) else str(manifest_path),
+                    "evidence_level": self._first_text(manifest.get("evidence_level")),
+                },
+            }
+            candidates.append((self._report_signal_count(payload), findings_path.stat().st_mtime, payload))
+        return candidates
+
+    @staticmethod
+    def _report_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        for key in ("real_findings", "findings", "bug_scores"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _report_finding_dedupe_key(item: dict[str, Any]) -> str:
+        import re as _re
+
+        title = str(item.get("title") or item.get("description") or "")[:200].strip().lower()
+        title = _re.sub(r"^(\[[^\]]*\]\s*)+", "", title)
+        title = _re.sub(r"\s+", " ", title).strip()
+        method = str(
+            item.get("_api_method")
+            or item.get("method")
+            or (item.get("evidence") or {}).get("method")
+            or ""
+        ).strip().upper()
+        path = str(
+            item.get("_api_path")
+            or item.get("path")
+            or (item.get("evidence") or {}).get("path")
+            or ""
+        ).strip()
+        risk_id = str(item.get("risk_id") or item.get("id") or "").strip().lower()
+        if title or method or path:
+            return f"{title}|{method}|{path}"
+        return risk_id
+
+    def _aggregate_related_report_candidate(
+        self,
+        anchor_candidate: tuple[int, float, dict[str, Any]] | None,
+        related_candidates: list[tuple[int, float, dict[str, Any]]],
+    ) -> tuple[int, float, dict[str, Any]] | None:
+        if anchor_candidate is None:
+            return None
+        source_candidates = [item for item in [*related_candidates, anchor_candidate] if isinstance(item[2], dict)]
+        if len(source_candidates) < 2:
+            return None
+
+        strongest_signal = max(item[0] for item in source_candidates)
+        merged_findings: dict[str, dict[str, Any]] = {}
+        for _signal, _mtime, payload in sorted(source_candidates, key=lambda item: item[1]):
+            for finding in self._report_findings(payload):
+                key = self._report_finding_dedupe_key(finding)
+                if not key:
+                    continue
+                merged_findings[key] = dict(finding)
+
+        merged_total = len(merged_findings)
+        if merged_total <= strongest_signal:
+            return None
+
+        latest_signal, latest_mtime, latest_payload = max(source_candidates, key=lambda item: (item[1], item[0]))
+        anchor_payload = anchor_candidate[2]
+        merged_payload = dict(anchor_payload)
+        merged_list = list(merged_findings.values())
+        source_refs: list[str] = []
+        for _signal, _mtime, payload in sorted(source_candidates, key=lambda item: item[1]):
+            ref = str(payload.get("report_source_path") or "").strip()
+            if ref and ref not in source_refs:
+                source_refs.append(ref)
+        merged_payload.update({
+            "project_id": self._first_text(anchor_payload.get("project_id"), latest_payload.get("project_id")),
+            "project_name": self._first_text(anchor_payload.get("project_name"), latest_payload.get("project_name")),
+            "generated_at_utc": self._first_text(latest_payload.get("generated_at_utc"), anchor_payload.get("generated_at_utc")),
+            "total_findings": merged_total,
+            "raw_total": merged_total,
+            "real_findings": merged_list,
+            "bug_scores": merged_list,
+            "summary": f"聚合当前报告与 {max(0, len(source_refs) - 1)} 个关联 evidence bundle，回填 {merged_total} 条历史确认结果。",
+            "report_source_path": f"aggregated:{source_refs[0]}" if source_refs else "aggregated:evidence_bundle_union",
+            "report_source_paths": source_refs,
+        })
+        if not isinstance(merged_payload.get("campaign"), dict) and isinstance(latest_payload.get("campaign"), dict):
+            merged_payload["campaign"] = latest_payload.get("campaign")
+        if isinstance(latest_payload.get("evidence_bundle"), dict) or source_refs:
+            merged_payload["evidence_bundle"] = {
+                **(latest_payload.get("evidence_bundle") if isinstance(latest_payload.get("evidence_bundle"), dict) else {}),
+                "aggregate": True,
+                "source_count": len(source_refs),
+            }
+        return (merged_total, max(latest_mtime, anchor_candidate[1]), merged_payload)
 
     def _load_workspace_report(self, project_id: str, root: Path) -> dict[str, Any]:
         workspace = root / "platform_workspace" / project_id
@@ -2501,27 +3957,141 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             description = self._first_text(item.get("description"), item.get("summary"), item.get("actual"), item.get("actual_behavior"), title)
             evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
             probe = item.get("probe") if isinstance(item.get("probe"), dict) else {}
+            raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
+            request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+            reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+            har_evidence = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
+            expected = self._first_text(item.get("expected_behavior"), item.get("expected"), evidence.get("expected"), evidence.get("assertion"), item.get("suggested_action"))
+            actual = self._first_text(item.get("actual_behavior"), item.get("actual"), evidence.get("actual"), item.get("business_impact"), description)
+            steps = item.get("reproduction_steps") if isinstance(item.get("reproduction_steps"), list) else []
+            if not steps:
+                steps = evidence.get("reproduction_steps") if isinstance(evidence.get("reproduction_steps"), list) else []
+            if not steps:
+                steps = reproduction.get("steps") if isinstance(reproduction.get("steps"), list) else []
+            claim_method, claim_path = _claim_request_identity(
+                title,
+                description,
+                expected,
+                actual,
+                self._first_text(evidence.get("assertion")),
+                self._first_text(item.get("suggested_action")),
+                [str(step) for step in steps if str(step or "").strip()],
+            )
 
             import re
             text_for_route = " ".join([title, description, str(evidence), str(probe)])
             # 提取 API 路径——用 ASCII-only 正则避免中文/日文等被误匹配为路径
             # \w 在 Python re 默认包含 Unicode，导致"/api/orders两次均返回201"被整体匹配
             path_match = re.search(r'(/api/[a-zA-Z0-9_/{}.-]+|/[a-zA-Z0-9{}.-]+/[a-zA-Z0-9_/{}.-]+)', text_for_route)
-            api_path = self._first_text(item.get("_api_path"), item.get("path"), item.get("path_template"), evidence.get("path"), evidence.get("path_template"), probe.get("path"), path_match.group(1) if path_match else "")
+            api_path = self._first_text(
+                item.get("_api_path"),
+                item.get("path"),
+                item.get("path_template"),
+                claim_path,
+                evidence.get("path"),
+                evidence.get("path_template"),
+                probe.get("path"),
+                request_raw.get("path"),
+                har_evidence.get("path"),
+                reproduction.get("path"),
+                path_match.group(1) if path_match else "",
+            )
             # 验证提取的路径是合法 API 端点（防止描述文本被误判为路径）
             if api_path:
                 api_path = _validate_api_path(api_path)
+            if api_path and "{" in api_path:
+                for candidate_path in (request_raw.get("path"), har_evidence.get("path"), reproduction.get("path")):
+                    concrete_path = _validate_api_path(str(candidate_path or "").strip())
+                    if concrete_path and _materialized_path_matches(api_path, concrete_path):
+                        api_path = concrete_path
+                        break
             method_match = re.search(r'\b(POST|GET|PUT|DELETE|PATCH)\b', text_for_route, re.IGNORECASE)
-            api_method = self._first_text(item.get("_api_method"), item.get("method"), evidence.get("method"), probe.get("method"), method_match.group(1) if method_match else "").upper()
+            api_method = self._first_text(
+                item.get("_api_method"),
+                item.get("method"),
+                claim_method,
+                evidence.get("method"),
+                probe.get("method"),
+                request_raw.get("method"),
+                har_evidence.get("method"),
+                reproduction.get("method"),
+                method_match.group(1) if method_match else "",
+            ).upper()
 
             matched = item.get("_doc_refs") if isinstance(item.get("_doc_refs"), list) else (self._match_docs_for_finding(title, docs) if docs else [])
             severity = self._normalize_severity(item.get("severity"))
             risk_type = self._first_text(item.get("category"), item.get("risk_type"), item.get("business_assurance_type"), "业务规则验证")
-            status = self._first_text(item.get("status"), item.get("verdict"), item.get("bug_confirmation"), "confirmed")
-            quality_gap = bool(item.get("quality_assurance_gap")) or "coverage_gap" in risk_type or status in {"needs_human_review", "candidate", "pending"}
-            expected = self._first_text(item.get("expected_behavior"), item.get("expected"), evidence.get("expected"), item.get("suggested_action"))
-            actual = self._first_text(item.get("actual_behavior"), item.get("actual"), evidence.get("actual"), item.get("business_impact"), description)
-            steps = item.get("reproduction_steps") if isinstance(item.get("reproduction_steps"), list) else []
+            confirmation_status = self._first_text(item.get("confirmation_status"), item.get("status"), item.get("verdict"), item.get("bug_confirmation"), "candidate").lower()
+            gate_passed = bool(item.get("gate_passed"))
+            bug_status = self._first_text(item.get("bug_status"), "reproduced" if gate_passed else "risk_clue")
+            evidence_status = item.get("evidence_status") if isinstance(item.get("evidence_status"), dict) else {}
+            evidence_quality = item.get("evidence_quality") if isinstance(item.get("evidence_quality"), dict) else {}
+            semantic_verdict = self._first_text(item.get("semantic_verdict"), evidence_status.get("semantic_verdict"))
+            business_evidence_status = self._first_text(item.get("business_evidence_status"), evidence_status.get("business_evidence_status")).upper()
+            final_review_status = self._first_text(item.get("final_review_status"), evidence_status.get("final_review_status"))
+            missing_requirements = item.get("missing_requirements") if isinstance(item.get("missing_requirements"), list) else (
+                evidence_status.get("missing_requirements") if isinstance(evidence_status.get("missing_requirements"), list) else []
+            )
+            status = "confirmed" if confirmation_status in {"confirmed", "validated", "validated_candidate"} else ("pending" if confirmation_status in {"candidate", "pending"} else confirmation_status)
+            quality_gap = (
+                bool(item.get("quality_assurance_gap"))
+                or "coverage_gap" in risk_type
+                or confirmation_status in {"candidate", "pending", "needs_human_review"}
+                or not gate_passed
+                or bug_status != "reproduced"
+                or business_evidence_status not in {"VALIDATED", "READY"}
+            )
+            timestamp = self._first_text(
+                item.get("timestamp"),
+                evidence.get("timestamp"),
+                raw_evidence.get("timestamp"),
+                item.get("last_verified_at"),
+                report.get("generated_at_utc"),
+            )
+            reproducibility = item.get("reproducibility") if isinstance(item.get("reproducibility"), dict) else {}
+            if not reproducibility:
+                har_evidence = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
+                reproducibility = {
+                    "reproducible": bool(gate_passed and (steps or raw_evidence.get("has_real_evidence") or har_evidence)),
+                    "reproduction_confidence": self._coerce_float(
+                        item.get("reproducibility_score"),
+                        0.95 if gate_passed else (0.7 if confirmation_status in {"confirmed", "validated", "validated_candidate"} else 0.45),
+                    ),
+                }
+            failed_assertions = item.get("failed_assertions") if isinstance(item.get("failed_assertions"), list) else []
+            if not failed_assertions and expected and actual and expected != actual:
+                failed_assertions = [{
+                    "type": "semantic_violation",
+                    "rule": self._first_text(evidence.get("assertion"), item.get("description"), title),
+                    "expected": expected,
+                    "actual": actual,
+                }]
+            if har_evidence:
+                har_evidence = {
+                    **har_evidence,
+                    "method": self._first_text(har_evidence.get("method"), api_method, raw_evidence.get("request_raw", {}).get("method")),
+                    "path": self._first_text(har_evidence.get("path"), api_path, raw_evidence.get("request_raw", {}).get("path")),
+                    "actor": self._first_text(har_evidence.get("actor"), raw_evidence.get("request_raw", {}).get("actor"), evidence.get("actor")),
+                    "duration_ms": har_evidence.get("duration_ms") if har_evidence.get("duration_ms") is not None else (
+                        raw_evidence.get("response_raw", {}).get("duration_ms") if isinstance(raw_evidence.get("response_raw"), dict) else 0
+                    ),
+                }
+            request_path = _validate_api_path(self._first_text(request_raw.get("path")))
+            request_method = self._first_text(request_raw.get("method")).upper()
+            if (
+                request_path
+                and api_path
+                and isinstance(raw_evidence.get("response_raw"), dict)
+                and raw_evidence.get("response_raw")
+                and (
+                    normalize_path_placeholders(request_path) != normalize_path_placeholders(api_path)
+                    or (request_method and api_method and request_method != api_method)
+                )
+            ):
+                raw_evidence = {
+                    **raw_evidence,
+                    "response_raw": {},
+                }
             # 不伪造复现步骤——如果没有真实步骤，留空列表，由 formatter 生成标记为 [指引] 的建议
 
             finding_evidence = dict(evidence)
@@ -2537,10 +4107,11 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
             findings.append({
                 "risk_id": self._first_text(item.get("risk_id"), item.get("bug_id"), item.get("evidence_id"), item.get("finding_id"), f"v12_{index}"),
+                "id": self._first_text(item.get("risk_id"), item.get("bug_id"), item.get("evidence_id"), item.get("finding_id"), f"v12_{index}"),
                 "title": title,
                 "technical_title": f"{api_method} {api_path} · {title}" if api_method or api_path else title,
                 "severity": severity,
-                "status": "pending" if quality_gap and status not in {"confirmed", "validated", "reproduced"} else ("confirmed" if status in {"confirmed", "validated", "reproduced"} else status),
+                "status": "pending" if quality_gap and status != "confirmed" else status,
                 "risk_type": risk_type,
                 "defect_family": self._first_text(item.get("defect_family"), "scenario_flow" if quality_gap else risk_type),
                 "summary": actual or title,
@@ -2558,7 +4129,25 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "reproduction_steps": steps,
                 "quality_assurance_gap": quality_gap,
                 "evidence_hint": self._first_text(item.get("evidence_hint"), finding_evidence.get("source_file")),
+                "timestamp": timestamp,
+                "bug_status": bug_status,
+                "gate_passed": gate_passed,
+                "execution_status": self._first_text(item.get("execution_status"), "executed" if gate_passed else "planned"),
+                "confirmation_status": confirmation_status,
+                "semantic_verdict": semantic_verdict,
+                "business_evidence_status": business_evidence_status,
+                "final_review_status": final_review_status,
+                "missing_requirements": missing_requirements,
+                "evidence_quality": evidence_quality,
+                "evidence_status": evidence_status,
+                "raw_evidence": raw_evidence,
+                "reproduction": reproduction,
+                "reproducibility": reproducibility,
+                "failed_assertions": failed_assertions,
+                "har_evidence": har_evidence,
+                "customer_delivery_status": self._first_text(item.get("customer_delivery_status"), "defect" if gate_passed and bug_status == "reproduced" else "clue"),
                 "_doc_refs": matched,
+                "doc_refs": matched,
                 "evidence": finding_evidence,
                 "_api_path": api_path,
                 "_api_method": api_method,
@@ -2740,6 +4329,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
     def _build_command_center(self, project_id: str, root: Path) -> dict:
         report = self._load_v12_report(project_id, root)
+        current_scan_report = self._load_current_scan_report(project_id, root)
+        current_report_source = current_scan_report if current_scan_report else report
         enterprise_docs = self._load_enterprise_docs(project_id, root)
         knowledge_summary = self._load_knowledge_summary(project_id, root)
         real_discovery_payload = _load_real_project_discovery_payload(root, project_id)
@@ -2776,7 +4367,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             for f in ui:
                 f.setdefault("risk_type", "frontend_ui")
                 f.setdefault("defect_family", "ui")
-            risks.extend(ui)
+                risks.append(_annotate_ui_risk_item(dict(f)))
         # ── 累积 findings：从 DB 加载跨扫描累积的未修复 bug ──
         # 这是"bug 货架"模型的核心：只要 bug 没修复（status='open'），
         # 就一直保留在列表里，即使本次扫描没触发也要展示。
@@ -2942,7 +4533,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             display_risks = risks
             display_metrics = {}
 
-        all_display_risks = [item for item in display_risks if isinstance(item, dict)]
+        all_display_risks = [
+            item for item in display_risks
+            if isinstance(item, dict) and not bool(item.get("_summary_only"))
+        ]
         delivery_defects, internal_clues = _partition_delivery_tracks(all_display_risks)
         display_risks = delivery_defects
         overall_display_contract = display_metrics.get("display_contract") if isinstance(display_metrics.get("display_contract"), dict) else {}
@@ -2957,6 +4551,12 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         )
 
         materialized_total = len(display_risks)
+        ui_stats = _ui_verification_stats(
+            report.get("ui_candidate_findings")
+            if isinstance(report.get("ui_candidate_findings"), list)
+            else report.get("ui_findings")
+        )
+        intake_stats = _defect_intake_stats(all_display_risks)
         scores = display_metrics.get("scores") or {}
         commercial_value = display_metrics.get("commercial_value") or {}
         display_contract = display_metrics.get("display_contract") if isinstance(display_metrics.get("display_contract"), dict) else {}
@@ -2981,9 +4581,59 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "severity_counts": severity_counts,
             }
 
+        regression_summary = _load_regression_projection(root, project_id, delivery_defects)
+
+        defect_grouped_summary = _build_defect_grouped_summary(delivery_defects)
+        defect_priority_summary = _build_defect_priority_summary(delivery_defects)
+        defect_repro_summary = _build_defect_repro_summary(delivery_defects)
+        defect_delivery_cards = _build_defect_delivery_cards(delivery_defects)
+        current_report_findings = self._report_findings(current_report_source)
+        current_report_category_counts: dict[str, int] = {}
+        for item in current_report_findings:
+            if not isinstance(item, dict):
+                continue
+            category = str(item.get("category") or item.get("risk_type") or "uncategorized").strip() or "uncategorized"
+            current_report_category_counts[category] = current_report_category_counts.get(category, 0) + 1
+        current_report_breakdown = {
+            "total_findings": len(current_report_findings),
+            "category_counts": current_report_category_counts,
+            "report_source_path": str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or ""),
+        }
+        current_campaign_bundle_stats = {"raw": 0, "deduped": 0}
+        if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
+            current_campaign_bundle_stats = _current_campaign_bundle_finding_stats(
+                project_id,
+                root,
+                discovery_payload["continuous_discovery_campaign"],
+            )
+        current_scope_total_findings = max(0, int(current_report_breakdown.get("total_findings") or 0))
+        current_scope_raw_candidate_findings = max(
+            current_scope_total_findings,
+            int(current_report_source.get("raw_total") or current_report_source.get("total_findings") or current_scope_total_findings or 0),
+        )
+        current_scope_customer_ready_defect_count = max(
+            0,
+            int(self._report_summary_number(
+                current_report_source,
+                "customer_ready_defects",
+                "ready_bug_count",
+                "total_bugs_found",
+                fallback=current_scope_total_findings,
+            ) or current_scope_total_findings),
+        )
+        current_scope_customer_ready_defect_count = min(
+            current_scope_customer_ready_defect_count or current_scope_total_findings,
+            current_scope_total_findings or len(delivery_defects),
+        )
+        current_scope_materialized_findings = max(
+            current_scope_customer_ready_defect_count,
+            current_scope_total_findings,
+        )
+        family_customer_ready_defect_count = len(delivery_defects)
+
         canonical_total = materialized_total
         raw_candidate_total = int(display_contract.get("raw_candidate_risk_count") or canonical_total)
-        ready_bug_count = int(display_contract.get("ready_bug_count") or 0)
+        ready_bug_count = current_scope_customer_ready_defect_count or int(display_contract.get("ready_bug_count") or 0)
         needs_validation_count = int(display_contract.get("needs_validation_count") or 0)
         not_reproduced_count = int(display_contract.get("not_reproduced_count") or 0)
         status_counts = display_contract.get("status_counts") if isinstance(display_contract.get("status_counts"), dict) else {}
@@ -3015,23 +4665,45 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         else:
             evidence_grade = "D"
         scan_counter = self._scan_counter(project_id, root)
+        execution_evidence_summary = _normalize_execution_evidence_summary(
+            report.get("execution_evidence_summary"),
+            report.get("ui_execution_summary"),
+            report.get("ui_execution"),
+        )
         scan_meta = {
-            "scan_id": str(report.get("scan_id") or ""),
+            "scan_id": str(current_report_source.get("scan_id") or report.get("scan_id") or ""),
             "run_count": int(scan_counter.get("count") or 0),
             "first_scan_at": str(scan_counter.get("first_scan_at") or ""),
             "last_scan_at": str(scan_counter.get("last_scan_at") or report.get("generated_at_utc") or ""),
-            "total_ms": int(report.get("total_ms") or 0),
-            "total_findings": canonical_total,
-            "materialized_findings": materialized_total,
-            "raw_candidate_findings": raw_candidate_total,
+            "total_ms": int(current_report_source.get("total_ms") or report.get("total_ms") or 0),
+            "total_findings": current_scope_total_findings,
+            "materialized_findings": current_scope_materialized_findings,
+            "raw_candidate_findings": current_scope_raw_candidate_findings,
             "ready_bug_count": ready_bug_count,
             "needs_validation_findings": needs_validation_count,
             "not_reproduced_findings": not_reproduced_count,
-            "customer_ready_defects": len(delivery_defects),
+            "customer_ready_defects": current_scope_customer_ready_defect_count,
+            "current_report_total_findings": current_scope_total_findings,
+            "current_report_materialized_findings": current_scope_materialized_findings,
+            "current_report_customer_ready_defect_count": current_scope_customer_ready_defect_count,
+            "current_campaign_bundle_finding_count_raw": int(current_campaign_bundle_stats.get("raw") or 0),
+            "family_customer_ready_defect_count": family_customer_ready_defect_count,
+            "family_materialized_findings": materialized_total,
             "internal_clue_count": len(internal_clues),
+            "ui_candidate_findings": ui_stats["ui_candidate_total"],
+            "ui_verified_candidates": ui_stats["ui_verified_candidate_total"],
+            "ui_high_confidence_candidates": ui_stats["ui_high_confidence_candidate_total"],
+            "defect_intake_recommended": intake_stats["defect_intake_recommended_total"],
             "grade": evidence_grade,
             "score": evidence_trust,
-            "report_path": str(report.get("report_path") or report.get("report_source_path") or ""),
+            "regression_last_run_at": _first_text((regression_summary.get("latest_run") or {}).get("generated_at")),
+            "regression_last_run_mode": _first_text((regression_summary.get("latest_run") or {}).get("suite_mode")),
+            "regression_gate_status": _first_text((regression_summary.get("latest_run") or {}).get("gate_status")),
+            "regression_failed_defect_count": int(regression_summary.get("failed_defect_count") or 0),
+            "regression_pending_defect_count": int(regression_summary.get("pending_defect_count") or 0),
+            "regression_covered_defect_count": int(regression_summary.get("covered_defect_count") or 0),
+            "report_path": str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or report.get("report_source_path") or report.get("report_path") or ""),
+            "current_report_breakdown": current_report_breakdown,
         }
         data = {
             "project_id": project_id,
@@ -3040,28 +4712,59 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "updated_at": scan_meta["last_scan_at"] or str(report.get("generated_at_utc") or ""),
             "live_map": {"status": "completed" if report else "idle"},
             "scan_meta": scan_meta,
+            "execution_evidence_summary": execution_evidence_summary,
+            "regression_summary": regression_summary,
             "defects": delivery_defects,
             "clues": internal_clues,
             "risks": display_risks,
+            "defect_grouped_summary": defect_grouped_summary,
+            "defect_priority_summary": defect_priority_summary,
+            "defect_repro_summary": defect_repro_summary,
+            "defect_delivery_cards": defect_delivery_cards,
             "value_metrics": {
                 "evidence_trust_score": evidence_trust,
                 "ai_equivalent_test_points": ai_points,
-                "canonical_risk_count": canonical_total,
-                "materialized_risk_count": materialized_total,
-                "raw_candidate_risk_count": raw_candidate_total,
+                "canonical_risk_count": current_scope_total_findings,
+                "materialized_risk_count": current_scope_materialized_findings,
+                "raw_candidate_risk_count": current_scope_raw_candidate_findings,
                 "ready_bug_count": ready_bug_count,
                 "needs_validation_count": needs_validation_count,
                 "not_reproduced_count": not_reproduced_count,
-                "defect_count": len(delivery_defects),
+                "defect_count": family_customer_ready_defect_count,
                 "clue_count": len(internal_clues),
+                "current_report_total_findings": current_scope_total_findings,
+                "current_report_customer_ready_defect_count": current_scope_customer_ready_defect_count,
+                "family_customer_ready_defect_count": family_customer_ready_defect_count,
                 "p0_count": canonical_p0,
                 "p1_count": canonical_p1,
                 "p2_count": canonical_p2,
                 "ready_p0_count": ready_p0,
                 "ready_p1_count": ready_p1,
                 "status_counts": status_counts,
+                "ui_total": ui_stats["ui_total"],
+                "ui_candidate_total": ui_stats["ui_candidate_total"],
+                "ui_verified_candidate_total": ui_stats["ui_verified_candidate_total"],
+                "ui_unverified_candidate_total": ui_stats["ui_unverified_candidate_total"],
+                "ui_high_confidence_candidate_total": ui_stats["ui_high_confidence_candidate_total"],
+                "defect_intake_recommended_total": intake_stats["defect_intake_recommended_total"],
+                "customer_defect_intake_total": intake_stats["customer_defect_intake_total"],
+                "internal_defect_intake_total": intake_stats["internal_defect_intake_total"],
+                "regression_covered_defect_count": int(regression_summary.get("covered_defect_count") or 0),
+                "regression_passed_defect_count": int(regression_summary.get("passed_defect_count") or 0),
+                "regression_failed_defect_count": int(regression_summary.get("failed_defect_count") or 0),
+                "regression_needs_review_defect_count": int(regression_summary.get("needs_review_defect_count") or 0),
+                "regression_pending_defect_count": int(regression_summary.get("pending_defect_count") or 0),
+                "regression_not_covered_defect_count": int(regression_summary.get("not_covered_defect_count") or 0),
+                "regression_gate_status": _first_text((regression_summary.get("latest_run") or {}).get("gate_status")),
+                "regression_last_run_mode": _first_text((regression_summary.get("latest_run") or {}).get("suite_mode")),
                 "scores": scores,
                 "commercial_value": commercial_value,
+                "current_report_breakdown": current_report_breakdown,
+                "defect_grouped_summary": defect_grouped_summary,
+                "defect_priority_summary": defect_priority_summary,
+                "defect_repro_summary": defect_repro_summary,
+                "defect_delivery_cards": defect_delivery_cards,
+                "regression_summary": regression_summary,
             },
             "data_contract": {
                 **display_contract,
@@ -3072,6 +4775,12 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "display_key": "defects",
                 "compatibility_alias": "risks",
                 "contract_rule": "客户页优先渲染 data.defects；data.risks 仅为兼容别名。内部待验证线索统一放在 data.clues。",
+                "current_report_breakdown": current_report_breakdown,
+                "defect_grouped_summary": defect_grouped_summary,
+                "defect_priority_summary": defect_priority_summary,
+                "defect_repro_summary": defect_repro_summary,
+                "defect_delivery_cards": defect_delivery_cards,
+                "regression_summary": regression_summary,
             },
             "delivery_tracks": {
                 "defects": {
@@ -3083,26 +4792,48 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             },
             "business_flow_summary": {"total": ai_points},
             "executive_summary": {
-                "total_findings": canonical_total,
+                "total_findings": current_scope_total_findings,
                 "total_bugs_found": ready_bug_count,
                 "ready_bugs": ready_bug_count,
-                "customer_ready_defects": len(delivery_defects),
+                "customer_ready_defects": current_scope_customer_ready_defect_count,
+                "family_customer_ready_defects": family_customer_ready_defect_count,
                 "internal_clues": len(internal_clues),
                 "needs_validation_findings": needs_validation_count,
                 "not_reproduced_findings": not_reproduced_count,
-                "raw_candidate_findings": raw_candidate_total,
+                "raw_candidate_findings": current_scope_raw_candidate_findings,
                 "critical_bugs": ready_p0,
                 "high_priority_bugs": ready_p1,
-                "materialized_findings": materialized_total,
+                "materialized_findings": current_scope_materialized_findings,
+                "ui_candidate_findings": ui_stats["ui_candidate_total"],
+                "ui_verified_candidates": ui_stats["ui_verified_candidate_total"],
+                "ui_high_confidence_candidates": ui_stats["ui_high_confidence_candidate_total"],
+                "defect_intake_recommended": intake_stats["defect_intake_recommended_total"],
+                "regression_gate_status": _first_text((regression_summary.get("latest_run") or {}).get("gate_status")),
+                "regression_failed_defects": int(regression_summary.get("failed_defect_count") or 0),
+                "regression_pending_defects": int(regression_summary.get("pending_defect_count") or 0),
+                "regression_covered_defects": int(regression_summary.get("covered_defect_count") or 0),
                 "llm_powered_analyses": ai_points,
                 "system_grade": scan_meta["grade"],
                 "overall_score": scan_meta["score"],
+                "current_report_breakdown": current_report_breakdown,
+                "defect_grouped_summary": defect_grouped_summary,
+                "defect_priority_summary": defect_priority_summary,
+                "defect_repro_summary": defect_repro_summary,
+                "defect_delivery_cards": defect_delivery_cards,
+                "regression_summary": regression_summary,
             },
         }
         if knowledge_summary:
             data["knowledge_summary"] = knowledge_summary
+        commercial_assets = _select_commercial_assets(report.get("external_commercial_assets"), report.get("commercial_assets"))
         if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
-            data["continuous_discovery_campaign"] = discovery_payload["continuous_discovery_campaign"]
+            data["continuous_discovery_campaign"] = _augment_continuous_discovery_campaign(
+                discovery_payload["continuous_discovery_campaign"],
+                current_report_breakdown=current_report_breakdown,
+                delivery_defects=delivery_defects,
+                current_campaign_customer_ready_defect_count=int(current_campaign_bundle_stats.get("deduped") or 0),
+                current_campaign_bundle_finding_count_raw=int(current_campaign_bundle_stats.get("raw") or 0),
+            )
         if real_discovery_payload and isinstance(discovery_payload.get("metrics"), dict):
             data["continuous_discovery_metrics"] = {
                 key: value
@@ -3118,6 +4849,15 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["cumulative_stats"] = db_persist.get_finding_stats(root, tenant_id, project_id)
         except Exception:
             pass
+        if commercial_assets:
+            data["commercial_assets"] = commercial_assets
+            data["scan_meta"]["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
+            data["scan_meta"]["external_tracker_sync_payload_status"] = _first_text((commercial_assets.get("tracker_sync") or {}).get("payload_status"))
+            data["scan_meta"]["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
+            data["value_metrics"]["commercial_asset_materialized"] = 1 if commercial_assets.get("status") == "materialized" else 0
+            data["value_metrics"]["commercial_delivery_package_created"] = 1 if _first_text((commercial_assets.get("delivery_package") or {}).get("status")) == "created" else 0
+            data["executive_summary"]["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
+            data["executive_summary"]["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
         try:
             data["continuous_state"] = _get_continuous_state(root, project_id)
         except Exception:
@@ -3268,6 +5008,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                             "defect_family": "multi_layer",
                             "confidence_score": 0.70,
                             "source": "multi_layer",
+                            "_summary_only": True,
                         })
             return findings
         except Exception:
@@ -3493,6 +5234,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         for i, svc in enumerate(config["services"]):
             if svc.get("name") in {name, previous_name}:
                 existing = dict(svc)
+                previous_auth = svc.get("auth") if isinstance(svc.get("auth"), dict) else {}
                 existing["name"] = name
                 existing["base_url"] = service_data.get("base_url", "")
                 existing["enabled"] = bool(service_data.get("enabled", True))
@@ -3513,25 +5255,30 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     if service_data.get("admin_user"):
                         auth.setdefault("admin", {})
                         auth["admin"]["username"] = service_data["admin_user"]
-                    if service_data.get("admin_pass"):
+                    previous_admin = previous_auth.get("admin") if isinstance(previous_auth.get("admin"), dict) else {}
+                    admin_password = _credential_update_value(service_data.get("admin_pass"), previous_admin.get("password"))
+                    if admin_password:
                         auth.setdefault("admin", {})
-                        auth["admin"]["password"] = service_data["admin_pass"]
-                if service_data.get("bearer_token"):
-                    auth["bearer_token"] = service_data["bearer_token"]
-                if service_data.get("api_key"):
-                    auth["api_key"] = service_data["api_key"]
+                        auth["admin"]["password"] = admin_password
+                bearer_token = _credential_update_value(service_data.get("bearer_token"), previous_auth.get("bearer_token"))
+                if bearer_token:
+                    auth["bearer_token"] = bearer_token
+                api_key = _credential_update_value(service_data.get("api_key"), previous_auth.get("api_key"))
+                if api_key:
+                    auth["api_key"] = api_key
                 existing["auth"] = auth
                 for legacy_key in ("login_api", "auth_type", "admin_user", "admin_pass", "bearer_token", "api_key"):
                     existing.pop(legacy_key, None)
 
                 # Build db section
                 if any(service_data.get(k) for k in ("db_host", "db_name")):
+                    previous_db = svc.get("db") if isinstance(svc.get("db"), dict) else {}
                     existing["db"] = {
                         "host": service_data.get("db_host", ""),
                         "port": int(service_data.get("db_port", 3306)),
                         "name": service_data.get("db_name", ""),
                         "user": service_data.get("db_user", ""),
-                        "password": service_data.get("db_pass", ""),
+                        "password": _credential_update_value(service_data.get("db_pass"), previous_db.get("password")),
                     }
                 else:
                     existing.pop("db", None)

@@ -92,6 +92,36 @@ def _write_artifact(directory: Path, name: str, value: Any) -> dict[str, Any]:
     return {"name": safe_name, "path": path.name, "sha256": _hash_bytes(raw), "byte_count": len(raw)}
 
 
+def _has_runtime_evidence(findings: list[dict[str, Any]] | None, auto_har: dict[str, Any] | None) -> bool:
+    har_status = str((auto_har or {}).get("status") or "no_traffic") if isinstance(auto_har, dict) else "no_traffic"
+    if har_status == "captured":
+        return True
+    for finding in findings if isinstance(findings, list) else []:
+        if not isinstance(finding, dict):
+            continue
+        raw = finding.get("raw_evidence") if isinstance(finding.get("raw_evidence"), dict) else {}
+        evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+        db_snapshot = raw.get("db_snapshot") if isinstance(raw.get("db_snapshot"), dict) else {}
+        db_evidence = finding.get("db_evidence") if isinstance(finding.get("db_evidence"), dict) else {}
+        response_raw = raw.get("response_raw") if isinstance(raw.get("response_raw"), dict) else {}
+        request_raw = raw.get("request_raw") if isinstance(raw.get("request_raw"), dict) else {}
+        if response_raw.get("status_code") or response_raw.get("body"):
+            return True
+        if evidence.get("status_code") or evidence.get("payload_summary"):
+            return True
+        if db_snapshot.get("assertion") or (db_snapshot.get("before") and db_snapshot.get("after")):
+            return True
+        if db_evidence.get("db_assertion") or db_evidence.get("assertion"):
+            return True
+        if (
+            request_raw.get("method")
+            and request_raw.get("path")
+            and (finding.get("execution_status") == "executed" or raw.get("has_real_evidence"))
+        ):
+            return True
+    return False
+
+
 def persist_evidence_bundle(
     project_id: str,
     *,
@@ -103,6 +133,7 @@ def persist_evidence_bundle(
     auto_har: dict[str, Any] | None,
     evidence_graphs: list[dict[str, Any]] | None,
     findings: list[dict[str, Any]] | None,
+    ui_execution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a redacted evidence bundle and return its integrity manifest."""
     project = _safe_project(project_id)
@@ -118,6 +149,7 @@ def persist_evidence_bundle(
         "har": auto_har or {},
         "graphs": evidence_graphs or [],
         "findings": findings or [],
+        "ui_execution": ui_execution or {},
     })
     bundle_id = f"evb_{fingerprint[:24]}"
     directory = _bundle_dir(Path(root), project, bundle_id)
@@ -129,8 +161,9 @@ def persist_evidence_bundle(
     artifacts.append(_write_artifact(directory, "auto_har", auto_har if isinstance(auto_har, dict) else {"status": "no_traffic"}))
     artifacts.append(_write_artifact(directory, "evidence_graphs", evidence_graphs if isinstance(evidence_graphs, list) else []))
     artifacts.append(_write_artifact(directory, "findings", findings if isinstance(findings, list) else []))
+    artifacts.append(_write_artifact(directory, "ui_execution", ui_execution if isinstance(ui_execution, dict) else {"status": "not_requested"}))
 
-    har_status = str((auto_har or {}).get("status") or "no_traffic") if isinstance(auto_har, dict) else "no_traffic"
+    runtime_captured = _has_runtime_evidence(findings, auto_har)
     bundle = {
         "schema_version": "qualibug-evidence-bundle-v1",
         "bundle_id": bundle_id,
@@ -138,7 +171,7 @@ def persist_evidence_bundle(
         "run_id": str(run_id or "")[:160],
         "campaign_id": str(campaign_record.get("campaign_id") or "")[:160],
         "execution_status": status,
-        "evidence_level": "runtime_captured" if har_status == "captured" else "plan_or_no_traffic",
+        "evidence_level": "runtime_captured" if runtime_captured else "plan_or_no_traffic",
         "source_manifest": _redact(contract.get("source_manifest") if isinstance(contract.get("source_manifest"), dict) else {}),
         "created_at_utc": _now(),
         "artifacts": artifacts,

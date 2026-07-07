@@ -11,13 +11,14 @@ from typing import Any
 
 from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
 from .scenario_runner import ScenarioRunner
-from .db_verifier import MESDBVerifier
 from .loop_runtime import LoopBusyError, LoopRuntimeError, LoopRuntimeSession
 from .console_output import safe_print
 
 
 HEARTBEAT_FILE_TEMPLATE = "platform_outputs/{project_id}/.loop_heartbeat.json"
-DEFAULT_PROJECT_ID = "real_project_demo"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PROJECT_ID = os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project")
+DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8000")
 _ACTIVE_RUNTIME: LoopRuntimeSession | None = None
 
 
@@ -28,6 +29,40 @@ class DiscoveryRunError(RuntimeError):
 def _console(message: object = "") -> None:
     """Best-effort operational logging that never aborts a supervised loop."""
     safe_print(str(message), flush=True)
+
+
+def _resolve_default_project_doc_path(
+    project_id: str,
+    candidates: list[str],
+    *,
+    search_root: Path | None = None,
+) -> str:
+    """Resolve project input artifacts from common workspace locations."""
+    root = Path(search_root or REPO_ROOT)
+    clean_project = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
+    search_dirs = [
+        root / "platform_workspace" / clean_project / "input",
+        root / "platform_inputs" / clean_project,
+        root / "projects" / clean_project / "input",
+        root / "input",
+    ]
+    for directory in search_dirs:
+        if not directory.exists() or not directory.is_dir():
+            continue
+        for candidate in candidates:
+            path = directory / candidate
+            if path.exists() and path.is_file():
+                return str(path)
+    return ""
+
+
+def _read_optional_text(file_path: str | Path | None) -> str:
+    if not file_path:
+        return ""
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
 
 
 def _fallback_heartbeat_path(project_id: str = DEFAULT_PROJECT_ID) -> Path:
@@ -82,19 +117,25 @@ class SelfImprovingSweep:
     MAX_ROUNDS = 5
     CONVERGED_THRESHOLD = 0.30
 
-    def __init__(self, prd_path=None, api_path=None, base_url="http://127.0.0.1:8000/api", *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
+    def __init__(self, prd_path=None, api_path=None, base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
         if prd_path is None:
-            prd_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/PRD.md")
+            prd_path = _resolve_default_project_doc_path(
+                project_id,
+                ["PRD.md", "prd.md", "requirements.md", "business_requirements.md"],
+            )
         if api_path is None:
-            api_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/API.md")
+            api_path = _resolve_default_project_doc_path(
+                project_id,
+                ["openapi.json", "openapi.yaml", "openapi.yml", "API_SPEC.md", "API.md"],
+            )
 
-        self.prd = Path(prd_path).read_text(encoding="utf-8") if Path(prd_path).exists() else ""
-        self.api = Path(api_path).read_text(encoding="utf-8") if Path(api_path).exists() else ""
-        self.base_url = base_url
-        self.project_id = project_id
-        self.output_dir = Path(output_dir or Path("platform_outputs") / project_id)
+        self.prd = _read_optional_text(prd_path)
+        self.api = _read_optional_text(api_path)
+        self.base_url = str(base_url or DEFAULT_BASE_URL)
+        self.project_id = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
+        self.output_dir = Path(output_dir or Path("platform_outputs") / self.project_id)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.engine = AutonomousDiscoveryEngine(base_url=base_url)
+        self.engine = AutonomousDiscoveryEngine(base_url=self.base_url)
         self.rounds: list[ImproveRound] = []
         self._prior_inconclusive_rate = 1.0
         self._last_discovery_result: dict[str, Any] = {}
@@ -630,7 +671,7 @@ def _save_to_memory(result: dict, actions: list, output_dir: Path | str | None =
         _console(f"  [MEM] Memory: +{new_entries} entries (total: {len(existing)})")
 
 
-def run_self_improving(prd_path=None, api_path=None, base_url="http://127.0.0.1:8000/api", *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
+def run_self_improving(prd_path=None, api_path=None, base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
     sweeper = SelfImprovingSweep(prd_path, api_path, base_url, project_id=project_id, output_dir=output_dir)
     return sweeper.run()
 

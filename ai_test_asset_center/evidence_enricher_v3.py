@@ -20,6 +20,19 @@ from pathlib import Path
 from typing import Any
 
 
+def _safe_text_excerpt(value: Any, limit: int = 200) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except Exception:
+            text = str(value)
+    return text[:limit]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Business Language Mappings
 # ═══════════════════════════════════════════════════════════════════════
@@ -276,19 +289,19 @@ def _build_reproduction_steps(finding: dict[str, Any], enterprise_ctx: dict[str,
             steps.append(
                 f'{step_num}. 观察响应: HTTP {har_status} {status_desc}\n'
                 f'   服务端返回内部错误，表明存在未处理异常或数据一致性问题。\n'
-                f'   原始响应（截取）: {har_body[:300] if har_body else "（响应体未记录）"}'
+                f'   原始响应（截取）: {_safe_text_excerpt(har_body, 300) if har_body else "（响应体未记录）"}'
             )
         elif int(status_code) >= 400 if isinstance(status_code, (int, str)) and str(status_code).isdigit() and int(status_code) >= 400 else False:
             steps.append(
                 f'{step_num}. 观察响应: HTTP {har_status} {status_desc}\n'
                 f'   请求被拒绝或失败，需确认是否为预期行为。\n'
-                f'   原始响应（截取）: {har_body[:300] if har_body else "（响应体未记录）"}'
+                f'   原始响应（截取）: {_safe_text_excerpt(har_body, 300) if har_body else "（响应体未记录）"}'
             )
         else:
             steps.append(
                 f'{step_num}. 观察响应: HTTP {har_status} {status_desc}\n'
                 f'   请求成功返回。关注返回体中是否有不应暴露的数据或状态。\n'
-                f'   原始响应（截取）: {har_body[:300] if har_body else "（响应体未记录）"}'
+                f'   原始响应（截取）: {_safe_text_excerpt(har_body, 300) if har_body else "（响应体未记录）"}'
             )
     else:
         # Infer from description
@@ -468,19 +481,19 @@ def _build_investigation_guidance(finding: dict[str, Any], enterprise_ctx: dict[
                 f"  1. 检查后端日志中是否有未捕获异常栈\n"
                 f"  2. 检查数据库连接/事务是否正常\n"
                 f"  3. 检查请求参数是否触发了空指针或类型转换异常\n"
-                f"  原始响应: {har_body[:200]}"
+                f"  原始响应: {_safe_text_excerpt(har_body, 200)}"
             )
         elif str(har_status) == "200":
             response_analysis = (
                 f"接口返回200成功，但根据业务规则此操作应被拒绝。\n"
                 f"  可能原因: 缺少角色校验、状态机检查缺失、数据过滤条件不足\n"
-                f"  原始响应: {har_body[:200]}"
+                f"  原始响应: {_safe_text_excerpt(har_body, 200)}"
             )
         elif str(har_status) in ("401", "403"):
             response_analysis = (
                 f"接口返回{har_status}拒绝访问，检查是否为预期行为。\n"
                 f"  若是预期: OK；若非预期: Token/权限配置问题\n"
-                f"  原始响应: {har_body[:200]}"
+                f"  原始响应: {_safe_text_excerpt(har_body, 200)}"
             )
     
     # Relevant APIs
@@ -686,11 +699,20 @@ def _build_evidence_chain(finding: dict[str, Any], enterprise_ctx: dict[str, Any
     actual_display = actual[:200] if actual else description[:200]
     if har_status:
         actual_display = f"HTTP {har_status}: {actual_display}"
+    har_body_text = ""
+    if har_body:
+        if isinstance(har_body, str):
+            har_body_text = har_body
+        else:
+            try:
+                har_body_text = json.dumps(har_body, ensure_ascii=False)
+            except Exception:
+                har_body_text = str(har_body)
     chain.append({
         "tag": "fact",
         "label": "实际行为",
         "content": actual_display,
-        "detail": "系统实际返回/行为与预期规则不符" + (f" · 响应: {har_body[:100]}" if har_body else ""),
+        "detail": "系统实际返回/行为与预期规则不符" + (f" · 响应: {_safe_text_excerpt(har_body_text, 100)}" if har_body_text else ""),
     })
     
     # Step 4: Expected behavior
@@ -940,7 +962,36 @@ def enrich_finding(
     enriched["evidence_chain"] = _build_evidence_chain(enriched, ctx)
     
     # ── Evidence quality ──
-    enriched["evidence_quality"] = _build_evidence_quality(finding)
+    computed_quality = _build_evidence_quality(finding)
+    existing_quality = finding.get("evidence_quality") if isinstance(finding.get("evidence_quality"), dict) else {}
+    semantic_verdict = str(finding.get("semantic_verdict") or ((finding.get("evidence_status") or {}).get("semantic_verdict") if isinstance(finding.get("evidence_status"), dict) else "") or "").strip().upper()
+    business_evidence_status = str(finding.get("business_evidence_status") or ((finding.get("evidence_status") or {}).get("business_evidence_status") if isinstance(finding.get("evidence_status"), dict) else "") or "").strip().upper()
+    try:
+        existing_score = float(existing_quality.get("score") or 0)
+    except Exception:
+        existing_score = 0.0
+    if (
+        bool(finding.get("gate_passed"))
+        and str(existing_quality.get("level") or "").strip().lower() == "validated"
+        and existing_score >= 90
+        and bool(existing_quality.get("can_reproduce"))
+        and semantic_verdict == "SEMANTIC_CONFIRMED"
+        and business_evidence_status == "VALIDATED"
+    ):
+        computed_quality = {
+            **computed_quality,
+            **existing_quality,
+            "level": "validated",
+            "score": max(int(computed_quality.get("score") or 0), int(existing_score)),
+            "can_reproduce": True,
+            "verified": list(dict.fromkeys([
+                *[str(item) for item in computed_quality.get("verified") or [] if str(item)],
+                *[str(item) for item in existing_quality.get("verified") or [] if str(item)],
+            ])),
+            "missing": [str(item) for item in existing_quality.get("missing") or [] if str(item)][:6],
+            "next_actions": [str(item) for item in existing_quality.get("next_actions") or [] if str(item)][:5],
+        }
+    enriched["evidence_quality"] = computed_quality
     
     # ── Ensure source_entity ──
     if not enriched.get("source_entity"):

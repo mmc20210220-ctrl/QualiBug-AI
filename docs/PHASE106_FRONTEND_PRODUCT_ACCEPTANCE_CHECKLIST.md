@@ -20,6 +20,7 @@ This checklist defines what the QualiBug product frontend must prove before it c
 ## 2. Product Surface Gate
 
 - The first screen is the actual QualiBug command center, not a landing page.
+- The formal customer product surface is the React frontend under `frontend/`; Phase105 static bundles count only as demo/export assets.
 - Sidebar navigation exposes the full product journey.
 - Topbar shows project name, API mode, and current backend status.
 - Dashboard summarizes quality score, environment readiness, blocking risks, ROI, and launch recommendation.
@@ -85,4 +86,5 @@ A frontend iteration is acceptable when:
 - It shows observable real/offline backend status from an actual health check.
 - It has product UI for each major workflow.
 - It keeps demo mode safe and clearly labeled.
+- It does not rely on Phase105 static preview pages as the primary customer product surface.
 - It passes the route/API contract tests and route smoke tests.

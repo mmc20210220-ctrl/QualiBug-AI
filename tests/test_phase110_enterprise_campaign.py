@@ -58,6 +58,59 @@ def test_source_identity_is_persisted_and_part_of_campaign_identity(tmp_path):
     assert first.public_contract()["source_hash"] == "hash-api-v1"
 
 
+def test_policy_version_does_not_change_campaign_identity() -> None:
+    snapshot = source_snapshot_hash("requirements-v1", "api-v1", "schema-v1", "service-scope", "test-environment")
+    first = EnterpriseCampaign.create(
+        "enterprise-project",
+        "service-scope",
+        "test-environment",
+        snapshot,
+        source_id="api-spec",
+        source_hash="hash-api-v1",
+        policy_version="policy-v1",
+    )
+    second = EnterpriseCampaign.create(
+        "enterprise-project",
+        "service-scope",
+        "test-environment",
+        snapshot,
+        source_id="api-spec",
+        source_hash="hash-api-v1",
+        policy_version="policy-v2",
+    )
+
+    assert first.campaign_id == second.campaign_id
+
+
+def test_rerun_key_creates_new_campaign_but_preserves_lineage(tmp_path) -> None:
+    store = EnterpriseCampaignStore(tmp_path, "enterprise-project")
+    baseline, _ = store.open_or_create(_campaign())
+    store.save(baseline)
+
+    rerun_candidate = EnterpriseCampaign.create(
+        "enterprise-project",
+        "service-scope",
+        "test-environment",
+        baseline.source_snapshot_hash,
+        source_id=baseline.source_id,
+        source_hash=baseline.source_hash,
+        policy_version="policy-v1",
+        rerun_key="priority-strategy-v2",
+        rerun_reason="re-evaluate selection strategy",
+    )
+    rerun, mode = store.open_or_create(rerun_candidate)
+    store.save(rerun)
+    resumed, resumed_mode = store.open_or_create(rerun_candidate)
+
+    assert mode == "created"
+    assert resumed_mode == "resumed"
+    assert rerun.campaign_id != baseline.campaign_id
+    assert rerun.lineage_campaign_id == baseline.campaign_id
+    assert rerun.public_contract()["rerun_key"] == "priority-strategy-v2"
+    assert rerun.public_contract()["rerun_reason"] == "re-evaluate selection strategy"
+    assert resumed.campaign_id == rerun.campaign_id
+
+
 def test_campaign_defaults_source_identity_to_snapshot_when_single_asset_is_not_supplied():
     snapshot = source_snapshot_hash("requirements-v1", "api-v1", "schema-v1", "service-scope", "test-environment")
     campaign = EnterpriseCampaign.create("enterprise-project", "service-scope", "test-environment", snapshot)
@@ -125,6 +178,53 @@ def test_confirmed_slice_requires_complete_real_receipt():
     assert has_real_confirmation_receipt(complete)
 
 
+def test_confirmed_slice_accepts_modern_v12_receipt_shape() -> None:
+    issue = {
+        "behavior_slice_id": "BHV_2",
+        "execution_status": "executed",
+        "confirmation_status": "confirmed",
+        "gate_passed": True,
+        "actor": "qa_lead",
+        "timestamp": "2026-07-07T12:00:00Z",
+        "reproduction_steps": ["POST /api/refunds", "observe forbidden state transition accepted"],
+        "failed_assertions": ["禁止的状态转换应被阻止"],
+        "raw_evidence": {
+            "timestamp": "2026-07-07T12:00:00Z",
+            "request_raw": {"method": "POST", "path": "/api/refunds", "actor": "qa_lead"},
+            "response_raw": {"status_code": 201, "body": "{\"ok\":true}"},
+        },
+        "reproduction": {"method": "POST", "path": "/api/refunds"},
+    }
+
+    assert has_real_confirmation_receipt(issue)
+
+
+def test_confirmed_slice_accepts_db_snapshot_backed_receipt_shape() -> None:
+    issue = {
+        "behavior_slice_id": "BHV_3",
+        "execution_status": "executed",
+        "confirmation_status": "confirmed",
+        "gate_passed": True,
+        "actor": "qa_lead",
+        "timestamp": "2026-07-07T12:00:00Z",
+        "reproduction_steps": ["POST /api/orders", "observe database row count changed unexpectedly"],
+        "failed_assertions": ["订单写入后数据库状态异常"],
+        "raw_evidence": {
+            "timestamp": "2026-07-07T12:00:00Z",
+            "request_raw": {"method": "POST", "path": "/api/orders", "actor": "qa_lead"},
+            "db_snapshot": {
+                "table": "orders",
+                "assertion": "orders row count changed 1->2",
+                "before": {"row_count": 1},
+                "after": {"row_count": 2},
+            },
+        },
+        "reproduction": {"method": "POST", "path": "/api/orders"},
+    }
+
+    assert has_real_confirmation_receipt(issue)
+
+
 def test_terminal_campaign_stays_deferred_when_observed_again():
     campaign = _campaign()
     campaign.status = "coverage_deferred"
@@ -138,3 +238,17 @@ def test_terminal_campaign_stays_deferred_when_observed_again():
     )
     assert campaign.status == "coverage_deferred"
     assert campaign.coverage_deferred_reason == "configured_round_limit_reached"
+
+
+def test_campaign_completes_when_no_slices_remain_even_without_full_confirmation():
+    campaign = _campaign()
+    campaign.record_cycle(
+        round_number=1,
+        selection={"stop_reason": "selected_final_available_slice_batch", "selected_slice_ids": ["BHV_1"], "remaining_slice_count": 0, "next_round": None},
+        findings=[],
+        coverage_gap_count=0,
+        execution_status="completed",
+        attempted_slice_ids=["BHV_1"],
+    )
+    assert campaign.status == "completed"
+    assert campaign.coverage_deferred_reason == ""

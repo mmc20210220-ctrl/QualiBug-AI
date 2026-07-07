@@ -48,7 +48,7 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     pyproject = PYPROJECT.read_text(encoding="utf-8")
     wrapper = SERVER_ENTRYPOINT.read_text(encoding="utf-8")
 
-    assert 'qualibug-server = "ai_test_asset_center.private_pilot_server:run_server"' in pyproject
+    assert 'qualibug-server = "ai_test_asset_center.private_pilot_entrypoint:run_server"' in pyproject
     assert "install_customer_delivery_gate_patch" in wrapper
     assert "customer_delivery_gate_patch_status" in wrapper
     assert "restore_customer_delivery_gate_patch" in wrapper
@@ -64,7 +64,32 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     assert "_ORIGINAL_PARTITION_DELIVERY_TRACKS" in wrapper
     assert "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE" in wrapper
     assert "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE" in wrapper
-    assert "_service.run_server()" in wrapper
+    assert "run_private_pilot_service()" in wrapper
+    assert "serve_forever()" in wrapper
+    assert "server_close()" in wrapper
+
+
+def test_private_pilot_server_legacy_run_server_starts_private_pilot_service(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class DummyServer:
+        def serve_forever(self) -> None:
+            calls.append("serve_forever")
+
+        def server_close(self) -> None:
+            calls.append("server_close")
+
+    monkeypatch.setattr(private_pilot_server, "install_customer_delivery_gate_patch", lambda: calls.append("install_customer_delivery_gate_patch"))
+    monkeypatch.setattr(private_pilot_server._service, "run_private_pilot_service", lambda: calls.append("run_private_pilot_service") or DummyServer())
+
+    private_pilot_server.run_server()
+
+    assert calls == [
+        "install_customer_delivery_gate_patch",
+        "run_private_pilot_service",
+        "serve_forever",
+        "server_close",
+    ]
 
 
 def test_private_pilot_server_patch_routes_legacy_partition_through_strict_gate() -> None:

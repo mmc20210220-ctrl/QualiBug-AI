@@ -13,7 +13,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
+from ai_test_asset_center.customer_delivery_gate import CUSTOMER_READY_MIN_EVIDENCE_SCORE
+from ai_test_asset_center.real_id_resolver import normalize_path_placeholders
+
+
+DISPLAY_READY_POLICY_PATH = Path(__file__).resolve().parent / "policies" / "display_ready_policy.json"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -131,12 +139,97 @@ def _build_taxonomy(finding: dict) -> dict:
     }
 
 
+def _ui_verification_display(finding: dict) -> dict:
+    verification = finding.get("ui_verification") if isinstance(finding.get("ui_verification"), dict) else {}
+    gate = finding.get("ui_candidate_gate") if isinstance(finding.get("ui_candidate_gate"), dict) else {}
+    status = _clean(verification.get("status") or finding.get("verification_badge"))
+    if status == "verified" or status == "ui_verified":
+        return {
+            "verification_badge": "ui_verified",
+            "verification_label": _clean(finding.get("verification_label")) or "已二次验真",
+            "customer_evidence_label": _clean(finding.get("customer_evidence_label")) or "UI 二次验真通过",
+            "verification_rank": 3,
+        }
+    if gate.get("passed") is True or status == "ui_candidate":
+        return {
+            "verification_badge": "ui_candidate",
+            "verification_label": _clean(finding.get("verification_label")) or "待二次验真",
+            "customer_evidence_label": _clean(finding.get("customer_evidence_label")) or "UI 候选待二次验真",
+            "verification_rank": 2,
+        }
+    if finding.get("defect_family") == "ui" or str(finding.get("risk_type") or "").strip() in {"frontend_ui", "ui_execution", "frontend_execution_runtime"} or status == "ui_signal":
+        return {
+            "verification_badge": "ui_signal",
+            "verification_label": _clean(finding.get("verification_label")) or "仅 UI 信号",
+            "customer_evidence_label": _clean(finding.get("customer_evidence_label")) or "UI 观测信号",
+            "verification_rank": 1,
+        }
+    return {
+        "verification_badge": _clean(finding.get("verification_badge")),
+        "verification_label": _clean(finding.get("verification_label")),
+        "customer_evidence_label": _clean(finding.get("customer_evidence_label")),
+        "verification_rank": 0,
+    }
+
+
+def _high_confidence_candidate_display(finding: dict) -> dict:
+    high_conf = bool(finding.get("high_confidence_candidate"))
+    tier = _clean(finding.get("candidate_tier"))
+    if high_conf or tier == "high_confidence_ui_candidate":
+        return {
+            "high_confidence_candidate": True,
+            "candidate_tier": "high_confidence_ui_candidate",
+            "candidate_tier_label": "高可信 UI 候选",
+        }
+    if tier:
+        return {
+            "high_confidence_candidate": False,
+            "candidate_tier": tier,
+            "candidate_tier_label": "UI 候选",
+        }
+    return {
+        "high_confidence_candidate": False,
+        "candidate_tier": "",
+        "candidate_tier_label": "",
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 辅助函数
 # ═══════════════════════════════════════════════════════════════════════
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _read_json_policy(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+@lru_cache(maxsize=1)
+def _display_ready_policy() -> dict[str, Any]:
+    return _read_json_policy(DISPLAY_READY_POLICY_PATH)
+
+
+def _policy_section(name: str) -> dict[str, Any]:
+    section = _display_ready_policy().get(name)
+    return section if isinstance(section, dict) else {}
+
+
+def _policy_list(name: str) -> list[str]:
+    values = _display_ready_policy().get(name)
+    return [str(item) for item in values] if isinstance(values, list) else []
+
+
+def _format_policy_text(template: str, **values: str) -> str:
+    try:
+        return template.format(**values)
+    except (KeyError, ValueError):
+        return template
 
 
 _PLACEHOLDER_TOKEN_RE = re.compile(
@@ -151,6 +244,38 @@ _PLACEHOLDER_TOKEN_RE = re.compile(
 def _is_placeholder_value(value: Any) -> bool:
     text = _clean(value)
     return bool(text and _PLACEHOLDER_TOKEN_RE.search(text))
+
+
+def _is_declared_path_template(value: Any) -> bool:
+    text = normalize_path_placeholders(_clean(value))
+    return bool(text.startswith("/") and re.search(r"\{[A-Za-z_]\w*\}", text))
+
+
+def _is_unresolved_path_value(value: Any) -> bool:
+    text = _clean(value)
+    if not text:
+        return False
+    if _is_declared_path_template(text):
+        return False
+    return _is_placeholder_value(text)
+
+
+def _canonical_runtime_path(value: Any) -> str:
+    return normalize_path_placeholders(_clean(value).split("?", 1)[0])
+
+
+def _declared_path_matches_observed(declared_path: str, observed_path: str) -> bool:
+    declared = _canonical_runtime_path(declared_path)
+    observed = _canonical_runtime_path(observed_path)
+    if not declared or not observed:
+        return False
+    if declared == observed:
+        return True
+    if _is_declared_path_template(declared):
+        pattern = re.escape(declared)
+        pattern = re.sub(r"\\\{[A-Za-z_]\w*\\\}", r"[^/]+", pattern)
+        return bool(re.fullmatch(pattern, observed))
+    return False
 
 
 def _response_body_has_value(body: Any) -> bool:
@@ -351,7 +476,7 @@ def _runtime_identity_mismatch_reasons(finding: dict, obs: dict[str, Any] | None
     """
     declared_method, declared_path = _declared_request_identity(finding)
     reasons: list[str] = []
-    if declared_path and _is_placeholder_value(declared_path):
+    if declared_path and _is_unresolved_path_value(declared_path):
         reasons.append(f"API path is a placeholder or unresolved template: {declared_path}")
 
     observations = [obs] if obs is not None else _runtime_observations(finding)
@@ -362,12 +487,12 @@ def _runtime_identity_mismatch_reasons(finding: dict, obs: dict[str, Any] | None
             continue
         observed_path = _clean(row.get("path"))
         observed_method = _clean(row.get("method")).upper()
-        if observed_path and not _is_placeholder_value(observed_path):
+        if observed_path and not _is_unresolved_path_value(observed_path):
             observed_paths.append(observed_path)
         if observed_method:
             observed_methods.append(observed_method)
 
-    if declared_path and observed_paths and declared_path not in observed_paths:
+    if declared_path and observed_paths and not any(_declared_path_matches_observed(declared_path, observed_path) for observed_path in observed_paths):
         reasons.append(
             f"Declared API path {declared_path} does not match observed runtime path(s): "
             f"{', '.join(sorted(set(observed_paths))[:5])}"
@@ -386,7 +511,7 @@ def _accepted_runtime_observations(finding: dict) -> list[dict[str, Any]]:
         if not isinstance(obs, dict):
             continue
         path = _clean(obs.get("path"))
-        if _is_placeholder_value(path):
+        if _is_unresolved_path_value(path):
             continue
         if not _observation_has_response_payload(obs):
             continue
@@ -438,8 +563,76 @@ def _has_runtime_response(finding: dict) -> bool:
     return bool(_accepted_runtime_observations(finding))
 
 
+def _extract_verified_db_evidence(finding: dict) -> dict | None:
+    """提取已验证的 DB 硬证据。
+
+    仅接受真实 before/after 快照或明确标记的 DB verifier 输出，不把 SQL 提示、
+    relevant_tables、source_entity/source_value 这类线索当作已验证 DB 证据。
+    """
+    if not isinstance(finding, dict):
+        return None
+
+    db_evidence = finding.get("db_evidence")
+    if isinstance(db_evidence, dict):
+        before = db_evidence.get("before_db_snapshot") or db_evidence.get("before")
+        after = db_evidence.get("after_db_snapshot") or db_evidence.get("after")
+        business_operation = _clean(db_evidence.get("business_operation") or db_evidence.get("operation"))
+        assertion = _clean(db_evidence.get("db_assertion") or db_evidence.get("assertion"))
+        if before and after and business_operation and assertion:
+            return {
+                "before": before,
+                "after": after,
+                "business_operation": business_operation,
+                "assertion": assertion,
+                "table": _clean(db_evidence.get("table")),
+                "column": _clean(db_evidence.get("column")),
+                "value": _clean(db_evidence.get("value")),
+                "violation": assertion,
+                "raw": _clean(finding.get("title")),
+                "source": "db_evidence",
+            }
+
+    for snapshot in finding.get("db_snapshots") or []:
+        if not isinstance(snapshot, dict):
+            continue
+        before = snapshot.get("before_db_snapshot") or snapshot.get("before")
+        after = snapshot.get("after_db_snapshot") or snapshot.get("after")
+        business_operation = _clean(snapshot.get("business_operation") or snapshot.get("operation"))
+        assertion = _clean(snapshot.get("db_assertion") or snapshot.get("assertion"))
+        if before and after and business_operation and assertion:
+            return {
+                "before": before,
+                "after": after,
+                "business_operation": business_operation,
+                "assertion": assertion,
+                "table": _clean(snapshot.get("table")),
+                "column": _clean(snapshot.get("column")),
+                "value": _clean(snapshot.get("value")),
+                "violation": assertion,
+                "raw": _clean(finding.get("title")),
+                "source": "db_snapshots",
+            }
+
+    title = _clean(finding.get("title"))
+    if str(finding.get("source") or "").lower() == "db_verifier" or title.startswith("[DB Verified]"):
+        db_ev = _extract_verified_db_evidence(finding)
+        if db_ev:
+            db_ev = dict(db_ev)
+            db_ev["source"] = "db_verifier"
+            return db_ev
+    return None
+
+
+def _has_db_clue(finding: dict) -> bool:
+    return bool(
+        _clean(finding.get("source_entity") or finding.get("source_value"))
+        or _has_any_value(_deep_get(finding, "investigation_guidance", "relevant_tables"))
+        or _clean(_deep_get(finding, "investigation_guidance", "sql_verify"))
+    )
+
+
 def _has_anomaly_signal(finding: dict) -> bool:
-    if _extract_db_evidence(finding):
+    if _extract_verified_db_evidence(finding):
         return True
     for obs in _accepted_runtime_observations(finding):
         status = _status_code_int(obs.get("status_code"))
@@ -451,6 +644,21 @@ def _has_anomaly_signal(finding: dict) -> bool:
         body_text = _clean(body)
         if body_text and any(token in body_text.lower() for token in ("error", "exception", "traceback", "failed")):
             return True
+    failed_assertions = finding.get("failed_assertions")
+    if isinstance(failed_assertions, list) and any(
+        (isinstance(assertion, dict) and _has_any_value(assertion)) or _clean(assertion)
+        for assertion in failed_assertions
+    ):
+        return True
+    comparison = finding.get("expected_actual_comparison") if isinstance(finding.get("expected_actual_comparison"), dict) else {}
+    if _clean(comparison.get("difference")):
+        return True
+    semantic_verdict = _clean(finding.get("semantic_verdict") or _deep_get(finding, "evidence_status", "semantic_verdict")).upper()
+    business_evidence_status = _clean(finding.get("business_evidence_status") or _deep_get(finding, "evidence_status", "business_evidence_status")).upper()
+    expected = _clean(finding.get("expected_behavior") or finding.get("expected"))
+    actual = _clean(finding.get("actual_behavior") or finding.get("actual") or finding.get("description"))
+    if semantic_verdict == "SEMANTIC_CONFIRMED" and business_evidence_status == "VALIDATED" and expected and actual and expected != actual:
+        return True
     return False
 
 
@@ -487,12 +695,13 @@ def _compute_evidence_quality(finding: dict, repro_path: str) -> dict:
     next_actions: list[str] = []
 
     method = _clean(finding.get("_api_method") or _deep_get(finding, "evidence", "method") or finding.get("method") or "GET").upper()
-    has_api_target = bool(_clean(repro_path) and not _is_placeholder_value(repro_path))
+    has_api_target = bool(_clean(repro_path) and not _is_unresolved_path_value(repro_path))
     has_actual = bool(_clean(finding.get("actual_behavior") or finding.get("actual") or finding.get("description")))
     has_expected = bool(_clean(finding.get("expected_behavior") or finding.get("expected")))
     doc_refs = finding.get("_doc_refs") or finding.get("doc_refs") or []
     has_docs = isinstance(doc_refs, list) and len(doc_refs) > 0
-    has_db_signal = bool(_clean(finding.get("source_entity") or finding.get("source_value"))) or _has_any_value(_deep_get(finding, "investigation_guidance", "relevant_tables"))
+    has_db_evidence = bool(_extract_verified_db_evidence(finding))
+    has_db_clue = _has_db_clue(finding)
     evidence_source_file = _clean(_deep_get(finding, "evidence", "source_file") or finding.get("source"))
     has_log_signal = bool(_clean(_deep_get(finding, "investigation_guidance", "log_search") or finding.get("evidence_hint") or evidence_source_file))
 
@@ -532,7 +741,9 @@ def _compute_evidence_quality(finding: dict, repro_path: str) -> dict:
     else:
         missing.append("缺少来自 PRD / API 规范的预期规则")
 
-    if has_db_signal:
+    if has_db_evidence:
+        verified.append("存在已验证的 DB 前后快照或 DB 校验证据")
+    elif has_db_clue:
         verified.append("存在业务数据核验线索")
     else:
         missing.append("缺少 DB 前后快照或业务主键")
@@ -566,7 +777,7 @@ def _compute_evidence_quality(finding: dict, repro_path: str) -> dict:
         next_actions.append("在客户设置中配置可访问的测试地址，并重新执行扫描")
     if not has_runtime_proof:
         next_actions.append("补跑一次真实请求 / 浏览器用例，保存状态码、响应体、截图和时间戳")
-    if not has_db_signal:
+    if not has_db_evidence:
         next_actions.append("补充业务主键（如资源ID、记录编号等），并导出请求前后 DB 快照")
     if not has_docs:
         next_actions.append("上传 PRD、API 规范或验收规则，让缺陷结论能回链到需求出处")
@@ -578,7 +789,7 @@ def _compute_evidence_quality(finding: dict, repro_path: str) -> dict:
         (15 if has_runtime_proof else 0) +
         (10 if has_actual else 0) +
         (10 if has_expected else 0) +
-        (10 if has_db_signal else 0) +
+        (10 if has_db_evidence else 0) +
         (8 if has_docs else 0) +
         (7 if has_log_signal else 0) +
         (15 if has_api_response else 0) +
@@ -607,6 +818,40 @@ def _compute_evidence_quality(finding: dict, repro_path: str) -> dict:
     curl_command = ""
     if has_api_target:
         curl_command = f'curl -X {method} "${{BASE_URL}}{repro_path}" -H "Content-Type: application/json" -v'
+
+    upstream_quality = finding.get("evidence_quality") if isinstance(finding.get("evidence_quality"), dict) else {}
+    upstream_level = _clean(upstream_quality.get("level")).lower()
+    try:
+        upstream_score = float(upstream_quality.get("score") or 0)
+    except Exception:
+        upstream_score = 0.0
+    semantic_verdict = _clean(finding.get("semantic_verdict") or _deep_get(finding, "evidence_status", "semantic_verdict")).upper()
+    business_evidence_status = _clean(finding.get("business_evidence_status") or _deep_get(finding, "evidence_status", "business_evidence_status")).upper()
+    if (
+        bool(finding.get("gate_passed"))
+        and upstream_level == "validated"
+        and upstream_score >= CUSTOMER_READY_MIN_EVIDENCE_SCORE
+        and bool(upstream_quality.get("can_reproduce"))
+        and semantic_verdict == "SEMANTIC_CONFIRMED"
+        and business_evidence_status == "VALIDATED"
+    ):
+        merged_verified = list(dict.fromkeys([
+            *[str(item) for item in verified if str(item)],
+            *[str(item) for item in upstream_quality.get("verified") or [] if str(item)],
+        ]))
+        return {
+            "level": "validated",
+            "score": max(score, int(upstream_score)),
+            # Once the strict customer-ready gate is satisfied, stale upstream
+            # labels such as "待补强证据" must not leak into the final payload.
+            "label": "可交付证据",
+            "summary": "证据完整，可直接提交研发修复。",
+            "verified": merged_verified,
+            "missing": [],
+            "next_actions": [],
+            "can_reproduce": True,
+            "curl_command": _clean(upstream_quality.get("curl_command")) or curl_command,
+        }
 
     return {
         "level": level,
@@ -693,7 +938,7 @@ def _extract_har_response_evidence(finding: dict) -> dict | None:
 
     if not (status_code or response_body or path):
         return None
-    if path and _is_placeholder_value(path):
+    if path and _is_unresolved_path_value(path):
         return None
     return {
         "source": _clean(obs.get("source")) or "runtime",
@@ -719,7 +964,7 @@ def _compute_evidence_completeness(finding: dict) -> dict:
     has_docs = isinstance(doc_refs, list) and len(doc_refs) > 0
     path = _clean(finding.get("_api_path") or finding.get("repro_path") or finding.get("path"))
 
-    db_ev = _extract_db_evidence(finding)
+    db_ev = _extract_verified_db_evidence(finding)
     har_ev = _extract_har_response_evidence(finding)
 
     trace_id = _clean(inv.get("trace_id")) or _clean(_deep_get(finding, "evidence", "trace_id"))
@@ -741,7 +986,7 @@ def _compute_evidence_completeness(finding: dict) -> dict:
         {
             "key": "api_request",
             "label": "接口请求",
-            "present": bool(path and not _is_placeholder_value(path)),
+            "present": bool(path and not _is_unresolved_path_value(path)),
             "detail": "可执行的接口地址",
         },
         {
@@ -753,8 +998,8 @@ def _compute_evidence_completeness(finding: dict) -> dict:
         {
             "key": "db_evidence",
             "label": "数据核验",
-            "present": bool(db_ev or inv.get("sql_verify")),
-            "detail": "数据库快照或 SQL 核验",
+            "present": bool(db_ev),
+            "detail": "数据库前后快照或已验证 DB 断言",
         },
         {
             "key": "log_evidence",
@@ -817,7 +1062,7 @@ def _build_display_evidence_chain(finding: dict) -> dict:
     })
 
     # 2. 触发请求（接口地址）
-    if path and not _is_placeholder_value(path):
+    if path and not _is_unresolved_path_value(path):
         chain.append({
             "tag": "api",
             "label": "触发请求",
@@ -884,7 +1129,7 @@ def _build_display_evidence_chain(finding: dict) -> dict:
         })
 
     # 5. DB 数据核验（结构化）
-    db_ev = _extract_db_evidence(finding)
+    db_ev = _extract_verified_db_evidence(finding)
     if db_ev or inv.get("sql_verify"):
         if db_ev:
             table = db_ev.get("table", "")
@@ -908,7 +1153,7 @@ def _build_display_evidence_chain(finding: dict) -> dict:
                 "violation": violation,
             }
         else:
-            content = "已生成 SQL 核验语句"
+            content = "存在 DB 核验线索"
             detail = _clean(inv.get("sql_verify"))[:200]
             structured = None
 
@@ -1000,11 +1245,11 @@ def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None
     har_method = (runtime_obs.get("method") or "").upper()
 
     # 优先用 finding 自己的 path（更精确）
-    if har_path and not _is_placeholder_value(har_path):
+    if har_path and not _is_unresolved_path_value(har_path):
         path = har_path
     else:
         path = finding_path
-    if _is_placeholder_value(path):
+    if _is_unresolved_path_value(path):
         path = ""
     method = finding_method or har_method
     if not path:
@@ -1063,7 +1308,7 @@ def _generate_default_repro_steps(finding: dict, path: str, method: str, ctx: di
     runtime_obs = _best_runtime_observation(finding)
     has_real_response = _has_runtime_response(finding)
 
-    if not path or _is_placeholder_value(path):
+    if not path or _is_unresolved_path_value(path):
         return []
 
     if path and has_real_response:
@@ -1644,9 +1889,8 @@ def _check_claim_evidence_consistency(finding: dict) -> list[str]:
     raw_status = _clean(finding.get("status") or finding.get("verdict") or finding.get("bug_confirmation")).lower()
     claims_confirmed = any(t in raw_status for t in ("confirmed", "reproduced", "validated", "已复现", "已确认"))
     if claims_confirmed and actual_status and 200 <= actual_status < 300:
-        # 检查是否有 DB 违规或其他异常信号
-        db_ev = _extract_db_evidence(finding)
-        has_anomaly_signal = bool(db_ev and db_ev.get("violation"))
+        # 2xx 语义违规同样属于有效异常信号，不能只用 DB 违规判定。
+        has_anomaly_signal = _has_anomaly_signal(finding)
         if not has_anomaly_signal:
             contradictions.append(
                 f"声明-证据矛盾：状态标记为'{raw_status}'（已复现），"
@@ -1843,7 +2087,7 @@ def _extract_failed_assertions(finding: dict, reproduction: dict) -> list[dict]:
     actual = _strip_internal_tags(_clean(finding.get("actual_behavior") or finding.get("actual") or finding.get("description")))
 
     # 2. DB 约束违规
-    db_ev = _extract_db_evidence(finding)
+    db_ev = _extract_verified_db_evidence(finding)
     if db_ev and db_ev.get("violation"):
         assertions.append({
             "type": "db_constraint_violation",
@@ -1909,7 +2153,7 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
     runtime_obs = _best_runtime_observation(finding)
     inv = finding.get("investigation_guidance") if isinstance(finding.get("investigation_guidance"), dict) else {}
     evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
-    db_ev = _extract_db_evidence(finding)
+    db_ev = _extract_verified_db_evidence(finding)
 
     trace_id = _clean(inv.get("trace_id")) or _clean(_deep_get(finding, "evidence", "trace_id"))
     source_file = _clean(_deep_get(finding, "evidence", "source_file") or finding.get("source"))
@@ -1918,9 +2162,9 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
     request_raw: dict[str, Any] = {}
     method = _clean(runtime_obs.get("method") or finding.get("_api_method") or "GET").upper()
     path = _clean(runtime_obs.get("path") or finding.get("_api_path") or finding.get("path"))
-    if method or (path and not _is_placeholder_value(path)):
+    if method or (path and not _is_unresolved_path_value(path)):
         request_raw["method"] = method
-        if path and not _is_placeholder_value(path):
+        if path and not _is_unresolved_path_value(path):
             request_raw["path"] = path
         if runtime_obs.get("source"):
             request_raw["source"] = runtime_obs.get("source")
@@ -1950,8 +2194,16 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
         db_snapshot["column"] = db_ev.get("column", "")
         db_snapshot["value"] = db_ev.get("value", "")
         db_snapshot["violation"] = db_ev.get("violation", "")
+        db_snapshot["assertion"] = db_ev.get("db_assertion") or db_ev.get("assertion") or ""
+        db_snapshot["business_operation"] = db_ev.get("business_operation") or db_ev.get("operation") or ""
+        before_snapshot = db_ev.get("before_db_snapshot") or db_ev.get("before") or {}
+        after_snapshot = db_ev.get("after_db_snapshot") or db_ev.get("after") or {}
+        if isinstance(before_snapshot, dict) and before_snapshot:
+            db_snapshot["before"] = before_snapshot
+        if isinstance(after_snapshot, dict) and after_snapshot:
+            db_snapshot["after"] = after_snapshot
     elif inv.get("sql_verify"):
-        db_snapshot["sql_verify"] = _clean(inv.get("sql_verify"))[:500]
+        db_snapshot["clue_sql_verify"] = _clean(inv.get("sql_verify"))[:500]
 
     # 日志
     logs: dict[str, Any] = {}
@@ -1973,7 +2225,12 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
         "db_snapshot": db_snapshot,
         "logs": logs,
         "execution_trace": execution_trace,
-        "timestamp": _clean(finding.get("last_verified_at") or finding.get("timestamp") or finding.get("first_seen_at")),
+        "timestamp": _clean(
+            finding.get("last_verified_at")
+            or finding.get("timestamp")
+            or _deep_get(finding, "raw_evidence", "timestamp")
+            or finding.get("first_seen_at")
+        ),
         "has_real_evidence": bool(response_raw or db_snapshot or trace_id or (request_raw.get("path") and _has_runtime_response(finding))),
     }
 
@@ -1985,42 +2242,31 @@ def _build_technical_details(finding: dict, investigation: dict, reproduction: d
     path = _clean(finding.get("_api_path") or finding.get("repro_path") or finding.get("path"))
     method = _clean(finding.get("_api_method") or finding.get("method") or "GET").upper()
 
-    # 可能的根因方向（通用，基于 risk_type 映射，不硬编码业务概念）
-    root_cause_map = {
-        "permission_bypass": "权限校验逻辑未覆盖该场景，可能缺少角色/资源归属检查",
-        "idor": "对象级授权缺失，接口未校验当前用户对该资源的访问权限",
-        "business_invariant": "业务约束校验缺失，数据写入前未验证不变量",
-        "data_integrity": "数据一致性校验缺失，可能缺少事务保护或并发控制",
-        "positive_numeric": "数值范围校验缺失，未拒绝非法负值",
-        "nonnegative_numeric": "非负约束校验缺失，未在写入前验证",
-        "idempotency": "幂等控制缺失，重复请求导致数据重复写入",
-        "state_machine": "状态流转校验缺失，允许了非法状态跳转",
-        "api_contract": "接口契约实现与规范不一致",
-        "sensitive_field_leak": "响应体未脱敏，敏感字段直接返回",
-    }
-    possible_root_cause = root_cause_map.get(risk_type, f"检测到 {risk_type} 类型风险，需排查相关校验逻辑")
+    defaults = _policy_section("defaults")
+    context = {"risk_type": risk_type, "method": method, "path": path}
+    possible_root_cause = _policy_section("root_cause_by_risk_type").get(risk_type)
+    if not possible_root_cause:
+        possible_root_cause = _format_policy_text(
+            _clean(defaults.get("possible_root_cause")) or "{risk_type}",
+            **context,
+        )
+    else:
+        possible_root_cause = _format_policy_text(_clean(possible_root_cause), **context)
+    recommended_fix = _policy_section("fix_by_risk_type").get(risk_type)
+    if not recommended_fix:
+        recommended_fix = _format_policy_text(
+            _clean(defaults.get("recommended_fix")) or "{risk_type}",
+            **context,
+        )
+    else:
+        recommended_fix = _format_policy_text(_clean(recommended_fix), **context)
 
-    # 修复建议（通用，基于 risk_type）
-    fix_map = {
-        "permission_bypass": "在该接口增加权限校验中间件，验证当前用户角色是否有权操作目标资源",
-        "idor": "在接口层增加对象级授权检查，验证请求者对目标资源的归属关系",
-        "business_invariant": "在数据写入前增加业务不变量校验，违反约束时拒绝写入并返回错误",
-        "data_integrity": "增加事务边界保护，确保关联数据原子性写入；补充并发控制机制",
-        "positive_numeric": "在入参校验层增加数值范围检查，拒绝负值；在数据库层增加 CHECK 约束",
-        "nonnegative_numeric": "增加非负校验，在模型层和数据库层双重保护",
-        "idempotency": "引入幂等键机制，相同请求在有效期内返回缓存结果而非重复执行",
-        "state_machine": "在状态变更接口增加状态机校验，拒绝非法跳转",
-        "api_contract": "对齐接口实现与 OpenAPI 规范，补充缺失的校验或字段",
-        "sensitive_field_leak": "在响应序列化层增加脱敏过滤，移除敏感字段或替换为掩码",
-    }
-    recommended_fix = fix_map.get(risk_type, "根据缺陷类型排查相关校验逻辑，补充缺失的边界检查和约束保护")
-
-    # 回归测试建议（通用）
     regression_suggestions = [
-        f"编写针对 {method} {path} 的回归测试，覆盖该缺陷场景",
-        "增加边界值测试用例，验证修复后不再出现同类问题",
-        "增加关联场景的集成测试，确保修复不影响正常业务流程",
+        _format_policy_text(template, **context)
+        for template in _policy_list("regression_suggestion_templates")
     ]
+    if not regression_suggestions:
+        regression_suggestions = [_format_policy_text("{method} {path}", **context)]
 
     return {
         "api_endpoint": {
@@ -2092,7 +2338,7 @@ def _build_expected_actual_comparison(finding: dict) -> dict:
     """构建预期 vs 实际结构化对比。"""
     expected = _strip_internal_tags(_clean(finding.get("expected_behavior") or finding.get("expected")))
     actual = _strip_internal_tags(_clean(finding.get("actual_behavior") or finding.get("actual") or finding.get("description")))
-    db_ev = _extract_db_evidence(finding)
+    db_ev = _extract_verified_db_evidence(finding)
     runtime_obs = _best_runtime_observation(finding)
 
     comparison = {
@@ -2158,13 +2404,15 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     confirmed = any(t in status_lower for t in ("confirmed", "validated", "reproduced", "reproducible"))
 
     repro_path = _clean(finding.get("_api_path") or finding.get("repro_path") or _deep_get(finding, "evidence", "path") or finding.get("path"))
-    if _is_placeholder_value(repro_path):
+    if _is_unresolved_path_value(repro_path):
         repro_path = ""
     repro_method = _clean(finding.get("_api_method") or finding.get("repro_method") or _deep_get(finding, "evidence", "method") or finding.get("method")).upper()
     if not repro_path:
         repro_method = ""
 
     taxonomy = _build_taxonomy(finding)
+    ui_verification_display = _ui_verification_display({**finding, **taxonomy})
+    high_confidence_display = _high_confidence_candidate_display(finding)
     evidence_quality = _compute_evidence_quality(finding, repro_path)
     evidence_chain_data = _build_display_evidence_chain(finding)
     evidence_completeness = _compute_evidence_completeness(finding)
@@ -2279,6 +2527,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         "title": title,
         "severity": severity,
         "risk_type": risk_type,
+        "_summary_only": bool(finding.get("_summary_only")),
         "verdict": "confirmed" if bug_status.get("status") == "reproduced" else "pending",
 
         # ── 统一 Bug 状态（四态）──
@@ -2296,6 +2545,13 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         "reporting_bucket": taxonomy["reporting_bucket"],
         "reporting_bucket_label": taxonomy["reporting_bucket_label"],
         "quality_assurance_gap": taxonomy["quality_assurance_gap"],
+        "verification_badge": ui_verification_display["verification_badge"],
+        "verification_label": ui_verification_display["verification_label"],
+        "customer_evidence_label": ui_verification_display["customer_evidence_label"],
+        "verification_rank": ui_verification_display["verification_rank"],
+        "high_confidence_candidate": high_confidence_display["high_confidence_candidate"],
+        "candidate_tier": high_confidence_display["candidate_tier"],
+        "candidate_tier_label": high_confidence_display["candidate_tier_label"],
 
         "evidence_quality": evidence_quality,
         "evidence_chain": evidence_chain_data["full"],
@@ -2316,6 +2572,13 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         "expected_actual_comparison": expected_actual_comparison,
         "failed_assertions": failed_assertions,
         "raw_evidence": raw_evidence,
+        "before_after_snapshot": finding.get("before_after_snapshot") if isinstance(finding.get("before_after_snapshot"), dict) else {},
+        "business_invariant_evaluation": (
+            finding.get("business_invariant_evaluation")
+            if isinstance(finding.get("business_invariant_evaluation"), dict)
+            else {}
+        ),
+        "db_evidence": finding.get("db_evidence") if isinstance(finding.get("db_evidence"), dict) else {},
         "technical_details": technical_details,
         "recommended_fix": technical_details["recommended_fix"],
         "regression_suggestions": technical_details["regression_suggestions"],
@@ -2466,7 +2729,12 @@ def _extract_business_key_for_dedupe(finding: dict) -> str:
     # 4. 纯数字ID（独立出现的6位以上数字）：1783157672785319 → <ID>
     core = re.sub(r'\b\d{6,}\b', '<ID>', core)
     # 5. 常见业务编号格式（字母前缀+连字符+数字）：ORD-001, SKU-PHONE-001 → <ID>
-    core = re.sub(r'\b[A-Z]{2,}[-_][A-Z0-9][-_A-Z0-9]*\b', '<ID>', core)
+    # 纯大写状态词（如 PENDING_PAYMENT）不是业务实例主键，不能在去重时折叠。
+    def _normalize_prefixed_identifier(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return '<ID>' if any(ch.isdigit() for ch in token) else token
+
+    core = re.sub(r'\b[A-Z]{2,}[-_][A-Z0-9][-_A-Z0-9]*\b', _normalize_prefixed_identifier, core)
     # 6. =号后的值：amount=100, amount=-6999.00 → amount=<V>
     core = re.sub(r'=\s*\S+', '=<V>', core)
 
@@ -2474,6 +2742,54 @@ def _extract_business_key_for_dedupe(finding: dict) -> str:
     path = _clean(finding.get("_api_path") or finding.get("repro_path") or finding.get("path"))
 
     return f"{core.strip().lower()}|{path.lower()}"
+
+
+_SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "critical": 0, "high": 1, "medium": 2, "low": 3}
+_BUG_STATUS_RANK = {"reproduced": 0, "suspected": 1, "risk_clue": 2, "not_reproduced": 3}
+
+
+def _verification_rank_value(item: dict[str, Any]) -> int:
+    try:
+        value = int(item.get("verification_rank") or 0)
+        if value:
+            return value
+    except Exception:
+        pass
+    verification = item.get("ui_verification") if isinstance(item.get("ui_verification"), dict) else {}
+    gate = item.get("ui_candidate_gate") if isinstance(item.get("ui_candidate_gate"), dict) else {}
+    badge = _clean(item.get("verification_badge") or verification.get("status"))
+    if badge in {"ui_verified", "verified"}:
+        return 3
+    if badge == "ui_candidate" or gate.get("passed") is True:
+        return 2
+    if badge == "ui_signal":
+        return 1
+    return 0
+
+
+def _sort_display_findings(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _severity_rank(item: dict[str, Any]) -> int:
+        return _SEVERITY_RANK.get(str(item.get("severity", "P2")).lower(), 2)
+
+    def _bug_status_rank(item: dict[str, Any]) -> int:
+        return _BUG_STATUS_RANK.get(str(item.get("bug_status") or "").lower(), 4)
+
+    def _confidence(item: dict[str, Any]) -> float:
+        try:
+            return float(item.get("confidence") or item.get("confidence_score") or 0.0)
+        except Exception:
+            return 0.0
+
+    return sorted(
+        [item for item in items if isinstance(item, dict)],
+        key=lambda item: (
+            _severity_rank(item),
+            -_verification_rank_value(item),
+            _bug_status_rank(item),
+            -_confidence(item),
+            _clean(item.get("title")).lower(),
+        ),
+    )
 
 
 def _dedupe_by_business_semantics(risks: list[dict]) -> list[dict]:
@@ -2485,10 +2801,8 @@ def _dedupe_by_business_semantics(risks: list[dict]) -> list[dict]:
     if not risks:
         return []
 
-    SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "critical": 0, "high": 1, "medium": 2, "low": 3}
-
     def severity_rank(item: dict) -> int:
-        return SEVERITY_RANK.get(str(item.get("severity", "P2")).lower(), 2)
+        return _SEVERITY_RANK.get(str(item.get("severity", "P2")).lower(), 2)
 
     # 按业务 key 分组
     groups: dict[str, list[dict]] = {}
@@ -2501,7 +2815,13 @@ def _dedupe_by_business_semantics(risks: list[dict]) -> list[dict]:
     # 每组只保留最高严重度的（P0 < P1 < P2）
     deduped: list[dict] = []
     for group in groups.values():
-        group.sort(key=severity_rank)
+        group.sort(
+            key=lambda item: (
+                severity_rank(item),
+                -_verification_rank_value(item),
+                -float(item.get("confidence_score") or item.get("confidence") or 0.0),
+            )
+        )
         best = group[0]
 
         # 如果有多个，合并它们的 evidence 信息到保留的那条
@@ -2557,7 +2877,7 @@ def _dedupe_by_business_semantics(risks: list[dict]) -> list[dict]:
 
         deduped.append(best)
 
-    return deduped
+    return _sort_display_findings(deduped)
 
 
 
@@ -2789,6 +3109,7 @@ def format_findings_display_ready(
     risks = _dedupe_by_business_semantics(risks)
 
     display_findings = [_format_single_finding(r, enterprise_ctx) for r in risks if isinstance(r, dict)]
+    display_findings = _sort_display_findings(display_findings)
 
     scores = _compute_scores(display_findings, raw_report)
     commercial_value = _compute_commercial_value(display_findings, raw_report)

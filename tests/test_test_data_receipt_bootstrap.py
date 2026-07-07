@@ -1,0 +1,510 @@
+from __future__ import annotations
+
+import hashlib
+import json
+
+from ai_test_asset_center.auto_test_data_factory import build_auto_fixture_for_probe
+from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from ai_test_asset_center.enterprise_test_data_receipts import issue_test_data_receipt, verify_test_data_receipt
+from ai_test_asset_center.test_data_receipt_bootstrap import bootstrap_test_data_receipts_for_campaign
+
+
+API_SPEC = json.dumps(
+    {
+        "openapi": "3.0.0",
+        "paths": {
+            "/api/auth/login": {
+                "post": {
+                    "summary": "login",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "email": {"type": "string"},
+                                        "password": {"type": "string"},
+                                    },
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+            "/api/orders": {
+                "post": {
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"name": {"type": "string"}, "amount": {"type": "number"}},
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/api/orders/{order_id}": {"get": {}, "delete": {}},
+        },
+    }
+)
+
+MARKDOWN_API_DOC = """# API 接口文档
+
+### POST /api/orders
+
+请求：
+
+```json
+{
+  "items":[{"sku":"SKU-PHONE-001","qty":1}],
+  "couponCode":"NEW100",
+  "addressId":"<address_id>"
+}
+```
+
+### GET /api/orders/:order_id
+
+### POST /api/orders/:id/cancel
+"""
+
+SCHEMA_SQL = """
+CREATE TABLE users (
+  id UUID PRIMARY KEY
+);
+
+CREATE TABLE addresses (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id),
+  receiver TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  province TEXT NOT NULL,
+  city TEXT NOT NULL,
+  detail TEXT NOT NULL
+);
+
+CREATE TABLE orders (
+  id UUID PRIMARY KEY,
+  address_id UUID REFERENCES addresses(id),
+  coupon_code TEXT
+);
+"""
+
+PRODUCT_API_SPEC = json.dumps(
+    {
+        "openapi": "3.0.0",
+        "paths": {
+            "/api/products/admin": {
+                "post": {
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {"type": "string"},
+                                        "category": {"type": "string"},
+                                        "price": {"type": "number"},
+                                        "status": {"type": "string", "enum": ["DRAFT", "ON_SALE", "OFF_SALE"]},
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/api/products/{sku}": {"get": {}},
+            "/api/products/admin/{sku}": {
+                "patch": {
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {"type": "string", "enum": ["DRAFT", "ON_SALE", "OFF_SALE", "DELETED"]},
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        },
+    }
+)
+
+
+def test_auto_fixture_prefers_markdown_request_example_for_setup_body() -> None:
+    bundle = build_auto_fixture_for_probe(
+        {
+            "candidate_id": "QBBOOT-EXAMPLE",
+            "risk_type": "anonymous_auth_boundary_probe",
+            "execution_policy": "read_only_safe",
+            "endpoint": {"method": "GET", "path": "/api/orders/:order_id"},
+            "probe_plan": {"auth_boundary": {"actor": "anonymous"}},
+        },
+        config={"qualibug_auto_create_test_data": True, "api_doc_text": MARKDOWN_API_DOC},
+    )
+
+    setup_body = bundle["setup_requests"][0]["body"]
+    assert setup_body["items"] == [{"sku": "SKU-PHONE-001", "qty": 1}]
+    assert setup_body["couponCode"] == "NEW100"
+    assert len(str(setup_body["addressId"])) == 36
+    assert str(setup_body["addressId"]).count("-") == 4
+
+
+def test_auto_fixture_builds_fk_dependency_setup_chain_from_schema(tmp_path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "schema.sql").write_text(SCHEMA_SQL, encoding="utf-8")
+
+    bundle = build_auto_fixture_for_probe(
+        {
+            "candidate_id": "QBBOOT-FK-CHAIN",
+            "risk_type": "anonymous_auth_boundary_probe",
+            "execution_policy": "read_only_safe",
+            "endpoint": {"method": "GET", "path": "/api/orders/:order_id"},
+            "probe_plan": {"auth_boundary": {"actor": "anonymous"}},
+        },
+        input_dir=input_dir,
+        config={"qualibug_auto_create_test_data": True, "api_doc_text": MARKDOWN_API_DOC},
+    )
+
+    dependency_setup = bundle["setup_requests"][0]
+    order_setup = bundle["setup_requests"][1]
+    order_cleanup = bundle["cleanup_requests"][0]
+    dependency_cleanup = bundle["cleanup_requests"][1]
+
+    assert dependency_setup["purpose"] == "create_dependency_fixture_addresses"
+    assert dependency_setup["path"] == "/api/users/addresses"
+    assert dependency_setup["path_candidates"] == ["/api/users/addresses", "/api/addresses", "/users/addresses", "/addresses"]
+    assert dependency_setup["bind_response_id_to"] == ["address_id"]
+    assert dependency_setup["body"]["receiver"].startswith("qb_auto_receiver_")
+    assert dependency_setup["body"]["province"] == "qb_auto_region"
+    assert dependency_setup["body"]["city"] == "qb_auto_city"
+    assert dependency_setup["body"]["detail"].startswith("qb_auto_detail_")
+
+    placeholder = str(bundle["path_params"]["address_id"])
+    assert placeholder.startswith("qb_auto_ref_address_id_")
+    assert order_setup["purpose"] == "create_disposable_qb_auto_fixture"
+    assert order_setup["body"]["addressId"] == placeholder
+    assert len(bundle["cleanup_requests"]) == 2
+    assert order_cleanup["purpose"] == "cleanup_qb_auto_fixture"
+    assert order_cleanup["method"] == "POST"
+    assert order_cleanup["path"] == "/api/orders/{id}/cancel"
+    assert dependency_cleanup["purpose"] == "cleanup_dependency_fixture_addresses"
+    assert dependency_cleanup["path"] == "/api/users/addresses/{id}"
+    assert dependency_cleanup["path_candidates"] == ["/api/users/addresses/{id}", "/api/addresses/{id}", "/users/addresses/{id}", "/addresses/{id}"]
+    assert dependency_cleanup["path_params"]["id"] == placeholder
+
+
+def test_auto_fixture_infers_resource_identity_and_patch_cleanup_for_inventory_probe() -> None:
+    bundle = build_auto_fixture_for_probe(
+        {
+            "candidate_id": "QBBOOT-PRODUCT",
+            "risk_type": "anonymous_auth_boundary_probe",
+            "execution_policy": "read_only_safe",
+            "endpoint": {"method": "GET", "path": "/api/products/{sku}"},
+            "probe_plan": {"auth_boundary": {"actor": "anonymous"}},
+        },
+        config={"qualibug_auto_create_test_data": True, "api_doc_text": PRODUCT_API_SPEC},
+    )
+
+    setup = bundle["setup_requests"][0]
+    cleanup = bundle["cleanup_requests"][0]
+
+    assert setup["path"] == "/api/products/admin"
+    assert str(setup["body"]["sku"]).startswith("qb_auto_sku_")
+    assert setup["body"]["status"] in {"DRAFT", "ON_SALE", "OFF_SALE"}
+    assert cleanup["method"] == "PATCH"
+    assert cleanup["path"] == "/api/products/admin/{sku}"
+    assert cleanup["body"] == {"status": "DELETED"}
+
+
+def test_bootstrap_receipts_issue_real_creation_and_cleanup_receipts(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center import test_data_receipt_bootstrap as bootstrap_module
+
+    def fake_login(self, email: str = "", password: str = "", login_path: str = "", body_template=None) -> bool:
+        self._token = "sandbox-token"
+        return bool(email and password and login_path)
+
+    def fake_execute(config: dict, base_url: str, probe: dict, key: str, timeout: float):
+        if key == "setup_requests":
+            return [{"status": "executed", "accepted": True, "path": "/api/orders", "purpose": "create_disposable_qb_auto_fixture"}]
+        return [{"status": "executed", "accepted": True, "path": "/api/orders/srv_1", "purpose": "cleanup_qb_auto_fixture"}]
+
+    monkeypatch.setattr("ai_test_asset_center.parameter_fuzzer.ParameterFuzzer.login", fake_login)
+    monkeypatch.setattr(bootstrap_module, "_execute_auto_fixture_requests", fake_execute)
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_pilot_runtime.load_connector_registry",
+        lambda project, root: {
+            "test_profile": {
+                "test_credentials": {
+                    "buyer": {"email": "buyer@example.com", "password": "Test@123456"},
+                }
+            }
+        },
+    )
+
+    result = bootstrap_test_data_receipts_for_campaign(
+        project="enterprise-project",
+        root=tmp_path,
+        base_url="http://sandbox.local",
+        api_doc_text=API_SPEC,
+        campaign={"campaign_id": "CMP_1", "scope_id": "scope-a", "environment_ref": "test-a"},
+        selected_slices=[{"slice_id": "slice-1", "endpoints": ["/api/orders/:order_id"]}],
+        contract={"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": "sandbox-a"},
+    )
+
+    creation_ref = str(result["contract"]["creation_receipt_ref"])
+    cleanup_ref = str(result["contract"]["cleanup_receipt_ref"])
+
+    assert result["status"] == "ready"
+    assert result["probe"]["endpoint"]["path"] == "/api/orders/{order_id}"
+    assert verify_test_data_receipt(
+        "enterprise-project",
+        creation_ref,
+        root=tmp_path,
+        kind="creation",
+        campaign_id="CMP_1",
+        scope_id="scope-a",
+        environment_ref="test-a",
+    )["valid"] is True
+    assert verify_test_data_receipt(
+        "enterprise-project",
+        cleanup_ref,
+        root=tmp_path,
+        kind="cleanup",
+        campaign_id="CMP_1",
+        scope_id="scope-a",
+        environment_ref="test-a",
+    )["valid"] is True
+
+
+def test_bootstrap_retries_next_control_account_when_first_fixture_attempt_is_forbidden(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center import test_data_receipt_bootstrap as bootstrap_module
+
+    def fake_login(self, email: str = "", password: str = "", login_path: str = "", body_template=None) -> bool:
+        self._token = f"token-for-{email}"
+        return bool(email and password and login_path)
+
+    def fake_execute(config: dict, base_url: str, probe: dict, key: str, timeout: float):
+        auth = str((config.get("fixture_headers") or {}).get("Authorization") or "")
+        if "buyer@example.com" in auth:
+            return [{"status": "executed", "accepted": False, "path": "/api/products/admin", "purpose": key}]
+        if key == "setup_requests":
+            return [{"status": "executed", "accepted": True, "path": "/api/products/admin", "purpose": "create_disposable_qb_auto_fixture"}]
+        return [{"status": "executed", "accepted": True, "path": "/api/products/admin/qb_auto_1", "purpose": "cleanup_qb_auto_fixture"}]
+
+    monkeypatch.setattr("ai_test_asset_center.parameter_fuzzer.ParameterFuzzer.login", fake_login)
+    monkeypatch.setattr(bootstrap_module, "_execute_auto_fixture_requests", fake_execute)
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_pilot_runtime.load_connector_registry",
+        lambda project, root: {
+            "test_profile": {
+                "test_credentials": {
+                    "buyer": {"email": "buyer@example.com", "password": "Test@123456"},
+                    "admin": {"email": "admin@example.com", "password": "Admin@123456"},
+                }
+            }
+        },
+    )
+
+    result = bootstrap_test_data_receipts_for_campaign(
+        project="enterprise-project",
+        root=tmp_path,
+        base_url="http://sandbox.local",
+        api_doc_text=API_SPEC,
+        campaign={"campaign_id": "CMP_2", "scope_id": "scope-b", "environment_ref": "test-b"},
+        selected_slices=[{"slice_id": "slice-1", "endpoints": ["/api/orders/:order_id"]}],
+        contract={"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": "sandbox-b"},
+    )
+
+    assert result["status"] == "ready"
+    assert len(result["control_attempts"]) == 2
+    assert result["control_attempts"][0]["credential_profile"] == "buyer"
+    assert result["control_attempts"][0]["setup_accepted"] is False
+    assert result["control_attempts"][1]["credential_profile"] == "admin"
+    assert result["control_attempts"][1]["setup_accepted"] is True
+    assert result["control_attempts"][1]["cleanup_accepted"] is True
+
+
+def test_scan_promotes_bootstrapped_contract_into_ready_test_data_plan(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center.__main__ import scan
+
+    register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+
+    def fake_v12_pipeline(**kwargs):
+        return {
+            "total_duration_ms": 1,
+            "findings": [],
+            "campaign": {
+                "campaign_id": "CMP_SCAN",
+                "campaign_status": "active",
+                "scope_id": "service-a",
+                "environment_ref": "test-a",
+                "confirmed_slice_count": 0,
+            },
+            "phases": {
+                "state_graph": {"coverage_gaps": []},
+                "execution": {"status": "plan_only"},
+                "incremental_discovery": {"selected_slices": []},
+            },
+            "auto_har": {"status": "no_traffic"},
+            "behavior_slice_ledger": {},
+        }
+
+    def fake_bootstrap(**kwargs):
+        creation = issue_test_data_receipt(
+            "enterprise-project",
+            root=tmp_path,
+            kind="creation",
+            campaign_id="CMP_SCAN",
+            scope_id="service-a",
+            environment_ref="test-a",
+            actor={"name": "QualiBug", "role": "sandbox_operator"},
+            data_scope_ref="sandbox-a",
+        )
+        cleanup = issue_test_data_receipt(
+            "enterprise-project",
+            root=tmp_path,
+            kind="cleanup",
+            campaign_id="CMP_SCAN",
+            scope_id="service-a",
+            environment_ref="test-a",
+            actor={"name": "QualiBug", "role": "sandbox_operator"},
+            operation_ref="cleanup-a",
+        )
+        return {
+            "status": "ready",
+            "reason": "bootstrap_receipts_issued",
+            "contract": {
+                "strategy": "create_disposable",
+                "write_approved": True,
+                "campaign_id": "CMP_SCAN",
+                "scope_id": "service-a",
+                "environment_ref": "test-a",
+                "disposable_scope_ref": "sandbox-a",
+                "creation_receipt_ref": creation["receipt_id"],
+                "cleanup_receipt_ref": cleanup["receipt_id"],
+            },
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr("ai_test_asset_center.__main__.bootstrap_test_data_receipts_for_campaign", fake_bootstrap)
+
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        base_url="http://sandbox.local",
+        campaign_context={
+            "scope_id": "service-a",
+            "environment_ref": "test-a",
+            "test_data_contract": {
+                "strategy": "create_disposable",
+                "write_approved": True,
+                "disposable_scope_ref": "sandbox-a",
+            },
+            "source_manifest": {
+                "source_id": "api-contract",
+                "source_hash": hashlib.sha256(API_SPEC.encode("utf-8")).hexdigest(),
+            },
+        },
+    )
+
+    assert result["test_data_bootstrap"]["status"] == "ready"
+    assert result["test_data_plan"]["status"] == "ready"
+    assert result["test_data_plan"]["receipt_validation"] == "verified"
+
+
+def test_scan_infers_create_disposable_contract_before_bootstrap(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center.__main__ import scan
+
+    register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    observed: dict[str, object] = {}
+
+    def fake_v12_pipeline(**kwargs):
+        return {
+            "total_duration_ms": 1,
+            "findings": [],
+            "campaign": {
+                "campaign_id": "CMP_SCAN",
+                "campaign_status": "active",
+                "scope_id": "service-a",
+                "environment_ref": "test-a",
+                "confirmed_slice_count": 0,
+            },
+            "phases": {
+                "state_graph": {"coverage_gaps": []},
+                "execution": {"status": "plan_only"},
+                "incremental_discovery": {"selected_slices": []},
+            },
+            "auto_har": {"status": "no_traffic"},
+            "behavior_slice_ledger": {},
+        }
+
+    def fake_bootstrap(**kwargs):
+        observed["contract"] = dict(kwargs.get("contract") or {})
+        creation = issue_test_data_receipt(
+            "enterprise-project",
+            root=tmp_path,
+            kind="creation",
+            campaign_id="CMP_SCAN",
+            scope_id="service-a",
+            environment_ref="test-a",
+            actor={"name": "QualiBug", "role": "sandbox_operator"},
+            data_scope_ref="service-a",
+        )
+        cleanup = issue_test_data_receipt(
+            "enterprise-project",
+            root=tmp_path,
+            kind="cleanup",
+            campaign_id="CMP_SCAN",
+            scope_id="service-a",
+            environment_ref="test-a",
+            actor={"name": "QualiBug", "role": "sandbox_operator"},
+            operation_ref="cleanup-a",
+        )
+        return {
+            "status": "ready",
+            "reason": "bootstrap_receipts_issued",
+            "contract": {
+                "strategy": "create_disposable",
+                "write_approved": True,
+                "campaign_id": "CMP_SCAN",
+                "scope_id": "service-a",
+                "environment_ref": "test-a",
+                "disposable_scope_ref": "service-a",
+                "creation_receipt_ref": creation["receipt_id"],
+                "cleanup_receipt_ref": cleanup["receipt_id"],
+            },
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr("ai_test_asset_center.__main__.bootstrap_test_data_receipts_for_campaign", fake_bootstrap)
+
+    result = scan(
+        project="enterprise-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        base_url="http://sandbox.local",
+        campaign_context={
+            "scope_id": "service-a",
+            "environment_ref": "test-a",
+            "source_manifest": {
+                "source_id": "api-contract",
+                "source_hash": hashlib.sha256(API_SPEC.encode("utf-8")).hexdigest(),
+            },
+        },
+    )
+
+    assert observed["contract"] == {
+        "strategy": "create_disposable",
+        "write_approved": True,
+        "disposable_scope_ref": "service-a",
+    }
+    assert result["test_data_bootstrap"]["status"] == "ready"
+    assert result["test_data_plan"]["status"] == "ready"

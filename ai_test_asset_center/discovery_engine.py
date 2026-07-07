@@ -452,8 +452,8 @@ def _apply_execution_budget_profile(vm: dict[str, Any], tier: str, settings: dic
 class AutonomousDiscoveryEngine:
     """自主发现引擎：文档 → 假设 → 探针 → 确认"""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8000/api"):
-        self.base = base_url
+    def __init__(self, base_url: str | None = None):
+        self.base = str(base_url or os.environ.get("QUALIBUG_DEFAULT_BASE_URL") or "http://127.0.0.1:8000")
         self.client = _get_client()
         
         # Phase81: Read execution policy from Policy Registry (fallback to hardcoded defaults)
@@ -480,7 +480,10 @@ class AutonomousDiscoveryEngine:
         )
         self._deployment_config_snapshot = build_deployment_config_snapshot(self._budget_learning_context)
         self._previous_deployment_config_snapshot = load_deployment_config_snapshot(
-            self._deployment_config_snapshot.get("project_id", "real_project_demo")
+            self._deployment_config_snapshot.get(
+                "project_id",
+                os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project"),
+            )
         )
         self._deployment_config_drift = detect_deployment_config_drift(
             self._deployment_config_snapshot,
@@ -495,7 +498,7 @@ class AutonomousDiscoveryEngine:
         # the engine to a specific scheduler implementation.
         self.progress_callback = None
 
-        # Pre-inject MES context to prevent multi-tenant hallucinations
+        # Apply only an explicit project guard; never inject benchmark-specific context.
         self._inject_context()
 
         # ── Multi-module credential manager (enterprise) ──
@@ -503,7 +506,7 @@ class AutonomousDiscoveryEngine:
         self._credential_manager = None    # EnterpriseCredentialManager (service×role)
         self._service_tokens: dict[str, dict[str, str]] = {}  # service → {role: token}
 
-        # MES 认证. In production mode discovery is dry/blocked: no HTTP is allowed.
+        # Runtime auth is optional. In production mode discovery is dry/blocked.
         if not self._production_blocked:
             # Try multi-module credential manager first
             self._init_multi_module_auth()
@@ -957,27 +960,27 @@ class AutonomousDiscoveryEngine:
         4. Cross-method fuzzy match (last resort)
         """
         import re
-        
-        # Normalize path: ensure /api/ prefix for MES (all MES routes start with /api/)
-        if not path.startswith("/api/"):
-            path = "/api" + path if path.startswith("/") else "/api/" + path
-        
+
+        path_candidates = self._candidate_route_paths(path, method, route_map)
+
         # === Level 1: Exact match ===
-        key = f"{method} {path}"
-        if key in route_map:
-            return route_map[key]
+        for candidate_path in path_candidates:
+            key = f"{method} {candidate_path}"
+            if key in route_map:
+                return route_map[key]
         
         # === Level 2: Normalized-param exact match ===
         # Replace all {param} → {_} so {id}/{materialId}/{material_id} are equivalent
-        llm_normalized = re.sub(r'\{[^}]+\}', '{_}', path)
-        for _key, info in route_map.items():
-            if info["method"] != method:
-                continue
-            route_normalized = re.sub(r'\{[^}]+\}', '{_}', info["path_pattern"])
-            if llm_normalized == route_normalized:
-                return info
+        for candidate_path in path_candidates:
+            llm_normalized = re.sub(r'\{[^}]+\}', '{_}', candidate_path)
+            for _key, info in route_map.items():
+                if info["method"] != method:
+                    continue
+                route_normalized = re.sub(r'\{[^}]+\}', '{_}', info["path_pattern"])
+                if llm_normalized == route_normalized:
+                    return info
         
-        llm_parts = [p for p in path.split("/") if p]
+        llm_parts = self._split_path_segments(path_candidates[0] if path_candidates else path)
         
         # === Level 3: Segment edit-distance fuzzy (same method, ±1 segment tolerance) ===
         best_score = -1.0
@@ -1022,6 +1025,76 @@ class AutonomousDiscoveryEngine:
             return best_info_cross
         
         return None
+
+    @staticmethod
+    def _split_path_segments(path: str) -> list[str]:
+        return [segment for segment in str(path or "").split("/") if segment]
+
+    @staticmethod
+    def _is_path_param(segment: str) -> bool:
+        text = str(segment or "")
+        return text.startswith("{") and text.endswith("}")
+
+    @classmethod
+    def _path_segments_compatible(cls, left: list[str], right: list[str]) -> bool:
+        if len(left) != len(right):
+            return False
+        for left_part, right_part in zip(left, right):
+            if left_part == right_part:
+                continue
+            if cls._is_path_param(left_part) and cls._is_path_param(right_part):
+                continue
+            return False
+        return True
+
+    def _candidate_route_paths(self, path: str, method: str, route_map: dict | None) -> list[str]:
+        normalized_path = "/" + str(path or "").lstrip("/")
+        if not isinstance(route_map, dict) or not route_map:
+            return [normalized_path]
+
+        candidates: list[str] = []
+
+        def _append(candidate: str) -> None:
+            clean = "/" + str(candidate or "").lstrip("/")
+            if clean not in candidates:
+                candidates.append(clean)
+
+        _append(normalized_path)
+        raw_parts = self._split_path_segments(normalized_path)
+        for info in route_map.values():
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("method") or "").upper() != str(method or "").upper():
+                continue
+            route_path = str(info.get("path_pattern") or info.get("path") or "").strip()
+            if not route_path:
+                continue
+            route_parts = self._split_path_segments(route_path)
+            if self._path_segments_compatible(raw_parts, route_parts):
+                _append(route_path)
+                continue
+            if raw_parts and len(route_parts) > len(raw_parts) and self._path_segments_compatible(raw_parts, route_parts[-len(raw_parts):]):
+                _append(route_path)
+        return candidates
+
+    def _route_resource_keywords(self, route_map: dict | None) -> list[str]:
+        if not isinstance(route_map, dict):
+            return []
+        counts: dict[str, int] = {}
+        stopwords = {"api", "internal", "admin", "system", "public", "open"}
+        for info in route_map.values():
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("method") or "").upper() != "GET":
+                continue
+            for part in self._split_path_segments(str(info.get("path_pattern") or "")):
+                token = part.lower()
+                if not token or token in stopwords or self._is_path_param(token):
+                    continue
+                if token.startswith("v") and token[1:].isdigit():
+                    continue
+                counts[token] = counts.get(token, 0) + 1
+        return sorted(counts, key=lambda item: (-counts[item], -len(item), item))
 
     @staticmethod
     def _segment_similarity(a_parts: list[str], b_parts: list[str]) -> float:
@@ -1207,14 +1280,12 @@ class AutonomousDiscoveryEngine:
         if not calls:
             for key in sorted(vm.keys()):
                 value = str(vm[key])
-                # Match both /api/... and /master/... style paths (MES uses /master/, /production/, etc.)
-                matches = re.findall(r'(/(?:api|master|production|inventory|quality|planning|sales|purchase|warehouse|report|system|admin)/[\w\-\/{}]+)', value)
+                matches = re.findall(r'(/[A-Za-z0-9][\w\-{}]*(?:/[\w\-{}]+)+)', value)
                 for path in matches:
-                    # Normalize path: ensure /api/ prefix for MES
-                    if not path.startswith("/api/"):
-                        path = "/api" + path
-                    calls.append({"method": "GET", "path": path, "source": key,
-                        "resolved": False, "synthetic_id": True, "unresolved_route": True})
+                    resolved = self._resolve_call(path, "GET", route_map or {}) if route_map else None
+                    resolved_path = str((resolved or {}).get("path_pattern") or self._candidate_route_paths(path, "GET", route_map or {})[0])
+                    calls.append({"method": "GET", "path": resolved_path, "source": key,
+                        "resolved": bool(resolved), "synthetic_id": not bool(resolved), "unresolved_route": not bool(resolved)})
 
         results = []
         prev_was_write = False
@@ -1360,9 +1431,9 @@ class AutonomousDiscoveryEngine:
                         if 'GET' in key and any(kw in key.lower() for kw in keywords[:10] if len(kw) >= 2):
                             get_path = key
                             break
-                # Third: fallback to common entity names
+                # Third: fallback to route-derived resource keywords instead of benchmark entities
                 if not get_path:
-                    for entity_name in ("material", "bom", "order", "inventory", "routing", "work", "machine"):
+                    for entity_name in self._route_resource_keywords(route_map):
                         for key in (route_map or {}):
                             if entity_name in key.lower() and "GET" in key:
                                 get_path = key
@@ -1381,7 +1452,6 @@ class AutonomousDiscoveryEngine:
                     # P2: Add cross-observer — fetch a related list endpoint for cross-validation
                     entity_parts = get_path.replace("GET ", "").strip("/").split("/")
                     if len(entity_parts) >= 2:
-                        # Use the same path prefix as the observer (e.g., /master/ for MES)
                         path_prefix = entity_parts[0] if entity_parts[0] else "api"
                         list_path = f"GET /{path_prefix}/{entity_parts[1]}"
                         if list_path != get_path:
@@ -1391,31 +1461,27 @@ class AutonomousDiscoveryEngine:
                                     new_vm["_cross_observer"] = True
                                     break
                     vm = new_vm
-                    # Phase84+: Force multi-observer for inventory-sensitive entities
-                    # Add inventory/transaction observers for material-related operations (MES uses /master/, /production/, etc.)
-                    entity_lower = (entity_parts[1] if len(entity_parts) >= 2 else "").lower()
-                    if entity_lower in ("materials", "material", "orders", "order", "inventory", "warehouse"):
-                        # Use MES-style paths: /master/materials, /production/orders, etc.
-                        path_prefix = entity_parts[0] if entity_parts[0] else "master"
-                        for extra_entity in ("materials", "orders", "boms"):
-                            extra_path = f"GET /{path_prefix}/{extra_entity}"
-                            if extra_path not in str(new_vm):
-                                for key in (route_map or {}):
-                                    if extra_entity in key.lower() and "GET" in key:
-                                        new_vm[f"step{len(new_vm)}"] = key
-                                        new_vm["_extra_observer"] = True
-                                        break
+                    path_prefix = entity_parts[0] if len(entity_parts) >= 1 else ""
+                    extra_observers = []
+                    for key in (route_map or {}):
+                        if "GET " not in key or key == get_path or key in str(new_vm):
+                            continue
+                        route_path = key.replace("GET ", "").strip()
+                        route_parts = self._split_path_segments(route_path)
+                        if path_prefix and route_parts and route_parts[0] == path_prefix:
+                            extra_observers.append(key)
+                    for extra_path in extra_observers[:2]:
+                        new_vm[f"step{len(new_vm)}"] = extra_path
+                        new_vm["_extra_observer"] = True
 
             # If no structured verification_method, try to extract paths from title + description
             if not (vm.get("path") or vm.get("step1")):
                 text = f"{h.get('title','')} {h.get('description','')} {h.get('expected_behavior','')}"
-                # Match both /api/... and /master/... style paths (MES uses /master/, /production/, etc.)
-                api_paths = re.findall(r'(/(?:api|master|production|inventory|quality|planning|sales|purchase|warehouse|report|system|admin)/[\w\-\/{}]+)', text)
+                api_paths = re.findall(r'(/[A-Za-z0-9][\w\-{}]*(?:/[\w\-{}]+)+)', text)
                 if api_paths:
-                    # Normalize path: ensure /api/ prefix for MES
                     first_path = api_paths[0]
-                    if not first_path.startswith("/api/"):
-                        first_path = "/api" + first_path
+                    resolved = self._resolve_call(first_path, "GET", route_map or {}) if route_map else None
+                    first_path = str((resolved or {}).get("path_pattern") or self._candidate_route_paths(first_path, "GET", route_map or {})[0])
                     vm = {"step1": f"GET {first_path}"}
                 else:
                     # Use entity-based path guess from route_map
@@ -2742,15 +2808,34 @@ class AutonomousDiscoveryEngine:
 
 
 def run_discovery(prd_path: str = None, api_path: str = None,
-                  base_url: str = "http://127.0.0.1:8000/api") -> dict:
+                  base_url: str | None = None) -> dict:
     """便捷入口"""
-    if prd_path is None:
-        prd_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/PRD.md")
-    if api_path is None:
-        api_path = str(Path(__file__).resolve().parents[1] / "mes_target/mes-buglab-target/docs/API.md")
+    project_id = str(os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID") or "default_project").strip() or "default_project"
+    repo_root = Path(__file__).resolve().parents[1]
 
-    prd = Path(prd_path).read_text(encoding="utf-8")
-    api = Path(api_path).read_text(encoding="utf-8")
+    def _resolve_input_path(candidates: list[str]) -> str:
+        search_dirs = [
+            repo_root / "platform_workspace" / project_id / "input",
+            repo_root / "platform_inputs" / project_id,
+            repo_root / "projects" / project_id / "input",
+            repo_root / "input",
+        ]
+        for directory in search_dirs:
+            if not directory.exists() or not directory.is_dir():
+                continue
+            for candidate in candidates:
+                path = directory / candidate
+                if path.exists() and path.is_file():
+                    return str(path)
+        return ""
+
+    if prd_path is None:
+        prd_path = _resolve_input_path(["PRD.md", "prd.md", "requirements.md", "business_requirements.md"])
+    if api_path is None:
+        api_path = _resolve_input_path(["openapi.json", "openapi.yaml", "openapi.yml", "API_SPEC.md", "API.md"])
+
+    prd = Path(prd_path).read_text(encoding="utf-8") if prd_path and Path(prd_path).is_file() else ""
+    api = Path(api_path).read_text(encoding="utf-8") if api_path and Path(api_path).is_file() else ""
 
     engine = AutonomousDiscoveryEngine(base_url=base_url)
     return engine.discover(prd, api)

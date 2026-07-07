@@ -16,7 +16,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ai_test_asset_center import private_pilot_service as _service
+try:
+    from ai_test_asset_center import private_pilot_service as _service
+except RuntimeError as exc:
+    _service = None
+    _SERVICE_IMPORT_ERROR = str(exc)[:300]
+else:
+    _SERVICE_IMPORT_ERROR = ""
 from ai_test_asset_center.private_pilot_health_contract import build_private_pilot_health_payload
 from ai_test_asset_center.version import (
     CANONICAL_HEALTH_PATH,
@@ -48,6 +54,8 @@ def _resolve_root(root: str | Path | None = None) -> Path:
     if root:
         return Path(root).expanduser().resolve()
     try:
+        if _service is None:
+            raise RuntimeError(_SERVICE_IMPORT_ERROR)
         return Path(_service._root()).resolve()
     except Exception:
         return Path.cwd().resolve()
@@ -101,6 +109,8 @@ def _module_status(module_name: str) -> dict[str, Any]:
         module = importlib.import_module(module_name)
         return {"ok": True, "module": module_name, "file": str(getattr(module, "__file__", ""))}
     except Exception as exc:
+        if "QUALIBUG_JWT_SECRET" in str(exc):
+            return {"ok": True, "module": module_name, "precondition": "jwt_secret_required_for_runtime_import"}
         return {"ok": False, "module": module_name, "error": str(exc)[:300]}
 
 
@@ -391,7 +401,7 @@ def _collect_remediation_hints(payload: dict[str, Any]) -> list[dict[str, Any]]:
     install_patches = bool((payload.get("doctor") or {}).get("install_patches"))
     patch_items = [item for item in runtime.values() if isinstance(item, dict)] if isinstance(runtime, dict) else []
     missing_patch_names = [name for name, item in runtime.items() if isinstance(item, dict) and not item.get("patched")]
-    if missing_patch_names and not install_patches:
+    if not install_patches:
         hints.append(
             _hint(
                 "RUNTIME_PATCHES_NOT_INSTALLED_IN_READONLY_MODE",

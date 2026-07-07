@@ -79,6 +79,7 @@ const SOURCE_STATUS_LABELS: Record<string, { label: string; tone: string }> = {
   processing: { label: '处理中', tone: 'warning' },
   failed: { label: '失败', tone: 'danger' },
 };
+const EXECUTABLE_SOURCE_TYPES = new Set(['prd', 'openapi', 'database_schema', 'collaboration_document', 'historical_bug']);
 
 function normalizeUploadError(error: unknown) {
   const rawMessage = error instanceof Error ? error.message : '资料导入失败';
@@ -423,11 +424,36 @@ export function EnterpriseMaterials() {
     return String(right.uploaded_at || '').localeCompare(String(left.uploaded_at || ''));
   });
   const activeCount = displaySources.filter((item) => item.status === 'active').length;
+  const processingCount = displaySources.filter((item) => item.status === 'processing').length;
+  const failedCount = displaySources.filter((item) => item.status === 'failed').length;
+  const executableCount = displaySources.filter((item) => EXECUTABLE_SOURCE_TYPES.has(String(item.source_type || '').trim())).length;
+  const prdCount = displaySources.filter((item) => String(item.source_type || '').trim() === 'prd').length;
+  const apiCount = displaySources.filter((item) => String(item.source_type || '').trim() === 'openapi').length;
+  const dbCount = displaySources.filter((item) => ['database_schema', 'db_design'].includes(String(item.source_type || '').trim())).length;
   const latestUploadedAt = displaySources
     .map((item) => item.uploaded_at)
     .filter(Boolean)
     .sort()
     .at(-1) || '';
+  const topSourceTypes = Object.entries(displaySources.reduce<Record<string, number>>((acc, item) => {
+    const key = formatSourceType(item.source_type);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {})).sort((left, right) => right[1] - left[1]).slice(0, 4);
+  const parseHeadline = displaySources.length === 0
+    ? '当前还没有进入知识中心的项目资料'
+    : failedCount > 0
+      ? '当前有资料导入失败，需先修复后再进入执行'
+      : processingCount > 0
+        ? '资料正在进入知识中心，建议等待解析完成后再运行'
+        : executableCount > 0
+          ? '当前资料已形成可执行上下文，可直接进入运行中心'
+          : '当前已导入资料，但可执行上下文仍需继续补齐';
+  const parseDescription = displaySources.length === 0
+    ? '建议至少先导入 PRD、接口文档或数据库设计，再进入运行中心。'
+    : executableCount > 0
+      ? `已识别 ${executableCount} 份可直接支撑执行的核心资料，其中 PRD ${prdCount} 份、接口文档 ${apiCount} 份、数据库资料 ${dbCount} 份。`
+      : '当前资料更多停留在补充信息层，还缺少能直接驱动执行的核心来源。';
   const helperText = status || (
     selectedType === 'prd'
       ? '用于沉淀需求背景、业务流程与验收口径'
@@ -492,6 +518,46 @@ export function EnterpriseMaterials() {
         <strong>{status ? '当前回执' : '操作提示'}</strong>
         <span>{status || '支持上传、筛选和删除资料；关键结果会在这里持续显示，避免提示一闪而过。'}</span>
       </div>
+      <div className="customer-summary-grid mb-4">
+        {[
+          { label: '资料总数', value: displaySources.length, tone: displaySources.length > 0 ? 'primary' : 'neutral', note: '已进入项目知识中心的资料数量' },
+          { label: '已生效', value: activeCount, tone: activeCount > 0 ? 'success' : 'neutral', note: '当前可被扫描链直接消费的资料' },
+          { label: '可执行资料', value: executableCount, tone: executableCount > 0 ? 'success' : 'warning', note: executableCount > 0 ? '已具备驱动测试执行的核心上下文' : '建议补齐 PRD / API / DB 设计' },
+          { label: '异常资料', value: failedCount, tone: failedCount > 0 ? 'danger' : 'neutral', note: failedCount > 0 ? '导入失败会直接影响后续执行' : '当前无失败资料' },
+        ].map((item) => (
+          <article key={item.label} className={`customer-summary-card tone-${item.tone}`}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <small>{item.note}</small>
+          </article>
+        ))}
+      </div>
+      <section className="section-card mb-4">
+        <div className="product-section-head">
+          <div>
+            <span className="panel-kicker">解析结果</span>
+            <h2>{parseHeadline}</h2>
+            <p>{parseDescription}</p>
+          </div>
+        </div>
+        <div className="customer-secondary-grid">
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">核心资料覆盖</span>
+            <h3>{prdCount > 0 && apiCount > 0 ? 'PRD + API 已就绪' : '核心资料待补齐'}</h3>
+            <p>PRD {prdCount} 份，接口文档 {apiCount} 份，数据库资料 {dbCount} 份。核心资料越完整，运行中心越容易形成真实可执行路径。</p>
+          </article>
+          <article className={`customer-secondary-card${processingCount > 0 || failedCount > 0 ? ' muted' : ''}`}>
+            <span className="customer-value-kicker">解析状态</span>
+            <h3>{processingCount > 0 ? '仍在处理' : failedCount > 0 ? '存在失败项' : '当前稳定可用'}</h3>
+            <p>处理中 {processingCount} 份，失败 {failedCount} 份。只有真实进入知识中心并成功解析的资料，才会被后续扫描和证据链消费。</p>
+          </article>
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">资料结构</span>
+            <h3>{topSourceTypes.length > 0 ? topSourceTypes.map(([label]) => label).join('、') : '等待导入'}</h3>
+            <p>{topSourceTypes.length > 0 ? topSourceTypes.map(([label, count]) => `${label} ${count} 份`).join('，') : '导入后会在这里展示当前项目的资料分布。'}</p>
+          </article>
+        </div>
+      </section>
       {batchUploadState && (
         <section className="materials-batch-panel">
           <div className="materials-batch-head">

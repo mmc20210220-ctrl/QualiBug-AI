@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_test_asset_center.behavior_registry import build_behavior_registry_report
 
@@ -20,6 +24,7 @@ CONTAINER_KEYS = (
     "issues",
     "results",
     "verification_results",
+    "artifacts",
     "_last_engine_report",
 )
 

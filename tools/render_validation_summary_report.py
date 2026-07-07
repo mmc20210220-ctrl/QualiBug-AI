@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_test_asset_center.validation_summary import build_validation_summary_report
 from tools.render_behavior_coverage_report import render_behavior_coverage_report

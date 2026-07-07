@@ -1,13 +1,13 @@
 import { useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { usePipelineData } from '../api/data';
+import { getCommercialAssets, usePipelineData } from '../api/data';
 import { useToast } from '../components/useToast';
 import { buildReportData, renderReportHTML } from '../api/report';
 import { formatDurationMs } from '../lib/display';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
-import type { Finding } from '../types';
+import type { CommercialAssets, Finding, RegressionSummary } from '../types';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -72,6 +72,14 @@ function asNum(v: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function firstNum(...values: unknown[]): number {
+  for (const value of values) {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
 function formatScanTime(value: string) {
   if (!value) return '暂无';
   const date = new Date(value);
@@ -109,6 +117,37 @@ function campaignDetail(status: string, deferredReason: string, nextCampaignReas
   if (status === 'completed') return '本 Campaign 的可执行范围已按真实回执收口；后续范围变化会创建新的 Campaign。';
   if (status === 'active') return '当前 Campaign 仍在执行或补证；只有完整真实回执可以形成 confirmed 结果。';
   return '当前没有可用的 Campaign 治理状态。';
+}
+
+function commercialHandoffLabel(assets: CommercialAssets | null): string {
+  const status = assets?.commercial_handoff.status || assets?.status || '';
+  if (status === 'commercial_handoff_ready_with_validated_findings') return '商业交付已就绪';
+  if (status === 'ready_for_customer_acceptance') return '待客户验收';
+  if (status === 'materialized') return '交付资产已生成';
+  if (status === 'empty') return '尚未生成';
+  return status || '未上报';
+}
+
+function trackerSyncLabel(assets: CommercialAssets | null): string {
+  const status = assets?.tracker_sync.payload_status || '';
+  if (status === 'external_tracker_sync_payloads_blocked_or_empty') return '仅保留待同步草稿';
+  if (status === 'external_tracker_sync_payloads_ready') return '同步载荷已就绪';
+  return status || '未上报';
+}
+
+function deliveryPackageLabel(assets: CommercialAssets | null): string {
+  const status = assets?.delivery_package.status || '';
+  if (status === 'created') return '交付包已创建';
+  if (status === 'not_created') return '交付包未生成';
+  return status || '未上报';
+}
+
+function regressionGateLabel(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === 'failed') return '回归失败';
+  if (normalized === 'passed') return '回归通过';
+  if (normalized === 'manual_approval_required') return '回归待审批';
+  return normalized ? '回归待执行' : '回归未上报';
 }
 
 function getExecutiveHeadline(defectCount: number, p0Count: number, highPriorityCount: number, clueCount: number, campaignStatus: string, deferredReason: string) {
@@ -297,8 +336,10 @@ export function Dashboard() {
   if (!project) return <StatePanel eyebrow="客户选择" title="请先选择客户项目" description="风险总览只展示真实项目数据。选择客户后，界面会按该项目的检测结果与证据链自动刷新。" />;
 
   const record = asRecord(data);
+  const commercialAssets = getCommercialAssets(record);
   const findings = ((record.defects || record.risks || []) as Finding[]);
   const clues = ((record.clues || []) as Finding[]);
+  const regressionSummary = asRecord(record.regression_summary) as unknown as RegressionSummary;
   const valueMetrics = asRecord(record.value_metrics);
   const scanMeta = asRecord(record.scan_meta);
   const gatePatch = getGatePatchStatus(record);
@@ -322,17 +363,22 @@ export function Dashboard() {
   const evidenceFullyNormalizedCount = asNum(evidenceNormalizationSummary.fully_normalized_count);
   const hasEvidenceNormalizationSummary = Object.keys(evidenceNormalizationSummary).length > 0 || evidenceNormalizationItemReports.length > 0;
   const campaign = asRecord(record.campaign);
+  const continuousCampaign = asRecord(record.continuous_discovery_campaign);
+  const campaignSummary = asRecord(continuousCampaign.summary);
   const campaignStatus = asText(campaign.campaign_status).toLowerCase();
   const campaignDeferredReason = asText(campaign.coverage_deferred_reason);
   const nextCampaignReason = asText(campaign.next_campaign_reason);
   const campaignScope = asText(campaign.scope_id);
   const campaignEnvironment = asText(campaign.environment_ref);
+  const totalRiskCount = findings.length;
   const campaignAttempted = asNum(campaign.attempted_slice_count);
-  const campaignConfirmed = asNum(campaign.confirmed_slice_count);
+  const campaignConfirmed = firstNum(campaignSummary.current_campaign_confirmed_slice_count, campaignSummary.confirmed_slice_count, campaign.confirmed_slice_count);
+  const campaignCurrentDefects = asNum(campaignSummary.current_campaign_customer_ready_defect_count);
+  const campaignCurrentRawFindings = asNum(campaignSummary.current_campaign_bundle_finding_count_raw);
+  const campaignFamilyDefects = asNum(campaignSummary.family_customer_ready_defect_count, totalRiskCount);
+  const campaignCarryoverDefects = asNum(campaignSummary.family_historical_carryover_defect_count);
   const coverageGaps = Array.isArray(record.coverage_gaps) ? record.coverage_gaps.length : 0;
   const governanceNeedsAction = campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred';
-
-  const totalRiskCount = findings.length;
   const p0Count = findings.filter((finding) => finding.severity === 'P0').length;
   const clueCount = clues.length;
   const evidenceTrust = asNum(valueMetrics.evidence_trust_score, 0);
@@ -341,6 +387,12 @@ export function Dashboard() {
   const modulesCount = modules.length;
   const validatedDefects = findings.filter((finding) => finding.evidence_quality?.level === 'validated').length;
   const deliveryReadiness = findings.length > 0 ? Math.round((validatedDefects / findings.length) * 100) : 0;
+  const regressionCovered = asNum(regressionSummary.covered_defect_count);
+  const regressionFailed = asNum(regressionSummary.failed_defect_count);
+  const regressionPending = asNum(regressionSummary.pending_defect_count);
+  const regressionPassed = asNum(regressionSummary.passed_defect_count);
+  const regressionRunAt = asText(regressionSummary.latest_run?.generated_at);
+  const regressionGate = regressionGateLabel(asText(regressionSummary.latest_run?.gate_status));
   const hasMaterializedMetrics = totalRiskCount > 0 || clueCount > 0 || asNum(asRecord(record.business_flow_summary).total, 0) > 0 || Boolean(campaignStatus) || coverageGaps > 0 || hasMainChainContract || hasEvidenceNormalizationSummary;
   const topFindings = [...findings].sort((a, b) => {
     const severityGap = getSeverityWeight(b.severity) - getSeverityWeight(a.severity);
@@ -432,9 +484,18 @@ export function Dashboard() {
           <div className="customer-secondary-meta">
             <span><em>范围</em><b>{campaignScope || '待登记'}</b></span>
             <span><em>环境</em><b>{campaignEnvironment || '待登记'}</b></span>
-            <span><em>切片</em><b>{campaignConfirmed}/{campaignAttempted || 0} 已确认</b></span>
+            <span><em>确认回执</em><b>{campaignConfirmed}/{campaignAttempted || 0}</b></span>
+            <span><em>本轮缺陷</em><b>{campaignCurrentDefects || 0} 条</b></span>
+            <span><em>缺陷货架</em><b>{campaignFamilyDefects} 条</b></span>
+            <span><em>历史延续</em><b>{campaignCarryoverDefects} 条</b></span>
             <span><em>覆盖缺口</em><b>{coverageGaps}</b></span>
           </div>
+          {(campaignCurrentRawFindings > 0 || campaignCarryoverDefects > 0) && (
+            <div className="customer-secondary-meta">
+              <span><em>本轮原始 finding</em><b>{campaignCurrentRawFindings}</b></span>
+              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮缺陷 {campaignCurrentDefects || 0} → 货架 {campaignFamilyDefects}</b></span>
+            </div>
+          )}
         </article>
       )}
       {clueCount > 0 && (
@@ -443,6 +504,34 @@ export function Dashboard() {
           <h3>{clueCount} 条线索仍在补证</h3>
           <p>这部分只供内部运营使用，不进入客户缺陷交付，避免把待补证线索误展示成已确认问题。</p>
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>进入内部线索页</button>
+        </article>
+      )}
+      {commercialAssets && (
+        <article className={`customer-secondary-card${commercialAssets.status === 'materialized' ? '' : ' muted'}`}>
+          <span className="customer-value-kicker">商业交付资产</span>
+          <h3>{commercialHandoffLabel(commercialAssets)}</h3>
+          <p>{commercialAssets.status === 'materialized' ? `当前已沉淀 ${commercialAssets.finding_count} 条商业交付资产，其中 ${commercialAssets.customer_ready_reproduction_count} 条具备客户复验入口。` : '后端已经暴露 commercial_assets 契约，但当前尚未形成可交付资产包。'}</p>
+          <div className="customer-secondary-meta">
+            <span><em>交付包</em><b>{deliveryPackageLabel(commercialAssets)}</b></span>
+            <span><em>Tracker 同步</em><b>{trackerSyncLabel(commercialAssets)}</b></span>
+            <span><em>客户复验资产</em><b>{commercialAssets.customer_ready_reproduction_count}</b></span>
+            <span><em>安全交付</em><b>{commercialAssets.commercial_handoff.safe_for_customer ? '是' : '否'}</b></span>
+          </div>
+        </article>
+      )}
+      {(regressionCovered > 0 || regressionSummary.suite_exists) && (
+        <article className={`customer-secondary-card${regressionFailed > 0 || regressionPending > 0 ? ' muted' : ''}`}>
+          <span className="customer-value-kicker">回归验证</span>
+          <h3>{regressionGate}</h3>
+          <p>{regressionSummary.headline || '当前已经把客户缺陷纳入回归闭环，但尚未返回更多细节。'}</p>
+          <div className="customer-secondary-meta">
+            <span><em>已覆盖缺陷</em><b>{regressionCovered}</b></span>
+            <span><em>回归通过</em><b>{regressionPassed}</b></span>
+            <span><em>回归失败</em><b>{regressionFailed}</b></span>
+            <span><em>待执行</em><b>{regressionPending}</b></span>
+            <span><em>最近模式</em><b>{asText(regressionSummary.latest_run?.suite_mode_label) || asText(regressionSummary.latest_run?.suite_mode) || '未执行'}</b></span>
+            <span><em>最近回归</em><b>{regressionRunAt ? formatScanTime(regressionRunAt) : '暂无'}</b></span>
+          </div>
         </article>
       )}
     </section>
@@ -469,6 +558,8 @@ export function Dashboard() {
             <span className="summary-pill">阻断发布 {p0Count}</span>
             <span className="summary-pill">Campaign {campaignStatusLabel(campaignStatus)}</span>
             <span className="summary-pill">覆盖缺口 {coverageGaps}</span>
+            {regressionCovered > 0 && <span className="summary-pill">回归 {regressionGate}</span>}
+            {commercialAssets && <span className="summary-pill">商业交付 {commercialHandoffLabel(commercialAssets)}</span>}
             <span className="summary-pill">{gatePatchLabel(gatePatchEnabled)}</span>
             <span className="summary-pill">{mainChainReadyLabel(mainChainReady, hasMainChainContract)}</span>
             <span className="summary-pill">{evidenceNormalizationLabel(evidenceNormalizationSummary)}</span>
@@ -491,6 +582,7 @@ export function Dashboard() {
             <span><em>交付 Gate</em><b>{gatePatchLabel(gatePatchEnabled)}</b></span>
             <span><em>主链路</em><b>{mainChainReadyLabel(mainChainReady, hasMainChainContract)}</b></span>
             <span><em>证据标准化</em><b>{evidenceNormalizationLabel(evidenceNormalizationSummary)}</b></span>
+            {regressionCovered > 0 && <span><em>回归状态</em><b>{regressionGate}</b></span>}
             <span><em>本轮说明</em><b>{asNum(scanMeta.run_count) ? `第 ${asNum(scanMeta.run_count)} 轮` : campaignStatus ? campaignStatusLabel(campaignStatus) : '首次结果'}</b></span>
           </div>
         </div>
@@ -502,6 +594,18 @@ export function Dashboard() {
           { label: '阻断发布', val: p0Count, tone: 'danger', note: p0Count > 0 ? '需要立即闭环' : governanceNeedsAction ? '需先补齐 Campaign 合同或范围' : '当前无阻断项' },
           { label: '主链路', val: mainChainReadyLabel(mainChainReady, hasMainChainContract), tone: hasMainChainContract && !mainChainReady ? 'danger' : 'neutral', note: hasMainChainContract ? mainChainReady ? '六段链路已闭合' : `断在 ${firstBlockedStageLabel}` : '等待后端合同' },
           { label: '证据字段', val: evidenceNormalizationLabel(evidenceNormalizationSummary), tone: evidenceBlockedItemCount > 0 ? 'danger' : 'neutral', note: evidenceMissingFields.length > 0 ? evidenceMissingFields.slice(0, 2).map(([field, count]) => `${evidenceMissingFieldLabel(field)}×${count}`).join('、') : '等待证据标准化报告' },
+          ...(regressionCovered > 0 ? [{
+            label: '回归闭环',
+            val: regressionGate,
+            tone: regressionFailed > 0 ? 'danger' : regressionPending > 0 ? 'warning' : 'success',
+            note: regressionRunAt ? `${formatScanTime(regressionRunAt)} · 已覆盖 ${regressionCovered} 条` : `已覆盖 ${regressionCovered} 条客户缺陷`,
+          }] : []),
+          ...(commercialAssets ? [{
+            label: '商业交付',
+            val: deliveryPackageLabel(commercialAssets),
+            tone: commercialAssets.delivery_package.status === 'created' ? 'success' : 'warning',
+            note: `${trackerSyncLabel(commercialAssets)} · 客户复验资产 ${commercialAssets.customer_ready_reproduction_count} 条`,
+          }] : []),
         ].map((item) => (
           <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.val}</strong><small>{item.note}</small></article>
         ))}

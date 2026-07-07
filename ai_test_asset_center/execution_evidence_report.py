@@ -32,6 +32,23 @@ EVIDENCE_KEYS = {
     "observations",
 }
 
+STATUS_EVIDENCE_KEYS = {"status", "status_code", "http_status"}
+
+
+def _has_status_evidence(value: Any) -> bool:
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return False
+        try:
+            int(text)
+            return True
+        except ValueError:
+            return text.upper().startswith("HTTP ")
+    return False
+
 
 def _has_non_empty_value(value: Any) -> bool:
     if value is None:
@@ -54,6 +71,10 @@ def has_runtime_evidence(candidate: Any) -> bool:
     if isinstance(candidate, dict):
         for key, value in candidate.items():
             key_text = str(key).lower()
+            if key_text in STATUS_EVIDENCE_KEYS:
+                if _has_status_evidence(value):
+                    return True
+                continue
             if key_text in EVIDENCE_KEYS and _has_non_empty_value(value):
                 return True
             if has_runtime_evidence(value):

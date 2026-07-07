@@ -161,6 +161,20 @@ class ParameterFuzzer:
         sandbox = route.get("disposable_sandbox")
         return self.allow_write and policy == "disposable_sandbox_required" and isinstance(sandbox, dict) and bool(sandbox.get("approved"))
 
+    def _test_acl(self, routes: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        for route in routes or []:
+            if not isinstance(route, dict):
+                continue
+            path = str(route.get("path") or "")
+            method = str(route.get("method") or "GET").upper()
+            if not path or method not in _READ_METHODS:
+                continue
+            status, body, elapsed = self._call(method, path)
+            if 200 <= status < 300:
+                findings.append(self._finding(method, path, status, body, elapsed, "acl_probe_unexpected_success", route))
+        return findings
+
     def _declared_params(self, route: dict[str, Any], *, query_only: bool) -> list[str]:
         values: list[str] = []
         if query_only:
@@ -235,3 +249,9 @@ class ParameterFuzzer:
                 "duration_ms": elapsed,
             },
         }
+
+    def _to_finding(self, method: str, path: str, status: int, body: Any, description: str, category: str, severity: str) -> dict[str, Any]:
+        finding = self._finding(method, path, status, body, 0.0, description, {})
+        finding["category"] = str(category or finding["category"])
+        finding["severity"] = str(severity or finding["severity"])
+        return finding

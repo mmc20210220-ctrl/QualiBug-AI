@@ -48,6 +48,8 @@ def _same_approved_origin(base_url: str, target_url: str) -> bool:
 
 
 def _as_steps(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        value = value.get("steps")
     if not isinstance(value, list):
         raise BrowserExecutionError("browser_steps_required")
     steps = [dict(item) for item in value if isinstance(item, dict)]

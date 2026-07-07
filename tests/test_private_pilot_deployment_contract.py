@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+
+
+def _function_block(source: str, name: str) -> str:
+    match = re.search(rf"def {re.escape(name)}\([^)]*\) -> [^:]+:\n((?:    .*\n)+)", source)
+    assert match, f"missing function block: {name}"
+    return match.group(1)
 
 
 def test_product_version_matches_pyproject() -> None:
@@ -51,6 +58,7 @@ def test_health_contract_and_deployment_patch_are_extracted_from_entrypoint() ->
 def test_entrypoint_uses_extracted_scan_campaign_context_patch() -> None:
     entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
     scan_patch = Path("ai_test_asset_center/private_pilot_scan_context_patch.py").read_text(encoding="utf-8")
+    install_block = _function_block(entrypoint, "install_runtime_patches")
 
     assert "from ai_test_asset_center.private_pilot_scan_context_patch import" in entrypoint
     assert "def install_extracted_scan_campaign_context_patch" in entrypoint
@@ -60,19 +68,20 @@ def test_entrypoint_uses_extracted_scan_campaign_context_patch() -> None:
     assert "def restore_scan_campaign_context_patch" in scan_patch
     assert "_handle_v12_scan_with_campaign_context" in scan_patch
     assert "_continuous_scan_loop_with_campaign_context" in scan_patch
-    assert "install_customer_delivery_gate_patch()" in entrypoint
-    assert entrypoint.index("install_customer_delivery_gate_patch()") < entrypoint.index("install_extracted_scan_campaign_context_patch()")
+    assert "install_customer_delivery_gate_patch()" in install_block
+    assert install_block.index("install_customer_delivery_gate_patch()") < install_block.index("install_extracted_scan_campaign_context_patch()")
 
 
 def test_entrypoint_uses_extracted_credential_safety_patch() -> None:
     entrypoint = Path("ai_test_asset_center/private_pilot_entrypoint.py").read_text(encoding="utf-8")
     credential_patch = Path("ai_test_asset_center/private_pilot_credentials_patch.py").read_text(encoding="utf-8")
+    install_block = _function_block(entrypoint, "install_runtime_patches")
 
     assert "from ai_test_asset_center.private_pilot_credentials_patch import" in entrypoint
     assert "def install_extracted_credential_safety_patch" in entrypoint
     assert "install_extracted_credential_safety_patch()" in entrypoint
-    assert "install_customer_delivery_gate_patch()" in entrypoint
-    assert entrypoint.index("install_customer_delivery_gate_patch()") < entrypoint.index("install_extracted_credential_safety_patch()")
+    assert "install_customer_delivery_gate_patch()" in install_block
+    assert install_block.index("install_customer_delivery_gate_patch()") < install_block.index("install_extracted_credential_safety_patch()")
     assert "def install_service_credentials_patch" in credential_patch
     assert "def restore_service_credentials_patch" in credential_patch
 

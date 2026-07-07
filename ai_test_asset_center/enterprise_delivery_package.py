@@ -73,6 +73,9 @@ def create_delivery_package(
     bundle_dir = workspace / "platform_workspace" / project / "evidence_bundles" / bundle_id
     if not bundle_dir.exists():
         raise DeliveryPackageError("delivery_evidence_bundle_directory_missing")
+    release_verdict = str(release_gate.get("verdict") or "not_ready")
+    if release_verdict == "pass" and int(result.get("total_findings") or 0) <= 0:
+        release_verdict = "not_ready"
     destination = Path(output_dir) if output_dir else workspace / "platform_outputs" / project / "delivery_packages"
     destination.mkdir(parents=True, exist_ok=True)
     package_id = f"delivery_{project}_{bundle_id}"
@@ -112,6 +115,6 @@ def create_delivery_package(
         "package_id": package_id,
         "package_ref": str(archive_path.relative_to(workspace)),
         "sha256": _hash_file(archive_path),
-        "release_verdict": str(release_gate.get("verdict") or "not_ready"),
+        "release_verdict": release_verdict,
         "evidence_bundle_id": bundle_id,
     }

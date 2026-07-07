@@ -1,0 +1,35 @@
+{
+  "root_cause_by_risk_type": {
+    "permission_bypass": "权限校验逻辑未覆盖该场景，可能缺少角色/资源归属检查",
+    "idor": "对象级授权缺失，接口未校验当前用户对该资源的访问权限",
+    "business_invariant": "业务约束校验缺失，数据写入前未验证不变量",
+    "data_integrity": "数据一致性校验缺失，可能缺少事务保护或并发控制",
+    "positive_numeric": "数值范围校验缺失，未拒绝非法负值",
+    "nonnegative_numeric": "非负约束校验缺失，未在写入前验证",
+    "idempotency": "幂等控制缺失，重复请求导致数据重复写入",
+    "state_machine": "状态流转校验缺失，允许了非法状态跳转",
+    "api_contract": "接口契约实现与规范不一致",
+    "sensitive_field_leak": "响应体未脱敏，敏感字段直接返回"
+  },
+  "fix_by_risk_type": {
+    "permission_bypass": "在该接口增加权限校验中间件，验证当前用户角色是否有权操作目标资源",
+    "idor": "在接口层增加对象级授权检查，验证请求者对目标资源的归属关系",
+    "business_invariant": "在数据写入前增加业务不变量校验，违反约束时拒绝写入并返回错误",
+    "data_integrity": "增加事务边界保护，确保关联数据原子性写入；补充并发控制机制",
+    "positive_numeric": "在入参校验层增加数值范围检查，拒绝负值；在数据库层增加 CHECK 约束",
+    "nonnegative_numeric": "增加非负校验，在模型层和数据库层双重保护",
+    "idempotency": "引入幂等键机制，相同请求在有效期内返回缓存结果而非重复执行",
+    "state_machine": "在状态变更接口增加状态机校验，拒绝非法跳转",
+    "api_contract": "对齐接口实现与 OpenAPI 规范，补充缺失的校验或字段",
+    "sensitive_field_leak": "在响应序列化层增加脱敏过滤，移除敏感字段或替换为掩码"
+  },
+  "defaults": {
+    "possible_root_cause": "检测到 {risk_type} 类型风险，需排查相关校验逻辑",
+    "recommended_fix": "根据缺陷类型排查相关校验逻辑，补充缺失的边界检查和约束保护"
+  },
+  "regression_suggestion_templates": [
+    "编写针对 {method} {path} 的回归测试，覆盖该缺陷场景",
+    "增加边界值测试用例，验证修复后不再出现同类问题",
+    "增加关联场景的集成测试，确保修复不影响正常业务流程"
+  ]
+}

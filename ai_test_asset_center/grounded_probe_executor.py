@@ -54,6 +54,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
+from .real_id_resolver import infer_path_params
 from .runtime_finding_evidence_packager import package_runtime_finding_evidence
 from .runtime_finding_customer_triage import triage_runtime_finding
 from .runtime_customer_report_builder import build_customer_delivery_index
@@ -2495,7 +2496,13 @@ def _bind_auto_fixture_response_id(config: dict[str, Any], probe: dict[str, Any]
         for field in bind_fields:
             previous_values[field] = str(path_params.get(field) or "")
             path_params[field] = response_id
-    replace_from = [old_id] + [v for v in previous_values.values() if v]
+    primary_fields = {
+        re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
+        for name in infer_path_params(str(((probe.get("endpoint") or {}).get("path") if isinstance(probe.get("endpoint"), dict) else "") or ""))
+    }
+    replace_from = [v for v in previous_values.values() if v]
+    if old_id and any(re.sub(r"[^a-z0-9]+", "", field.lower()) in primary_fields for field in bind_fields):
+        replace_from.append(old_id)
     for previous in dict.fromkeys([v for v in replace_from if v and v != response_id]):
         for key in ("request_body", "setup_requests", "snapshots", "cleanup_requests"):
             if key in bundle:
@@ -2658,6 +2665,19 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
         invariant_eval = evaluate_business_invariants_before_after(probe, responses, snapshots)
     except Exception as exc:  # pragma: no cover - defensive runtime guard
         invariant_eval = {"verdict": "inconclusive", "reason": f"before_after_invariant_evaluator_error:{type(exc).__name__}:{exc}", "checked_count": 0}
+    db_snapshot = snapshots.get("db") if isinstance(snapshots.get("db"), dict) else {}
+    db_diffs = [item for item in (db_snapshot.get("diffs") or []) if isinstance(item, dict)]
+    db_anomalies = [item for item in db_diffs if item.get("added_rows") or item.get("removed_rows") or item.get("modified_rows")]
+    db_evidence = None
+    if db_anomalies:
+        first_diff = db_anomalies[0]
+        db_evidence = {
+            "before_db_snapshot": ((db_snapshot.get("before_snapshots") or [{}])[0] if isinstance(db_snapshot.get("before_snapshots"), list) else {}),
+            "after_db_snapshot": ((db_snapshot.get("after_snapshots") or [{}])[0] if isinstance(db_snapshot.get("after_snapshots"), list) else {}),
+            "db_assertion": str(first_diff.get("detail") or "数据库前后快照存在差异"),
+            "business_operation": f"{str((probe.get('endpoint') or {}).get('method') or '').upper()} {str((probe.get('endpoint') or {}).get('path') or '')}".strip(),
+            "table": str(first_diff.get("table") or ""),
+        }
 
     if invariant_eval.get("verdict") == "failed":
         failed_results = [r for r in (invariant_eval.get("results") or []) if isinstance(r, dict) and r.get("verdict") == "failed"]
@@ -2671,18 +2691,19 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
             "payload_summary": summary,
             "sensitive_keys": sensitive_keys,
             "business_invariant_evaluation": invariant_eval,
+            "db_evidence": db_evidence,
             "failed_fields": list(dict.fromkeys(failed_fields))[:30],
         }
 
     if status is None:
-        return {"verdict": "inconclusive", "reason": first.get("error") or "network_error", "confidence": 0.0, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
+        return {"verdict": "inconclusive", "reason": first.get("error") or "network_error", "confidence": 0.0, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
     try:
         code = int(status)
     except Exception:
         code = 0
 
     if code in expected:
-        return {"verdict": "falsified_or_protected", "reason": f"negative sandbox write was rejected with expected HTTP {code}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
+        return {"verdict": "falsified_or_protected", "reason": f"negative sandbox write was rejected with expected HTTP {code}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
 
     if 200 <= code < 300 and _negative_probe_payload_was_accepted(probe, payload):
         method = str(first.get("method") or "").upper()
@@ -2694,43 +2715,44 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
             "payload_summary": summary,
             "sensitive_keys": sensitive_keys,
             "business_invariant_evaluation": invariant_eval,
+            "db_evidence": db_evidence,
         }
 
     if _is_auth_boundary_risk(probe, risk_type) or risk_type in {"ownership_scope_probe", "state_transition_probe", "async_external_event_probe"}:
         if 200 <= code < 300:
-            return {"verdict": "validated_candidate", "reason": f"negative sandbox write was accepted with HTTP {code}; expected one of {sorted(expected)}", "confidence": 0.86, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
-        return {"verdict": "inconclusive", "reason": f"negative sandbox write returned unexpected HTTP {code}", "confidence": 0.38, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
+            return {"verdict": "validated_candidate", "reason": f"negative sandbox write was accepted with HTTP {code}; expected one of {sorted(expected)}", "confidence": 0.86, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
+        return {"verdict": "inconclusive", "reason": f"negative sandbox write returned unexpected HTTP {code}", "confidence": 0.38, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
 
     if risk_type == "idempotency_replay_probe":
         ok_responses = [r for r in responses if isinstance(r.get("status_code"), int) and 200 <= int(r.get("status_code")) < 300]
         ids = [_extract_id_like(r.get("payload")) for r in ok_responses]
         ids = [x for x in ids if x]
         if len(ok_responses) >= 2 and len(set(ids)) >= 2:
-            return {"verdict": "validated_candidate", "reason": f"replayed sandbox write produced multiple distinct resource identifiers: {ids[:3]}", "confidence": 0.88, "payload_summary": summary, "sensitive_keys": sensitive_keys, "replay_ids": ids[:5], "business_invariant_evaluation": invariant_eval}
+            return {"verdict": "validated_candidate", "reason": f"replayed sandbox write produced multiple distinct resource identifiers: {ids[:3]}", "confidence": 0.88, "payload_summary": summary, "sensitive_keys": sensitive_keys, "replay_ids": ids[:5], "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
         if len(ok_responses) >= 2 and ids and len(set(ids)) == 1:
-            return {"verdict": "observed_no_finding", "reason": "replayed sandbox write returned the same resource identifier; no duplicate side effect observed by response oracle", "confidence": 0.62, "payload_summary": summary, "sensitive_keys": sensitive_keys, "replay_ids": ids[:5], "business_invariant_evaluation": invariant_eval}
+            return {"verdict": "observed_no_finding", "reason": "replayed sandbox write returned the same resource identifier; no duplicate side effect observed by response oracle", "confidence": 0.62, "payload_summary": summary, "sensitive_keys": sensitive_keys, "replay_ids": ids[:5], "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
         if len(ok_responses) >= 2:
-            return {"verdict": "needs_more_evidence", "reason": "replayed write was accepted, but response lacks stable resource identifiers or side-effect oracle", "confidence": 0.5, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
+            return {"verdict": "needs_more_evidence", "reason": "replayed write was accepted, but response lacks stable resource identifiers or side-effect oracle", "confidence": 0.5, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
         if code in expected:
-            return {"verdict": "falsified_or_protected", "reason": f"replay rejected with HTTP {code}", "confidence": 0.76, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
+            return {"verdict": "falsified_or_protected", "reason": f"replay rejected with HTTP {code}", "confidence": 0.76, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
 
     if risk_type == "conservation_probe":
         if negative_values:
-            return {"verdict": "validated_candidate", "reason": "sandbox write response exposed negative resource-like values", "confidence": 0.83, "payload_summary": summary, "sensitive_keys": sensitive_keys, "negative_values": negative_values, "business_invariant_evaluation": invariant_eval}
+            return {"verdict": "validated_candidate", "reason": "sandbox write response exposed negative resource-like values", "confidence": 0.83, "payload_summary": summary, "sensitive_keys": sensitive_keys, "negative_values": negative_values, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
         if 200 <= code < 300:
             snap_count = len(snapshots.get("before") or []) + len(snapshots.get("after") or [])
             reason = "write accepted; conservation requires configured before/after DB or API snapshots for confirmation"
             if snap_count:
                 reason = "write accepted and snapshots captured; manual/advanced reconciliation is required before confirmation"
             if invariant_eval.get("verdict") == "passed" and snap_count:
-                return {"verdict": "observed_no_finding", "reason": "write accepted, but derived before/after conservation/resource invariants passed on observed snapshots", "confidence": 0.62, "payload_summary": summary, "sensitive_keys": sensitive_keys, "snapshot_count": snap_count, "business_invariant_evaluation": invariant_eval}
-            return {"verdict": "needs_more_evidence", "reason": reason, "confidence": 0.48, "payload_summary": summary, "sensitive_keys": sensitive_keys, "snapshot_count": snap_count, "business_invariant_evaluation": invariant_eval}
+                return {"verdict": "observed_no_finding", "reason": "write accepted, but derived before/after conservation/resource invariants passed on observed snapshots", "confidence": 0.62, "payload_summary": summary, "sensitive_keys": sensitive_keys, "snapshot_count": snap_count, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
+            return {"verdict": "needs_more_evidence", "reason": reason, "confidence": 0.48, "payload_summary": summary, "sensitive_keys": sensitive_keys, "snapshot_count": snap_count, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
 
     if 200 <= code < 300:
         if invariant_eval.get("verdict") == "passed":
-            return {"verdict": "observed_no_finding", "reason": f"sandbox write returned HTTP {code}; derived before/after invariants passed", "confidence": 0.58, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
-        return {"verdict": "observed_no_finding", "reason": f"sandbox write returned HTTP {code}; no runtime oracle matched", "confidence": 0.4, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
-    return {"verdict": "inconclusive", "reason": f"sandbox write returned HTTP {code}; no runtime oracle matched", "confidence": 0.35, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval}
+            return {"verdict": "observed_no_finding", "reason": f"sandbox write returned HTTP {code}; derived before/after invariants passed", "confidence": 0.58, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
+        return {"verdict": "observed_no_finding", "reason": f"sandbox write returned HTTP {code}; no runtime oracle matched", "confidence": 0.4, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
+    return {"verdict": "inconclusive", "reason": f"sandbox write returned HTTP {code}; no runtime oracle matched", "confidence": 0.35, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
 
 
 def _snapshot_requests(config: dict[str, Any], probe: dict[str, Any], phase: str) -> list[dict[str, Any]]:
@@ -2783,6 +2805,92 @@ def _execute_snapshots(config: dict[str, Any], base_url: str, probe: dict[str, A
             "response": {"status_code": response.get("status_code"), "error": response.get("error"), "payload": _redact(response.get("payload")), "duration_ms": response.get("duration_ms")},
         })
     return out
+
+
+def _db_snapshot_tables(config: dict[str, Any], probe: dict[str, Any]) -> list[str]:
+    tables: list[str] = []
+    try:
+        from .auto_test_data_factory import _infer_table_from_path, _parse_sql_tables
+    except Exception:
+        return tables
+
+    input_dir = config.get("input_dir") or config.get("project_input_dir")
+    schema_text = ""
+    if input_dir:
+        schema_path = Path(str(input_dir)) / "schema.sql"
+        if schema_path.exists():
+            try:
+                schema_text = schema_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                schema_text = ""
+    if not schema_text:
+        return tables
+
+    parsed_tables = _parse_sql_tables(schema_text)
+    if not parsed_tables:
+        return tables
+
+    endpoint = probe.get("endpoint") if isinstance(probe.get("endpoint"), dict) else {}
+    endpoint_path = normalize_path_placeholders(str(endpoint.get("path") or ""))
+    candidate = _infer_table_from_path(endpoint_path, parsed_tables)
+    if candidate:
+        tables.append(candidate)
+
+    for ref in probe.get("source_refs") or []:
+        if not isinstance(ref, dict):
+            continue
+        text = " ".join(str(ref.get(key) or "") for key in ("section", "quote", "file"))
+        lowered = text.lower()
+        for table_name in parsed_tables.keys():
+            if table_name.lower() in lowered and table_name not in tables:
+                tables.append(table_name)
+    return tables[:5]
+
+
+def _execute_db_snapshot(config: dict[str, Any], probe: dict[str, Any], phase: str) -> dict[str, Any]:
+    tables = _db_snapshot_tables(config, probe)
+    if not tables:
+        return {"status": "skipped", "reason": "no_db_tables_inferred", "tables": []}
+    try:
+        from .db_snapshot_verifier import DBSnapshotVerifier
+    except Exception as exc:
+        return {"status": "skipped", "reason": f"db_snapshot_verifier_unavailable:{type(exc).__name__}", "tables": tables}
+
+    verifier = DBSnapshotVerifier()
+    if not verifier.configured:
+        return {"status": "skipped", "reason": "db_snapshot_not_configured", "tables": tables}
+    try:
+        if phase == "before":
+            verifier.snapshot_before(tables)
+            return {
+                "status": "captured",
+                "phase": phase,
+                "tables": tables,
+                "before_snapshots": [snap.to_dict() for snap in verifier._before.values()],
+                "_verifier": verifier,
+            }
+        previous = config.get("_qualibug_db_snapshot_before")
+        if not isinstance(previous, dict):
+            return {"status": "skipped", "reason": "db_snapshot_before_missing", "tables": tables}
+        before_verifier = previous.get("verifier")
+        if before_verifier is None:
+            return {"status": "skipped", "reason": "db_snapshot_before_verifier_missing", "tables": tables}
+        before_verifier.snapshot_after(tables)
+        result = before_verifier.verify()
+        return {
+            "status": "captured",
+            "phase": phase,
+            "tables": tables,
+            "db_type": result.db_type,
+            "tables_checked": result.tables_checked,
+            "before_snapshots": result.before_snapshots,
+            "after_snapshots": result.after_snapshots,
+            "diffs": result.diffs,
+            "findings": result.findings,
+            "duration_ms": result.duration_ms,
+        }
+    except Exception as exc:
+        return {"status": "failed", "reason": f"db_snapshot_failed:{type(exc).__name__}", "tables": tables}
 
 
 def _auto_fixture_requests(config: dict[str, Any], probe: dict[str, Any], key: str) -> list[dict[str, Any]]:
@@ -2949,32 +3057,56 @@ def _render_runtime_target_body(
 
 def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe: dict[str, Any], key: str, timeout: float) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
-    for item in _auto_fixture_requests(config, probe, key):
+    initial_items = _auto_fixture_requests(config, probe, key)
+    for index in range(len(initial_items)):
+        current_items = _auto_fixture_requests(config, probe, key)
+        if index >= len(current_items):
+            break
+        item = current_items[index]
         method = str(item.get("method") or "POST").upper()
         if method not in WRITE_METHODS:
             receipts.append({"status": "skipped", "reason": f"auto_fixture_method_not_write:{method}", "path": item.get("path")})
             continue
         path_params = _fixture_item_path_params(config, probe, item)
-        path, missing = _render_path(str(item.get("path") or ""), path_params)
-        if missing:
-            receipts.append({"status": "blocked", "reason": f"auto_fixture_missing_path_params:{','.join(missing)}", "path": item.get("path")})
-            continue
         query_string = _render_query(item.get("query"), path_params)
-        request_path = path + (("?" + query_string) if query_string else "")
         headers = _fixture_control_headers(config)
         if isinstance(item.get("headers"), dict):
             headers.update({str(k): str(v) for k, v in (item.get("headers") or {}).items()})
         request_body = _fixture_request_body(config, probe, item, path_params)
-        response = _http_request(method, _join_url(base_url, request_path), headers, body=request_body, timeout=timeout)
+        path_candidates = [str(item.get("path") or "").strip()]
+        if isinstance(item.get("path_candidates"), list):
+            path_candidates.extend(str(candidate or "").strip() for candidate in item.get("path_candidates") if str(candidate or "").strip())
+        tried_paths: list[str] = []
+        response: dict[str, Any] = {}
+        request_path = ""
+        accepted = False
+        binding: dict[str, Any] = {}
+        missing: list[str] = []
+        for candidate_path in dict.fromkeys(path_candidates):
+            path, missing = _render_path(candidate_path, path_params)
+            if missing:
+                continue
+            request_path = path + (("?" + query_string) if query_string else "")
+            tried_paths.append(request_path)
+            response = _http_request(method, _join_url(base_url, request_path), headers, body=request_body, timeout=timeout)
+            code = response.get("status_code")
+            accepted = bool(isinstance(code, int) and 200 <= int(code) < 300)
+            if accepted:
+                binding = _bind_auto_fixture_response_id(config, probe, item, response)
+                break
+            if code not in {404, 405, 501}:
+                break
+        if not request_path and missing:
+            receipts.append({"status": "blocked", "reason": f"auto_fixture_missing_path_params:{','.join(missing)}", "path": item.get("path")})
+            continue
         code = response.get("status_code")
-        accepted = bool(isinstance(code, int) and 200 <= int(code) < 300)
-        binding = _bind_auto_fixture_response_id(config, probe, item, response) if accepted else {}
         receipts.append({
             "status": "executed",
             "purpose": item.get("purpose") or key,
             "accepted": accepted,
             "method": method,
             "path": request_path,
+            "path_candidates_tried": tried_paths,
             "used_fixture_control_headers": True,
             "path_params_bound_at_execution": _redact(path_params),
             "body_runtime_binding": _runtime_body_binding_summary(item.get("body"), request_body),
@@ -3175,7 +3307,13 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
     snapshots = {
         "before": [] if setup_blocked else _execute_snapshots(config, base_url, probe, "before", timeout),
         "after": [],
+        "db": {},
     }
+    if not setup_blocked:
+        db_before = _execute_db_snapshot(config, probe, "before")
+        snapshots["db"] = {"before": db_before}
+        if db_before.get("status") == "captured" and db_before.get("_verifier") is not None:
+            config["_qualibug_db_snapshot_before"] = {"verifier": db_before.get("_verifier"), "tables": db_before.get("tables") or []}
     responses: list[dict[str, Any]] = []
     shared_body, _reason = _configured_body(config, decision.candidate_id, decision.method, decision.path, probe)
     shared_params = _configured_path_params(config, probe, decision.method, decision.path)
@@ -3214,6 +3352,9 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
                     shared_body = _replace_fixture_runtime_value(shared_body, str((runtime_binding.get("previous_values") or {}).get(bind_fields[0]) or ""), response_id)
             responses.append(response | {"attempt": idx + 1, "step": idx + 1, "flow_action": step.get("action"), "flow_path": request_path, "request_body_runtime_binding": step_body_binding, "runtime_binding": runtime_binding})
         snapshots["after"] = _execute_snapshots(config, base_url, probe, "after", timeout)
+        db_after = _execute_db_snapshot(config, probe, "after")
+        if isinstance(snapshots.get("db"), dict):
+            snapshots["db"]["after"] = db_after
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout)
     verification = _verify_flow_observation(probe, responses, snapshots) if not setup_blocked else {"verdict": "inconclusive", "reason": "auto_fixture_setup_blocked", "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
     return {
@@ -3245,15 +3386,99 @@ def _verify_flow_observation(probe: dict[str, Any], responses: list[dict[str, An
         invariant_eval = evaluate_business_invariants_before_after(probe, responses, snapshots)
     except Exception as exc:  # pragma: no cover
         invariant_eval = {"verdict": "inconclusive", "reason": f"before_after_invariant_evaluator_error:{type(exc).__name__}:{exc}"}
+    db_evidence = _db_evidence_from_snapshots(probe, snapshots)
+    before_after_snapshot = _flow_before_after_snapshot(responses)
+    payload_summary = _safe_payload_summary([r.get("payload") for r in responses])
+    common = {
+        "payload_summary": payload_summary,
+        "sensitive_keys": [],
+        "business_invariant_evaluation": invariant_eval,
+        "db_evidence": db_evidence,
+        "before_after_snapshot": before_after_snapshot,
+    }
     if invariant_eval.get("verdict") == "failed":
-        return {"verdict": "validated_candidate", "reason": f"multi-step flow broke before/after invariant: {invariant_eval.get('reason')}", "confidence": max(0.89, float(invariant_eval.get("confidence") or 0.0)), "payload_summary": _safe_payload_summary([r.get("payload") for r in responses]), "sensitive_keys": [], "business_invariant_evaluation": invariant_eval}
+        failed_results = [r for r in (invariant_eval.get("results") or []) if isinstance(r, dict) and r.get("verdict") == "failed"]
+        failed_fields: list[str] = []
+        for item in failed_results:
+            failed_fields.extend([str(x) for x in (item.get("failed_fields") or [])])
+        return {
+            "verdict": "validated_candidate",
+            "reason": f"multi-step flow broke before/after invariant: {invariant_eval.get('reason')}",
+            "confidence": max(0.89, float(invariant_eval.get("confidence") or 0.0)),
+            "failed_fields": list(dict.fromkeys(failed_fields))[:30],
+            **common,
+        }
     strategy = str(scenario.get("strategy") or plan.get("strategy") or "")
     ok = [r for r in responses if isinstance(r.get("status_code"), int) and 200 <= int(r.get("status_code")) < 300]
+    if ok and db_evidence:
+        return {
+            "verdict": "validated_candidate",
+            "reason": "multi-step flow was accepted and DB snapshots captured a real side-effect delta",
+            "confidence": 0.9,
+            **common,
+        }
     if strategy == "illegal_order_inversion_flow" and ok:
-        return {"verdict": "validated_candidate", "reason": f"illegal multi-step order inversion accepted {len(ok)} step(s); expected rejection/no side effect", "confidence": 0.87, "payload_summary": _safe_payload_summary([r.get("payload") for r in responses]), "sensitive_keys": [], "business_invariant_evaluation": invariant_eval}
+        return {
+            "verdict": "validated_candidate",
+            "reason": f"illegal multi-step order inversion accepted {len(ok)} step(s); expected rejection/no side effect",
+            "confidence": 0.87,
+            **common,
+        }
     if responses and not ok:
-        return {"verdict": "falsified_or_protected", "reason": "multi-step negative flow rejected all write steps", "confidence": 0.74, "payload_summary": _safe_payload_summary([r.get("payload") for r in responses]), "sensitive_keys": [], "business_invariant_evaluation": invariant_eval}
-    return {"verdict": "needs_more_evidence", "reason": "multi-step flow executed but runtime oracle needs observer deltas for confirmation", "confidence": 0.52, "payload_summary": _safe_payload_summary([r.get("payload") for r in responses]), "sensitive_keys": [], "business_invariant_evaluation": invariant_eval}
+        return {
+            "verdict": "falsified_or_protected",
+            "reason": "multi-step negative flow rejected all write steps",
+            "confidence": 0.74,
+            **common,
+        }
+    return {
+        "verdict": "needs_more_evidence",
+        "reason": "multi-step flow executed but runtime oracle needs observer deltas for confirmation",
+        "confidence": 0.52,
+        **common,
+    }
+
+
+def _db_evidence_from_snapshots(probe: dict[str, Any], snapshots: dict[str, Any]) -> dict[str, Any] | None:
+    db_snapshot = snapshots.get("db") if isinstance(snapshots.get("db"), dict) else {}
+    db_diffs = [item for item in (db_snapshot.get("diffs") or []) if isinstance(item, dict)]
+    db_anomalies = [item for item in db_diffs if item.get("added_rows") or item.get("removed_rows") or item.get("modified_rows")]
+    if not db_anomalies:
+        return None
+    first_diff = db_anomalies[0]
+    endpoint = probe.get("endpoint") if isinstance(probe.get("endpoint"), dict) else {}
+    return {
+        "before_db_snapshot": ((db_snapshot.get("before_snapshots") or [{}])[0] if isinstance(db_snapshot.get("before_snapshots"), list) else {}),
+        "after_db_snapshot": ((db_snapshot.get("after_snapshots") or [{}])[0] if isinstance(db_snapshot.get("after_snapshots"), list) else {}),
+        "db_assertion": str(first_diff.get("detail") or "数据库前后快照存在差异"),
+        "business_operation": f"{str(endpoint.get('method') or '').upper()} {str(endpoint.get('path') or '')}".strip(),
+        "table": str(first_diff.get("table") or ""),
+    }
+
+
+def _flow_before_after_snapshot(responses: list[dict[str, Any]]) -> dict[str, Any]:
+    runtime_steps = [item for item in responses if isinstance(item, dict) and (item.get("flow_path") or item.get("path"))]
+    if not runtime_steps:
+        return {}
+
+    def _snapshot(step: dict[str, Any]) -> dict[str, Any]:
+        status_code = step.get("status_code")
+        try:
+            status = int(status_code)
+        except Exception:
+            status = 0
+        return {
+            "action": str(step.get("flow_action") or step.get("step") or ""),
+            "method": str(step.get("method") or "").upper(),
+            "path": str(step.get("flow_path") or step.get("path") or ""),
+            "status_code": status,
+            "body": _redact(step.get("payload")),
+        }
+
+    return {
+        "before": _snapshot(runtime_steps[0]),
+        "after": _snapshot(runtime_steps[-1]),
+    }
 
 
 def _query_surface_path(path: str) -> bool:
@@ -3396,7 +3621,13 @@ def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config:
     snapshots = {
         "before": [] if setup_blocked or missing else _execute_snapshots(config, base_url, probe, "before", timeout),
         "after": [],
+        "db": {},
     }
+    if not setup_blocked and not missing:
+        db_before = _execute_db_snapshot(config, probe, "before")
+        snapshots["db"] = {"before": db_before}
+        if db_before.get("status") == "captured" and db_before.get("_verifier") is not None:
+            config["_qualibug_db_snapshot_before"] = {"verifier": db_before.get("_verifier"), "tables": db_before.get("tables") or []}
     replay_count = _configured_replay_count(config, probe) if decision.risk_type in {"idempotency_replay_probe", "async_external_event_probe"} else 1
     responses: list[dict[str, Any]] = []
     if missing:
@@ -3431,6 +3662,9 @@ def _execute_write_probe(probe: dict[str, Any], decision: ProbeDecision, config:
                     timeout=timeout,
                 )
         snapshots["after"] = _execute_snapshots(config, base_url, probe, "after", timeout)
+        db_after = _execute_db_snapshot(config, probe, "after")
+        if isinstance(snapshots.get("db"), dict):
+            snapshots["db"]["after"] = db_after
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout)
     if missing:
         verification = {"verdict": "inconclusive", "reason": f"runtime_missing_path_params_after_setup:{','.join(missing)}", "confidence": 0.0, "payload_summary": {}, "sensitive_keys": []}
@@ -3673,8 +3907,9 @@ def _finding_from_observation(obs: dict[str, Any], finding_no: int, source: str)
         "evidence_strength_score": evidence_package.get("evidence_strength_score"),
         "evidence_grade": evidence_package.get("evidence_grade"),
         "reason": verification.get("reason"),
-        "evidence": {"status_code": evidence_status, "payload_summary": verification.get("payload_summary"), "sensitive_keys": verification.get("sensitive_keys"), "replay_ids": verification.get("replay_ids"), "negative_values": verification.get("negative_values"), "business_invariant_evaluation": verification.get("business_invariant_evaluation")},
+        "evidence": {"status_code": evidence_status, "payload_summary": verification.get("payload_summary"), "sensitive_keys": verification.get("sensitive_keys"), "replay_ids": verification.get("replay_ids"), "negative_values": verification.get("negative_values"), "business_invariant_evaluation": verification.get("business_invariant_evaluation"), "db_evidence": verification.get("db_evidence")},
         "evidence_package": evidence_package,
+        "db_evidence": verification.get("db_evidence") or {},
         "violated_invariants": evidence_package.get("violated_invariants") or [],
         "delta_summary": evidence_package.get("delta_summary") or {},
         "source_refs": obs.get("source_refs") or [],

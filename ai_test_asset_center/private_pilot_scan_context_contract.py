@@ -9,6 +9,7 @@ and campaign_context construction. Runtime patch installation lives in
 """
 
 import contextvars
+import os
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,56 @@ def default_scan_test_data_contract(body: dict[str, Any]) -> dict[str, Any]:
         "write_approved": True,
         "disposable_scope_ref": scope_ref,
     }
+
+
+def default_scan_ui_execution_requests(body: dict[str, Any]) -> list[dict[str, Any]]:
+    if isinstance(body.get("ui_execution_requests"), list) and body.get("ui_execution_requests"):
+        return [dict(item) for item in body["ui_execution_requests"] if isinstance(item, dict)]
+    if body.get("disable_ui_execution_autogen") is True:
+        return []
+    base_url = as_text(body.get("base_url"))
+    if not base_url:
+        return []
+    bridge = as_dict(body.get("page_agent_bridge"))
+    bridge_url = as_text(bridge.get("url") or os.environ.get("QUALIBUG_PAGE_AGENT_BRIDGE_URL"))
+    if not bridge_url:
+        return []
+    scope_ref = as_text(body.get("scope_id") or body.get("target_environment") or body.get("environment_ref"))
+    manifest = source_manifest_from_body(body)
+    page_hints = [
+        hint
+        for hint in (
+            f"scan scope: {scope_ref}" if scope_ref else "",
+            f"source manifest: {as_text(manifest.get('source_id'))}" if as_text(manifest.get("source_id")) else "",
+            "capture the landing page state after the application becomes stable",
+        )
+        if hint
+    ]
+    return [
+        {
+            "request_id": "ui_observe_entrypoint",
+            "title": "Auto-generated UI entrypoint observation",
+            "provider": "page_agent",
+            "task": "Open the approved application entry URL and capture stable UI evidence for this scan.",
+            "start_url": base_url,
+            "execution_mode": "safe_read_only",
+            "browser_plan": {
+                "execution_mode": "safe_read_only",
+                "steps": [
+                    {"action": "goto", "url": base_url, "wait_until": "networkidle"},
+                    {"action": "wait_for_load", "state": "networkidle"},
+                    {"action": "screenshot", "full_page": True},
+                ],
+            },
+            "page_hints": page_hints,
+            "success_criteria": {},
+            "metadata": {
+                "auto_generated": True,
+                "request_origin": "private_pilot_scan_context_contract",
+                "bridge_mode": "page_agent_browser_plan",
+            },
+        }
+    ]
 
 
 def continuous_context_key(root: Path, project: str) -> tuple[str, str]:
@@ -197,4 +248,16 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
     release_policy = as_dict(body.get("release_policy"))
     if release_policy:
         context["release_policy"] = release_policy
+    page_agent_bridge = as_dict(body.get("page_agent_bridge"))
+    if page_agent_bridge:
+        context["page_agent_bridge"] = page_agent_bridge
+    external_signal_requests = body.get("external_signal_requests")
+    if isinstance(external_signal_requests, list) and external_signal_requests:
+        context["external_signal_requests"] = external_signal_requests
+    ui_execution_requests = default_scan_ui_execution_requests(body)
+    if ui_execution_requests:
+        context["ui_execution_requests"] = ui_execution_requests
+    ui_test_data_requests = body.get("ui_test_data_requests")
+    if isinstance(ui_test_data_requests, list) and ui_test_data_requests:
+        context["ui_test_data_requests"] = ui_test_data_requests
     return context

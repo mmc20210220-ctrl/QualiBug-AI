@@ -9,12 +9,12 @@ const navItems = [
   { to: 'clues', icon: 'runtime', label: '待验证线索', section: null, badgeKey: 'clues' },
   { to: 'evidence', icon: 'shield', label: '证据链', section: null },
   { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
-  { to: 'materials', icon: 'knowledge', label: '企业资料', section: '系统' },
+  { to: 'settings', icon: 'settings', label: '项目设置', section: '产品主线' },
+  { to: 'materials', icon: 'knowledge', label: '企业资料', section: null },
   { to: 'source-assets', icon: 'source', label: '来源资产', section: null },
-  { to: 'campaigns', icon: 'campaign', label: '受控 Campaign', section: null },
+  { to: 'campaigns', icon: 'campaign', label: '运行中心', section: null },
   { to: 'release', icon: 'release', label: '发布门禁', section: null },
-  { to: 'products', icon: 'product', label: '产品矩阵', section: null },
-  { to: 'settings', icon: 'settings', label: '设置', section: null },
+  { to: 'products', icon: 'product', label: '产品矩阵', section: '商业化' },
 ];
 
 type NavItem = (typeof navItems)[number] & { badge?: number | string };
@@ -79,7 +79,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         <div className="side-project">
           <span className="side-project-label">当前客户</span>
           <b>{projectName}</b>
-          <small>围绕风险总览、证据链和发布门禁，直接支撑上线决策。</small>
+          <small>围绕项目配置、资料导入、运行执行与结果回显，形成客户可感知的闭环。</small>
           <div className="side-project-metrics">
             <div className="side-project-metric">
               <span>当前状态</span>

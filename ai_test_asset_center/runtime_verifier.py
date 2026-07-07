@@ -11,6 +11,7 @@ QualiBug Runtime Verifier — 自动化运行时探测引擎
 
 import base64
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -33,24 +34,54 @@ class ProbeResult:
     blocked_reason: str = ""
 
 
-class MESRuntimeVerifier:
-    """MES BugLab 运行时验证器"""
+DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8000")
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8000/api"):
-        self.base_url = base_url
+
+def _default_role_tokens() -> dict[str, str]:
+    return {
+        "admin": base64.b64encode(b"admin:ADMIN").decode(),
+        "planner": base64.b64encode(b"planner:PLANNER").decode(),
+        "operator": base64.b64encode(b"operator:OPERATOR").decode(),
+        "warehouse": base64.b64encode(b"warehouse:WAREHOUSE").decode(),
+        "quality": base64.b64encode(b"quality:QUALITY").decode(),
+        "maintenance": base64.b64encode(b"maint:MAINT").decode(),
+        "viewer": base64.b64encode(b"viewer:VIEWER").decode(),
+        "forged": base64.b64encode(b"viewer:ADMIN").decode(),
+    }
+
+
+def _load_role_tokens(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    tokens = _default_role_tokens()
+    env_payload = os.environ.get("QUALIBUG_RUNTIME_TOKENS", "").strip()
+    if env_payload:
+        try:
+            loaded = json.loads(env_payload)
+        except Exception:
+            loaded = {}
+        if isinstance(loaded, dict):
+            for role, token in loaded.items():
+                role_name = str(role or "").strip()
+                token_value = str(token or "").strip()
+                if role_name and token_value:
+                    tokens[role_name] = token_value
+    if isinstance(overrides, dict):
+        for role, token in overrides.items():
+            role_name = str(role or "").strip()
+            token_value = str(token or "").strip()
+            if role_name and token_value:
+                tokens[role_name] = token_value
+    return tokens
+
+
+class RuntimeVerifier:
+    """运行时验证器，默认加载外部注入的角色凭证配置。"""
+
+    def __init__(self, base_url: str = DEFAULT_BASE_URL, *, role_tokens: dict[str, str] | None = None):
+        self.base_url = str(base_url or DEFAULT_BASE_URL)
         self.results: list[ProbeResult] = []
 
-        # 预认证 token
-        self.tokens = {
-            "admin": base64.b64encode(b"admin:ADMIN").decode(),
-            "planner": base64.b64encode(b"planner:PLANNER").decode(),
-            "operator": base64.b64encode(b"operator:OPERATOR").decode(),
-            "warehouse": base64.b64encode(b"warehouse:WAREHOUSE").decode(),
-            "quality": base64.b64encode(b"quality:QUALITY").decode(),
-            "maintenance": base64.b64encode(b"maint:MAINT").decode(),
-            "viewer": base64.b64encode(b"viewer:VIEWER").decode(),
-            "forged": base64.b64encode(b"viewer:ADMIN").decode(),  # 伪造 token
-        }
+        # Legacy benchmark tokens remain as a compatibility fallback only.
+        self.tokens = _load_role_tokens(role_tokens)
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -495,11 +526,16 @@ class MESRuntimeVerifier:
             "inconclusive": inconclusive,
             "blocked": blocked,
             "hit_rate": round(confirmed / max(len(self.results), 1) * 100, 1),
-            "oracle_reference": "MES-BugLab v1.0 (82 known bugs)",
+            "oracle_reference": os.environ.get("QUALIBUG_RUNTIME_ORACLE_REFERENCE", "legacy_runtime_probe_pack"),
             "note": "剩余 {} 个 Oracle 需要 DB 访问/状态编排/并发测试".format(
                 82 - confirmed
             ),
         }
+
+
+# Backward compatibility for existing imports while removing MES-only naming
+# from the primary entrypoint.
+MESRuntimeVerifier = RuntimeVerifier
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +543,7 @@ class MESRuntimeVerifier:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    v = MESRuntimeVerifier()
+    v = RuntimeVerifier()
     v.run_all()
     print(f"\n{'='*60}")
     print(json.dumps(v.summary(), indent=2, ensure_ascii=False))

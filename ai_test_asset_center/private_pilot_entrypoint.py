@@ -95,7 +95,11 @@ def install_runtime_patches() -> None:
 
 def run_server() -> None:
     install_runtime_patches()
-    _service.run_server()
+    server = _service.run_private_pilot_service()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

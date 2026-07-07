@@ -39,6 +39,33 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _campaign_identity_payload(
+    project_id: str,
+    scope_id: str,
+    environment_ref: str,
+    snapshot: str,
+    source_id: str,
+    source_hash: str,
+    *,
+    rerun_key: str = "",
+) -> dict[str, str]:
+    payload = {
+        "project": _text(project_id),
+        "scope": _text(scope_id),
+        "environment": _text(environment_ref),
+        "snapshot": _text(snapshot, 80),
+        "source_id": _text(source_id) or f"source_snapshot:{_text(source_hash, 128)[:24]}",
+        "source_hash": _text(source_hash, 128) or _text(snapshot, 80),
+    }
+    if _text(rerun_key, 120):
+        payload["rerun_key"] = _text(rerun_key, 120)
+    return payload
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -74,9 +101,61 @@ def has_real_confirmation_receipt(item: Any) -> bool:
         return False
     if row.get("gate_passed") is not True:
         return False
-    evidence = _as_dict(row.get("evidence") or row.get("raw_evidence"))
-    required = ("request", "response", "assertion", "timestamp", "target", "actor", "reproduction_steps")
-    return all(evidence.get(key) for key in required)
+    evidence = _as_dict(row.get("evidence"))
+    raw_evidence = _as_dict(row.get("raw_evidence"))
+    reproduction = _as_dict(row.get("reproduction"))
+    request_raw = _as_dict(raw_evidence.get("request_raw"))
+    response_raw = _as_dict(raw_evidence.get("response_raw"))
+    db_snapshot = _as_dict(raw_evidence.get("db_snapshot"))
+
+    has_request = bool(
+        evidence.get("request")
+        or (request_raw.get("method") and request_raw.get("path"))
+        or (reproduction.get("method") and reproduction.get("path"))
+    )
+    has_response = bool(
+        evidence.get("response")
+        or response_raw.get("status_code")
+        or response_raw.get("body")
+        or (db_snapshot.get("before") and db_snapshot.get("after"))
+        or db_snapshot.get("assertion")
+    )
+    has_assertion = bool(
+        evidence.get("assertion")
+        or db_snapshot.get("assertion")
+        or any(_text(item) for item in _as_list(row.get("failed_assertions")))
+    )
+    has_timestamp = bool(
+        evidence.get("timestamp")
+        or raw_evidence.get("timestamp")
+        or row.get("timestamp")
+        or row.get("last_verified_at")
+    )
+    has_target = bool(
+        evidence.get("target")
+        or request_raw.get("path")
+        or reproduction.get("path")
+    )
+    has_actor = bool(
+        evidence.get("actor")
+        or request_raw.get("actor")
+        or reproduction.get("actor")
+        or row.get("actor")
+    )
+    has_reproduction_steps = bool(
+        evidence.get("reproduction_steps")
+        or row.get("reproduction_steps")
+        or reproduction.get("reproduction_steps")
+    )
+    return all((
+        has_request,
+        has_response,
+        has_assertion,
+        has_timestamp,
+        has_target,
+        has_actor,
+        has_reproduction_steps,
+    ))
 
 
 @dataclass
@@ -89,6 +168,9 @@ class EnterpriseCampaign:
     source_id: str = ""
     source_hash: str = ""
     policy_version: str = ""
+    lineage_campaign_id: str = ""
+    rerun_key: str = ""
+    rerun_reason: str = ""
     status: str = "active"
     run_count: int = 0
     round_count: int = 0
@@ -113,20 +195,26 @@ class EnterpriseCampaign:
         source_id: str = "",
         source_hash: str = "",
         policy_version: str = "",
+        rerun_key: str = "",
+        rerun_reason: str = "",
         slice_budget: int = 15,
         automatic_round_limit: int = 3,
     ) -> "EnterpriseCampaign":
         resolved_snapshot = _text(snapshot, 80)
         resolved_source_hash = _text(source_hash, 128) or resolved_snapshot
         resolved_source_id = _text(source_id) or f"source_snapshot:{resolved_source_hash[:24]}"
+        lineage_payload = _campaign_identity_payload(
+            project_id,
+            scope_id,
+            environment_ref,
+            resolved_snapshot,
+            resolved_source_id,
+            resolved_source_hash,
+        )
+        lineage_campaign_id = "CMP_" + _hash(lineage_payload)
         campaign_id = "CMP_" + _hash({
-            "project": project_id,
-            "scope": scope_id,
-            "environment": environment_ref,
-            "snapshot": resolved_snapshot,
-            "source_id": resolved_source_id,
-            "source_hash": resolved_source_hash,
-            "policy": policy_version,
+            **lineage_payload,
+            **({"rerun_key": _text(rerun_key, 120)} if _text(rerun_key, 120) else {}),
         })
         return cls(
             campaign_id=campaign_id,
@@ -137,6 +225,9 @@ class EnterpriseCampaign:
             source_id=resolved_source_id,
             source_hash=resolved_source_hash,
             policy_version=_text(policy_version, 120),
+            lineage_campaign_id=lineage_campaign_id,
+            rerun_key=_text(rerun_key, 120),
+            rerun_reason=_text(rerun_reason, 240),
             slice_budget=max(1, min(int(slice_budget or 1), MAX_SLICES_PER_ROUND)),
             automatic_round_limit=max(1, min(int(automatic_round_limit or 1), MAX_AUTOMATIC_ROUNDS)),
         )
@@ -174,6 +265,10 @@ class EnterpriseCampaign:
         if reason.startswith("campaign_") and self.status in {"coverage_deferred", "completed", "blocked"}:
             pass
         elif reason == "all_source_bound_slices_confirmed":
+            self.status = "completed"
+            self.coverage_deferred_reason = ""
+            self.next_campaign_reason = ""
+        elif remaining == 0 and not selection.get("next_round") and _text(execution_status, 80).lower() == "completed":
             self.status = "completed"
             self.coverage_deferred_reason = ""
             self.next_campaign_reason = ""
@@ -216,6 +311,9 @@ class EnterpriseCampaign:
             "source_hash": self.source_hash,
             "source_snapshot_hash": self.source_snapshot_hash,
             "policy_version": self.policy_version,
+            "lineage_campaign_id": self.lineage_campaign_id or self.campaign_id,
+            "rerun_key": self.rerun_key,
+            "rerun_reason": self.rerun_reason,
             "run_count": self.run_count,
             "round_count": self.round_count,
             "slice_budget": self.slice_budget,
@@ -250,6 +348,9 @@ class EnterpriseCampaign:
             source_id=source_id,
             source_hash=source_hash,
             policy_version=_text(value.get("policy_version"), 120),
+            lineage_campaign_id=_text(value.get("lineage_campaign_id"), 80) or _text(value.get("campaign_id"), 80),
+            rerun_key=_text(value.get("rerun_key"), 120),
+            rerun_reason=_text(value.get("rerun_reason"), 240),
             status=_text(value.get("campaign_status") or value.get("status"), 80) or "active",
             run_count=max(0, int(value.get("run_count") or 0)),
             round_count=max(0, int(value.get("round_count") or 0)),
@@ -281,6 +382,7 @@ class EnterpriseCampaignStore:
             "source_snapshot_hash",
             "source_id",
             "source_hash",
+            "rerun_key",
         )
         mismatches = [key for key in keys if getattr(stored, key) != getattr(expected, key)]
         if mismatches:
@@ -339,6 +441,7 @@ class EnterpriseCampaignStore:
             "summary": {
                 "campaign_state": campaign.status,
                 "campaign_id": campaign.campaign_id,
+                "lineage_campaign_id": campaign.lineage_campaign_id or campaign.campaign_id,
                 "coverage_deferred_reason": campaign.coverage_deferred_reason,
                 "next_campaign_reason": campaign.next_campaign_reason,
                 "attempted_slice_count": len(campaign.attempted_slice_ids),
