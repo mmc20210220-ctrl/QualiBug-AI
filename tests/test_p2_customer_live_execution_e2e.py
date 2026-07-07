@@ -45,6 +45,13 @@ class _CustomerApiHandler(BaseHTTPRequestHandler):
             return
         self._write_json(404, {"error": "not_found"})
 
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler method
+        type(self).calls.append({"method": "DELETE", "path": self.path})
+        if self.path.startswith("/api/orders/"):
+            self._write_json(204, {})
+            return
+        self._write_json(404, {"error": "not_found"})
+
 
 class _LiveCustomerApi:
     def __enter__(self) -> str:
@@ -107,7 +114,48 @@ def _runtime_scenario_contract() -> dict[str, Any]:
     }
 
 
-def _issue_live_execution_approval(tmp_path: Path, manifest: dict[str, Any], base_url: str) -> dict[str, Any]:
+def _write_runtime_scenario_contract() -> dict[str, Any]:
+    return {
+        "schema_version": "runtime-scenario-contract-v1",
+        "execution_policy": "approved_sandbox_write",
+        "write_approved": True,
+        "actor": {"id": "customer_qa_lead"},
+        "scenarios": [
+            {
+                "id": "SCN_LIVE_ORDERS_CREATE",
+                "title": "Live create approved disposable order",
+                "entity": "orders",
+                "category": "runtime_contract",
+                "severity": "P2",
+                "steps": [
+                    {
+                        "order": 1,
+                        "action": "create_disposable_order",
+                        "method": "POST",
+                        "path": "/api/orders",
+                        "expected_status": 201,
+                        "body": {"sku": "demo-sku", "amount_cents": 1899},
+                        "actor": "customer_qa_lead",
+                    }
+                ],
+                "cleanup_steps": [
+                    {
+                        "order": 1,
+                        "action": "delete_disposable_order",
+                        "method": "DELETE",
+                        "path": "/api/orders/{id}",
+                        "expected_status": 204,
+                        "actor": "customer_qa_lead",
+                    }
+                ],
+                "expected_state": "disposable_order_created",
+                "oracle_rules": ["HTTP write succeeds in approved sandbox"],
+            }
+        ],
+    }
+
+
+def _issue_live_execution_approval(tmp_path: Path, manifest: dict[str, Any], base_url: str, execution_mode: str = "safe_read_only") -> dict[str, Any]:
     from ai_test_asset_center.enterprise_campaign import EnterpriseCampaign, source_snapshot_hash
     from ai_test_asset_center.execution_approvals import issue_execution_approval
 
@@ -130,7 +178,7 @@ def _issue_live_execution_approval(tmp_path: Path, manifest: dict[str, Any], bas
         environment_ref=ENVIRONMENT_REF,
         source_hash=manifest["source_hash"],
         target_base_url=base_url,
-        execution_mode="safe_read_only",
+        execution_mode=execution_mode,
         expires_at_utc=expires_at,
         actor={"name": "customer_qa_lead", "role": "qa_lead"},
     )
@@ -203,3 +251,36 @@ def test_p2_live_execution_hits_fake_customer_api_with_runtime_contract(tmp_path
     assert saved["runtime_contract"]["execution_approval"]["status"] == "approved"
     assert saved["v12"]["phases"]["scenario_generation"]["runtime_scenario_contract_present"] is True
     assert saved["auto_har"]["status"] == "captured"
+
+
+def test_p2_live_execution_hits_fake_customer_api_with_approved_sandbox_write(tmp_path: Path) -> None:
+    from ai_test_asset_center.__main__ import scan
+
+    manifest = _prepare_customer_project(tmp_path)
+    with _LiveCustomerApi() as base_url:
+        approval = _issue_live_execution_approval(tmp_path, manifest, base_url, execution_mode="approved_sandbox_write")
+        result = scan(
+            PROJECT,
+            root=tmp_path,
+            prd_text=PRD_TEXT,
+            api_doc_text=OPENAPI_TEXT,
+            base_url=base_url,
+            campaign_context={
+                "source_manifest": manifest,
+                "scope_id": SCOPE_ID,
+                "environment_ref": ENVIRONMENT_REF,
+                "test_data_contract": {"strategy": "create_disposable", "write_approved": True},
+                "execution_mode": "approved_sandbox_write",
+                "execution_approval_id": approval["approval_id"],
+                "runtime_scenario_contract": _write_runtime_scenario_contract(),
+            },
+        )
+
+    assert result["success"] is True
+    assert result["runtime_contract"]["status"] == "approved"
+    assert result["runtime_contract"]["execution_approval"]["execution_mode"] == "approved_sandbox_write"
+    assert result["execution_status"] == "completed"
+    assert result["v12"]["phases"]["scenario_generation"]["runtime_contract_scenarios"] >= 1
+    assert result["v12"]["phases"]["execution"]["executed"] >= 1
+    assert result["auto_har"]["status"] == "captured"
+    assert any(call["method"] == "POST" and call["path"].startswith("/api/orders") for call in _CustomerApiHandler.calls)
