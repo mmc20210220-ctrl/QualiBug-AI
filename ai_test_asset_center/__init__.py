@@ -41,3 +41,9 @@ try:
     install_p6_delivery_scan_patch()
 except Exception:
     pass
+
+try:
+    from .p7_sales_handoff_scan_patch import install_p7_sales_handoff_scan_patch
+    install_p7_sales_handoff_scan_patch()
+except Exception:
+    pass
