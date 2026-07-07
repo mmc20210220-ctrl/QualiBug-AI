@@ -20,3 +20,10 @@ try:  # pragma: no cover - import-time P4 value scorecard shim
     install_p4_scorecard_scan_patch()
 except Exception:
     pass
+
+try:  # pragma: no cover - import-time P4 pilot success gate shim
+    from .p4_pilot_success_scan_patch import install_p4_pilot_success_scan_patch
+
+    install_p4_pilot_success_scan_patch()
+except Exception:
+    pass
