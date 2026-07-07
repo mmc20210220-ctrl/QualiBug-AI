@@ -47,3 +47,9 @@ try:
     install_p7_sales_handoff_scan_patch()
 except Exception:
     pass
+
+try:
+    from .p8_operations_scan_patch import install_p8_operations_scan_patch
+    install_p8_operations_scan_patch()
+except Exception:
+    pass
