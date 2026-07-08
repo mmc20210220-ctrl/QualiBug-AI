@@ -27,11 +27,21 @@ def _allow_internal_preflight() -> bool:
     return os.environ.get("QUALIBUG_LOCAL_DEV_ACTOR", "0") == "1" or os.environ.get("QUALIBUG_SSRF_ALLOW_INTERNAL", "0") == "1"
 
 
+def _ordered_test_credentials(config: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        from .enterprise_pilot_runtime import ordered_test_credentials
+        return ordered_test_credentials({"test_profile": config})
+    except Exception:
+        credentials = config.get("test_credentials", {})
+        if not isinstance(credentials, dict):
+            return []
+        return [{"profile": str(key), **dict(value)} for key, value in credentials.items() if isinstance(value, dict)]
+
+
 def run_preflight(config: dict, api_doc: str | None = None) -> dict:
     """Run pre-scan health checks. Returns diagnostics dict."""
     checks: list[DiagCheck] = []
     base_url = config.get("api_base_url", "")
-    creds = config.get("test_credentials", {})
     db_cfg = config.get("database", {})
 
     # ── 1. API reachability ──
@@ -55,36 +65,57 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
             "error"))
 
     # ── 2. Auth check ──
-    buyer = creds.get("buyer", {})
-    admin = creds.get("admin", {})
-    if base_url and buyer.get("email") and buyer.get("password"):
+    credentials = _ordered_test_credentials(config)
+    login_account = next(
+        (
+            item for item in credentials
+            if str(item.get("email") or item.get("username") or item.get("account") or "").strip()
+            and str(item.get("password") or item.get("pass") or "").strip()
+        ),
+        {},
+    )
+    account_name = str(login_account.get("profile") or "default").strip() or "default"
+    identity = str(
+        login_account.get("email")
+        or login_account.get("username")
+        or login_account.get("account")
+        or login_account.get("mobile")
+        or login_account.get("phone")
+        or account_name
+    ).strip()
+    if base_url and login_account:
         try:
-            data = json.dumps({"email": buyer["email"], "password": buyer["password"]}).encode()
+            data = json.dumps(
+                {
+                    "email": str(login_account.get("email") or login_account.get("username") or login_account.get("account") or ""),
+                    "password": str(login_account.get("password") or login_account.get("pass") or ""),
+                }
+            ).encode()
             req = urllib.request.Request(f"{base_url}/api/auth/login", data=data,
                 headers={"Content-Type": "application/json"}, method="POST")
             resp = safe_urlopen(req, timeout=5, allow_internal=_allow_internal_preflight())
             token = json.loads(resp.read()).get("token", "")
             if token:
-                checks.append(DiagCheck("买家凭证", True,
-                    f"{buyer['email']} 登录成功"))
+                checks.append(DiagCheck(f"测试凭证({account_name})", True,
+                    f"{identity} 登录成功"))
             else:
-                checks.append(DiagCheck("买家凭证", False,
-                    f"{buyer['email']} 登录成功但无token",
+                checks.append(DiagCheck(f"测试凭证({account_name})", False,
+                    f"{identity} 登录成功但无token",
                     "检查认证接口返回格式", "warn"))
         except urllib.error.HTTPError as e:
-            checks.append(DiagCheck("买家凭证", False,
-                f"{buyer['email']} 登录失败: HTTP {e.code}",
+            checks.append(DiagCheck(f"测试凭证({account_name})", False,
+                f"{identity} 登录失败: HTTP {e.code}",
                 f"请检查connector_registry中的凭证是否正确，或使用其他登录端点",
                 "error"))
         except Exception as e:
-            checks.append(DiagCheck("买家凭证", False,
+            checks.append(DiagCheck(f"测试凭证({account_name})", False,
                 f"登录异常: {_short_err(e)}",
                 "请确认/api/auth/login接口存在且可访问",
                 "warn"))
     else:
-        checks.append(DiagCheck("买家凭证", False,
-            "未配置买家凭证",
-            "在test_profile.test_credentials.buyer中设置email和password",
+        checks.append(DiagCheck("测试凭证", False,
+            "未配置可登录测试凭证",
+            "在test_profile.test_credentials中设置任一可用账号的email/username和password",
             "warn"))
 
     # ── 3. DB connection ──

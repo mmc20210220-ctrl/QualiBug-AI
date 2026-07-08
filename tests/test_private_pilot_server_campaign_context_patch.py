@@ -15,6 +15,8 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
                 "source_origin": "registered_source_registry",
             },
             "base_url": "http://127.0.0.1:8000",
+            "ui_base_url": "http://127.0.0.1:3001",
+            "ui_base_url_source": "connector_registry.test_profile.ui_base_url",
             "scope_id": "checkout-scope",
             "environment_ref": "staging-env",
             "execution_approval_id": "approval-001",
@@ -28,6 +30,8 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
     assert context["source_manifest"]["source_id"] == "openapi-main"
     assert context["source_manifest"]["source_hash"] == "a" * 64
     assert context["base_url"] == "http://127.0.0.1:8000"
+    assert context["ui_base_url"] == "http://127.0.0.1:3001"
+    assert context["ui_base_url_source"] == "connector_registry.test_profile.ui_base_url"
     assert context["scope_id"] == "checkout-scope"
     assert context["environment_ref"] == "staging-env"
     assert context["execution_approval_id"] == "approval-001"
@@ -160,6 +164,24 @@ def test_scan_body_preserves_explicit_ui_execution_requests_without_autogen_over
     assert context["ui_execution_requests"] == explicit
     assert context["ui_execution_requests"][0]["request_id"] == "explicit_ui_repro"
     assert context["ui_execution_requests"][0]["metadata"]["auto_generated"] is False
+
+
+def test_scan_body_auto_generated_ui_requests_prefer_ui_base_url() -> None:
+    from ai_test_asset_center.private_pilot_scan_context_contract import build_campaign_context_from_scan_body
+
+    context = build_campaign_context_from_scan_body(
+        {
+            "base_url": "http://127.0.0.1:8080",
+            "ui_base_url": "http://127.0.0.1:3001",
+            "scope_id": "checkout-scope",
+            "environment_ref": "local-benchmark",
+            "page_agent_bridge": {"url": "http://127.0.0.1:8797/execute"},
+        }
+    )
+
+    assert context["ui_base_url"] == "http://127.0.0.1:3001"
+    assert context["ui_execution_requests"][0]["start_url"] == "http://127.0.0.1:3001"
+    assert context["ui_execution_requests"][0]["browser_plan"]["steps"][0]["url"] == "http://127.0.0.1:3001"
 
 
 def test_install_patch_replaces_continuous_loop_and_reports_status() -> None:

@@ -9,6 +9,8 @@ MATERIALS = ROOT / "frontend" / "src" / "pages" / "EnterpriseMaterials.tsx"
 RUN_CENTER = ROOT / "frontend" / "src" / "pages" / "EnterpriseCampaigns.tsx"
 FINDINGS = ROOT / "frontend" / "src" / "pages" / "Findings.tsx"
 DASHBOARD = ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx"
+EVIDENCE = ROOT / "frontend" / "src" / "pages" / "EvidenceChain.tsx"
+CLIENT = ROOT / "frontend" / "src" / "api" / "client.ts"
 README = ROOT / "README.md"
 
 
@@ -43,10 +45,25 @@ def test_frontend_settings_and_materials_surface_readiness_and_parse_summary() -
 def test_frontend_dashboard_and_findings_surface_regression_closure() -> None:
     findings = FINDINGS.read_text(encoding="utf-8")
     dashboard = DASHBOARD.read_text(encoding="utf-8")
+    evidence = EVIDENCE.read_text(encoding="utf-8")
+    client = CLIENT.read_text(encoding="utf-8")
 
-    assert "回归状态" in findings
+    assert "生命周期" in findings
     assert "待执行回归" in findings
     assert "回归验证" in findings
+    assert "回归历史" in findings
+    assert "执行 Release 回归" in findings
     assert "回归闭环" in dashboard
+    assert "回归趋势" in dashboard
+    assert "发布 / 交付建议" in dashboard
+    assert "真实验真摘要" in dashboard
+    assert "最小双轮验真" in dashboard
+    assert "历史轮次" in dashboard
     assert "已覆盖缺陷" in dashboard
     assert "最近回归" in dashboard
+    assert "执行 Smoke 回归" in dashboard
+    assert "执行 Release 回归" in dashboard
+    assert "回归闭环" in evidence
+    assert "最近轨迹" in evidence
+    assert "export async function runRegression" in client
+    assert "/regression/run" in client

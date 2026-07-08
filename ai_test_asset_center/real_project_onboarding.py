@@ -107,9 +107,52 @@ def config_paths(project_id: str, root: Path | None = None) -> dict[str, Path]:
     }
 
 
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _merge_connector_runtime_defaults(project_id: str, cfg: dict[str, Any], root: Path) -> dict[str, Any]:
+    if not isinstance(cfg, dict):
+        cfg = {}
+    try:
+        from .enterprise_pilot_runtime import load_connector_registry
+
+        registry = load_connector_registry(project_id, root)
+    except Exception:
+        return cfg
+    profile = registry.get("test_profile") if isinstance(registry, dict) else {}
+    if not isinstance(profile, dict):
+        return cfg
+    connectors = registry.get("connectors") if isinstance(registry.get("connectors"), list) else []
+    primary_connector = next((item for item in connectors if isinstance(item, dict) and item.get("enabled") is True), None)
+
+    merged = dict(cfg)
+    merged["base_url"] = _first_text(
+        merged.get("base_url"),
+        profile.get("api_base_url"),
+        primary_connector.get("endpoint_ref") if isinstance(primary_connector, dict) else "",
+    )
+    merged["ui_base_url"] = _first_text(merged.get("ui_base_url"), profile.get("ui_base_url"))
+    if not isinstance(merged.get("frontend_urls"), dict) and isinstance(profile.get("frontend_urls"), dict):
+        merged["frontend_urls"] = dict(profile["frontend_urls"])
+    if not isinstance(merged.get("test_credentials"), dict) and isinstance(profile.get("test_credentials"), dict):
+        merged["test_credentials"] = dict(profile["test_credentials"])
+    if not isinstance(merged.get("database"), dict) and isinstance(profile.get("database"), dict):
+        merged["database"] = dict(profile["database"])
+    merged["environment_ref"] = _first_text(merged.get("environment_ref"), profile.get("environment_ref"))
+    merged["deployment_scope_id"] = _first_text(merged.get("deployment_scope_id"), profile.get("scope_id"))
+    return merged
+
+
 def load_real_project_config(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:
+    root = root or ROOT
     paths = config_paths(project_id, root)
     cfg = _load_json(paths["input_dir"] / "real_project_config.json", {})
+    cfg = _merge_connector_runtime_defaults(project_id, cfg, root)
     cfg.setdefault("project_id", _safe_project_id(project_id))
     cfg.setdefault("project_name", cfg["project_id"])
     cfg.setdefault("base_url", "")

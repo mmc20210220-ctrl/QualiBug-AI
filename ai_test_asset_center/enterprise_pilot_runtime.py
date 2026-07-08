@@ -267,6 +267,58 @@ def load_connector_registry(project_id: str = "real_project_demo", root: Path | 
     return default
 
 
+def ordered_test_credentials(config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    source = config if isinstance(config, dict) else {}
+    profile = source.get("test_profile") if isinstance(source.get("test_profile"), dict) else source
+    if not isinstance(profile, dict):
+        return []
+    credentials = profile.get("test_credentials")
+    preferred_order = profile.get("test_credential_order")
+    order_lookup = {
+        str(name).strip(): index
+        for index, name in enumerate(preferred_order)
+        if str(name).strip()
+    } if isinstance(preferred_order, list) else {}
+
+    rows: list[tuple[tuple[int, int, int, int, str], dict[str, Any]]] = []
+    if isinstance(credentials, dict):
+        iterator = list(credentials.items())
+    elif isinstance(credentials, list):
+        iterator = [
+            (
+                str(item.get("profile") or item.get("credential_id") or item.get("name") or f"credential_{index}"),
+                item,
+            )
+            for index, item in enumerate(credentials)
+            if isinstance(item, dict)
+        ]
+    else:
+        iterator = []
+
+    for index, (name, value) in enumerate(iterator):
+        if not isinstance(value, dict):
+            continue
+        profile_name = str(name or value.get("profile") or value.get("credential_id") or f"credential_{index}").strip()
+        explicit_default = any(value.get(flag) is True for flag in ("default", "primary", "is_default", "is_primary"))
+        priority_raw = value.get("priority", value.get("order", value.get("rank")))
+        try:
+            numeric_priority = int(priority_raw)
+        except (TypeError, ValueError):
+            numeric_priority = 10_000
+        explicit_order = order_lookup.get(profile_name, 10_000)
+        sort_key = (
+            0 if explicit_default else 1,
+            explicit_order,
+            numeric_priority,
+            index,
+            profile_name.lower(),
+        )
+        rows.append((sort_key, {"profile": profile_name, **dict(value)}))
+
+    rows.sort(key=lambda item: item[0])
+    return [item for _, item in rows]
+
+
 def _validate_ref(value: Any, name: str, allow_blank: bool = True) -> str:
     text = str(value or "").strip()
     if not text and allow_blank:

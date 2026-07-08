@@ -238,6 +238,7 @@ class EnterpriseCampaign:
                 "campaign_id": self.campaign_id,
                 "selected_slice_ids": [],
                 "attempted_slice_ids": list(self.attempted_slice_ids),
+                "confirmed_slice_ids": sorted(self.confirmation_receipts),
                 "round": self.round_count,
             }
         }

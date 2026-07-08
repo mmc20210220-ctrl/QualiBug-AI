@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from .real_id_resolver import infer_path_params
+from .enterprise_project_config import match_production_data_exclusion
 from .runtime_finding_evidence_packager import package_runtime_finding_evidence
 from .runtime_finding_customer_triage import triage_runtime_finding
 from .runtime_customer_report_builder import build_customer_delivery_index
@@ -2121,6 +2122,13 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
         "headers": _redact(headers),
         "body": _redact(body),
     }
+    # Hard safety boundary (主链 1): never probe data the customer marked
+    # off-limits (e.g. production PII, settlement tables). This is a pure
+    # blocking guard — it can only ever block a probe, never enable one.
+    _excl_target = _join_url(base_url, request_path) if base_url else request_path
+    _excl_hit = match_production_data_exclusion(config, _excl_target, risk_type)
+    if _excl_hit:
+        return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", _excl_hit, req)
     read_fixture_setup_required = False
     if method in READ_METHODS and _auto_fixture_enabled(config) and _fixture_backed_read_probe(probe, method, path):
         bundle = _auto_fixture_bundle(config, probe)

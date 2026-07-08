@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 
 import ai_test_asset_center.browser_execution as browser_execution
@@ -57,6 +58,72 @@ def test_execute_page_agent_request_forwards_browser_plan(tmp_path, monkeypatch)
     )
     assert request_payload["browser_plan"]["steps"][0]["action"] == "goto"
     assert request_payload["browser_plan"]["steps"][0]["url"] == "/orders"
+    assert result["status"] == "executed"
+
+
+def test_execute_page_agent_request_auto_starts_loopback_bridge_when_enabled(tmp_path, monkeypatch) -> None:
+    state = {"started": False, "execute_calls": 0, "health_calls": 0}
+
+    class _Response:
+        def __init__(self, payload: dict[str, object], status: int = 200) -> None:
+            self.status = status
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_serve_page_agent_bridge(*, root, host="127.0.0.1", port=8797, mode="stub_page_agent"):
+        state["started"] = True
+        return object()
+
+    def fake_urlopen(request, timeout=0):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        method = request.get_method() if hasattr(request, "get_method") else "GET"
+        if url.endswith("/health"):
+            state["health_calls"] += 1
+            if not state["started"]:
+                raise urllib.error.URLError(ConnectionRefusedError(10061, "actively refused"))
+            return _Response({"ok": True})
+        if url.endswith("/execute") and method == "POST":
+            state["execute_calls"] += 1
+            if not state["started"]:
+                raise urllib.error.URLError(ConnectionRefusedError(10061, "actively refused"))
+            return _Response({"status": "executed", "execution_status": "executed"})
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    monkeypatch.setattr("ai_test_asset_center.page_agent_bridge_server.serve_page_agent_bridge", fake_serve_page_agent_bridge)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    result = execute_page_agent_request(
+        "demo-project",
+        {
+            "request_id": "ui_req_autostart",
+            "title": "Open orders page",
+            "task": "Inspect orders",
+            "start_url": "https://example.com/orders",
+            "execution_mode": "safe_read_only",
+            "metadata": {
+                "page_agent_bridge": {
+                    "url": "http://127.0.0.1:8797/execute",
+                    "auto_start_local": True,
+                    "mode": "page_agent_browser_plan",
+                }
+            },
+        },
+        {"status": "approved", "approved_base_url": "https://example.com", "execution_mode": "safe_read_only"},
+        root=tmp_path,
+        run_id="scan-run",
+    )
+
+    assert state["started"] is True
+    assert state["health_calls"] >= 1
+    assert state["execute_calls"] == 2
     assert result["status"] == "executed"
 
 

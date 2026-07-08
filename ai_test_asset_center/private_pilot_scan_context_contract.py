@@ -84,7 +84,7 @@ def default_scan_ui_execution_requests(body: dict[str, Any]) -> list[dict[str, A
         return [dict(item) for item in body["ui_execution_requests"] if isinstance(item, dict)]
     if body.get("disable_ui_execution_autogen") is True:
         return []
-    base_url = as_text(body.get("base_url"))
+    base_url = as_text(body.get("ui_base_url") or body.get("base_url"))
     if not base_url:
         return []
     bridge = as_dict(body.get("page_agent_bridge"))
@@ -229,6 +229,8 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
 
     for key in (
         "base_url",
+        "ui_base_url",
+        "ui_base_url_source",
         "scope_id",
         "environment_ref",
         "target_environment",

@@ -49,6 +49,42 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _scan_campaign_context_defaults(project: str, root: Path) -> dict[str, str]:
+    try:
+        from .enterprise_pilot_runtime import load_connector_registry
+
+        registry = load_connector_registry(project, root)
+    except Exception:
+        return {}
+    profile = registry.get("test_profile") if isinstance(registry, dict) else {}
+    if not isinstance(profile, dict):
+        return {}
+    scope_id = _first_text(
+        profile.get("scope_id"),
+        profile.get("deployment_scope_id"),
+        profile.get("project_scope_id"),
+    )
+    environment_ref = _first_text(
+        profile.get("environment_ref"),
+        profile.get("target_environment"),
+        profile.get("environment"),
+    )
+    defaults: dict[str, str] = {}
+    if scope_id:
+        defaults["scope_id"] = scope_id[:160]
+    if environment_ref:
+        defaults["environment_ref"] = environment_ref[:160]
+    return defaults
+
+
 def _truthy_env(name: str, default: str = "") -> bool:
     value = str(os.environ.get(name, default) or "").strip().lower()
     return value not in {"", "0", "false", "no", "off"}
@@ -114,6 +150,24 @@ def _issue_local_execution_approval(project: str, root: Path, context: dict[str,
     return str(approval.get("approval_id") or "").strip()
 
 
+def _should_refresh_local_execution_approval(runtime_contract: dict[str, Any], context: dict[str, Any]) -> bool:
+    if not str(context.get("execution_approval_id") or "").strip():
+        return False
+    if str(runtime_contract.get("reason") or "") != "execution_approval_required":
+        return False
+    missing = {
+        str(code or "").strip()
+        for code in (runtime_contract.get("missing_requirements") if isinstance(runtime_contract.get("missing_requirements"), list) else [])
+        if str(code or "").strip()
+    }
+    return any(
+        code == "EXECUTION_APPROVAL_CAMPAIGN_ID_MISMATCH"
+        or code == "EXECUTION_APPROVAL_INVALID"
+        or code.startswith("EXECUTION_APPROVAL_")
+        for code in missing
+    )
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -167,6 +221,8 @@ def _customer_ready_static_snapshot(project: str, root: Path) -> dict[str, Any]:
         "scan_meta": dict(data.get("scan_meta") or {}) if isinstance(data.get("scan_meta"), dict) else {},
         "data_contract": dict(data.get("data_contract") or {}) if isinstance(data.get("data_contract"), dict) else {},
     }
+    if isinstance(data.get("current_campaign_scope"), dict):
+        snapshot["current_campaign_scope"] = dict(data.get("current_campaign_scope") or {})
     if isinstance(data.get("defect_grouped_summary"), dict):
         snapshot["defect_grouped_summary"] = dict(data.get("defect_grouped_summary") or {})
     if isinstance(data.get("defect_priority_summary"), dict):
@@ -199,9 +255,10 @@ def _persist_customer_ready_static_artifacts(project: str, root: Path, result: O
 
     real_project_path = root / "platform_outputs" / project_key / "real_project" / "real_project_defect_data.json"
     real_project_payload = _read_json(real_project_path)
-    if isinstance(snapshot.get("continuous_discovery_campaign"), dict):
-        real_project_payload["continuous_discovery_campaign"] = dict(snapshot.get("continuous_discovery_campaign") or {})
-    real_project_payload.update({
+    if not isinstance(real_project_payload, dict):
+        real_project_payload = {}
+
+    customer_ready_family_shelf = {
         "project": project,
         "generated_at_utc": snapshot.get("generated_at_utc"),
         "defects": snapshot.get("defects", []),
@@ -211,18 +268,52 @@ def _persist_customer_ready_static_artifacts(project: str, root: Path, result: O
         "executive_summary": snapshot.get("executive_summary", {}),
         "scan_meta": snapshot.get("scan_meta", {}),
         "data_contract": snapshot.get("data_contract", {}),
-        "customer_ready_snapshot": snapshot,
-    })
+    }
+    if isinstance(snapshot.get("current_campaign_scope"), dict):
+        customer_ready_family_shelf["current_campaign_scope"] = dict(snapshot.get("current_campaign_scope") or {})
+    if isinstance(snapshot.get("continuous_discovery_campaign"), dict):
+        customer_ready_family_shelf["continuous_discovery_campaign"] = dict(snapshot.get("continuous_discovery_campaign") or {})
     if isinstance(snapshot.get("defect_grouped_summary"), dict):
-        real_project_payload["defect_grouped_summary"] = dict(snapshot.get("defect_grouped_summary") or {})
+        customer_ready_family_shelf["defect_grouped_summary"] = dict(snapshot.get("defect_grouped_summary") or {})
     if isinstance(snapshot.get("defect_priority_summary"), dict):
-        real_project_payload["defect_priority_summary"] = dict(snapshot.get("defect_priority_summary") or {})
+        customer_ready_family_shelf["defect_priority_summary"] = dict(snapshot.get("defect_priority_summary") or {})
     if isinstance(snapshot.get("defect_repro_summary"), dict):
-        real_project_payload["defect_repro_summary"] = dict(snapshot.get("defect_repro_summary") or {})
+        customer_ready_family_shelf["defect_repro_summary"] = dict(snapshot.get("defect_repro_summary") or {})
     if isinstance(snapshot.get("defect_delivery_cards"), dict):
-        real_project_payload["defect_delivery_cards"] = dict(snapshot.get("defect_delivery_cards") or {})
+        customer_ready_family_shelf["defect_delivery_cards"] = dict(snapshot.get("defect_delivery_cards") or {})
     if isinstance(snapshot.get("commercial_assets"), dict):
-        real_project_payload["commercial_assets"] = dict(snapshot.get("commercial_assets") or {})
+        customer_ready_family_shelf["commercial_assets"] = dict(snapshot.get("commercial_assets") or {})
+
+    discovery_owned_markers = (
+        "metrics",
+        "summary",
+        "probes",
+        "risk_distribution",
+        "issue_count",
+        "validated_bug_count",
+        "candidate_issue_count",
+        "pending_finding_count",
+        "network_requests",
+    )
+    preserve_discovery_top_level = any(
+        key in real_project_payload and real_project_payload.get(key) not in (None, "", [], {})
+        for key in discovery_owned_markers
+    )
+
+    real_project_payload["customer_ready_snapshot"] = snapshot
+    real_project_payload["customer_ready_family_shelf"] = customer_ready_family_shelf
+    real_project_payload["customer_ready_defect_count"] = defect_count
+    real_project_payload["customer_ready_clue_count"] = clue_count
+    real_project_payload["customer_ready_projection_basis"] = "command_center_snapshot"
+    if isinstance(snapshot.get("commercial_assets"), dict):
+        real_project_payload["customer_ready_commercial_assets"] = dict(snapshot.get("commercial_assets") or {})
+    if isinstance(snapshot.get("current_campaign_scope"), dict):
+        real_project_payload["customer_ready_current_campaign_scope"] = dict(snapshot.get("current_campaign_scope") or {})
+    if isinstance(snapshot.get("continuous_discovery_campaign"), dict):
+        real_project_payload["customer_ready_continuous_discovery_campaign"] = dict(snapshot.get("continuous_discovery_campaign") or {})
+
+    if not preserve_discovery_top_level:
+        real_project_payload.update(customer_ready_family_shelf)
     _write_json(real_project_path, real_project_payload)
 
     if isinstance(result, dict):
@@ -2427,30 +2518,130 @@ def _load_schema_assets(root: Path, project: str) -> str:
     return "\n\n".join(chunks)
 
 
-def _load_project_prd_text(root: Path, project: str) -> str:
-    input_dir = root / "platform_workspace" / _safe_project(project) / "input"
-    candidates: list[Path] = []
-    for pattern in ("PRD*", "prd*", "*requirement*", "*Requirement*", "*spec*"):
+def _project_requirement_input_dirs(root: Path, project: str) -> list[Path]:
+    safe_project = _safe_project(project)
+    candidates: list[Path] = [root / "platform_workspace" / safe_project / "input"]
+
+    aliases: set[str] = {safe_project}
+    normalized_project = re.sub(r"[^a-z0-9]+", "_", safe_project.lower()).strip("_")
+    if normalized_project:
+        aliases.add(normalized_project)
+    try:
+        from .enterprise_pilot_runtime import load_connector_registry
+
+        registry = load_connector_registry(project, root)
+    except Exception:
+        registry = {}
+    if isinstance(registry, dict):
+        aliases.add(str(registry.get("project_id") or "").strip())
+        for connector in registry.get("connectors", []) if isinstance(registry.get("connectors"), list) else []:
+            if not isinstance(connector, dict):
+                continue
+            for key in ("system_name", "service_name", "domain_name", "module_name"):
+                aliases.add(str(connector.get(key) or "").strip())
+    aliases = {item for item in aliases if item}
+    projects_root = root / "projects"
+    if projects_root.exists():
         try:
-            candidates.extend(path for path in input_dir.glob(pattern) if path.is_file())
-        except Exception:
-            continue
+            for entry in sorted(projects_root.iterdir(), key=lambda item: item.name.lower()):
+                if not entry.is_dir():
+                    continue
+                name = entry.name.strip()
+                normalized_name = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+                if (
+                    name in aliases
+                    or normalized_name in aliases
+                    or any(alias and (alias in normalized_name or normalized_name in alias) for alias in aliases)
+                ):
+                    candidates.append(entry / "input")
+        except OSError:
+            pass
     seen: set[str] = set()
-    for path in sorted(candidates, key=lambda item: str(item).lower()):
+    result: list[Path] = []
+    for path in candidates:
+        try:
+            key = str(path.resolve())
+        except Exception:
+            key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _requirement_doc_score(path: Path) -> int:
+    name = path.name.lower()
+    if path.suffix.lower() not in {".md", ".txt", ".rst"}:
+        return 0
+    negative_tokens = (
+        "api_spec",
+        "openapi",
+        "swagger",
+        "db_schema",
+        "schema",
+        "test_accounts",
+        "windows_native_start",
+        "deployment",
+        "historical_bug",
+    )
+    if any(token in name for token in negative_tokens):
+        return 0
+    score = 0
+    if "prd" in name:
+        score += 100
+    if "mrd" in name:
+        score += 90
+    if "business_rules" in name or "business-rules" in name:
+        score += 85
+    if "requirement" in name:
+        score += 80
+    if "user_roles" in name or "roles" in name:
+        score += 50
+    if "spec" in name:
+        score += 20
+    return score
+
+
+def _load_project_prd_text(root: Path, project: str) -> str:
+    candidates: list[tuple[int, int, Path]] = []
+    for directory_index, input_dir in enumerate(_project_requirement_input_dirs(root, project)):
+        if not input_dir.exists():
+            continue
+        try:
+            entries = sorted(input_dir.iterdir(), key=lambda item: item.name.lower())
+        except OSError:
+            continue
+        for path in entries:
+            if not path.is_file():
+                continue
+            score = _requirement_doc_score(path)
+            if score <= 0:
+                continue
+            candidates.append((directory_index, -score, path))
+    chunks: list[str] = []
+    seen_paths: set[str] = set()
+    seen_hashes: set[str] = set()
+    for _, _, path in sorted(candidates, key=lambda item: (item[0], item[1], str(item[2]).lower())):
         try:
             resolved = str(path.resolve())
         except Exception:
             resolved = str(path)
-        if resolved in seen:
+        if resolved in seen_paths:
             continue
-        seen.add(resolved)
+        seen_paths.add(resolved)
         try:
             text = path.read_text(encoding="utf-8", errors="replace").strip()
         except Exception:
             text = ""
-        if text:
-            return text
-    return ""
+        if not text:
+            continue
+        content_hash = _sha256(text)
+        if content_hash in seen_hashes:
+            continue
+        seen_hashes.add(content_hash)
+        chunks.append(f"## {path.name}\n{text}")
+    return "\n\n".join(chunks)
 
 
 def _registry_manifest(root: Path, project: str, api_doc_text: str) -> dict[str, str]:
@@ -2741,6 +2932,71 @@ def _classify_findings(items: Any) -> tuple[list[dict[str, Any]], list[dict[str,
             row["confirmation_status"] = str(row.get("confirmation_status") or "candidate")
             candidates.append(row)
     return confirmed, candidates
+
+
+def _dedupe_findings(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Collapse near-identical findings that share the same reproduction path.
+
+    A state-graph cross-product can stamp one probe (e.g. a duplicate-payment
+    call) onto many lifecycle-state labels, inflating one real defect into N
+    "P0" rows with byte-identical reproduction steps. This groups by
+    (oracle rule + id-normalized reproduction fingerprint + primary target) and
+    keeps a single representative, recording the collapsed lifecycle-state
+    variants as coverage on the survivor so nothing is silently dropped.
+    """
+    import re as _re
+
+    def _norm(text: str) -> str:
+        # Neutralize concrete ids (uuid / long hex / digits) so the same probe
+        # against different entity instances collapses to one fingerprint.
+        text = _re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{20,}", "{id}", str(text or ""))
+        text = _re.sub(r"\b[0-9a-fA-F]{16,}\b", "{id}", text)
+        text = _re.sub(r"\b\d+\b", "{n}", text)
+        return text.strip()
+
+    groups: dict[tuple, dict[str, Any]] = {}
+    order: list[tuple] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        oracle = item.get("oracle") if isinstance(item.get("oracle"), dict) else {}
+        rule = str(oracle.get("violated_rule") or oracle.get("oracle_name") or item.get("category") or "").strip().lower()
+        ev = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+        steps = ev.get("reproduction_steps") if isinstance(ev.get("reproduction_steps"), list) else []
+        fingerprint = tuple(_norm(s) for s in steps)
+        primary = _norm(str(ev.get("request") or ""))
+        key = (rule, primary, fingerprint)
+        variant = {
+            "title": item.get("title"),
+            "behavior_slice_id": item.get("behavior_slice_id"),
+            "oracle_state": (oracle.get("expected") or item.get("expected") or ""),
+        }
+        if key not in groups:
+            keep = dict(item)
+            keep["_coverage_variants"] = [variant]
+            keep["_duplicate_count"] = 1
+            groups[key] = keep
+            order.append(key)
+        else:
+            groups[key]["_coverage_variants"].append(variant)
+            groups[key]["_duplicate_count"] += 1
+
+    deduped = [groups[k] for k in order]
+    _total = len([i for i in items if isinstance(i, dict)])
+    report = {
+        "input_count": _total,
+        "unique_count": len(deduped),
+        "collapsed_count": _total - len(deduped),
+        "groups": [
+            {
+                "title": groups[k].get("title"),
+                "duplicate_count": groups[k].get("_duplicate_count", 1),
+                "variant_states": [v.get("oracle_state") for v in groups[k].get("_coverage_variants", [])],
+            }
+            for k in order
+        ],
+    }
+    return deduped, report
 
 
 def _has_verified_db_evidence(finding: dict[str, Any]) -> bool:
@@ -3442,6 +3698,47 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
     return result
 
 
+def _compute_scan_score(confirmed: list[dict[str, Any]], candidates: list[dict[str, Any]], execution_status: str) -> tuple[float, float]:
+    """Derive a score/coverage signal from real findings.
+
+    Previously hardcoded to 0.0 regardless of outcome. Score rewards confirmed
+    findings weighted by evidence strength; coverage reflects the share of
+    executed work that reached a confirmed verdict.
+    """
+    if execution_status != "completed" and not confirmed:
+        return 0.0, 0.0
+    strength_weight = {"runtime_and_db": 1.0, "runtime_before_after": 0.8, "db": 0.75, "runtime": 0.6}
+    total = 0.0
+    for f in confirmed:
+        eq = f.get("evidence_quality") if isinstance(f.get("evidence_quality"), dict) else {}
+        strength = str(eq.get("evidence_strength") or f.get("evidence_strength") or "runtime")
+        total += strength_weight.get(strength, 0.6)
+    score = round(min(100.0, total * 10.0), 2)
+    denom = len(confirmed) + len(candidates)
+    coverage = round(len(confirmed) / denom, 4) if denom else (1.0 if confirmed else 0.0)
+    return score, coverage
+
+
+def _discovery_verdict(confirmed: list[dict[str, Any]], db_verification: dict[str, Any]) -> dict[str, Any]:
+    """Product-facing verdict: did QualiBug deliver reproducible defects?
+
+    Kept separate from release_gate (which answers "is the target safe to
+    ship?" and therefore *fails* precisely because P0 defects were found).
+    """
+    p0 = sum(1 for f in confirmed if str(f.get("severity") or "").upper() in {"P0", "CRITICAL"})
+    db_backed = int(db_verification.get("findings_with_db_evidence") or 0) if isinstance(db_verification, dict) else 0
+    if confirmed:
+        verdict = "defects_delivered"
+    else:
+        verdict = "no_confirmed_defects"
+    return {
+        "verdict": verdict,
+        "confirmed_defect_count": len(confirmed),
+        "confirmed_p0_count": p0,
+        "defects_with_db_evidence": db_backed,
+    }
+
+
 def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline."""
     root = Path(root or Path.cwd())
@@ -3449,6 +3746,11 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     if not project:
         return {"success": False, "error": "project is required"}
     context = dict(campaign_context or {})
+    context_defaults = _scan_campaign_context_defaults(project, root)
+    if context_defaults.get("scope_id") and not str(context.get("scope_id") or "").strip():
+        context["scope_id"] = context_defaults["scope_id"]
+    if context_defaults.get("environment_ref") and not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
+        context["environment_ref"] = context_defaults["environment_ref"]
     if not _as_dict(context.get("test_data_contract")):
         try:
             from .private_pilot_scan_context_contract import default_scan_test_data_contract
@@ -3521,11 +3823,14 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     execution = _as_dict(phases.get("execution"))
     campaign = _as_dict(v12.get("campaign"))
     execution_status = str(execution.get("status") or "not_executed")
+    refresh_local_approval = _should_refresh_local_execution_approval(runtime_contract, context)
     if (
         execution_status == "blocked"
         and str(runtime_contract.get("reason") or "") == "execution_approval_required"
-        and not str(context.get("execution_approval_id") or "").strip()
+        and (not str(context.get("execution_approval_id") or "").strip() or refresh_local_approval)
     ):
+        if refresh_local_approval:
+            context.pop("execution_approval_id", None)
         approval_id = _issue_local_execution_approval(project, root, context, campaign, approved_base_url)
         if approval_id:
             context["execution_approval_id"] = approval_id
@@ -3538,7 +3843,66 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             execution = _as_dict(phases.get("execution"))
             campaign = _as_dict(v12.get("campaign"))
             execution_status = str(execution.get("status") or "not_executed")
+
+    # ── Automatic multi-round campaign convergence ──
+    # A single behavior-slice round only exercises up to the per-round budget.
+    # When the campaign still has unattempted, source-executable slices, drive
+    # additional rounds in-process — feeding each round's confirmed findings
+    # back as history — so supplementary probes (permission / isolation /
+    # money / concurrency / state) accumulate coverage instead of stalling at
+    # one batch.  Bounded by round_limit and QUALIBUG_SCAN_MAX_ROUNDS.
+    if execution_status == "completed":
+        try:
+            from .v12_pipeline import run_v12_pipeline as _run_v12
+        except Exception:
+            _run_v12 = None
+        if _run_v12 is not None:
+            try:
+                _max_rounds = int(os.environ.get("QUALIBUG_SCAN_MAX_ROUNDS", "4") or "4")
+            except (TypeError, ValueError):
+                _max_rounds = 4
+            _max_rounds = max(1, min(_max_rounds, 12))
+            _acc_findings: list[dict[str, Any]] = [f for f in (v12.get("findings") or []) if isinstance(f, dict)]
+            _seen_keys = {(str(f.get("behavior_slice_id") or ""), str(f.get("title") or "")) for f in _acc_findings}
+            _rounds_run = 1
+            while _rounds_run < _max_rounds:
+                _ledger = _as_dict(v12.get("behavior_slice_ledger"))
+                _campaign_status = str(_as_dict(v12.get("campaign")).get("campaign_status") or "")
+                if _ledger.get("next_round") in (None, "", 0) or _campaign_status in {"completed", "blocked", "coverage_deferred"}:
+                    break
+                try:
+                    _next = _run_v12(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, existing_findings=_acc_findings, campaign_context=context)
+                except Exception:
+                    break
+                _next_exec = str(_as_dict(_as_dict(_next.get("phases")).get("execution")).get("status") or "")
+                if _next_exec != "completed":
+                    break
+                _new = 0
+                for _f in (_next.get("findings") or []):
+                    if not isinstance(_f, dict):
+                        continue
+                    _k = (str(_f.get("behavior_slice_id") or ""), str(_f.get("title") or ""))
+                    if _k not in _seen_keys:
+                        _seen_keys.add(_k)
+                        _acc_findings.append(_f)
+                        _new += 1
+                v12 = _next
+                _rounds_run += 1
+                # Stop early if a round contributed nothing new AND has no next round.
+                if _new == 0 and _as_dict(_next.get("behavior_slice_ledger")).get("next_round") in (None, "", 0):
+                    break
+            v12["findings"] = _acc_findings
+            v12["multi_round_summary"] = {"rounds_run": _rounds_run, "max_rounds": _max_rounds, "accumulated_findings": len(_acc_findings)}
+            runtime_contract = _as_dict(v12.get("runtime_contract")) or runtime_contract
+            phases = _as_dict(v12.get("phases"))
+            execution = _as_dict(phases.get("execution"))
+            campaign = _as_dict(v12.get("campaign"))
+            execution_status = str(execution.get("status") or execution_status)
     confirmed, candidates = _classify_findings(v12.get("findings"))
+    # Collapse state-graph cross-product duplicates so one real defect is not
+    # reported as N near-identical P0 rows. Collapsed lifecycle variants are
+    # preserved as coverage on the survivor.
+    confirmed, dedupe_report = _dedupe_findings(confirmed)
     external_findings = v12.get("external_findings") if isinstance(v12.get("external_findings"), list) else []
     if external_findings:
         external_findings = _adjudicate_external_evidence_backed_candidates(external_findings)
@@ -3653,6 +4017,24 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     )
     grade = "blocked" if str(runtime_contract.get("status") or "") == "blocked" or execution_status == "blocked" else ("inconclusive" if not confirmed else "evidence_ready")
     duration_ms = int((time.time() - started) * 1000)
+    # ── Honest data-layer verification summary aggregated from real findings ──
+    _db_backed = [f for f in confirmed if isinstance(f, dict) and isinstance(f.get("db_evidence"), dict) and f["db_evidence"].get("status") == "captured"]
+    _db_changed = [f for f in _db_backed if f["db_evidence"].get("any_change")]
+    if _db_backed:
+        db_verification = {
+            "status": "captured",
+            "reason": "runtime_before_after_db_snapshot",
+            "findings_with_db_evidence": len(_db_backed),
+            "findings_with_db_change": len(_db_changed),
+            "findings": [
+                {"title": f.get("title"), "changed_tables": f["db_evidence"].get("changed_tables", [])}
+                for f in _db_changed
+            ],
+        }
+    else:
+        db_verification = {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []}
+    # ── Score/coverage wired to real findings instead of a constant 0.0 ──
+    score, coverage = _compute_scan_score(confirmed, candidates, execution_status)
     ui_findings = v12.get("ui_findings") if isinstance(v12.get("ui_findings"), list) else []
     ui_candidate_findings = _ui_candidate_gate(ui_findings)
     ui_candidate_findings = _verify_ui_candidate_findings(ui_candidate_findings, root=root, runtime_contract=runtime_contract)
@@ -3674,7 +4056,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         plan_only_scenarios=v12.get("plan_only_scenarios") if isinstance(v12.get("plan_only_scenarios"), list) else [],
     )
     result: dict[str, Any] = {
-        "success": True, "scan_id": scan_id, "project": project, "grade": grade, "score": 0.0, "coverage": 0.0,
+        "success": True, "scan_id": scan_id, "project": project, "grade": grade, "score": score, "coverage": coverage,
         "total_findings": len(confirmed), "total_candidates": len(candidates), "total_ms": duration_ms,
         "layers": {
             "source_grounded_discovery": {"tool": "V12 enterprise campaign", "findings": len(confirmed), "candidates": len(candidates), "ms": int(v12.get("total_duration_ms") or duration_ms), "execution_status": execution_status, "campaign_id": campaign.get("campaign_id", "")},
@@ -3712,7 +4094,9 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         "ui_test_data_bootstrap": ui_test_data_bootstrap,
         "behavior_slice_ledger": v12.get("behavior_slice_ledger", {}), "incremental_discovery": incremental,
         "execution_status": execution_status,
-        "db_verification": {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []},
+        "db_verification": db_verification,
+        "dedupe_report": dedupe_report,
+        "discovery_verdict": _discovery_verdict(confirmed, db_verification),
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
         "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution": ui_execution, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "external_signal_execution": external_signal_execution, "v12": v12,
     }

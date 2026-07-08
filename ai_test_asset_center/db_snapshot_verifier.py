@@ -304,7 +304,7 @@ class DBSnapshotVerifier:
                 continue
 
             sorted_json = json.dumps(
-                sorted([dict(r) for r in rows], key=lambda x: json.dumps(x, sort_keys=True)),
+                sorted([dict(r) for r in rows], key=lambda x: json.dumps(x, sort_keys=True, default=str)),
                 sort_keys=True, default=str,
             )
             checksum = hashlib.sha256(sorted_json.encode()).hexdigest()[:16]
@@ -469,6 +469,45 @@ class DBSnapshotVerifier:
             data = _j.loads(resp.read())
             return [hit["_source"] for hit in data.get("hits", {}).get("hits", [])]
 
+        return []
+
+    def list_tables(self) -> list[str]:
+        """Return base table/collection names for the connected store, generically.
+
+        Used so the executor can snapshot every table and let the diff itself
+        reveal which one changed — no per-project table hardcoding required.
+        """
+        if not self.configured:
+            return []
+        try:
+            self._connect()
+        except Exception:
+            return []
+        try:
+            if self._db_type == "sqlite3":
+                rows = self._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+                return [str(r[0]) for r in rows]
+            if self._db_type == "postgresql":
+                rows = self._query_all(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
+                )
+                return [str(r.get("table_name")) for r in rows if r.get("table_name")]
+            if self._db_type in ("mysql", "mariadb"):
+                rows = self._query_all(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema=DATABASE() AND table_type='BASE TABLE'"
+                )
+                return [str(r.get("table_name") or r.get("TABLE_NAME")) for r in rows if (r.get("table_name") or r.get("TABLE_NAME"))]
+            if self._db_type in ("mssql", "oracle", "db2"):
+                rows = self._query_all(
+                    "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE'"
+                )
+                return [str(r.get("table_name") or r.get("TABLE_NAME")) for r in rows if (r.get("table_name") or r.get("TABLE_NAME"))]
+        except Exception:
+            return []
         return []
 
 

@@ -408,6 +408,54 @@ def test_query_like_post_route_can_back_source_observation_for_coupon_invariants
     assert all("OBSERVATION_ROUTE_NOT_SOURCE_BOUND" not in item.evidence_gaps for item in invariant_slices)
 
 
+def test_coupon_invariant_generates_runtime_validate_scenario_from_source_rule():
+    builder = BusinessStateGraphBuilder()
+    graphs = builder.build(COUPON_RULES, COUPON_VALIDATE_API, COUPON_SCHEMA)
+    invariant_slice = next(
+        item for item in builder.behavior_slices
+        if item.kind == "invariant" and item.entity == "coupon"
+    )
+
+    scenarios = SemanticScenarioGenerator().generate(
+        graphs,
+        COUPON_VALIDATE_API,
+        active_slice_ids={invariant_slice.slice_id},
+        active_slices=[invariant_slice.to_dict()],
+        allow_source_runtime=True,
+    )
+
+    assert len(scenarios) == 1
+    scenario = scenarios[0]
+    assert scenario.execution_policy == "approved_sandbox_write"
+    assert len(scenario.steps) == 1
+    assert scenario.steps[0].api_method == "POST"
+    assert scenario.steps[0].api_path == "/api/coupons/validate"
+    assert "CouponOracle.inactive_coupon_must_be_invalid" in scenario.oracle_rules
+
+
+def test_coupon_invariant_prefers_category_rule_over_section_wide_expiry_tokens():
+    generator = SemanticScenarioGenerator()
+
+    assert generator._coupon_rule_key(
+        "coupon",
+        "ACTIVE",
+        "6. 类目券只能用于指定类目；",
+        [
+            "1. 优惠券必须在有效期内；",
+            "6. 类目券只能用于指定类目；",
+        ],
+    ) == "coupon_category_scope_must_match"
+
+
+def test_coupon_disabled_state_falls_back_to_inactive_rule_when_invariant_is_generic():
+    generator = SemanticScenarioGenerator()
+
+    assert generator._coupon_rule_key("coupon", "DISABLED", "7. 折扣券必须遵守封顶金额。", [
+        "1. 优惠券必须在有效期内；",
+        "2. 优惠券状态必须为 ACTIVE；",
+    ]) == "inactive_coupon_must_be_invalid"
+
+
 def test_dependency_slice_can_reuse_parent_coupon_observation_route_for_coupon_usage():
     builder = BusinessStateGraphBuilder()
     builder.build("", COUPON_VALIDATE_API, COUPON_SCHEMA)

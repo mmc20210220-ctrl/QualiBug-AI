@@ -252,3 +252,13 @@ def test_campaign_completes_when_no_slices_remain_even_without_full_confirmation
     )
     assert campaign.status == "completed"
     assert campaign.coverage_deferred_reason == ""
+
+
+def test_campaign_history_item_carries_confirmed_slice_ids_for_same_campaign_scheduler_feedback():
+    campaign = _campaign()
+    campaign.attempted_slice_ids = ["BHV_1", "BHV_2"]
+    campaign.confirmation_receipts = {"BHV_2": "receipt_2"}
+    history = campaign.history_item()
+
+    assert history["behavior_slice_ledger"]["attempted_slice_ids"] == ["BHV_1", "BHV_2"]
+    assert history["behavior_slice_ledger"]["confirmed_slice_ids"] == ["BHV_2"]

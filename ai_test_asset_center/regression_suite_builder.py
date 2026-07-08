@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .real_project_onboarding import ROOT, _html_escape, _safe_project_id, load_real_project_config
 
@@ -76,6 +77,149 @@ def _is_destructive(method: str, risk_type: str) -> bool:
     return method.upper() in DESTRUCTIVE_METHODS or risk_type.lower() in {"payment", "refund", "idempotency", "duplicate_submit", "concurrency", "delete", "cancel_order"}
 
 
+def _extract_request_body_from_steps(steps: list[Any]) -> dict[str, Any] | list[Any] | str | None:
+    for step in steps:
+        text = str(step or "")
+        match = re.search(r"-d\s+'([^']+)'", text) or re.search(r'-d\s+"([^"]+)"', text)
+        if not match:
+            continue
+        payload = match.group(1).strip()
+        if not payload or "根据业务场景填写" in payload or '"..."' in payload or "{...}" in payload:
+            continue
+        try:
+            return json.loads(payload)
+        except Exception:
+            return payload
+    return None
+
+
+def _extract_path_from_curl(curl_command: str) -> str:
+    match = re.search(r'curl\s+-X\s+\w+\s+"([^"]+)"', str(curl_command or ""))
+    if not match:
+        return ""
+    url = match.group(1).strip()
+    if "${BASE_URL}" in url:
+        return re.sub(r"^\$\{BASE_URL\}", "", url)
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.netloc:
+        return parsed.path or "/"
+    return url
+
+
+def _current_campaign_scope_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    candidates = [
+        payload.get("current_campaign_scope"),
+        (payload.get("scan_meta") or {}).get("current_campaign_scope") if isinstance(payload.get("scan_meta"), dict) else {},
+        (payload.get("value_metrics") or {}).get("current_campaign_scope") if isinstance(payload.get("value_metrics"), dict) else {},
+        (payload.get("executive_summary") or {}).get("current_campaign_scope") if isinstance(payload.get("executive_summary"), dict) else {},
+    ]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        normalized = {
+            "campaign_id": _safe_text(candidate.get("campaign_id"), 120),
+            "lineage_campaign_id": _safe_text(candidate.get("lineage_campaign_id"), 120),
+            "scope_id": _safe_text(candidate.get("scope_id"), 160),
+            "environment_ref": _safe_text(candidate.get("environment_ref"), 160),
+            "source_hash": _safe_text(candidate.get("source_hash"), 128),
+            "source_snapshot_hash": _safe_text(candidate.get("source_snapshot_hash"), 128),
+        }
+        if any(normalized.values()):
+            return normalized
+    return {}
+
+
+def _load_customer_ready_defect_probes(project: str, root: Path) -> list[dict[str, Any]]:
+    project = _safe_project_id(project)
+    candidates = [
+        root / "platform_outputs" / project / "real_project" / "real_project_defect_data.json",
+        root / "platform_workspace" / project / "real_project" / "real_project_defect_data.json",
+    ]
+    data: dict[str, Any] = {}
+    for path in candidates:
+        loaded = _load_json_safe(path, {})
+        if not isinstance(loaded, dict):
+            continue
+        payload_candidates: list[dict[str, Any]] = []
+        for nested_key in ("customer_ready_family_shelf", "customer_ready_snapshot"):
+            nested = loaded.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            candidate = dict(nested)
+            if not isinstance(candidate.get("current_campaign_scope"), dict):
+                for scope_key in ("customer_ready_current_campaign_scope", "current_campaign_scope"):
+                    if isinstance(loaded.get(scope_key), dict):
+                        candidate["current_campaign_scope"] = dict(loaded.get(scope_key) or {})
+                        break
+            if not isinstance(candidate.get("continuous_discovery_campaign"), dict):
+                for campaign_key in ("customer_ready_continuous_discovery_campaign", "continuous_discovery_campaign"):
+                    if isinstance(loaded.get(campaign_key), dict):
+                        candidate["continuous_discovery_campaign"] = dict(loaded.get(campaign_key) or {})
+                        break
+            payload_candidates.append(candidate)
+        payload_candidates.append(loaded)
+        for candidate in payload_candidates:
+            if isinstance(candidate.get("defects"), list):
+                data = candidate
+                break
+        if data:
+            break
+    defects = data.get("defects") if isinstance(data, dict) else None
+    if not isinstance(defects, list):
+        return []
+    current_campaign_scope = _current_campaign_scope_from_payload(data)
+
+    probes: list[dict[str, Any]] = []
+    for item in defects:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("customer_delivery_status") or "").strip().lower() != "defect":
+            continue
+        if str(item.get("bug_status") or "").strip().lower() != "reproduced":
+            continue
+        if not bool(item.get("gate_passed")) or not bool(item.get("is_reproducible")):
+            continue
+        reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
+        raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
+        request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+        har_evidence = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
+        expected_actual = item.get("expected_actual_comparison") if isinstance(item.get("expected_actual_comparison"), dict) else {}
+        evidence_quality = item.get("evidence_quality") if isinstance(item.get("evidence_quality"), dict) else {}
+        method = str(reproduction.get("method") or request_raw.get("method") or "GET").upper()
+        path = str(reproduction.get("path") or request_raw.get("path") or "").strip()
+        if not path:
+            path = _extract_path_from_curl(str(reproduction.get("curl_command") or evidence_quality.get("curl_command") or ""))
+        if not path:
+            continue
+        request_body = _extract_request_body_from_steps(reproduction.get("steps") or []) if isinstance(reproduction.get("steps"), list) else None
+        probe: dict[str, Any] = {
+            "regression_probe_id": f"CRD_REG_{item.get('id') or len(probes) + 1}",
+            "issue_id": item.get("id") or item.get("issue_id"),
+            "title": item.get("title") or item.get("business_summary") or f"已确认缺陷回归 {len(probes) + 1}",
+            "risk_type": item.get("risk_type") or "business_risk",
+            "severity": item.get("severity") or "P2",
+            "method": method,
+            "path": path,
+            "actor": har_evidence.get("actor") or request_raw.get("actor") or "normal_user",
+            "expected": expected_actual.get("expected") or item.get("expected") or "原缺陷信号不应复现，若缺少自动断言则应进入人工复核。",
+            "source": "customer_ready_defect_data",
+            "candidate_tier": "customer_ready_defect",
+            "verification_status": ((item.get("evidence_status") or {}) if isinstance(item.get("evidence_status"), dict) else {}).get("final_review_status") or "validated_candidate",
+            "verification_badge": "customer_ready_defect",
+            "confidence_score": round(float(evidence_quality.get("score") or 0) / 100.0, 3),
+            "high_confidence_candidate": False,
+            "evidence_quality": dict(evidence_quality),
+        }
+        if request_body is not None:
+            probe["request_body"] = request_body
+        if current_campaign_scope:
+            probe["current_campaign_scope"] = dict(current_campaign_scope)
+        probes.append(probe)
+    return probes
+
+
 def _load_fix_regression_probes(project: str, root: Path) -> list[dict[str, Any]]:
     """Load traditional fix-regression probes plus Phase55 approved confirmations.
 
@@ -112,6 +256,10 @@ def _load_fix_regression_probes(project: str, root: Path) -> list[dict[str, Any]
             if isinstance(item, dict) and item.get("approved") is True
         )
 
+    if probes:
+        return probes
+
+    probes.extend(_load_customer_ready_defect_probes(project, root))
     if probes:
         return probes
 
@@ -160,6 +308,7 @@ def _normalize_probe(probe: dict[str, Any], index: int) -> dict[str, Any]:
     path = _safe_text(probe.get("path") or probe.get("url") or "/", 300)
     title = _safe_text(probe.get("title") or probe.get("expected") or f"回归探针 {index}", 240)
     severity = _safe_text(probe.get("severity") or "P2", 16).upper()
+    evidence_quality = probe.get("evidence_quality") if isinstance(probe.get("evidence_quality"), dict) else {}
     normalized = {
         "regression_probe_id": _normalize_probe_id(probe.get("regression_probe_id") or probe.get("probe_id") or probe.get("id"), index),
         "issue_id": _safe_text(probe.get("issue_id"), 120),
@@ -173,7 +322,16 @@ def _normalize_probe(probe: dict[str, Any], index: int) -> dict[str, Any]:
         "expected": _safe_text(probe.get("expected") or "原缺陷信号不应复现，业务规则保持正确。", 1200),
         "source": _safe_text(probe.get("source") or "fix_regression_probes", 120),
         "destructive": _is_destructive(method, risk_type),
+        "candidate_tier": _safe_text(probe.get("candidate_tier"), 80),
+        "high_confidence_candidate": bool(probe.get("high_confidence_candidate") is True),
+        "verification_status": _safe_text(probe.get("verification_status"), 40),
+        "verification_badge": _safe_text(probe.get("verification_badge"), 40),
+        "confidence_score": float(probe.get("confidence_score") or 0.0),
+        "evidence_quality": dict(evidence_quality),
+        "request_body": probe.get("request_body"),
     }
+    if isinstance(probe.get("current_campaign_scope"), dict):
+        normalized["current_campaign_scope"] = dict(probe.get("current_campaign_scope") or {})
     normalized["priority_score"] = _risk_score(normalized)
     normalized["tags"] = [normalized["severity"], normalized["risk_type"], normalized["module"]]
     return normalized
@@ -271,6 +429,10 @@ def build_regression_suite(project_id: str = "real_project_demo", root: Path | N
     cfg = load_real_project_config(project, root)
     raw_probes = _load_fix_regression_probes(project, root)
     probes = _dedupe_sort(raw_probes)
+    current_campaign_scope = next(
+        (dict(probe.get("current_campaign_scope") or {}) for probe in probes if isinstance(probe.get("current_campaign_scope"), dict) and any((probe.get("current_campaign_scope") or {}).values())),
+        {},
+    )
     modes = _select_modes(probes, cfg, options)
     p0_p1_count = sum(1 for p in probes if p.get("severity") in {"P0", "P1"})
     destructive_count = sum(1 for p in probes if p.get("destructive"))
@@ -296,6 +458,8 @@ def build_regression_suite(project_id: str = "real_project_demo", root: Path | N
         "severity_distribution": _count_by(probes, "severity"),
         "ci_gate_recommendation": ci_gate_recommendation,
     }
+    if current_campaign_scope:
+        summary["current_campaign_scope"] = current_campaign_scope
     ci_gate = {
         "project_id": project,
         "suite": "release",
@@ -311,6 +475,8 @@ def build_regression_suite(project_id: str = "real_project_demo", root: Path | N
         },
         "recommendation": ci_gate_recommendation,
     }
+    if current_campaign_scope:
+        ci_gate["current_campaign_scope"] = current_campaign_scope
     result = {
         "phase": "phase31_regression_suite_builder",
         "project_id": project,
@@ -318,6 +484,8 @@ def build_regression_suite(project_id: str = "real_project_demo", root: Path | N
         "modes": modes,
         "ci_gate": ci_gate,
     }
+    if current_campaign_scope:
+        result["current_campaign_scope"] = current_campaign_scope
     private_check = _private_leak_check(result)
     summary["private_leak_check_passed"] = private_check["passed"]
     result["private_leak_check"] = private_check

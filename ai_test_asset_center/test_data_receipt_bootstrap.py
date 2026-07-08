@@ -259,24 +259,12 @@ def _login_route(routes: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _test_credentials(project: str, root: Path) -> list[dict[str, Any]]:
     try:
-        from .enterprise_pilot_runtime import load_connector_registry
+        from .enterprise_pilot_runtime import load_connector_registry, ordered_test_credentials
 
         registry = load_connector_registry(project, root)
     except Exception:
         return []
-    profile = registry.get("test_profile") if isinstance(registry, dict) else {}
-    credentials = profile.get("test_credentials") if isinstance(profile, dict) else {}
-    if not isinstance(credentials, dict):
-        return []
-    preferred = ["buyer", "admin", "qa", "read_only", "readonly", "viewer", "auditor"]
-    ordered = []
-    for name in preferred:
-        if isinstance(credentials.get(name), dict):
-            ordered.append({"profile": name, **dict(credentials.get(name) or {})})
-    for key, value in credentials.items():
-        if key not in preferred and isinstance(value, dict):
-            ordered.append({"profile": key, **dict(value or {})})
-    return ordered
+    return ordered_test_credentials(registry)
 
 
 def _login_body_template(account: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:

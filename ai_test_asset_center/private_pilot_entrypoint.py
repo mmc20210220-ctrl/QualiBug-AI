@@ -7,6 +7,8 @@ pilot deployments. It composes runtime patches before delegating to the legacy
 HTTP server.
 """
 
+import os
+import time
 from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
@@ -94,11 +96,35 @@ def install_runtime_patches() -> None:
 
 
 def run_server() -> None:
+    # #region debug-point A:entrypoint-run-server
+    _service._dbg_report(
+        hypothesis_id="A",
+        msg="[DEBUG] private-pilot entrypoint starting server",
+        data={
+            "pid": os.getpid(),
+            "cwd": os.getcwd(),
+            "port_env": os.environ.get("QUALIBUG_PORT", ""),
+            "bind_host_env": os.environ.get("QUALIBUG_BIND_HOST", ""),
+            "patch_source": PATCH_SOURCE,
+        },
+    )
+    _started = time.perf_counter()
+    # #endregion
     install_runtime_patches()
     server = _service.run_private_pilot_service()
     try:
         server.serve_forever()
     finally:
+        # #region debug-point B:entrypoint-run-server-finally
+        _service._dbg_report(
+            hypothesis_id="B",
+            msg="[DEBUG] private-pilot entrypoint stopping server",
+            data={
+                "pid": os.getpid(),
+                "elapsed_ms": int((time.perf_counter() - _started) * 1000),
+            },
+        )
+        # #endregion
         server.server_close()
 
 

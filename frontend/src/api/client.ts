@@ -97,6 +97,39 @@ export type V12ScanResult = {
   message?: string;
 };
 
+export type RegressionRunResult = {
+  ok: boolean;
+  project_id?: string;
+  mode?: 'smoke' | 'release' | 'full' | string;
+  summary?: {
+    generated_at?: string;
+    suite_mode?: string;
+    suite_mode_label?: string;
+    total_probe_count?: number;
+    executed_count?: number;
+    passed_count?: number;
+    failed_count?: number;
+    needs_review_count?: number;
+    skipped_count?: number;
+  };
+  ci_feedback?: {
+    gate_status?: string;
+    ci_message?: string;
+    exit_code?: number;
+    reopen_issue_ids?: string[];
+  };
+  regression_summary?: Record<string, unknown>;
+  failures?: Array<Record<string, unknown>>;
+  artifacts?: Record<string, string>;
+  governance?: {
+    dry_run?: boolean;
+    allow_destructive_execution?: boolean;
+    safe_by_default?: boolean;
+  };
+  error?: string;
+  message?: string;
+};
+
 function asRecord(value: unknown): JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
 }
@@ -402,6 +435,22 @@ export function runV12Scan(projectId: string, options?: { api_doc?: string; base
       environment_ref: options?.environment_ref || undefined,
       source_manifest: options?.source_id || options?.source_hash ? { source_id: options?.source_id || '', source_hash: options?.source_hash || '' } : undefined,
       test_data_contract: options?.test_data_contract,
+    }),
+  });
+}
+
+export async function runRegression(projectId: string, options?: { mode?: 'smoke' | 'release' | 'full'; dry_run?: boolean; allow_destructive_execution?: boolean }): Promise<RegressionRunResult> {
+  const resolvedProjectId = await resolveProjectId(projectId);
+  if (!resolvedProjectId) {
+    return { ok: false, error: '未选择有效项目，无法执行回归。' };
+  }
+  return fetchJSON<RegressionRunResult>(`${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/regression/run`, {
+    method: 'POST',
+    body: JSON.stringify({
+      project_id: resolvedProjectId,
+      mode: options?.mode || 'release',
+      dry_run: options?.dry_run === true,
+      allow_destructive_execution: options?.allow_destructive_execution === true,
     }),
   });
 }

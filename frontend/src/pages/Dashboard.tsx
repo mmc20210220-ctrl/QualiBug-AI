@@ -1,7 +1,8 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getCommercialAssets, usePipelineData } from '../api/data';
+import { emitScanCompleted, getCommercialAssets, usePipelineData } from '../api/data';
+import { runRegression } from '../api/client';
 import { useToast } from '../components/useToast';
 import { buildReportData, renderReportHTML } from '../api/report';
 import { formatDurationMs } from '../lib/display';
@@ -150,19 +151,38 @@ function regressionGateLabel(status: string): string {
   return normalized ? '回归待执行' : '回归未上报';
 }
 
-function getExecutiveHeadline(defectCount: number, p0Count: number, highPriorityCount: number, clueCount: number, campaignStatus: string, deferredReason: string) {
+function regressionTrendLabel(direction: string): string {
+  const normalized = direction.trim().toLowerCase();
+  if (normalized === 'improving') return '趋势向好';
+  if (normalized === 'regressing') return '风险上升';
+  if (normalized === 'stable') return '趋势持平';
+  return '趋势待观察';
+}
+
+function releaseRecommendationLabel(value: string, fallback: string): string {
+  if (fallback) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'block_release') return '建议阻断发布';
+  if (normalized === 'continue_regression') return '建议继续执行真实回归';
+  if (normalized === 'hold_for_validation') return '建议先完成剩余回归';
+  if (normalized === 'candidate_release') return '可进入候选发布';
+  if (normalized === 'candidate_acceptance') return '可进入客户验收';
+  return '继续观察后续轮次';
+}
+
+function getExecutiveHeadline(currentDefectCount: number, familyDefectCount: number, p0Count: number, highPriorityCount: number, clueCount: number, campaignStatus: string, deferredReason: string) {
   if (campaignStatus === 'blocked') return `本轮 Campaign 已阻塞：${deferredReason || '缺少进入执行的必要合同'}。`;
   if (campaignStatus === 'coverage_deferred') return `本轮覆盖已递延：${deferredReason || '自动执行边界已到达'}。`;
-  if (defectCount > 0 && p0Count > 0) return `已确认 ${defectCount} 个可交付缺陷，其中 ${p0Count} 个会直接影响发布。`;
-  if (defectCount > 0) return `已确认 ${defectCount} 个可交付缺陷，可直接进入整改与验收闭环。`;
+  if (currentDefectCount > 0 && p0Count > 0) return familyDefectCount > currentDefectCount ? `本轮确认 ${currentDefectCount} 个可交付缺陷，累计货架 ${familyDefectCount} 个，其中 ${p0Count} 个会直接影响发布。` : `已确认 ${currentDefectCount} 个可交付缺陷，其中 ${p0Count} 个会直接影响发布。`;
+  if (currentDefectCount > 0) return familyDefectCount > currentDefectCount ? `本轮确认 ${currentDefectCount} 个可交付缺陷，累计货架 ${familyDefectCount} 个，可直接进入整改与验收闭环。` : `已确认 ${currentDefectCount} 个可交付缺陷，可直接进入整改与验收闭环。`;
   if (clueCount > 0) return `本轮尚未形成可交付缺陷，内部仍有 ${clueCount} 条线索正在补证。`;
   if (highPriorityCount === 0) return '当前未发现可交付缺陷，但仍需结合 Campaign 覆盖状态判断发布结论。';
   return '当前没有形成客户可交付缺陷，建议继续进行真实场景扫描。';
 }
 
-function getExecutiveDescription(defectCount: number, clueCount: number, evidenceScore: number, modulesCount: number, campaignStatus: string, deferredReason: string, nextCampaignReason: string) {
+function getExecutiveDescription(currentDefectCount: number, familyDefectCount: number, clueCount: number, evidenceScore: number, modulesCount: number, campaignStatus: string, deferredReason: string, nextCampaignReason: string) {
   if (campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred') return campaignDetail(campaignStatus, deferredReason, nextCampaignReason);
-  if (defectCount > 0) return `本页只展示已验证、可复现、具备原始证据的缺陷结果。当前已覆盖 ${modulesCount} 个业务模块，证据可信度 ${evidenceScore}%。`;
+  if (currentDefectCount > 0) return familyDefectCount > currentDefectCount ? `本页显式区分本轮扫描与累计 defect shelf：本轮确认 ${currentDefectCount} 个缺陷，累计货架保留 ${familyDefectCount} 个历史可交付缺陷。当前已覆盖 ${modulesCount} 个业务模块，证据可信度 ${evidenceScore}%。` : `本页只展示已验证、可复现、具备原始证据的缺陷结果。当前已覆盖 ${modulesCount} 个业务模块，证据可信度 ${evidenceScore}%。`;
   if (clueCount > 0) return '当前没有站得住的客户缺陷，说明系统仍处于补证阶段。本轮内部线索不会进入客户交付，待形成真实证据后再升级展示。';
   return '当前结果代表本轮没有形成客户可交付缺陷。后续新增扫描结果后，这里会自动更新业务结论。';
 }
@@ -278,6 +298,7 @@ export function Dashboard() {
   const { data, loading, error, refetch } = usePipelineData(project);
   const { navigateToProjectPath } = useProjectNavigation();
   const toast = useToast();
+  const [regressionRunningMode, setRegressionRunningMode] = useState('');
 
   const handleExport = useCallback(async () => {
     if (!data) return;
@@ -309,6 +330,28 @@ export function Dashboard() {
       toast.show(`导出失败: ${message}`, 'danger');
     }
   }, [project, data, toast]);
+
+  const handleRegressionRun = useCallback(async (mode: 'smoke' | 'release') => {
+    if (!project) return;
+    setRegressionRunningMode(mode);
+    try {
+      toast.show(`正在执行${mode === 'smoke' ? ' Smoke ' : ' Release '}回归...`, 'info');
+      const result = await runRegression(project, { mode });
+      emitScanCompleted(project);
+      await refetch();
+      const gateStatus = asText(result.ci_feedback?.gate_status) || 'unknown';
+      const failedCount = asNum(result.summary?.failed_count);
+      toast.show(
+        `${mode === 'smoke' ? 'Smoke' : 'Release'} 回归完成：${gateStatus}${failedCount > 0 ? `，失败 ${failedCount} 项` : ''}`,
+        gateStatus === 'failed' ? 'danger' : gateStatus === 'passed' ? 'success' : 'warning',
+      );
+    } catch (caught: unknown) {
+      const message = caught instanceof Error ? caught.message : '回归执行失败';
+      toast.show(message, 'danger');
+    } finally {
+      setRegressionRunningMode('');
+    }
+  }, [project, refetch, toast]);
 
   if (loading) {
     return (
@@ -376,13 +419,19 @@ export function Dashboard() {
   const campaignCurrentDefects = asNum(campaignSummary.current_campaign_customer_ready_defect_count);
   const campaignCurrentRawFindings = asNum(campaignSummary.current_campaign_bundle_finding_count_raw);
   const campaignFamilyDefects = asNum(campaignSummary.family_customer_ready_defect_count, totalRiskCount);
+  const p0Count = findings.filter((finding) => finding.severity === 'P0').length;
+  const highPriorityCount = p0Count + findings.filter((finding) => finding.severity === 'P1').length;
+  const currentScanFindings = asNum(scanMeta.current_report_total_findings, asNum(scanMeta.total_findings, campaignCurrentRawFindings || totalRiskCount));
+  const currentScanDefects = asNum(scanMeta.current_report_customer_ready_defect_count, asNum(scanMeta.customer_ready_defects, campaignCurrentDefects || Math.min(totalRiskCount, currentScanFindings || totalRiskCount)));
+  const familyShelfDefects = asNum(scanMeta.family_customer_ready_defect_count, campaignFamilyDefects);
+  const currentScanP0Count = Math.min(p0Count, currentScanDefects);
+  const currentScanHighPriorityCount = Math.min(highPriorityCount, currentScanDefects);
+  const shelfCarryoverCount = Math.max(0, familyShelfDefects - currentScanDefects);
   const campaignCarryoverDefects = asNum(campaignSummary.family_historical_carryover_defect_count);
   const coverageGaps = Array.isArray(record.coverage_gaps) ? record.coverage_gaps.length : 0;
   const governanceNeedsAction = campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred';
-  const p0Count = findings.filter((finding) => finding.severity === 'P0').length;
   const clueCount = clues.length;
   const evidenceTrust = asNum(valueMetrics.evidence_trust_score, 0);
-  const highPriorityCount = p0Count + findings.filter((finding) => finding.severity === 'P1').length;
   const modules = Array.from(new Set(findings.map(getFindingModule).filter(Boolean)));
   const modulesCount = modules.length;
   const validatedDefects = findings.filter((finding) => finding.evidence_quality?.level === 'validated').length;
@@ -393,18 +442,33 @@ export function Dashboard() {
   const regressionPassed = asNum(regressionSummary.passed_defect_count);
   const regressionRunAt = asText(regressionSummary.latest_run?.generated_at);
   const regressionGate = regressionGateLabel(asText(regressionSummary.latest_run?.gate_status));
+  const regressionHasLinkedDefects = regressionCovered > 0 || regressionPassed > 0 || regressionFailed > 0 || regressionPending > 0;
+  const regressionGateDisplay = regressionHasLinkedDefects ? regressionGate : '回归待观察';
+  const regressionHeadline = regressionHasLinkedDefects ? (regressionSummary.headline || '当前已经把客户缺陷纳入回归闭环，但尚未返回更多细节。') : '当前已存在回归执行记录，但还没有与客户缺陷建立关联。';
+  const regressionTrend = regressionTrendLabel(asText(regressionSummary.trend_direction));
+  const regressionTrendSummary = asText(regressionSummary.trend_summary);
+  const regressionHistoryRunCount = asNum(regressionSummary.history_run_count);
+  const regressionRecentRuns = Array.isArray(regressionSummary.recent_runs) ? regressionSummary.recent_runs : [];
+  const regressionLifecycleCounts = asRecord(regressionSummary.lifecycle_counts);
+  const regressionValidationSummary = asRecord(regressionSummary.validation_summary);
+  const regressionDoubleRunVerified = Boolean(regressionValidationSummary.double_run_verified);
+  const regressionRepeatedFailures = asNum(regressionValidationSummary.repeated_failure_defect_count);
+  const releaseRecommendation = releaseRecommendationLabel(asText(regressionSummary.release_recommendation), asText(regressionSummary.release_recommendation_label));
+  const releaseRecommendationReason = asText(regressionSummary.release_recommendation_reason);
+  const customerDeliveryReadiness = asText(regressionSummary.customer_delivery_readiness_label) || asText(regressionSummary.customer_delivery_readiness) || '持续观察中';
   const hasMaterializedMetrics = totalRiskCount > 0 || clueCount > 0 || asNum(asRecord(record.business_flow_summary).total, 0) > 0 || Boolean(campaignStatus) || coverageGaps > 0 || hasMainChainContract || hasEvidenceNormalizationSummary;
   const topFindings = [...findings].sort((a, b) => {
     const severityGap = getSeverityWeight(b.severity) - getSeverityWeight(a.severity);
     return severityGap !== 0 ? severityGap : (b.evidence_quality?.score || 0) - (a.evidence_quality?.score || 0);
   }).slice(0, 3);
+  const focusFindings = currentScanDefects > 0 ? topFindings : [];
   const topFamilyLabel = findings[0]?.defect_family_label || findings[0]?.defect_family || '核心业务';
-  const executiveHeadline = getExecutiveHeadline(totalRiskCount, p0Count, highPriorityCount, clueCount, campaignStatus, campaignDeferredReason);
-  const executiveDescription = getExecutiveDescription(totalRiskCount, clueCount, evidenceTrust, modulesCount, campaignStatus, campaignDeferredReason, nextCampaignReason);
-  const conclusion = campaignStatus === 'blocked' ? 'Campaign 已阻塞' : campaignStatus === 'coverage_deferred' ? '覆盖已递延' : p0Count > 0 ? '存在阻断发布缺陷' : totalRiskCount > 0 ? '建议进入整改验收' : '当前无可交付缺陷';
+  const executiveHeadline = getExecutiveHeadline(currentScanDefects, familyShelfDefects, currentScanP0Count, currentScanHighPriorityCount, clueCount, campaignStatus, campaignDeferredReason);
+  const executiveDescription = getExecutiveDescription(currentScanDefects, familyShelfDefects, clueCount, evidenceTrust, modulesCount, campaignStatus, campaignDeferredReason, nextCampaignReason);
+  const conclusion = campaignStatus === 'blocked' ? 'Campaign 已阻塞' : campaignStatus === 'coverage_deferred' ? '覆盖已递延' : currentScanP0Count > 0 ? '存在阻断发布缺陷' : currentScanDefects > 0 ? '建议进入整改验收' : '当前无可交付缺陷';
   const conclusionDetail = campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred'
     ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason)
-    : p0Count > 0 ? `${p0Count} 个 P0 缺陷需要优先闭环。` : totalRiskCount > 0 ? `${highPriorityCount} 个高风险问题建议先处理。` : '本轮结果需结合 Campaign 覆盖状态作为当前阶段风险结论。';
+    : currentScanP0Count > 0 ? `${currentScanP0Count} 个 P0 缺陷需要优先闭环。` : currentScanDefects > 0 ? `${currentScanHighPriorityCount} 个高风险问题建议先处理。` : '本轮结果需结合 Campaign 覆盖状态作为当前阶段风险结论。';
 
   const mainChainDetail = hasMainChainContract
     ? mainChainReady
@@ -485,15 +549,15 @@ export function Dashboard() {
             <span><em>范围</em><b>{campaignScope || '待登记'}</b></span>
             <span><em>环境</em><b>{campaignEnvironment || '待登记'}</b></span>
             <span><em>确认回执</em><b>{campaignConfirmed}/{campaignAttempted || 0}</b></span>
-            <span><em>本轮缺陷</em><b>{campaignCurrentDefects || 0} 条</b></span>
-            <span><em>缺陷货架</em><b>{campaignFamilyDefects} 条</b></span>
+            <span><em>本轮缺陷</em><b>{currentScanDefects || campaignCurrentDefects || 0} 条</b></span>
+            <span><em>缺陷货架</em><b>{familyShelfDefects} 条</b></span>
             <span><em>历史延续</em><b>{campaignCarryoverDefects} 条</b></span>
             <span><em>覆盖缺口</em><b>{coverageGaps}</b></span>
           </div>
-          {(campaignCurrentRawFindings > 0 || campaignCarryoverDefects > 0) && (
+          {(campaignCurrentRawFindings > 0 || campaignCarryoverDefects > 0 || shelfCarryoverCount > 0) && (
             <div className="customer-secondary-meta">
-              <span><em>本轮原始 finding</em><b>{campaignCurrentRawFindings}</b></span>
-              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮缺陷 {campaignCurrentDefects || 0} → 货架 {campaignFamilyDefects}</b></span>
+              <span><em>本轮原始 finding</em><b>{campaignCurrentRawFindings || currentScanFindings}</b></span>
+              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮缺陷 {currentScanDefects || campaignCurrentDefects || 0} → 货架 {familyShelfDefects}</b></span>
             </div>
           )}
         </article>
@@ -522,8 +586,8 @@ export function Dashboard() {
       {(regressionCovered > 0 || regressionSummary.suite_exists) && (
         <article className={`customer-secondary-card${regressionFailed > 0 || regressionPending > 0 ? ' muted' : ''}`}>
           <span className="customer-value-kicker">回归验证</span>
-          <h3>{regressionGate}</h3>
-          <p>{regressionSummary.headline || '当前已经把客户缺陷纳入回归闭环，但尚未返回更多细节。'}</p>
+          <h3>{regressionGateDisplay}</h3>
+          <p>{regressionHeadline}</p>
           <div className="customer-secondary-meta">
             <span><em>已覆盖缺陷</em><b>{regressionCovered}</b></span>
             <span><em>回归通过</em><b>{regressionPassed}</b></span>
@@ -532,6 +596,70 @@ export function Dashboard() {
             <span><em>最近模式</em><b>{asText(regressionSummary.latest_run?.suite_mode_label) || asText(regressionSummary.latest_run?.suite_mode) || '未执行'}</b></span>
             <span><em>最近回归</em><b>{regressionRunAt ? formatScanTime(regressionRunAt) : '暂无'}</b></span>
           </div>
+          <div className="customer-showcase-actions">
+            <button className="btn btn-primary" onClick={() => void handleRegressionRun('release')} disabled={regressionRunningMode !== ''}>{regressionRunningMode === 'release' ? 'Release 回归中' : '执行 Release 回归'}</button>
+            <button className="btn btn-secondary" onClick={() => void handleRegressionRun('smoke')} disabled={regressionRunningMode !== ''}>{regressionRunningMode === 'smoke' ? 'Smoke 回归中' : '执行 Smoke 回归'}</button>
+          </div>
+        </article>
+      )}
+      {(regressionHistoryRunCount > 0 || regressionRecentRuns.length > 0) && (
+        <article className={`customer-secondary-card${asText(regressionSummary.trend_direction) === 'regressing' ? ' muted' : ''}`}>
+          <span className="customer-value-kicker">回归趋势</span>
+          <h3>{regressionTrend}</h3>
+          <p>{regressionTrendSummary || '当前已开始沉淀多轮回归结果，趋势会随执行轮次自动更新。'}</p>
+          <div className="customer-secondary-meta">
+            <span><em>历史轮次</em><b>{regressionHistoryRunCount}</b></span>
+            <span><em>待回归</em><b>{asNum(regressionLifecycleCounts.pending_regression)}</b></span>
+            <span><em>回归失败</em><b>{asNum(regressionLifecycleCounts.regression_failed)}</b></span>
+            <span><em>回归通过</em><b>{asNum(regressionLifecycleCounts.verified_fixed)}</b></span>
+            <span><em>待复核</em><b>{asNum(regressionLifecycleCounts.manual_review_required)}</b></span>
+          </div>
+          {regressionRecentRuns.length > 0 && (
+            <div className="customer-secondary-meta">
+              {regressionRecentRuns.slice(0, 3).map((run, index) => (
+                <span key={`${asText(run.generated_at)}-${asText(run.suite_mode)}-${index}`}>
+                  <em>{formatScanTime(asText(run.generated_at))}</em>
+                  <b>{asText(run.suite_mode_label) || asText(run.suite_mode) || '回归'} · {regressionGateLabel(asText(run.gate_status))} · 失败 {asNum(run.failed_count)}</b>
+                </span>
+              ))}
+            </div>
+          )}
+        </article>
+      )}
+      {(releaseRecommendation || regressionHistoryRunCount > 0) && (
+        <article className={`customer-secondary-card${asText(regressionSummary.release_recommendation) === 'block_release' ? ' muted' : ''}`}>
+          <span className="customer-value-kicker">发布 / 交付建议</span>
+          <h3>{releaseRecommendation}</h3>
+          <p>{releaseRecommendationReason || '当前建议基于最近多轮真实回归、趋势变化和交付资产状态自动生成。'}</p>
+          <div className="customer-secondary-meta">
+            <span><em>客户交付</em><b>{customerDeliveryReadiness}</b></span>
+            <span><em>历史轮次</em><b>{regressionHistoryRunCount}</b></span>
+            <span><em>最小双轮验真</em><b>{regressionDoubleRunVerified ? '已满足' : '未满足'}</b></span>
+            <span><em>反复失败缺陷</em><b>{regressionRepeatedFailures}</b></span>
+          </div>
+        </article>
+      )}
+      {(regressionHistoryRunCount > 0 || regressionRepeatedFailures > 0) && (
+        <article className={`customer-secondary-card${regressionDoubleRunVerified ? '' : ' muted'}`}>
+          <span className="customer-value-kicker">真实验真摘要</span>
+          <h3>{asText(regressionValidationSummary.headline) || '当前正在沉淀真实多轮回归记录'}</h3>
+          <p>{regressionDoubleRunVerified ? '当前已具备最小双轮验真基础，可以开始把回归趋势用于发布和交付判断。' : '当前还不能把一次通过当成稳定结论，建议继续保持真实环境回归。'} </p>
+          <div className="customer-secondary-meta">
+            <span><em>最小要求</em><b>{asNum(regressionValidationSummary.minimum_required_runs, 2)} 轮</b></span>
+            <span><em>当前轮次</em><b>{regressionHistoryRunCount}</b></span>
+            <span><em>趋势结论</em><b>{regressionTrend}</b></span>
+            <span><em>反复失败</em><b>{regressionRepeatedFailures}</b></span>
+          </div>
+          {regressionRecentRuns.length > 0 && (
+            <div className="customer-secondary-meta">
+              {regressionRecentRuns.slice(0, 3).map((run, index) => (
+                <span key={`validation-${asText(run.generated_at)}-${asText(run.suite_mode)}-${index}`}>
+                  <em>{formatScanTime(asText(run.generated_at))}</em>
+                  <b>{asText(run.suite_mode_label) || asText(run.suite_mode) || '回归'} · {regressionGateLabel(asText(run.gate_status))}</b>
+                </span>
+              ))}
+            </div>
+          )}
         </article>
       )}
     </section>
@@ -554,11 +682,12 @@ export function Dashboard() {
           <h1>{asText(record.project_name) || project} · {executiveHeadline}</h1>
           <p>{executiveDescription}</p>
           <div className="page-summary-strip">
-            <span className="summary-pill strong">可交付缺陷 {totalRiskCount}</span>
-            <span className="summary-pill">阻断发布 {p0Count}</span>
+            <span className="summary-pill strong">本轮缺陷 {currentScanDefects}</span>
+            <span className="summary-pill">缺陷货架 {familyShelfDefects}</span>
+            <span className="summary-pill">阻断发布 {currentScanP0Count}</span>
             <span className="summary-pill">Campaign {campaignStatusLabel(campaignStatus)}</span>
             <span className="summary-pill">覆盖缺口 {coverageGaps}</span>
-            {regressionCovered > 0 && <span className="summary-pill">回归 {regressionGate}</span>}
+            {(regressionCovered > 0 || regressionSummary.suite_exists) && <span className="summary-pill">回归 {regressionGateDisplay}</span>}
             {commercialAssets && <span className="summary-pill">商业交付 {commercialHandoffLabel(commercialAssets)}</span>}
             <span className="summary-pill">{gatePatchLabel(gatePatchEnabled)}</span>
             <span className="summary-pill">{mainChainReadyLabel(mainChainReady, hasMainChainContract)}</span>
@@ -567,11 +696,13 @@ export function Dashboard() {
           <div className="customer-showcase-actions">
             <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>查看客户缺陷</button>
             <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button>
+            <button className="btn btn-secondary" onClick={() => void handleRegressionRun('smoke')} disabled={regressionRunningMode !== ''}>{regressionRunningMode === 'smoke' ? 'Smoke 回归中' : '执行 Smoke 回归'}</button>
+            <button className="btn btn-secondary" onClick={() => void handleRegressionRun('release')} disabled={regressionRunningMode !== ''}>{regressionRunningMode === 'release' ? 'Release 回归中' : '执行 Release 回归'}</button>
             <button className="btn btn-secondary" onClick={handleExport}>导出成果摘要</button>
           </div>
         </div>
         <div className="customer-showcase-side">
-          <div className={`customer-status-card ${campaignStatus === 'blocked' || p0Count > 0 || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? 'danger' : campaignStatus === 'coverage_deferred' || totalRiskCount > 0 ? 'warning' : 'success'}`}>
+          <div className={`customer-status-card ${campaignStatus === 'blocked' || currentScanP0Count > 0 || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? 'danger' : campaignStatus === 'coverage_deferred' || currentScanDefects > 0 ? 'warning' : 'success'}`}>
             <span>当前结论</span>
             <strong>{hasMainChainContract && !mainChainReady ? '主链路未闭合' : evidenceBlockedItemCount > 0 ? '证据标准化未完成' : conclusion}</strong>
             <p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : conclusionDetail}</p>
@@ -582,7 +713,7 @@ export function Dashboard() {
             <span><em>交付 Gate</em><b>{gatePatchLabel(gatePatchEnabled)}</b></span>
             <span><em>主链路</em><b>{mainChainReadyLabel(mainChainReady, hasMainChainContract)}</b></span>
             <span><em>证据标准化</em><b>{evidenceNormalizationLabel(evidenceNormalizationSummary)}</b></span>
-            {regressionCovered > 0 && <span><em>回归状态</em><b>{regressionGate}</b></span>}
+            {(regressionCovered > 0 || regressionSummary.suite_exists) && <span><em>回归状态</em><b>{regressionGateDisplay}</b></span>}
             <span><em>本轮说明</em><b>{asNum(scanMeta.run_count) ? `第 ${asNum(scanMeta.run_count)} 轮` : campaignStatus ? campaignStatusLabel(campaignStatus) : '首次结果'}</b></span>
           </div>
         </div>
@@ -590,8 +721,9 @@ export function Dashboard() {
 
       <div className="customer-summary-grid mb-4">
         {[
-          { label: '客户可交付', val: totalRiskCount, tone: 'primary', note: totalRiskCount > 0 ? '已验证、可复现、可验收' : governanceNeedsAction ? '未把未覆盖范围误判为无风险' : '当前没有 confirmed 缺陷' },
-          { label: '阻断发布', val: p0Count, tone: 'danger', note: p0Count > 0 ? '需要立即闭环' : governanceNeedsAction ? '需先补齐 Campaign 合同或范围' : '当前无阻断项' },
+          { label: '本轮可交付', val: currentScanDefects, tone: 'primary', note: currentScanDefects > 0 ? `当前扫描确认 ${currentScanDefects} 条；累计货架 ${familyShelfDefects} 条` : governanceNeedsAction ? '未把未覆盖范围误判为无风险' : '当前没有 confirmed 缺陷' },
+          { label: '缺陷货架', val: familyShelfDefects, tone: familyShelfDefects > currentScanDefects ? 'warning' : 'neutral', note: familyShelfDefects > currentScanDefects ? `含历史延续 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条` : '当前与本轮结果一致' },
+          { label: '阻断发布', val: currentScanP0Count, tone: 'danger', note: currentScanP0Count > 0 ? '需要立即闭环' : governanceNeedsAction ? '需先补齐 Campaign 合同或范围' : '当前无阻断项' },
           { label: '主链路', val: mainChainReadyLabel(mainChainReady, hasMainChainContract), tone: hasMainChainContract && !mainChainReady ? 'danger' : 'neutral', note: hasMainChainContract ? mainChainReady ? '六段链路已闭合' : `断在 ${firstBlockedStageLabel}` : '等待后端合同' },
           { label: '证据字段', val: evidenceNormalizationLabel(evidenceNormalizationSummary), tone: evidenceBlockedItemCount > 0 ? 'danger' : 'neutral', note: evidenceMissingFields.length > 0 ? evidenceMissingFields.slice(0, 2).map(([field, count]) => `${evidenceMissingFieldLabel(field)}×${count}`).join('、') : '等待证据标准化报告' },
           ...(regressionCovered > 0 ? [{
@@ -599,6 +731,18 @@ export function Dashboard() {
             val: regressionGate,
             tone: regressionFailed > 0 ? 'danger' : regressionPending > 0 ? 'warning' : 'success',
             note: regressionRunAt ? `${formatScanTime(regressionRunAt)} · 已覆盖 ${regressionCovered} 条` : `已覆盖 ${regressionCovered} 条客户缺陷`,
+          }] : []),
+          ...(regressionHistoryRunCount > 0 ? [{
+            label: '回归趋势',
+            val: regressionTrend,
+            tone: asText(regressionSummary.trend_direction) === 'regressing' ? 'danger' : asText(regressionSummary.trend_direction) === 'improving' ? 'success' : 'neutral',
+            note: regressionTrendSummary || `已沉淀 ${regressionHistoryRunCount} 轮回归`,
+          }] : []),
+          ...(releaseRecommendation ? [{
+            label: '发布建议',
+            val: releaseRecommendation,
+            tone: asText(regressionSummary.release_recommendation) === 'block_release' ? 'danger' : asText(regressionSummary.release_recommendation) === 'candidate_release' ? 'success' : 'warning',
+            note: releaseRecommendationReason || customerDeliveryReadiness,
           }] : []),
           ...(commercialAssets ? [{
             label: '商业交付',
@@ -612,27 +756,27 @@ export function Dashboard() {
       </div>
 
       <section className="customer-value-grid mb-4">
-        <article className="customer-value-card"><span className="customer-value-kicker">发布建议</span><h2>{hasMainChainContract && !mainChainReady ? '暂不形成客户交付结论，先闭合主链路' : evidenceBlockedItemCount > 0 ? '暂不形成客户交付结论，先补齐证据字段' : campaignStatus === 'blocked' ? '暂不形成发布结论，先补齐执行合同' : campaignStatus === 'coverage_deferred' ? '先评审递延范围，再决定是否扩大 Campaign' : p0Count > 0 ? '建议暂停发布，先处理阻断缺陷' : totalRiskCount > 0 ? '建议带着缺陷清单推进整改验收' : '当前没有可交付缺陷，可继续观察后续轮次'}</h2><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : p0Count > 0 ? '当前存在会直接影响业务履约或发布安全的高风险缺陷。' : totalRiskCount > 0 ? '当前结果已经足以形成客户整改清单，不需要再从线索里筛。' : '本轮输出可以作为当前阶段的风险结论，但建议继续保持持续检测。'}</p></article>
-        <article className="customer-value-card"><span className="customer-value-kicker">客户价值</span><h2>{totalRiskCount > 0 ? `本轮交付 ${totalRiskCount} 个已验证缺陷` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '本轮价值在于明确暴露可测试性边界' : '本轮价值在于给出明确风险结论'}</h2><p>{totalRiskCount > 0 ? `缺陷集中在 ${topFamilyLabel} 等方向，证据可信度 ${evidenceTrust}% ，可直接进入修复与复验。` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '系统没有把缺少来源、环境、测试数据、真实执行、证据字段或证据链闭合伪装成“通过”，可直接用于推动补齐条件。' : '当前没有把未补证线索冒充成客户缺陷，避免误导客户对结果质量的判断。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">发布建议</span><h2>{hasMainChainContract && !mainChainReady ? '暂不形成客户交付结论，先闭合主链路' : evidenceBlockedItemCount > 0 ? '暂不形成客户交付结论，先补齐证据字段' : campaignStatus === 'blocked' ? '暂不形成发布结论，先补齐执行合同' : campaignStatus === 'coverage_deferred' ? '先评审递延范围，再决定是否扩大 Campaign' : currentScanP0Count > 0 ? '建议暂停发布，先处理阻断缺陷' : currentScanDefects > 0 ? '建议带着本轮缺陷清单推进整改验收' : '当前没有可交付缺陷，可继续观察后续轮次'}</h2><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : currentScanP0Count > 0 ? '当前存在会直接影响业务履约或发布安全的高风险缺陷。' : currentScanDefects > 0 ? '当前扫描结果已经足以形成客户整改清单，不需要再从线索里筛。' : '本轮输出可以作为当前阶段的风险结论，但建议继续保持持续检测。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">客户价值</span><h2>{currentScanDefects > 0 ? `本轮交付 ${currentScanDefects} 个已验证缺陷，累计货架 ${familyShelfDefects} 个` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '本轮价值在于明确暴露可测试性边界' : '本轮价值在于给出明确风险结论'}</h2><p>{currentScanDefects > 0 ? `缺陷集中在 ${topFamilyLabel} 等方向，证据可信度 ${evidenceTrust}% ，其中 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条为历史延续货架，可直接进入修复与复验。` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '系统没有把缺少来源、环境、测试数据、真实执行、证据字段或证据链闭合伪装成“通过”，可直接用于推动补齐条件。' : '当前没有把未补证线索冒充成客户缺陷，避免误导客户对结果质量的判断。'}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">交付边界</span><h2>{evidenceBlockedItemCount > 0 ? `证据仍有 ${evidenceBlockedItemCount} 项阻断` : hasMainChainContract && !mainChainReady ? `主链路断在：${firstBlockedStageLabel}` : coverageGaps > 0 ? `当前有 ${coverageGaps} 项覆盖缺口` : clueCount > 0 ? `内部仍有 ${clueCount} 条待补证线索` : '当前没有待补证线索'}</h2><p>{evidenceBlockedItemCount > 0 ? evidenceDetail : hasMainChainContract && !mainChainReady ? firstBlockedNextAction : coverageGaps > 0 ? '覆盖缺口不会进入客户缺陷数量，需要通过新的资料、环境、数据或授权条件在后续 Campaign 中关闭。' : clueCount > 0 ? '这些线索不会进入客户成果展示，只作为内部继续采证与复验的运营池。' : '当前结果已经清晰收口，没有把内部线索混进客户视图。'}</p></article>
       </section>
 
-      {topFindings.length === 0 && <div className="mb-4">{secondarySummarySection}</div>}
+      {focusFindings.length === 0 && <div className="mb-4">{secondarySummarySection}</div>}
 
       <section className="customer-focus-section mb-4">
         <div className="customer-section-head"><div><span className="panel-kicker">重点缺陷</span><h2>客户应该优先关注的结果</h2></div><button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看完整缺陷清单</button></div>
-        {topFindings.length === 0 ? (
-          <section className="findings-empty-state compact"><span className="findings-empty-kicker">当前结论</span><h3>{hasMainChainContract && !mainChainReady ? '主链路未闭合' : evidenceBlockedItemCount > 0 ? '证据标准化未完成' : governanceNeedsAction ? campaignStatusLabel(campaignStatus) : '当前没有客户可交付缺陷'}</h3><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : governanceNeedsAction ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : clueCount > 0 ? `本轮仅有 ${clueCount} 条内部线索仍在补证，客户侧暂不展示。` : '当前没有 confirmed 缺陷，说明本轮结果未发现可交付问题。'}</p></section>
+        {focusFindings.length === 0 ? (
+          <section className="findings-empty-state compact"><span className="findings-empty-kicker">当前结论</span><h3>{hasMainChainContract && !mainChainReady ? '主链路未闭合' : evidenceBlockedItemCount > 0 ? '证据标准化未完成' : governanceNeedsAction ? campaignStatusLabel(campaignStatus) : '当前没有客户可交付缺陷'}</h3><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : governanceNeedsAction ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : clueCount > 0 ? `本轮仅有 ${clueCount} 条内部线索仍在补证，客户侧暂不展示。` : familyShelfDefects > 0 ? `当前货架仍保留 ${familyShelfDefects} 条历史缺陷，但本轮没有新增 confirmed 缺陷。` : '当前没有 confirmed 缺陷，说明本轮结果未发现可交付问题。'}</p></section>
         ) : (
           <div className="customer-focus-list">
-            {topFindings.map((finding) => (
+            {focusFindings.map((finding) => (
               <article key={finding.id} className="customer-focus-card"><div className="customer-focus-head"><span className={`severity ${finding.severity.toLowerCase()}`}>{finding.severity}</span><strong>{finding.title}</strong></div><p>{finding.business_summary || finding.business_impact?.summary || finding.actual || '该问题已形成可交付缺陷结论。'}</p><div className="customer-focus-meta"><span><em>影响模块</em><b>{getFindingModule(finding)}</b></span><span><em>证据状态</em><b>{finding.evidence_quality?.label || '已归档'}</b></span><span><em>复现稳定性</em><b>{finding.proof?.repro_rate ?? 0}%</b></span></div></article>
             ))}
           </div>
         )}
       </section>
 
-      {topFindings.length > 0 && secondarySummarySection}
+      {focusFindings.length > 0 && secondarySummarySection}
     </div>
   );
 }

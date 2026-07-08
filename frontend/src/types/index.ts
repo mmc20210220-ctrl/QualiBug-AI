@@ -154,6 +154,26 @@ export interface Finding {
     reason: string;
     regression_probe_id: string;
     issue_id: string;
+    history: Array<{
+      generated_at: string;
+      suite_mode: string;
+      suite_mode_label: string;
+      gate_status: string;
+      ci_message: string;
+      status: string;
+      status_label: string;
+      reason: string;
+      regression_probe_id: string;
+      issue_id: string;
+      path: string;
+      method: string;
+      title: string;
+      severity: string;
+    }>;
+    history_count: number;
+    lifecycle_status: string;
+    lifecycle_label: string;
+    lifecycle_description: string;
   };
 }
 
@@ -193,6 +213,37 @@ export interface RegressionSummary {
     run_status_counts: Record<string, number>;
     reopen_issue_ids: string[];
   };
+  history_run_count: number;
+  recent_runs: Array<{
+    generated_at: string;
+    suite_mode: string;
+    suite_mode_label: string;
+    gate_status: string;
+    ci_message: string;
+    total_probe_count: number;
+    executed_count: number;
+    passed_count: number;
+    failed_count: number;
+    needs_review_count: number;
+    skipped_count: number;
+  }>;
+  gate_status_counts: Record<string, number>;
+  trend_direction: string;
+  trend_summary: string;
+  lifecycle_counts: Record<string, number>;
+  validation_summary: {
+    history_run_count: number;
+    minimum_required_runs: number;
+    double_run_verified: boolean;
+    repeated_failure_defect_count: number;
+    latest_to_previous_change: string;
+    headline: string;
+  };
+  release_recommendation: string;
+  release_recommendation_label: string;
+  release_recommendation_reason: string;
+  customer_delivery_readiness: string;
+  customer_delivery_readiness_label: string;
 }
 
 export interface CommercialAssets {

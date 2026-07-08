@@ -47,6 +47,262 @@ def _lexicon_groups(name: str) -> list[set[str]]:
     return groups
 
 
+def _semantic_text(value: Any) -> str:
+    return re.sub(r"[\s_\-/]+", "", str(value or "").strip().lower())
+
+
+def _state_aliases() -> dict[str, set[str]]:
+    raw = _semantic_lexicon().get("state_aliases")
+    result: dict[str, set[str]] = {}
+    if not isinstance(raw, dict):
+        return result
+    for key, value in raw.items():
+        canonical = _state(key).upper()
+        if not canonical:
+            continue
+        aliases = {_semantic_text(canonical), _semantic_text(canonical.lower())}
+        if isinstance(value, list):
+            aliases.update(_semantic_text(item) for item in value if str(item).strip())
+        result[canonical] = {alias for alias in aliases if alias}
+    return result
+
+
+def _mentioned_states(text: str, known_states: set[str] | None = None) -> set[str]:
+    resolved = {state.upper() for state in _line_states(text)}
+    normalized_text = _semantic_text(text)
+    for canonical, aliases in _state_aliases().items():
+        if known_states and canonical not in known_states:
+            continue
+        if any(alias and alias in normalized_text for alias in aliases):
+            resolved.add(canonical)
+    if known_states:
+        return {state for state in resolved if state in known_states}
+    return resolved
+
+
+def _verb_action_lexicon() -> dict[str, list[str]]:
+    """Chinese -> English action-verb bridge (language resource, not domain hardcoding).
+
+    Lets narrative PRD verbs (e.g. 支付) be routed to concrete API action tokens
+    (e.g. pay) so prose state transitions become executable without per-project
+    keyword tables.
+    """
+    raw = _semantic_lexicon().get("verb_action_lexicon")
+    result: dict[str, list[str]] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key == "comment" or not isinstance(value, list):
+                continue
+            cleaned = [str(item).lower() for item in value if str(item).strip()]
+            if cleaned:
+                result[str(key)] = cleaned
+    return result
+
+
+def _entity_token_lexicon() -> dict[str, list[str]]:
+    """Chinese -> English ENTITY noun bridge (language resource, not domain hardcoding).
+
+    Binds Chinese-only PRD sections (e.g. '退款', '订单') to the correct
+    source-derived entity when the API catalog is English-only.
+    """
+    raw = _semantic_lexicon().get("entity_token_lexicon")
+    result: dict[str, list[str]] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key == "comment" or not isinstance(value, list):
+                continue
+            cleaned = [str(item).lower() for item in value if str(item).strip()]
+            if cleaned:
+                result[str(key)] = cleaned
+    return result
+
+
+def _section_entity_via_tokens(
+    section: dict[str, Any],
+    endpoints: list[dict[str, str]],
+    known: dict[str, set[str]],
+) -> str:
+    """Bind a Chinese-only PRD section to a source-derived entity.
+
+    Uses the entity_token_lexicon (noun bridge, weighted +3 so the lifecycle
+    SUBJECT entity wins) plus a verb->endpoint fallback (+1, it's the action's
+    entity, not necessarily the subject). Returns the entity name or ''.
+    """
+    lex = _entity_token_lexicon()
+    if not lex:
+        return ""
+    text = " ".join([
+        str(section.get("title") or ""),
+        *(str(row.get("line") or "") for row in section.get("transitions", [])),
+        *(str(inv) for inv, _ in section.get("invariants", [])),
+    ])
+    scores: dict[str, int] = {}
+    # Strong signal: an entity noun that DIRECTLY precedes 状态/state is the
+    # state OWNER of the transition ("订单状态变为 REFUNDED" => order is the
+    # subject whose state machine moves PAID->REFUNDED; 退款 is merely the
+    # triggering action). Without this, a section mentioning both the subject
+    # (订单) and the action noun (退款) ties at +3 and the alphabetical
+    # tiebreaker wrongly picks 退款->refund, producing a dead transition (refund
+    # has no PAID/REFUNDED state machine). Matching the lexicon key literally
+    # against "<noun>状态" avoids greedy Chinese capture and needs no translation.
+    # Universal: "order status becomes PAID" => order.
+    for zh, en_tokens in lex.items():
+        if f"{zh}状态" in text or f"{zh} 状态" in text:
+            for en in en_tokens:
+                ent_e = _entity(en)
+                for entity in known:
+                    if ent_e == _entity(entity) or en in _entity_aliases(entity):
+                        scores[entity] = scores.get(entity, 0) + 10
+        for en in en_tokens:
+            if f"{en} status" in text or f"{en} state" in text:
+                ent_e = _entity(en)
+                for entity in known:
+                    if ent_e == _entity(entity) or en in _entity_aliases(entity):
+                        scores[entity] = scores.get(entity, 0) + 10
+    for zh, en_tokens in lex.items():
+        if zh not in text:
+            continue
+        for en in en_tokens:
+            en_e = _entity(en)
+            for entity in known:
+                if en_e == _entity(entity) or en in _entity_aliases(entity):
+                    scores[entity] = scores.get(entity, 0) + 3
+    vlex = _verb_action_lexicon()
+    for verb in vlex:
+        if verb in text:
+            act, ep = _route_narrative_action(verb, endpoints)
+            if ep:
+                for item in endpoints:
+                    if str(item.get("path") or "") == ep:
+                        ent = str(item.get("entity") or "")
+                        if ent in known:
+                            scores[ent] = scores.get(ent, 0) + 1
+    if scores:
+        return max(scores, key=lambda k: (scores[k], k))
+    return ""
+
+
+def _ordered_line_states(line: str) -> list[str]:
+    """State tokens in appearance order (deterministic, unlike the set variant)."""
+    found: list[str] = []
+    for value in re.finditer(r"`([^`]+)`|'([^']+)'|\"([^\"]+)\"|\b[A-Z][A-Z0-9_]{1,64}\b", str(line or "")):
+        for candidate in value.groups():
+            token = _state(candidate)
+            if token and token not in found:
+                found.append(token)
+    return found
+
+
+def _extract_narrative_verb(line: str) -> str:
+    """Extract the Chinese action verb that drives a narrative state transition.
+
+    Picks the lexicon verb occurring closest *before* the transition phrase. Falls
+    back to any lexicon verb present in the line. Returns '' if none.
+    """
+    lex = _verb_action_lexicon()
+    if not lex:
+        return ""
+    marker = re.search(
+        r"(?:状态[^，,\n]{0,20}(?:变更?为|变成|进入|流转到|转为|切换[到为]|更新为)"
+        r"|become|changes?\s+to|transitioned?\s+to|set\s+to|updated?\s+to|moves?\s+to|enters?)",
+        line,
+        re.I,
+    )
+    marker_pos = marker.start() if marker else len(line)
+    best_verb = ""
+    best_pos = -1
+    for verb in lex:
+        idx = line.find(verb)
+        while idx != -1:
+            if idx < marker_pos and idx > best_pos:
+                best_pos = idx
+                best_verb = verb
+            idx = line.find(verb, idx + len(verb))
+    if best_verb:
+        return best_verb
+    for verb in lex:
+        if verb in line:
+            return verb
+    return ""
+
+
+def _route_narrative_action(
+    verb: str,
+    endpoints: list[dict[str, str]],
+    entity: str = "",
+) -> tuple[str, str]:
+    """Route a narrative verb to a concrete mutating endpoint via the verb lexicon.
+
+    Searches mutating (POST/PUT/PATCH) endpoints for an operation whose action,
+    path tail, or summary overlaps the verb's candidate tokens. On a confident
+    verb-stem / path-tail match a *collection* endpoint (whose `action` field is
+    empty) is still routable: the path tail becomes the canonical action token so
+    the transition is executable end-to-end. Entity-constrained routing (when
+    `entity` is supplied) only reinforces an already-confident verb match, never
+    creates one from nothing. Returns (action, endpoint_path); ('', '') if no
+    confident match. Domain keywords are never matched.
+    """
+    if not verb:
+        return "", ""
+    lex = _verb_action_lexicon()
+    candidates: set[str] = set(lex.get(verb, []))
+    candidates.add(_entity(verb))
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", verb):
+        candidates.add(verb.lower())
+    candidates.discard("")
+    if not candidates:
+        return "", ""
+    entity_e = _entity(entity) if entity else ""
+    entity_aliases = _entity_aliases(entity_e) if entity_e else set()
+
+    def _path_tail_matches(tail: str) -> bool:
+        # Exact, prefix, or reversed-prefix (stem) match between the normalized
+        # path tail and a candidate verb token. Handles plural/suffix variants
+        # (refunds->refund, cancellations->cancel) WITHOUT substring false
+        # positives (e.g. 'lock' must not match 'unlock').
+        for c in candidates:
+            if not c:
+                continue
+            if tail == c or tail.startswith(c) or c.startswith(tail):
+                return True
+        return False
+
+    best: tuple[int, str, str] = (0, "", "")
+    for item in endpoints:
+        method = str(item.get("method") or "").upper()
+        if method not in {"POST", "PUT", "PATCH"}:
+            continue
+        action = str(item.get("action") or "").lower()
+        path = str(item.get("path") or "")
+        path_tail = _entity(path.rstrip("/").split("/")[-1]) if path else ""
+        summary = " ".join(str(item.get(key) or "") for key in ("summary", "action", "path")).lower()
+        score = 0
+        verb_match = False
+        if action and action in candidates:
+            score += 3
+            verb_match = True
+        if path_tail and _path_tail_matches(path_tail):
+            score += 2
+            verb_match = True
+        if verb in summary or any(c and c in summary for c in candidates):
+            score += 1
+            verb_match = True
+        # Entity constraint only reinforces a match that the verb already won.
+        if entity_e and verb_match:
+            item_entity = _entity(item.get("entity") or "")
+            if item_entity == entity_e or (entity_aliases and item_entity in entity_aliases):
+                score += 2
+        if score <= 0:
+            continue
+        # Collection endpoint without an explicit action token but a confident
+        # verb-stem / path-tail match: the path tail is the canonical action.
+        if not action and verb_match and path_tail:
+            action = path_tail
+        if score > best[0]:
+            best = (score, action, path)
+    return (best[1], best[2]) if best[0] > 0 else ("", "")
+
+
 @dataclass
 class StateNode:
     entity: str
@@ -219,6 +475,34 @@ class BusinessStateGraph:
     def normal_paths(self) -> list[StateTransition]:
         return [item for item in self.transitions if item.is_normal and not item.is_forbidden]
 
+    def path_to_state(self, from_state: str, to_state: str) -> list[StateTransition] | None:
+        """BFS shortest-path through normal transitions from from_state to to_state.
+
+        Returns the ordered list of transitions required to drive an entity
+        from ``from_state`` to ``to_state``, or None if unreachable.  Used by
+        the state-precondition driver to actively build the target state when
+        no existing entity satisfies the runtime filter.
+        """
+        if from_state == to_state:
+            return []
+        outgoing: dict[str, list[StateTransition]] = defaultdict(list)
+        for item in self.transitions:
+            if item.is_normal and not item.is_forbidden:
+                outgoing[item.from_state].append(item)
+        visited: set[str] = {from_state}
+        queue: list[tuple[str, list[StateTransition]]] = [(from_state, [])]
+        while queue:
+            current, trail = queue.pop(0)
+            for t in outgoing.get(current, []):
+                if t.to_state in visited:
+                    continue
+                new_trail = list(trail) + [t]
+                if t.to_state == to_state:
+                    return new_trail
+                visited.add(t.to_state)
+                queue.append((t.to_state, new_trail))
+        return None
+
     def boundary_paths(self) -> list[StateTransition]:
         return [item for item in self.transitions if item.is_boundary]
 
@@ -281,9 +565,27 @@ class BusinessStateGraph:
 
 class BusinessStateGraphBuilder:
     _transition = re.compile(r"(?P<before>[A-Z][A-Z0-9_]{1,64}|[\u4e00-\u9fff]{2,24})\s*(?:->|→|=>)\s*(?P<after>[A-Z][A-Z0-9_]{1,64}|[\u4e00-\u9fff]{2,24})")
-    _modal = re.compile(r"\b(?:must|shall|cannot|must\s+not|only|become|becomes)\b|必须|不得|不允许|不可|只能|禁止|变为|变成", re.I)
+    _modal = re.compile(
+        r"\b(?:must|shall|cannot|must\s+not|only|become|becomes)\b|必须|不得|不允许|不可|只能|禁止|变为|变成|不展示|仅展示|只展示|不可见|隐藏",
+        re.I,
+    )
     _forbidden = re.compile(r"forbidden|invalid|禁止|不得|不允许|不可", re.I)
     _state_field = re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I)
+    # Narrative state transitions — PRDs that describe flows in prose
+    # ("支付成功后订单状态变为 PAID") instead of arrow diagrams
+    # ("CREATED -> PAID").  Universal across languages and domains.
+    _narrative_transition = re.compile(
+        r"状态(?:[^，,\n]{0,20})(?:变更?为|变成|进入|流转到|转为|切换[到为]|更新为)\s*`?([A-Z][A-Z0-9_]+)`?"
+        r"|\b(?:become|changes?\s+to|transitioned?\s+to|set\s+to|updated?\s+to|moves?\s+to|enters?)\s+`?([A-Z][A-Z0-9_]+)`?",
+        re.I,
+    )
+    # Precondition patterns — "必须处于 PENDING_PAYMENT 状态" / "must be in state X".
+    # Requires an explicit state anchor so we don't grab arbitrary uppercase tokens.
+    _narrative_precondition = re.compile(
+        r"(?:处于|状态(?:必须|应)?为|必须为|当前状态)\s*`?([A-Z][A-Z0-9_]{2,})`?"
+        r"|\b(?:must|should)\s+be\s+(?:in\s+)?(?:state\s+|status\s+)?`?([A-Z][A-Z0-9_]{2,})`?",
+        re.I,
+    )
 
     def __init__(self) -> None:
         self.graphs: dict[str, BusinessStateGraph] = {}
@@ -316,11 +618,34 @@ class BusinessStateGraphBuilder:
         for section in self._sections(prd_text):
             entity, binding_mode = _best_entity_for_section(section, known, source_fields)
             if not entity:
+                # Chinese-only sections fail state/field overlap; bridge them via
+                # the entity_token_lexicon (language resource, not hardcoding).
+                entity = _section_entity_via_tokens(section, endpoints, known)
+                if entity:
+                    binding_mode = "entity_token_bridge"
+            if not entity:
                 self._record_unbound_section(section)
                 continue
             graph = self.graphs[entity]
             for row in section["transitions"]:
                 action, endpoint = _source_action(row["line"], entity, endpoints)
+                # ── Narrative verb routing ──
+                # Arrow transitions carry an explicit action verb that _source_action
+                # matches literally. Narrative transitions ("支付成功后状态变为 PAID")
+                # carry a *Chinese* verb with no English action token in the line, so
+                # the literal match fails. Bridge it through the verb_action_lexicon
+                # (language resource, not domain hardcoding) to a concrete endpoint.
+                if not action and not endpoint:
+                    action, endpoint = _route_narrative_action(_extract_narrative_verb(row["line"]), endpoints, entity=entity)
+                # ── Route-aware risk scoring ──
+                # A transition detected from narrative PRD text that cannot be
+                # mapped to a concrete API endpoint is still structurally valid
+                # for the state graph, but its *slice* must rank below every
+                # executable slice so it doesn't displace real probes in the per-
+                # round budget.  No per-project scoring table — just a structural
+                # penalty on unresolvable transitions.
+                can_route = bool(action and endpoint)
+                risk_boost = 0.9 if section["forbidden"] else (0.5 if can_route else 0.02)
                 transition = StateTransition(
                     row["before"],
                     row["after"],
@@ -332,7 +657,7 @@ class BusinessStateGraphBuilder:
                     section["forbidden"],
                     False,
                     False,
-                    0.9 if section["forbidden"] else 0.2,
+                    risk_boost,
                     "",
                     "",
                     [row["ref"]],
@@ -349,7 +674,13 @@ class BusinessStateGraphBuilder:
                 graph.add_transition(transition)
             for invariant, ref in section["invariants"]:
                 if graph.states:
-                    for name in list(graph.states):
+                    known_states = {str(name).strip().upper() for name in graph.states}
+                    targeted_states = _mentioned_states(
+                        f"{section.get('title') or ''} {invariant}",
+                        known_states=known_states,
+                    )
+                    state_names = [name for name in graph.states if str(name).strip().upper() in targeted_states] or list(graph.states)
+                    for name in state_names:
                         graph.add_state(name, invariants=[invariant], source_refs=[ref], observed_from_doc=True)
                 else:
                     self.bound_invariants.append({
@@ -393,24 +724,35 @@ class BusinessStateGraphBuilder:
                     adjacency[target_entity].add(source_entity)
         for entity, graph in sorted(self.graphs.items()):
             for transition in graph.transitions:
+                # Unroutable transition (no action/endpoint): keep it OBSERVABLE as a
+                # coverage gap but do NOT emit a competing behavior slice. A dead
+                # slice with empty endpoints would otherwise be selected first
+                # (transition kind_rank=0) in round 1 and displace executable
+                # probes from the per-round budget — the exact regression we saw.
+                if not transition.action or not transition.api_endpoint:
+                    self.coverage_gaps.append({
+                        "kind": "UNROUTABLE_TRANSITION",
+                        "title": f"{transition.from_state}->{transition.to_state}",
+                        "reason": "no_source_bound_action_route",
+                        "source_refs": _refs(transition.source_refs or graph.source_refs),
+                        "required_asset": "endpoint_matching_narrative_verb_or_explicit_action",
+                    })
+                    continue
                 slice_id = transition.behavior_slice_id or behavior_slice_id(
                     "transition", entity, transition.from_state, transition.to_state,
                     transition.action, transition.api_endpoint,
                     "forbidden" if transition.is_forbidden else "normal",
                 )
                 transition.behavior_slice_id = slice_id
-                gaps: list[str] = []
-                if not transition.action or not transition.api_endpoint:
-                    gaps.append("ACTION_ROUTE_NOT_SOURCE_BOUND")
                 slices.append(BehaviorSlice(
                     slice_id=slice_id,
                     entity=entity,
                     kind="transition",
                     states=_unique([transition.from_state, transition.to_state]),
-                    endpoints=[transition.api_endpoint] if transition.api_endpoint else [],
+                    endpoints=[transition.api_endpoint],
                     priority=max(float(transition.risk_score or 0.0), 0.9 if transition.is_forbidden else 0.35),
                     source_refs=_refs(transition.source_refs or graph.source_refs),
-                    evidence_gaps=gaps,
+                    evidence_gaps=[],
                 ))
             for state_name, node in graph.states.items():
                 for invariant in node.invariants:
@@ -507,6 +849,12 @@ class BusinessStateGraphBuilder:
     def _sections(self, text: str) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         current: dict[str, Any] | None = None
+        # Document-level rolling last-observed state. Used only as a final
+        # fallback for narrative transitions whose source is implied by the
+        # nearest preceding state discussed anywhere in the PRD (e.g.
+        # "退款成功后状态变为 REFUNDED" whose source PAID was stated two sections
+        # earlier). Pure structural heuristic — no per-domain hardcoding.
+        self._doc_last_observed_state: str = ""
         for number, raw in enumerate(str(text or "").splitlines(), 1):
             line = raw.strip()
             if not line:
@@ -530,6 +878,57 @@ class BusinessStateGraphBuilder:
                 if before and after:
                     current["states"].update((before, after))
                     current["transitions"].append({"before": before, "after": after, "line": line, "ref": ref})
+            # ── Narrative transition extraction ──
+            # PRDs that describe state flows in prose (e.g. "支付成功后
+            # 状态变为 PAID") need the same transition-graph treatment that
+            # arrow-diagram PRDs get automatically.  For narrative lines we
+            # infer the source state from the section's last observed
+            # precondition, and the target from the transition verb.
+            # Config-driven — no per-project state-name hardcoding.
+            line_states = _ordered_line_states(line)
+            narr_trans = self._narrative_transition.search(line)
+            if narr_trans and len(line_states) >= 1:
+                target = _state(narr_trans.group(1) or narr_trans.group(2) or "")
+                if not target and line_states:
+                    target = line_states[-1]
+                # The source state is the last precondition observed in this
+                # section, or — if this line carries its own precondition — the
+                # state that immediately precedes the transition verb in the
+                # narrative.  Heuristic: pick the last state-before-verb that
+                # also appears in the section's known states.  Fall back to the
+                # most recently *observed* state in the section so prose like
+                # "退款成功后订单状态变为 REFUNDED" (whose source is only implied
+                # by an earlier "已支付/已完成") is not silently dropped.
+                source = ""
+                if len(line_states) >= 2:
+                    # Two states on the same line with a transition verb between
+                    # them is the strongest signal — pair them in order.
+                    source = line_states[0]
+                else:
+                    source = (
+                        current.get("_last_precondition_state")
+                        or current.get("_last_observed_state", "")
+                        or getattr(self, "_doc_last_observed_state", "")
+                    )
+                if source and target and source != target:
+                    tr = {"before": source, "after": target, "line": line, "ref": ref}
+                    current["transitions"].append(tr)
+                    current["states"].update((source, target))
+            # Track the last observed state (rolling, deterministic) AFTER source
+            # resolution so the target state on this line does not poison the next
+            # transition's source inference. Rolled at both the section and the
+            # document level so later narrative transitions can fall back to it.
+            if line_states:
+                current["_last_observed_state"] = line_states[-1]
+                self._doc_last_observed_state = line_states[-1]
+            # Track the last explicit precondition state for the section.
+            precond = self._narrative_precondition.search(line)
+            if precond:
+                ps = _state(precond.group(1) or precond.group(2) or "")
+                if ps:
+                    current.setdefault("_last_precondition_state", "")
+                    current["_last_precondition_state"] = ps
+                    current["states"].add(ps)
             if self._modal.search(line):
                 current["invariants"].append((line, ref))
         return [item for item in result if item["states"] or item["invariants"]]

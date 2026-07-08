@@ -141,6 +141,18 @@ def _looks_like_aggregate_or_collection_response(body: dict[str, Any]) -> bool:
     return False
 
 
+def _response_records(body: Any) -> list[dict[str, Any]]:
+    if isinstance(body, list):
+        return [item for item in body if isinstance(item, dict)]
+    if not isinstance(body, dict):
+        return []
+    for key in ("items", "rows", "records", "results", "list", "data"):
+        value = body.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return [body] if body else []
+
+
 class ErrorCodeOracle(BaseOracle):
     name = "ErrorCodeOracle"; layer = "L1"
     trigger_keywords = []; priority = 10
@@ -205,6 +217,59 @@ class ConsistencyOracle(BaseOracle):
                         return OracleResult(False, "ConsistencyOracle", "L2", "pagination_overlap",
                             f"分页数据重复: {common}", "", "P1", 0.65)
         return OracleResult(True, "ConsistencyOracle", "L2")
+
+
+class VisibilityOracle(BaseOracle):
+    name = "VisibilityOracle"; layer = "L2"
+    trigger_keywords = ["展示", "显示", "可见", "隐藏", "visible", "visibility", "hidden", "invisible"]
+
+    def evaluate(self, scenario, trace, snapshots=None):
+        signal_text = " ".join([
+            str(scenario.get("title") or ""),
+            str(scenario.get("description") or ""),
+            " ".join(str(item or "") for item in scenario.get("oracle_rules", []) or []),
+        ]).lower()
+        if not any(token in signal_text for token in ("不展示", "只展示", "仅展示", "不可见", "隐藏", "not display", "not visible", "hidden", "invisible", "visible")):
+            return OracleResult(True, "VisibilityOracle", "L2")
+        expected_state = str(scenario.get("expected_state") or "").strip().upper()
+        forbidden_states = {expected_state} if expected_state else set()
+        if not forbidden_states:
+            return OracleResult(True, "VisibilityOracle", "L2")
+        steps = trace.get("steps", []) if isinstance(trace, dict) else []
+        for step in steps:
+            response = step.get("response", {}) if isinstance(step, dict) else {}
+            body = response.get("body", {}) if isinstance(response, dict) else {}
+            records = _response_records(body)
+            if not records:
+                continue
+            leaked = []
+            for item in records:
+                status = str(
+                    item.get("status")
+                    or item.get("state")
+                    or item.get("product_status")
+                    or item.get("visibility_status")
+                    or ""
+                ).strip().upper()
+                if status in forbidden_states:
+                    leaked.append({
+                        "id": str(item.get("id") or item.get("sku") or item.get("code") or ""),
+                        "status": status,
+                    })
+            if leaked:
+                sample = leaked[0]
+                return OracleResult(
+                    False,
+                    "VisibilityOracle",
+                    "L2",
+                    "hidden_entity_exposed",
+                    f"前台不应展示状态为 {', '.join(sorted(forbidden_states))} 的资源",
+                    f"{sample.get('id') or 'resource'} status={sample['status']}",
+                    "P1",
+                    0.96,
+                    "来源约束要求资源对前台隐藏，但运行时响应仍返回了隐藏态实体",
+                )
+        return OracleResult(True, "VisibilityOracle", "L2")
 
 
 class TransactionOracle(BaseOracle):
@@ -410,6 +475,72 @@ class TemporalOracle(BaseOracle):
                         except (ValueError, TypeError, AttributeError):
                             pass  # non-numeric value — skip
         return OracleResult(True, "TemporalOracle", "L3")
+
+
+class CouponOracle(BaseOracle):
+    name = "CouponOracle"; layer = "L3"
+    trigger_keywords = ["优惠券", "coupon", "有效期", "类目", "折扣", "validate"]
+
+    def evaluate(self, scenario, trace, snapshots=None):
+        runtime_hints = scenario.get("runtime_hints", {}) if isinstance(scenario, dict) else {}
+        sample = runtime_hints.get("coupon_validation_sample", {}) if isinstance(runtime_hints, dict) else {}
+        rule = str(runtime_hints.get("coupon_validation_rule") or "").strip()
+        if not rule:
+            for item in scenario.get("oracle_rules", []) if isinstance(scenario, dict) else []:
+                text = str(item or "").strip()
+                if text.startswith("CouponOracle."):
+                    rule = text.split(".", 1)[1].strip()
+                    break
+        if not rule:
+            return OracleResult(True, "CouponOracle", "L3")
+        steps = trace.get("steps", []) if isinstance(trace, dict) else []
+        if not steps:
+            return OracleResult(True, "CouponOracle", "L3")
+        response = steps[-1].get("response", {}) if isinstance(steps[-1], dict) else {}
+        body = response.get("body", {}) if isinstance(response, dict) else {}
+        if not isinstance(body, dict) or body.get("valid") is not True:
+            return OracleResult(True, "CouponOracle", "L3")
+        coupon = body.get("coupon", {}) if isinstance(body.get("coupon"), dict) else {}
+        if rule == "expired_coupon_must_be_invalid":
+            expires_at = str(sample.get("coupon_expires_at") or coupon.get("expires_at") or "").strip()
+            if expires_at:
+                return OracleResult(
+                    False, "CouponOracle", "L3", "expired_coupon_accepted",
+                    "过期优惠券应返回 valid=false", f"valid=true, expires_at={expires_at}", "P0", 0.98,
+                    "优惠券已过期但校验接口仍返回 valid=true"
+                )
+        if rule == "inactive_coupon_must_be_invalid":
+            status = str(sample.get("coupon_status") or coupon.get("status") or "").strip().upper()
+            if status and status != "ACTIVE":
+                return OracleResult(
+                    False, "CouponOracle", "L3", "inactive_coupon_accepted",
+                    "非 ACTIVE 优惠券应返回 valid=false", f"valid=true, status={status}", "P0", 0.98,
+                    "已停用优惠券仍被接口判定为可用"
+                )
+        if rule == "coupon_category_scope_must_match":
+            expected_category = str(sample.get("coupon_category_scope") or coupon.get("category_scope") or "").strip().lower()
+            actual_category = str(sample.get("item_category") or "").strip().lower()
+            if expected_category and actual_category and expected_category != actual_category:
+                return OracleResult(
+                    False, "CouponOracle", "L3", "coupon_category_scope_bypassed",
+                    f"类目券仅可用于 {expected_category}", f"valid=true, item_category={actual_category}", "P0", 0.96,
+                    "类目券与商品类目不匹配，但校验接口仍返回 valid=true"
+                )
+        if rule == "coupon_min_order_amount_must_match":
+            request = steps[-1].get("request", {}) if isinstance(steps[-1], dict) else {}
+            request_body = request.get("body", {}) if isinstance(request, dict) else {}
+            total_amount = request_body.get("totalAmount") if isinstance(request_body, dict) else None
+            minimum = coupon.get("min_order_amount")
+            try:
+                if minimum is not None and total_amount is not None and float(total_amount) < float(minimum):
+                    return OracleResult(
+                        False, "CouponOracle", "L3", "coupon_min_order_bypassed",
+                        f"订单金额需 >= {minimum}", f"valid=true, totalAmount={total_amount}", "P0", 0.95,
+                        "未达到优惠券门槛金额，但校验接口仍返回 valid=true"
+                    )
+            except (TypeError, ValueError):
+                pass
+        return OracleResult(True, "CouponOracle", "L3")
 
 
 # ═══════════════════════════════════════════════════
@@ -770,9 +901,9 @@ class OracleRegistry:
             # L1
             HttpStatusOracle(), SchemaOracle(), FieldTypeOracle(), RequiredFieldOracle(), ErrorCodeOracle(),
             # L2
-            DataIntegrityOracle(), ConsistencyOracle(), TransactionOracle(), CacheConsistencyOracle(),
+            DataIntegrityOracle(), ConsistencyOracle(), VisibilityOracle(), TransactionOracle(), CacheConsistencyOracle(),
             # L3
-            MoneyOracle(), InventoryOracle(), StateOracle(), WorkflowOracle(), QuotaOracle(), TemporalOracle(),
+            MoneyOracle(), InventoryOracle(), StateOracle(), WorkflowOracle(), QuotaOracle(), TemporalOracle(), CouponOracle(),
             # L4
             PermissionOracle(), PrivacyOracle(), TenantIsolationOracle(), AuthSessionOracle(),
             # L5
@@ -799,10 +930,11 @@ class OracleRegistry:
         mapping = {
             "state_machine": ["StateOracle", "WorkflowOracle"],
             "permission": ["PermissionOracle", "TenantIsolationOracle"],
+            "isolation": ["TenantIsolationOracle", "PermissionOracle"],
             "money": ["MoneyOracle", "TransactionOracle"],
             "inventory": ["InventoryOracle", "TransactionOracle"],
             "concurrency": ["ConcurrencyOracle", "IdempotencyOracle"],
-            "invariant": ["ConsistencyOracle", "DataIntegrityOracle"],
+            "invariant": ["ConsistencyOracle", "DataIntegrityOracle", "VisibilityOracle"],
             "privacy": ["PrivacyOracle", "AuditOracle"],
             "performance": ["PerformanceOracle"],
             "notification": ["NotificationOracle", "RecoveryOracle"],
@@ -815,7 +947,7 @@ class OracleRegistry:
         for o in self.get_by_layer("L1"):
             if o not in matched: matched.append(o)
         # Always include universal L2+L5 oracles
-        for name in ("StateOracle", "ConsistencyOracle", "DataIntegrityOracle", "ErrorCodeOracle"):
+        for name in ("StateOracle", "ConsistencyOracle", "DataIntegrityOracle", "VisibilityOracle", "ErrorCodeOracle"):
             o = self._oracles.get(name)
             if o and o not in matched: matched.append(o)
         return matched
@@ -848,6 +980,13 @@ class OracleEngine:
         _log = logging.getLogger("OracleEngine")
         results = []
         oracles = self.registry.get_for_category(scenario.get("category", ""))
+        if (
+            str(scenario.get("entity", "") or "").strip().lower() == "coupon"
+            or any(str(item or "").startswith("CouponOracle.") for item in scenario.get("oracle_rules", []) or [])
+        ):
+            coupon_oracle = self.registry._oracles.get("CouponOracle")
+            if coupon_oracle and coupon_oracle not in oracles:
+                oracles.append(coupon_oracle)
         for oracle in oracles:
             try:
                 results.append(oracle.evaluate(scenario, trace, snapshots))

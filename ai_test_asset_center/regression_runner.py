@@ -86,6 +86,17 @@ def _headers_from_accounts(project: str, root: Path) -> dict[str, str]:
     return headers
 
 
+def _encode_request_body(probe: dict[str, Any]) -> bytes | None:
+    request_body = probe.get("request_body")
+    if request_body is None:
+        return None
+    if isinstance(request_body, (dict, list)):
+        return json.dumps(request_body, ensure_ascii=False).encode("utf-8")
+    if isinstance(request_body, (str, int, float, bool)):
+        return str(request_body).encode("utf-8")
+    return None
+
+
 def _execute_http_probe(probe: dict[str, Any], cfg: dict[str, Any], project: str, root: Path, timeout: float) -> dict[str, Any]:
     base_url = str(cfg.get("base_url") or "").strip()
     method = str(probe.get("method") or "GET").upper()
@@ -97,7 +108,7 @@ def _execute_http_probe(probe: dict[str, Any], cfg: dict[str, Any], project: str
     data = None
     if method in {"POST", "PUT", "PATCH"}:
         headers["Content-Type"] = "application/json"
-        data = b"{}"
+        data = _encode_request_body(probe) or b"{}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - user supplied test env URL by design
@@ -197,7 +208,12 @@ def _build_ci_feedback(project: str, mode: str, summary: dict[str, Any], failure
     p0p1_failures = [f for f in failures if f.get("severity") in {"P0", "P1"}]
     p2_failures = [f for f in failures if f.get("severity") == "P2"]
     needs_review = int(summary.get("needs_review_count") or 0)
-    if p0p1_failures:
+    total_probe_count = int(summary.get("total_probe_count") or 0)
+    if total_probe_count <= 0:
+        gate_status = "manual_approval_required"
+        exit_code = 1
+        release_gate_override = "continue_regression"
+    elif p0p1_failures:
         gate_status = "failed"
         exit_code = 2
         release_gate_override = "block_release"
@@ -224,11 +240,56 @@ def _build_ci_feedback(project: str, mode: str, summary: dict[str, Any], failure
         "p2_regression_failure_count": len(p2_failures),
         "needs_review_count": needs_review,
         "ci_message": (
+            "当前回归套件为空，不能作为发布依据，需先补齐回归探针后再执行真实验证。" if total_probe_count <= 0 else
             "P0/P1 回归失败，建议阻断发布。" if gate_status == "failed" else
             "存在 P2 回归失败或无法自动判定项，建议人工审批。" if gate_status == "manual_approval_required" else
             "回归套件通过，允许继续发布。"
         ),
     }
+
+
+def _append_regression_history(project: str, root: Path, result: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    ci_feedback = result.get("ci_feedback") if isinstance(result.get("ci_feedback"), dict) else {}
+    items = result.get("items") if isinstance(result.get("items"), list) else []
+    run_entry = {
+        "generated_at": summary.get("generated_at"),
+        "suite_mode": summary.get("suite_mode"),
+        "suite_mode_label": summary.get("suite_mode_label"),
+        "gate_status": ci_feedback.get("gate_status"),
+        "ci_message": ci_feedback.get("ci_message"),
+        "summary": {
+            "total_probe_count": summary.get("total_probe_count"),
+            "executed_count": summary.get("executed_count"),
+            "passed_count": summary.get("passed_count"),
+            "failed_count": summary.get("failed_count"),
+            "needs_review_count": summary.get("needs_review_count"),
+            "skipped_count": summary.get("skipped_count"),
+        },
+        "items": [
+            {
+                "issue_id": item.get("issue_id"),
+                "regression_probe_id": item.get("regression_probe_id"),
+                "title": item.get("title"),
+                "path": item.get("path"),
+                "method": item.get("method"),
+                "severity": item.get("severity"),
+                "status": item.get("status"),
+                "reason": item.get("reason"),
+            }
+            for item in items
+            if isinstance(item, dict)
+        ],
+    }
+    history_path = root / "platform_outputs" / project / "regression_run" / "regression_run_history.json"
+    history = _load_json_safe(history_path, [])
+    if not isinstance(history, list):
+        history = []
+    history.append(run_entry)
+    history = history[-30:]
+    _write_json(history_path, history)
+    _write_json(root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json", history)
+    return history
 
 
 def _render_failure_report(result: dict[str, Any]) -> str:
@@ -357,6 +418,9 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
     _write_text(out_dir / "regression_failure_report.html", _render_failure_report(result))
     _write_json(ws_dir / "regression_run_result.json", result)
     _write_json(ws_dir / "regression_ci_feedback.json", ci_feedback)
+    history = _append_regression_history(project, root, result)
+    result["history_ref"] = f"platform_outputs/{project}/regression_run/regression_run_history.json"
+    result["history_size"] = len(history)
     return result
 
 

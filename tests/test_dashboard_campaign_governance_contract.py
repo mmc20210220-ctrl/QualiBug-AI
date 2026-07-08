@@ -39,8 +39,8 @@ def test_dashboard_campaign_governance_surfaces_receipts_defects_shelf_and_carry
 
     assert "Campaign 治理" in page
     assert "<span><em>确认回执</em><b>{campaignConfirmed}/{campaignAttempted || 0}</b></span>" in page
-    assert "<span><em>本轮缺陷</em><b>{campaignCurrentDefects || 0} 条</b></span>" in page
-    assert "<span><em>缺陷货架</em><b>{campaignFamilyDefects} 条</b></span>" in page
+    assert "<span><em>本轮缺陷</em><b>{currentScanDefects || campaignCurrentDefects || 0} 条</b></span>" in page
+    assert "<span><em>缺陷货架</em><b>{familyShelfDefects} 条</b></span>" in page
     assert "<span><em>历史延续</em><b>{campaignCarryoverDefects} 条</b></span>" in page
-    assert "<span><em>本轮原始 finding</em><b>{campaignCurrentRawFindings}</b></span>" in page
-    assert "<span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮缺陷 {campaignCurrentDefects || 0} → 货架 {campaignFamilyDefects}</b></span>" in page
+    assert "<span><em>本轮原始 finding</em><b>{campaignCurrentRawFindings || currentScanFindings}</b></span>" in page
+    assert "<span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮缺陷 {currentScanDefects || campaignCurrentDefects || 0} → 货架 {familyShelfDefects}</b></span>" in page

@@ -194,7 +194,45 @@ def test_prepare_v12_scan_body_backfills_prd_from_project_input(tmp_path):
         local_dev_mode=False,
     )
 
-    assert prepared["prd"] == "Orders must not be payable after cancellation."
+    assert "## PRD.md" in prepared["prd"]
+    assert "Orders must not be payable after cancellation." in prepared["prd"]
+
+
+def test_prepare_v12_scan_body_backfills_aggregated_requirement_sources_from_template_input(tmp_path):
+    register_source_asset("benchmark_mall_v05_p0probe", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    registry_path = tmp_path / "platform_workspace" / "benchmark_mall_v05_p0probe" / "enterprise_pilot_runtime" / "connector_registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "project_id": "benchmark_mall_v05_p0probe",
+                "connectors": [{"connector_id": "gateway", "system_name": "benchmark_mall", "enabled": True}],
+                "test_profile": {"api_base_url": "http://127.0.0.1:8080"},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    workspace_input = tmp_path / "platform_workspace" / "benchmark_mall_v05_p0probe" / "input"
+    workspace_input.mkdir(parents=True, exist_ok=True)
+    (workspace_input / "PRD.md").write_text("前台商品列表只展示可售商品。", encoding="utf-8")
+    template_input = tmp_path / "projects" / "benchmark_mall" / "input"
+    template_input.mkdir(parents=True, exist_ok=True)
+    (template_input / "BUSINESS_RULES.md").write_text("用户端不展示下架商品、草稿商品、内部商品。", encoding="utf-8")
+
+    prepared = service._prepare_v12_scan_body(
+        "benchmark_mall_v05_p0probe",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {"base_url": "http://127.0.0.1:8080"},
+        local_dev_mode=False,
+    )
+
+    assert "## PRD.md" in prepared["prd"]
+    assert "前台商品列表只展示可售商品" in prepared["prd"]
+    assert "## BUSINESS_RULES.md" in prepared["prd"]
+    assert "用户端不展示下架商品、草稿商品、内部商品" in prepared["prd"]
 
 
 def test_load_connector_registry_preserves_test_profile(tmp_path):
@@ -236,6 +274,7 @@ def test_prepare_v12_scan_body_uses_connector_registry_runtime_defaults(tmp_path
                     "api_base_url": "http://127.0.0.1:8080",
                     "scope_id": "benchmark-mall-checkout",
                     "environment_ref": "local-benchmark",
+                    "ui_base_url": "http://127.0.0.1:3001",
                 },
             },
             ensure_ascii=False,
@@ -254,6 +293,8 @@ def test_prepare_v12_scan_body_uses_connector_registry_runtime_defaults(tmp_path
 
     assert prepared["scope_id"] == "benchmark-mall-checkout"
     assert prepared["environment_ref"] == "local-benchmark"
+    assert prepared["ui_base_url"] == "http://127.0.0.1:3001"
+    assert prepared["ui_base_url_source"] == "connector_registry.test_profile.ui_base_url"
     assert prepared["execution_mode"] == "approved_sandbox_write"
     assert prepared["test_data_contract"] == {
         "strategy": "create_disposable",
@@ -291,6 +332,7 @@ def test_prepare_v12_scan_body_auto_generates_page_agent_ui_observation_request_
         {"name": "local_dev", "role": "project_owner"},
         {
             "base_url": "http://127.0.0.1:8080",
+            "ui_base_url": "http://127.0.0.1:3001",
             "scope_id": "checkout-scope",
             "environment_ref": "local-benchmark",
         },
@@ -299,12 +341,12 @@ def test_prepare_v12_scan_body_auto_generates_page_agent_ui_observation_request_
 
     request = prepared["ui_execution_requests"][0]
     assert request["provider"] == "page_agent"
-    assert request["start_url"] == "http://127.0.0.1:8080"
+    assert request["start_url"] == "http://127.0.0.1:3001"
     assert request["execution_mode"] == "safe_read_only"
     assert request["metadata"]["bridge_mode"] == "page_agent_browser_plan"
     assert request["metadata"]["auto_generated"] is True
     assert request["browser_plan"]["steps"][0]["action"] == "goto"
-    assert request["browser_plan"]["steps"][0]["url"] == "http://127.0.0.1:8080"
+    assert request["browser_plan"]["steps"][0]["url"] == "http://127.0.0.1:3001"
     assert "checkout-scope" in request["page_hints"][0]
 
 
@@ -353,6 +395,7 @@ def test_prepare_v12_scan_body_prefers_followup_ui_execution_requests_asset_when
         {"name": "local_dev", "role": "project_owner"},
         {
             "base_url": "http://127.0.0.1:8080",
+            "ui_base_url": "http://127.0.0.1:3001",
             "scope_id": "checkout-scope",
             "environment_ref": "local-benchmark",
         },
@@ -362,12 +405,152 @@ def test_prepare_v12_scan_body_prefers_followup_ui_execution_requests_asset_when
     assert len(prepared["ui_execution_requests"]) == 1
     request = prepared["ui_execution_requests"][0]
     assert request["request_id"] == "UIFOLLOW_1"
-    assert request["start_url"] == "http://127.0.0.1:8080/orders/123"
+    assert request["start_url"] == "http://127.0.0.1:3001/orders/123"
     assert request["metadata"]["request_origin"] == "private_pilot_service_followup_asset"
+    assert request["metadata"]["resolved_start_url_base"] == "http://127.0.0.1:3001"
+    assert request["metadata"]["resolved_start_url_base_source"] == "request_body.ui_base_url"
+    assert request["metadata"]["resolved_path"] == "/orders/123"
     assert request["metadata"]["verification"]["kind"] == "http_get"
     assert request["metadata"]["verification"]["path"] == "/orders/{object_id}"
     assert request["metadata"]["verification"]["body_contains"] == "{object_id}"
     assert request["browser_plan"]["steps"][0]["url"] == "/orders/123"
+
+
+def test_prepare_v12_scan_body_prefers_explicit_profile_ui_base_url_for_ui_followups(tmp_path, monkeypatch):
+    register_source_asset("benchmark_mall_v05_p0probe", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    monkeypatch.setenv("QUALIBUG_PAGE_AGENT_BRIDGE_URL", "http://127.0.0.1:8797/execute")
+    registry_path = tmp_path / "platform_workspace" / "benchmark_mall_v05_p0probe" / "enterprise_pilot_runtime" / "connector_registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "project_id": "benchmark_mall_v05_p0probe",
+                "connectors": [{"connector_id": "gateway", "enabled": True, "endpoint_ref": "http://127.0.0.1:8080"}],
+                "test_profile": {
+                    "api_base_url": "http://127.0.0.1:8080",
+                    "scope_id": "benchmark-mall-checkout",
+                    "environment_ref": "local-benchmark",
+                    "ui_base_url": "http://127.0.0.1:3001",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    asset_path = tmp_path / "platform_workspace" / "benchmark_mall_v05_p0probe" / "defect_discovery" / "ui_followup_execution_requests.json"
+    asset_path.parent.mkdir(parents=True, exist_ok=True)
+    asset_path.write_text(
+        json.dumps(
+            {
+                "version": "ui_followup_execution_requests_v1",
+                "project_id": "benchmark_mall_v05_p0probe",
+                "items": [
+                    {
+                        "request_template_id": "UIFOLLOW_PORTAL_1",
+                        "title": "业务订单页",
+                        "severity": "P1",
+                        "path": "/orders",
+                        "task": "Open the primary business orders page.",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = service._prepare_v12_scan_body(
+        "benchmark_mall_v05_p0probe",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {"base_url": "http://127.0.0.1:8080"},
+        local_dev_mode=False,
+    )
+
+    assert prepared["base_url"] == "http://127.0.0.1:8080"
+    assert prepared["ui_base_url"] == "http://127.0.0.1:3001"
+    assert prepared["ui_base_url_source"] == "connector_registry.test_profile.ui_base_url"
+    assert prepared["ui_execution_requests"][0]["start_url"] == "http://127.0.0.1:3001/orders"
+    assert prepared["ui_execution_requests"][0]["metadata"]["resolved_start_url_base"] == "http://127.0.0.1:3001"
+    assert (
+        prepared["ui_execution_requests"][0]["metadata"]["resolved_start_url_base_source"]
+        == "connector_registry.test_profile.ui_base_url"
+    )
+    assert prepared["ui_execution_requests"][0]["metadata"]["resolved_path"] == "/orders"
+
+
+def test_prepare_v12_scan_body_uses_single_frontend_candidate_without_role_guessing(tmp_path):
+    register_source_asset("demo", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    registry_path = tmp_path / "platform_workspace" / "demo" / "enterprise_pilot_runtime" / "connector_registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "connectors": [{"connector_id": "gateway", "enabled": True, "endpoint_ref": "http://127.0.0.1:8080"}],
+                "test_profile": {
+                    "api_base_url": "http://127.0.0.1:8080",
+                    "scope_id": "generic-scope",
+                    "environment_ref": "generic-env",
+                    "frontend_urls": {"portal": "http://127.0.0.1:3001"},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = service._prepare_v12_scan_body(
+        "demo",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {"base_url": "http://127.0.0.1:8080"},
+        local_dev_mode=False,
+    )
+
+    assert prepared["ui_base_url"] == "http://127.0.0.1:3001"
+
+
+def test_prepare_v12_scan_body_does_not_guess_between_multiple_frontends(tmp_path, monkeypatch):
+    register_source_asset("demo", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
+    monkeypatch.setenv("QUALIBUG_PAGE_AGENT_BRIDGE_URL", "http://127.0.0.1:8797/execute")
+    registry_path = tmp_path / "platform_workspace" / "demo" / "enterprise_pilot_runtime" / "connector_registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "connectors": [{"connector_id": "gateway", "enabled": True, "endpoint_ref": "http://127.0.0.1:8080"}],
+                "test_profile": {
+                    "api_base_url": "http://127.0.0.1:8080",
+                    "scope_id": "generic-scope",
+                    "environment_ref": "generic-env",
+                    "frontend_urls": {
+                        "portal_a": "http://127.0.0.1:3001",
+                        "portal_b": "http://127.0.0.1:3002",
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = service._prepare_v12_scan_body(
+        "demo",
+        tmp_path,
+        {"name": "local_dev", "role": "project_owner"},
+        {"base_url": "http://127.0.0.1:8080"},
+        local_dev_mode=False,
+    )
+
+    assert "ui_base_url" not in prepared
+    assert prepared["disable_ui_execution_autogen"] is True
+    assert prepared["ui_target_resolution"]["reason"] == "MULTIPLE_FRONTEND_URLS_REQUIRE_UI_BASE_URL"
+    assert "ui_execution_requests" not in prepared
 
 
 def test_prepare_v12_scan_body_loads_only_executable_followup_ui_test_data_requests(tmp_path, monkeypatch):

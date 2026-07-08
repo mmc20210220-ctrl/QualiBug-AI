@@ -331,6 +331,51 @@ def test_bootstrap_retries_next_control_account_when_first_fixture_attempt_is_fo
     assert result["control_attempts"][1]["cleanup_accepted"] is True
 
 
+def test_bootstrap_control_account_order_uses_configured_default_without_role_names(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center import test_data_receipt_bootstrap as bootstrap_module
+
+    def fake_login(self, email: str = "", password: str = "", login_path: str = "", body_template=None) -> bool:
+        self._token = f"token-for-{email}"
+        return bool(email and password and login_path)
+
+    def fake_execute(config: dict, base_url: str, probe: dict, key: str, timeout: float):
+        auth = str((config.get("fixture_headers") or {}).get("Authorization") or "")
+        if "ops-reader@example.com" in auth:
+            return [{"status": "executed", "accepted": False, "path": "/api/assets", "purpose": key}]
+        return [{"status": "executed", "accepted": True, "path": "/api/assets", "purpose": key}]
+
+    monkeypatch.setattr("ai_test_asset_center.parameter_fuzzer.ParameterFuzzer.login", fake_login)
+    monkeypatch.setattr(bootstrap_module, "_execute_auto_fixture_requests", fake_execute)
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_pilot_runtime.load_connector_registry",
+        lambda project, root: {
+            "test_profile": {
+                "test_credentials": {
+                    "ops_reader": {"email": "ops-reader@example.com", "password": "Reader@123456"},
+                    "portal_operator": {
+                        "email": "portal-operator@example.com",
+                        "password": "Portal@123456",
+                        "default": True,
+                    },
+                }
+            }
+        },
+    )
+
+    result = bootstrap_test_data_receipts_for_campaign(
+        project="enterprise-project",
+        root=tmp_path,
+        base_url="http://sandbox.local",
+        api_doc_text=API_SPEC,
+        campaign={"campaign_id": "CMP_3", "scope_id": "scope-c", "environment_ref": "test-c"},
+        selected_slices=[{"slice_id": "slice-1", "endpoints": ["/api/orders/:order_id"]}],
+        contract={"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": "sandbox-c"},
+    )
+
+    assert result["status"] == "ready"
+    assert result["control_attempts"][0]["credential_profile"] == "portal_operator"
+
+
 def test_scan_promotes_bootstrapped_contract_into_ready_test_data_plan(tmp_path, monkeypatch) -> None:
     from ai_test_asset_center.__main__ import scan
 

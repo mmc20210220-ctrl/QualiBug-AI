@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -24,6 +25,7 @@ from .enterprise_campaign import (
     has_real_confirmation_receipt,
     source_snapshot_hash,
 )
+from .real_id_resolver import infer_path_params, normalize_path_placeholders, path_has_placeholders
 
 _v12_har_entries: list[dict[str, Any]] = []
 _SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
@@ -98,7 +100,7 @@ def _behavior_slice_settings() -> dict[str, int]:
     except Exception:
         budget, round_number, round_limit = 15, 1, 3
     return {
-        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, 15),
+        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, 40),
         "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 12),
         "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 3, 1, 12),
     }
@@ -129,18 +131,36 @@ def _login_route(catalog: list[dict[str, Any]]) -> dict[str, Any]:
     return {}
 
 
-def _login_parameter_fuzzer(fuzzer: Any, catalog: list[dict[str, Any]], project: str, root: Path) -> bool:
+def _login_example_credentials(api_doc: str, login_path: str) -> list[dict[str, str]]:
+    if not str(api_doc or "").strip() or not str(login_path or "").strip():
+        return []
+    try:
+        from .auto_test_data_factory import _markdown_request_example
+        example = _markdown_request_example(api_doc, "POST", login_path)
+    except Exception:
+        return []
+    if not isinstance(example, dict):
+        return []
+    email = str(example.get("email") or example.get("username") or "").strip()
+    password = str(example.get("password") or example.get("pass") or "").strip()
+    if not email or not password:
+        return []
+    return [{"email": email, "password": password}]
+
+
+def _login_parameter_fuzzer(fuzzer: Any, catalog: list[dict[str, Any]], project: str, root: Path, api_doc: str = "") -> bool:
     profile = _test_profile(project, root)
-    credentials = profile.get("test_credentials") if isinstance(profile, dict) else {}
-    if not isinstance(credentials, dict):
-        return False
     login_route = _login_route(catalog)
     login_path = str(login_route.get("path") or "")
     if not login_path:
         return False
-    preferred = ["buyer", "read_only", "readonly", "viewer", "auditor", "admin"]
-    candidates = [credentials.get(name) for name in preferred if isinstance(credentials.get(name), dict)]
-    candidates.extend(value for key, value in credentials.items() if key not in preferred and isinstance(value, dict))
+    try:
+        from .enterprise_pilot_runtime import ordered_test_credentials
+        candidates = ordered_test_credentials(profile)
+    except Exception:
+        credentials = profile.get("test_credentials") if isinstance(profile, dict) else {}
+        candidates = [value for value in credentials.values() if isinstance(credentials, dict) and isinstance(value, dict)]
+    candidates.extend(_login_example_credentials(api_doc, login_path))
     for item in candidates:
         email = str(item.get("email") or "").strip()
         password = str(item.get("password") or "").strip()
@@ -149,7 +169,7 @@ def _login_parameter_fuzzer(fuzzer: Any, catalog: list[dict[str, Any]], project:
     return False
 
 
-def _read_only_runtime_token(base_url: str, catalog: list[dict[str, Any]], project: str, root: Path) -> str:
+def _read_only_runtime_token(base_url: str, catalog: list[dict[str, Any]], project: str, root: Path, api_doc: str = "") -> str:
     if not str(base_url or "").strip():
         return ""
     try:
@@ -157,9 +177,234 @@ def _read_only_runtime_token(base_url: str, catalog: list[dict[str, Any]], proje
     except Exception:
         return ""
     fuzzer = ParameterFuzzer(base_url, allow_write=False)
-    if _login_parameter_fuzzer(fuzzer, catalog, project, root):
+    if _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=api_doc):
         return str(getattr(fuzzer, "_token", "") or "")
     return ""
+
+
+def _profile_database_dsn(profile: dict[str, Any]) -> str:
+    database = profile.get("database") if isinstance(profile, dict) else {}
+    if not isinstance(database, dict):
+        return ""
+    for key in ("dsn", "url", "connection_string"):
+        value = str(database.get(key) or "").strip()
+        if value:
+            return value
+    host = str(database.get("host") or "").strip()
+    name = str(database.get("database") or database.get("name") or "").strip()
+    user = str(database.get("user") or "").strip()
+    password = str(database.get("password") or "").strip()
+    if not (host and name and user):
+        return ""
+    port = int(database.get("port") or 5432)
+    return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+
+
+def _dsn_from_text(text: str) -> str:
+    match = re.search(r"(postgres(?:ql)?://[^\s`\"']+)", str(text or ""), re.I)
+    return str(match.group(1) or "").strip() if match else ""
+
+
+def _runtime_db_dsn(project: str, root: Path, db_schema_text: str = "") -> str:
+    env_dsn = str(os.environ.get("QUALIBUG_DB_DSN") or "").strip()
+    if env_dsn:
+        return env_dsn
+    profile_dsn = _profile_database_dsn(_test_profile(project, root))
+    if profile_dsn:
+        return profile_dsn
+    return _dsn_from_text(db_schema_text)
+
+
+def _coupon_rule_from_scenario(scenario: Any) -> str:
+    runtime_hints = getattr(scenario, "runtime_hints", {}) or {}
+    if isinstance(runtime_hints, dict):
+        rule = str(runtime_hints.get("coupon_validation_rule") or "").strip()
+        if rule:
+            return rule
+    for item in getattr(scenario, "oracle_rules", []) or []:
+        text = str(item or "").strip()
+        if text.startswith("CouponOracle."):
+            return text.split(".", 1)[1].strip()
+    return ""
+
+
+def _coupon_validation_request(code: str, *, sku: str, price: float, qty: int) -> dict[str, Any]:
+    normalized_qty = max(1, int(qty or 1))
+    normalized_price = round(float(price or 0.0), 2)
+    total_amount = round(normalized_price * normalized_qty, 2)
+    return {
+        "code": str(code or "").strip(),
+        "items": [{"sku": str(sku or "").strip(), "qty": normalized_qty, "price": normalized_price}],
+        "totalAmount": total_amount,
+    }
+
+
+def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
+    if not str(dsn or "").strip():
+        return {}
+    try:
+        import psycopg2
+    except Exception:
+        return {}
+    conn = psycopg2.connect(dsn)
+    try:
+        cur = conn.cursor()
+
+        def one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            if row is None:
+                return {}
+            cols = [str(item[0]) for item in cur.description]
+            return dict(zip(cols, row))
+
+        def saleable_product(*, excluded_category: str = "") -> dict[str, Any]:
+            if excluded_category:
+                return one(
+                    """
+                    SELECT sku, category, price, status
+                    FROM products
+                    WHERE COALESCE(status, '') IN ('ON_SALE', 'ACTIVE')
+                      AND COALESCE(price, 0) > 0
+                      AND COALESCE(category, '') <> %s
+                    ORDER BY price DESC, sku ASC
+                    LIMIT 1
+                    """,
+                    (excluded_category,),
+                )
+            return one(
+                """
+                SELECT sku, category, price, status
+                FROM products
+                WHERE COALESCE(status, '') IN ('ON_SALE', 'ACTIVE')
+                  AND COALESCE(price, 0) > 0
+                ORDER BY price DESC, sku ASC
+                LIMIT 1
+                """
+            )
+
+        def quantity_for(min_order_amount: Any, price: Any) -> int:
+            price_value = max(float(price or 0.0), 0.01)
+            minimum = max(float(min_order_amount or 0.0), 0.0)
+            return max(1, int(math.ceil(max(minimum, price_value) / price_value)))
+
+        samples: dict[str, dict[str, Any]] = {}
+        expired = one(
+            """
+            SELECT code, min_order_amount, category_scope, status, expires_at
+            FROM coupons
+            WHERE expires_at IS NOT NULL AND expires_at < NOW()
+            ORDER BY expires_at ASC, code ASC
+            LIMIT 1
+            """
+        )
+        if expired:
+            product = saleable_product()
+            if product:
+                qty = quantity_for(expired.get("min_order_amount"), product.get("price"))
+                samples["expired_coupon_must_be_invalid"] = {
+                    "body": _coupon_validation_request(
+                        str(expired.get("code") or ""),
+                        sku=str(product.get("sku") or ""),
+                        price=float(product.get("price") or 0.0),
+                        qty=qty,
+                    ),
+                    "coupon_code": str(expired.get("code") or ""),
+                    "coupon_status": str(expired.get("status") or ""),
+                    "coupon_expires_at": str(expired.get("expires_at") or ""),
+                    "item_sku": str(product.get("sku") or ""),
+                    "item_category": str(product.get("category") or ""),
+                }
+
+        inactive = one(
+            """
+            SELECT code, min_order_amount, category_scope, status, expires_at
+            FROM coupons
+            WHERE COALESCE(status, '') <> 'ACTIVE'
+            ORDER BY expires_at ASC NULLS LAST, code ASC
+            LIMIT 1
+            """
+        )
+        if inactive:
+            product = saleable_product()
+            if product:
+                qty = quantity_for(inactive.get("min_order_amount"), product.get("price"))
+                samples["inactive_coupon_must_be_invalid"] = {
+                    "body": _coupon_validation_request(
+                        str(inactive.get("code") or ""),
+                        sku=str(product.get("sku") or ""),
+                        price=float(product.get("price") or 0.0),
+                        qty=qty,
+                    ),
+                    "coupon_code": str(inactive.get("code") or ""),
+                    "coupon_status": str(inactive.get("status") or ""),
+                    "coupon_expires_at": str(inactive.get("expires_at") or ""),
+                    "item_sku": str(product.get("sku") or ""),
+                    "item_category": str(product.get("category") or ""),
+                }
+
+        mismatched_category = one(
+            """
+            SELECT code, min_order_amount, category_scope, status, expires_at
+            FROM coupons
+            WHERE COALESCE(status, '') = 'ACTIVE'
+              AND category_scope IS NOT NULL
+              AND (expires_at IS NULL OR expires_at >= NOW())
+            ORDER BY min_order_amount DESC NULLS LAST, code ASC
+            LIMIT 10
+            """
+        )
+        if mismatched_category:
+            product = saleable_product(excluded_category=str(mismatched_category.get("category_scope") or ""))
+            if product:
+                qty = quantity_for(mismatched_category.get("min_order_amount"), product.get("price"))
+                samples["coupon_category_scope_must_match"] = {
+                    "body": _coupon_validation_request(
+                        str(mismatched_category.get("code") or ""),
+                        sku=str(product.get("sku") or ""),
+                        price=float(product.get("price") or 0.0),
+                        qty=qty,
+                    ),
+                    "coupon_code": str(mismatched_category.get("code") or ""),
+                    "coupon_status": str(mismatched_category.get("status") or ""),
+                    "coupon_expires_at": str(mismatched_category.get("expires_at") or ""),
+                    "coupon_category_scope": str(mismatched_category.get("category_scope") or ""),
+                    "item_sku": str(product.get("sku") or ""),
+                    "item_category": str(product.get("category") or ""),
+                }
+        return samples
+    except Exception:
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _enrich_coupon_validation_scenarios(scenarios: list[Any], dsn: str) -> None:
+    samples = _coupon_validation_samples(dsn)
+    for scenario in scenarios:
+        if str(getattr(scenario, "entity", "") or "").strip().lower() != "coupon":
+            continue
+        rule = _coupon_rule_from_scenario(scenario)
+        if not rule:
+            continue
+        sample = dict(samples.get(rule) or {})
+        if not sample:
+            gaps = [str(item) for item in (getattr(scenario, "evidence_gaps", []) or []) if str(item).strip()]
+            if "DB_SAMPLE_DISCOVERY_MISSING" not in gaps:
+                gaps.append("DB_SAMPLE_DISCOVERY_MISSING")
+            scenario.evidence_gaps = gaps
+            scenario.execution_policy = "plan_only_requires_fixture"
+            continue
+        runtime_hints = dict(getattr(scenario, "runtime_hints", {}) or {})
+        runtime_hints["coupon_validation_rule"] = rule
+        runtime_hints["coupon_validation_sample"] = sample
+        scenario.runtime_hints = runtime_hints
+        steps = list(getattr(scenario, "steps", []) or [])
+        if steps:
+            steps[0].body_template = dict(sample.get("body") or {})
 
 
 def _source_text(value: Any) -> str:
@@ -261,7 +506,12 @@ def _slice_ledger_path(root: Path, project: str) -> Path:
     return root / "platform_workspace" / str(project) / "defect_discovery" / "v12_behavior_slice_ledger.json"
 
 
-def _load_persisted_slice_history(root: Path, project: str, source_snapshot_hash: str = "") -> list[dict[str, Any]]:
+def _load_persisted_slice_history(
+    root: Path,
+    project: str,
+    source_snapshot_hash: str = "",
+    source_hash: str = "",
+) -> list[dict[str, Any]]:
     path = _slice_ledger_path(root, project)
     if not path.exists():
         return []
@@ -272,9 +522,13 @@ def _load_persisted_slice_history(root: Path, project: str, source_snapshot_hash
     if not isinstance(payload, dict):
         return []
     expected_snapshot = str(source_snapshot_hash or "").strip()
-    if expected_snapshot:
-        persisted_snapshot = str(payload.get("source_snapshot_hash") or "").strip()
-        if persisted_snapshot != expected_snapshot:
+    expected_source_hash = str(source_hash or "").strip()
+    persisted_snapshot = str(payload.get("source_snapshot_hash") or "").strip()
+    persisted_source_hash = str(payload.get("source_hash") or "").strip()
+    snapshot_matches = bool(expected_snapshot) and persisted_snapshot == expected_snapshot
+    source_hash_matches = bool(expected_source_hash) and persisted_source_hash == expected_source_hash
+    if expected_snapshot or expected_source_hash:
+        if not snapshot_matches and not source_hash_matches:
             return []
     return [{"behavior_slice_ledger": payload}]
 
@@ -286,6 +540,8 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
         "campaign_status": str(ledger.get("campaign_status") or ""),
         "scope_id": str(ledger.get("scope_id") or ""),
         "source_snapshot_hash": str(ledger.get("source_snapshot_hash") or ""),
+        "source_id": str(ledger.get("source_id") or ""),
+        "source_hash": str(ledger.get("source_hash") or ""),
         "project": str(project),
         "round": int(ledger.get("round") or 0),
         "round_limit": int(ledger.get("round_limit") or 0),
@@ -293,7 +549,7 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
         "selection_mode": str(ledger.get("selection_mode") or ""),
         "selected_slice_ids": [str(value) for value in ledger.get("selected_slice_ids", []) if str(value)],
         "attempted_slice_ids": [str(value) for value in ledger.get("attempted_slice_ids", []) if str(value)],
-        "confirmed_slice_ids": [],
+        "confirmed_slice_ids": [str(value) for value in ledger.get("confirmed_slice_ids", []) if str(value)],
         "next_round": ledger.get("next_round"),
         "stop_reason": str(ledger.get("stop_reason") or ""),
         "updated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -319,6 +575,7 @@ def _slice_history(history: list[dict[str, Any]] | None) -> tuple[set[str], set[
         ledger = item.get("behavior_slice_ledger")
         if isinstance(ledger, dict):
             attempted.update(str(value) for value in ledger.get("attempted_slice_ids", []) if str(value))
+            confirmed.update(str(value) for value in ledger.get("confirmed_slice_ids", []) if str(value))
         slice_id = str(item.get("behavior_slice_id") or item.get("source_slice_id") or item.get("slice_id") or "").strip()
         if slice_id and _history_item_counts_as_attempted(item):
             attempted.add(slice_id)
@@ -407,24 +664,112 @@ def _slice_selection_family(item: dict[str, Any]) -> str:
     return "|".join(part for part in (entity, kind, states, endpoints) if part) or str(item.get("slice_id") or "")
 
 
+def _slice_selection_entity(item: dict[str, Any]) -> str:
+    return str(item.get("entity") or "").strip().lower()
+
+
+def _prioritize_confirmed_state_variants(
+    items: list[dict[str, Any]],
+    *,
+    confirmed_slice_ids: set[str],
+    all_slices: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not items or not confirmed_slice_ids or not all_slices:
+        return items
+    slice_index = {
+        str(item.get("slice_id") or ""): item
+        for item in all_slices
+        if isinstance(item, dict) and str(item.get("slice_id") or "")
+    }
+    confirmed_families: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for slice_id in confirmed_slice_ids:
+        confirmed_item = slice_index.get(str(slice_id))
+        if not confirmed_item:
+            continue
+        entity = _slice_selection_entity(confirmed_item)
+        kind = str(confirmed_item.get("kind") or "").strip().lower()
+        family = _slice_selection_family(confirmed_item)
+        if entity and kind and family:
+            confirmed_families[(entity, kind)].add(family)
+    if not confirmed_families:
+        return items
+    prioritized: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    for item in items:
+        entity = _slice_selection_entity(item)
+        kind = str(item.get("kind") or "").strip().lower()
+        family = _slice_selection_family(item)
+        states = [str(value).strip().upper() for value in (item.get("states") or []) if str(value).strip()]
+        if states and family and family not in confirmed_families.get((entity, kind), set()):
+            prioritized.append(item)
+        else:
+            deferred.append(item)
+    return prioritized + deferred if prioritized else items
+
+
+def _entity_primary_slice_rank(item: dict[str, Any], index: int) -> tuple[int, int]:
+    kind = str(item.get("kind") or "").strip().lower()
+    kind_rank = {
+        "transition": 0,
+        "invariant": 1,
+        "dependency": 2,
+        "source_observation": 3,
+    }.get(kind, 9)
+    return (kind_rank, index)
+
+
 def _take_diverse_slice_batch(items: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
     if budget <= 0 or not items:
         return []
     selected: list[dict[str, Any]] = []
-    deferred: list[dict[str, Any]] = []
+    entity_deferred: list[dict[str, Any]] = []
+    family_deferred: list[dict[str, Any]] = []
+    entity_primary_ids: set[str] = set()
+    seen_entities: set[str] = set()
     seen_families: set[str] = set()
+    best_entity_items: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+
+    for index, item in enumerate(items):
+        entity = _slice_selection_entity(item)
+        if not entity:
+            continue
+        candidate = (_entity_primary_slice_rank(item, index), item)
+        current = best_entity_items.get(entity)
+        if current is None or candidate[0] < current[0]:
+            best_entity_items[entity] = candidate
+
     for item in items:
+        entity = _slice_selection_entity(item)
+        family = _slice_selection_family(item)
+        primary = best_entity_items.get(entity)
+        primary_item = primary[1] if primary else None
+        primary_id = str(primary_item.get("slice_id") or "") if isinstance(primary_item, dict) else ""
+        current_id = str(item.get("slice_id") or "")
+        if entity and entity not in seen_entities and primary_id and current_id == primary_id:
+            seen_entities.add(entity)
+            if primary_id:
+                entity_primary_ids.add(primary_id)
+            if family:
+                seen_families.add(family)
+            selected.append(item)
+        else:
+            entity_deferred.append(item)
+        if len(selected) >= budget:
+            return selected
+
+    for item in entity_deferred:
+        if str(item.get("slice_id") or "") in entity_primary_ids:
+            continue
         family = _slice_selection_family(item)
         if family and family not in seen_families:
             seen_families.add(family)
             selected.append(item)
         else:
-            deferred.append(item)
+            family_deferred.append(item)
         if len(selected) >= budget:
             return selected
-    if len(selected) >= budget:
-        return selected[:budget]
-    for item in deferred:
+
+    for item in family_deferred:
         selected.append(item)
         if len(selected) >= budget:
             break
@@ -504,6 +849,8 @@ def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, 
     if attempted:
         executable_pending = [item for item in pending if _slice_has_source_executable_route(item)]
         executable_unattempted = [item for item in unattempted if _slice_has_source_executable_route(item)]
+        executable_pending = _prioritize_confirmed_state_variants(executable_pending, confirmed_slice_ids=confirmed, all_slices=all_slices)
+        executable_unattempted = _prioritize_confirmed_state_variants(executable_unattempted, confirmed_slice_ids=confirmed, all_slices=all_slices)
         if executable_unattempted:
             selected = _take_diverse_slice_batch(executable_unattempted, budget)
             remaining = len(executable_unattempted) - len(selected)
@@ -533,10 +880,50 @@ def _active_policy_version() -> str:
         return ""
 
 
+def _campaign_identity_defaults(project: str, root: Path) -> dict[str, str]:
+    try:
+        from .enterprise_pilot_runtime import load_connector_registry
+
+        registry = load_connector_registry(project, root)
+    except Exception:
+        return {}
+    profile = registry.get("test_profile") if isinstance(registry, dict) else {}
+    if not isinstance(profile, dict):
+        return {}
+    defaults: dict[str, str] = {}
+    scope_id = str(
+        profile.get("scope_id")
+        or profile.get("deployment_scope_id")
+        or profile.get("project_scope_id")
+        or ""
+    ).strip()
+    environment_ref = str(
+        profile.get("environment_ref")
+        or profile.get("target_environment")
+        or profile.get("environment")
+        or ""
+    ).strip()
+    if scope_id:
+        defaults["scope_id"] = scope_id[:160]
+    if environment_ref:
+        defaults["environment_ref"] = environment_ref[:160]
+    return defaults
+
+
 def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any], root: Path, submitted_api_spec_text: Any) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
     policy_version = str(context.get("policy_version") or _active_policy_version())[:120]
-    scope_id = str(context.get("scope_id") or f"project_scope_{hashlib.sha256(project.encode()).hexdigest()[:12]}")[:160]
-    environment_ref = str(context.get("environment_ref") or context.get("target_environment") or (f"target_{hashlib.sha256(base_url.encode()).hexdigest()[:16]}" if base_url else "unbound_environment"))[:160]
+    defaults = _campaign_identity_defaults(project, root)
+    scope_id = str(
+        context.get("scope_id")
+        or defaults.get("scope_id")
+        or f"project_scope_{hashlib.sha256(project.encode()).hexdigest()[:12]}"
+    )[:160]
+    environment_ref = str(
+        context.get("environment_ref")
+        or context.get("target_environment")
+        or defaults.get("environment_ref")
+        or (f"target_{hashlib.sha256(base_url.encode()).hexdigest()[:16]}" if base_url else "unbound_environment")
+    )[:160]
     rerun_key = str(context.get("campaign_rerun_key") or context.get("campaign_restart_key") or "")[:120]
     rerun_reason = str(context.get("campaign_rerun_reason") or context.get("campaign_restart_reason") or "")[:240]
     snapshot = source_snapshot_hash(prd_text, api_spec_text, db_schema_text, scope_id, environment_ref)
@@ -734,6 +1121,24 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             runtime_contract = {**runtime_contract, "execution_approval": approval}
         result["runtime_contract"] = runtime_contract
         ranked_behavior_slices = list(behavior_contract["slices"])
+        # ── Supplementary coverage: inject actor-aware / data-isolation /
+        # concurrency / financial-integrity slices that the state-machine builder
+        # cannot express, so oracles beyond idempotency + state + invariant get
+        # runtime evidence against the live target.  Config-driven, no per-project
+        # hardcoding — the endpoint catalog comes from _api_facts, actors from
+        # test_accounts.json (or test_accounts.md fallback).
+        try:
+            from .supplementary_behavior_slices import generate_supplementary_slices
+
+            graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+            supp = generate_supplementary_slices(root, project, graph_api_doc)
+            if supp:
+                ranked_behavior_slices = list(ranked_behavior_slices) + supp
+                behavior_contract["slices"] = ranked_behavior_slices
+                behavior_contract["summary"]["total_slices"] = len(ranked_behavior_slices)
+                behavior_contract["summary"]["supplementary_slices"] = len(supp)
+        except Exception:
+            pass  # Supplementary coverage best-effort; never blocks the scan
         if runtime_contract.get("status") == "approved":
             from .semantic_scenario_generator import SemanticScenarioGenerator
 
@@ -745,6 +1150,8 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 active_slices=behavior_contract["slices"],
                 discovery_round=settings["round_number"],
                 allow_source_runtime=True,
+                root=root,
+                project=project,
             )
             ranked_behavior_slices = _rank_behavior_slices_for_selection(behavior_contract["slices"], preview_scenarios)
         if campaign.status in {"coverage_deferred", "completed", "blocked"}:
@@ -754,7 +1161,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             if existing_findings is not None:
                 history.extend(item for item in existing_findings if isinstance(item, dict))
             elif not campaign.attempted_slice_ids and not recovered_stale_campaign:
-                history.extend(_load_persisted_slice_history(root, project, campaign.source_snapshot_hash))
+                history.extend(_load_persisted_slice_history(root, project, campaign.source_snapshot_hash, campaign.source_hash))
             if "QUALIBUG_DISCOVERY_ROUND" not in os.environ and campaign.round_count:
                 settings["round_number"] = min(campaign.round_count + 1, campaign.automatic_round_limit + 1)
             settings["slice_budget"] = min(settings["slice_budget"], campaign.slice_budget)
@@ -767,6 +1174,8 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "campaign_status": campaign.status,
             "scope_id": campaign.scope_id,
             "source_snapshot_hash": campaign.source_snapshot_hash,
+            "source_id": campaign.source_id,
+            "source_hash": campaign.source_hash,
             "project": project,
             "round": settings["round_number"],
             "round_limit": settings["round_limit"],
@@ -821,7 +1230,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 from .parameter_fuzzer import ParameterFuzzer
                 scoped_catalog = [entry for entry in catalog if str(entry.get("path") or "") in selected_paths]
                 fuzzer = ParameterFuzzer(approved_base_url, allow_write=False)
-                _login_parameter_fuzzer(fuzzer, catalog, project, root)
+                _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text)
                 fuzzer_findings = fuzzer.fuzz_all(scoped_catalog, max_variants=6)
                 attempted_slice_ids.update(
                     str(item.get("slice_id") or "")
@@ -855,9 +1264,12 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             active_slices=selection["selected"],
             discovery_round=settings["round_number"],
             allow_source_runtime=runtime_contract.get("status") == "approved",
+            root=root,
+            project=project,
         )
+        _enrich_coupon_validation_scenarios(scenarios, _runtime_db_dsn(project, root, db_schema_text))
         executable = [scenario for scenario in scenarios if _scenario_executable(scenario)]
-        runtime_token = _read_only_runtime_token(approved_base_url, catalog, project, root) if executable else ""
+        runtime_token = _read_only_runtime_token(approved_base_url, catalog, project, root, api_doc=scenario_api_doc) if executable else ""
         if runtime_token:
             for scenario in executable:
                 if str(getattr(scenario, "execution_policy", "") or "") in {"safe_read_only", "approved_sandbox_write"} and not str(getattr(scenario, "actor_token", "") or ""):
@@ -1071,6 +1483,30 @@ def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2) -> dic
 def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
     trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}
     bindings: dict[str, Any] = {}
+
+    # ── DB evidence: snapshot the data layer before/after write scenarios ──
+    # Config-driven (QUALIBUG_DB_DSN); no per-project table hardcoding. The diff
+    # itself reveals which table changed, giving idempotency/consistency/state
+    # oracles a real data-layer proof instead of an HTTP-status-only inference.
+    _db_verifier = None
+    _db_tables: list[str] = []
+    _scenario_has_write = any(
+        str(getattr(s, "api_method", "") or "").upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        for s in (getattr(scenario, "steps", []) or [])
+    )
+    if _scenario_has_write and os.environ.get("QUALIBUG_DB_DSN"):
+        try:
+            from .db_snapshot_verifier import DBSnapshotVerifier
+
+            _db_verifier = DBSnapshotVerifier()
+            _db_tables = _db_verifier.list_tables()
+            if _db_tables:
+                _db_verifier.snapshot_before(_db_tables)
+            else:
+                _db_verifier = None
+        except Exception as _db_exc:
+            trace["db_evidence"] = {"status": "unavailable", "reason": f"db_snapshot_setup_failed:{type(_db_exc).__name__}"}
+            _db_verifier = None
     # #region debug-point A:scenario-start
     exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'A', 'location': 'v12_pipeline.py:__execute_scenario_once:start', 'msg': '[DEBUG] scenario execution started', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'step_count': len(getattr(scenario, 'steps', []) or [])}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
     # #endregion
@@ -1081,11 +1517,39 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
             trace["errors"].append("invalid_source_bound_step")
             continue
         path, body = _replace(path, bindings), _replace(getattr(step, "body_template", {}) or {}, bindings)
+        normalized_path = normalize_path_placeholders(path)
+        if path_has_placeholders(normalized_path):
+            missing_bindings = infer_path_params(normalized_path)
+            reason = f"missing_runtime_path_binding:{','.join(missing_bindings)}" if missing_bindings else "missing_runtime_path_binding"
+            trace["errors"].append(reason)
+            trace.setdefault("precondition_not_met", list(trace.get("precondition_not_met", [])))
+            trace["precondition_not_met"].append({
+                "step": getattr(step, "action", ""),
+                "path": normalized_path,
+                "missing_path_params": missing_bindings,
+            })
+            trace["steps"].append({
+                "action": getattr(step, "action", ""),
+                "method": method,
+                "path": path,
+                "status": 0,
+                "request": {"body": _redact(body)} if body else {},
+                "response": {"status_code": 0, "headers": {}, "body": {"error": reason}},
+                "expected_status": getattr(step, "expected_status", 0),
+                "skipped_reason": reason,
+            })
+            break
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
         headers = {"Accept": "application/json"}
         if data is not None:
             headers["Content-Type"] = "application/json"
         token, actor = str(getattr(scenario, "actor_token", "") or ""), str(getattr(step, "actor", "") or "")
+        # If the scenario didn't carry a pre-issued actor token, fall back to a
+        # token captured earlier in this scenario (e.g. from a login step whose
+        # extract_from_response=["token"]).  This lets multi-actor permission /
+        # isolation probes authenticate as the role they logged in as.
+        if not token and isinstance(bindings.get("token"), str) and bindings.get("token"):
+            token = str(bindings["token"])
         if token:
             headers["Authorization"] = f"Bearer {token}"
         started, url = time.time(), base_url.rstrip("/") + path
@@ -1111,14 +1575,65 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
             value = _extract(response_body, str(field))
             if value not in (None, "", [], {}):
                 bindings[str(field)] = value
+        # Filtered extraction: pick items in a GET list whose attribute
+        # matches a where= clause, then extract their ids.  This lets a
+        # precondition resolver bind a concrete entity id when the state
+        # precondition (e.g. status=PAID) is real at runtime.
+        step_where = dict(getattr(step, "extract_where", None) or {})
+        if step_where and isinstance(response_body, (list, dict)):
+            candidates = response_body if isinstance(response_body, list) else [response_body]
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                if not all(str(candidate.get(k)) == str(v) for k, v in step_where.items()):
+                    continue
+                for field in (getattr(step, "extract_from_response", []) or []):
+                    value = _extract(candidate, str(field))
+                    if value not in (None, "", [], {}):
+                        bindings[str(field)] = value
+                        break  # first matching entity
+                break  # only need one matching entity
+            if not bindings.get("id"):
+                trace.setdefault("precondition_not_met", list(trace.get("precondition_not_met", [])))
+                trace["precondition_not_met"].append(step_where)
         trace["steps"].append({
             "action": getattr(step, "action", ""),
             "method": method,
             "path": path,
             "status": status,
+            "request": {"body": _redact(body)} if body else {},
             "response": {"status_code": status, "headers": _redact(response_headers), "body": _redact(response_body)},
             "expected_status": getattr(step, "expected_status", 0),
         })
+
+    # ── DB evidence: snapshot after all steps and diff against the before state ──
+    if _db_verifier is not None:
+        try:
+            _db_verifier.snapshot_after(_db_tables)
+            _db_result = _db_verifier.verify()
+            _changed = [
+                {
+                    "table": d.get("table"),
+                    "before_count": d.get("before_count"),
+                    "after_count": d.get("after_count"),
+                    "added": d.get("added_rows"),
+                    "removed": d.get("removed_rows"),
+                    "modified": d.get("modified_rows"),
+                }
+                for d in (_db_result.diffs or [])
+                if d.get("checksum_changed") or d.get("added_rows") or d.get("removed_rows") or d.get("modified_rows")
+            ]
+            trace["db_evidence"] = {
+                "status": "captured",
+                "db_type": _db_result.db_type,
+                "tables_checked": _db_result.tables_checked,
+                "any_change": bool(_changed),
+                "changed_tables": _changed,
+                "duration_ms": _db_result.duration_ms,
+            }
+        except Exception as _db_exc:
+            trace["db_evidence"] = {"status": "unavailable", "reason": f"db_snapshot_verify_failed:{type(_db_exc).__name__}"}
+
     return trace
 
 
@@ -1175,19 +1690,49 @@ def _count_by(items: list[Any], attr: str) -> dict[str, int]:
     return dict(result)
 
 
+def _evidence_quality_score(gate_passed: bool, evidence_strength: str) -> int:
+    """Grade confidence by the strongest evidence layer actually captured.
+
+    Avoids a flat 95 for every finding: HTTP-status-only inferences score
+    lower than data-layer-confirmed ones so reviewers can triage honestly.
+    """
+    if not gate_passed:
+        return 55
+    return {
+        "runtime_and_db": 95,
+        "runtime_before_after": 80,
+        "db": 78,
+        "runtime": 65,
+    }.get(evidence_strength, 65)
+
+
 def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, Any]:
     steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
     if not steps:
         return {}
     rule = str(getattr(oracle_result, "violated_rule", "") or "").strip().lower()
-    if rule == "non_idempotent" and len(steps) >= 2:
-        return steps[-1] if isinstance(steps[-1], dict) else {}
+    _writes = {"POST", "PUT", "PATCH", "DELETE"}
+    # For idempotency/replay violations the primary evidence must be the
+    # repeated *write* call (the duplicate that should have been rejected),
+    # never a trailing read-only observation appended for state capture.
+    if rule in {"non_idempotent", "replay", "idempotency"}:
+        write_steps = [s for s in steps if isinstance(s, dict) and str(s.get("method") or "").upper() in _writes]
+        if len(write_steps) >= 2:
+            return write_steps[-1]
+        if write_steps:
+            return write_steps[-1]
+    # Otherwise prefer the last step whose observed status contradicts the
+    # expected status (the actual assertion failure).
     for step in reversed(steps):
         if not isinstance(step, dict):
             continue
         status = int(step.get("status") or 0)
         expected = int(step.get("expected_status") or 0)
         if expected and status != expected:
+            return step
+    # Fall back to the last *write* step before any trailing observe read.
+    for step in reversed(steps):
+        if isinstance(step, dict) and str(step.get("method") or "").upper() in _writes:
             return step
     return steps[-1] if isinstance(steps[-1], dict) else {}
 
@@ -1250,12 +1795,15 @@ def _confirmed_oracle_finding(
         else {}
     )
     db_evidence = dict(trace.get("db_evidence") or {}) if isinstance(trace.get("db_evidence"), dict) else {}
+    # Only a successfully captured before/after snapshot counts as real DB
+    # evidence; an "unavailable" marker must not inflate the evidence strength.
+    db_captured = db_evidence.get("status") == "captured"
     evidence_strength = "runtime"
-    if before_after_snapshot and db_evidence:
+    if before_after_snapshot and db_captured:
         evidence_strength = "runtime_and_db"
     elif before_after_snapshot:
         evidence_strength = "runtime_before_after"
-    elif db_evidence:
+    elif db_captured:
         evidence_strength = "db"
     runtime_confirmable = (
         _scenario_executable(scenario)
@@ -1263,6 +1811,14 @@ def _confirmed_oracle_finding(
         and bool(reproduction_steps)
         and not (trace.get("errors") if isinstance(trace, dict) else [])
         and bool(getattr(evidence, "vote_summary", {}).get("confirmation_threshold_met"))
+        # A path that still carries an unresolved {param}/:param placeholder means
+        # the probe never bound a real entity id — the request was malformed, so a
+        # resulting 4xx/5xx is a probe artifact, not a confirmed target defect.
+        and "{" not in path and not re.search(r"/:[A-Za-z_]", path)
+        # A declared state precondition (e.g. status=PAID) that could not be
+        # satisfied at runtime means the tested transition was never actually
+        # exercised from the claimed state — do not confirm on fabricated state.
+        and not (trace.get("precondition_not_met") if isinstance(trace, dict) else None)
     )
     confirmation_status = "confirmed" if runtime_confirmable else "candidate"
     gate_passed = bool(runtime_confirmable)
@@ -1316,8 +1872,9 @@ def _confirmed_oracle_finding(
         },
         "evidence_quality": {
             "level": "validated" if gate_passed else "needs_evidence",
-            "score": 95 if gate_passed else 70,
+            "score": _evidence_quality_score(gate_passed, evidence_strength),
             "can_reproduce": bool(gate_passed),
+            "evidence_strength": evidence_strength,
         },
         "evidence_status": {
             "semantic_verdict": "SEMANTIC_CONFIRMED" if gate_passed else "SEMANTIC_CANDIDATE",

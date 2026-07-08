@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+from email.message import Message
 from types import SimpleNamespace
 
 from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
+from ai_test_asset_center.oracle_engine import OracleEngine
 from ai_test_asset_center.policy_wiring import _behavior_slice_execution_value
 from ai_test_asset_center.route_catalog_builder import RouteCatalogBuilder
 from ai_test_asset_center.v12_pipeline import (
     _confirmed_oracle_finding,
+    _execute_scenario,
     _login_parameter_fuzzer,
     _behavior_slice_settings,
+    _enrich_coupon_validation_scenarios,
     _rank_behavior_slices_for_selection,
     _runtime_contract,
     _schedule_behavior_slices,
@@ -198,6 +202,35 @@ def test_inventory_report_route_is_reused_as_inventory_observation_endpoint():
     invariant_slices = [item for item in contract["slices"] if item["kind"] == "invariant" and item["entity"] == "inventory"]
     assert invariant_slices
     assert any("/api/reports/inventory-risk" in item["endpoints"] for item in invariant_slices)
+
+
+def test_frontend_product_visibility_rule_binds_to_product_invariant():
+    api_doc = """### GET /api/products
+查询商品列表。
+
+### GET /api/products/:sku
+查询商品详情。
+"""
+    db_schema = """CREATE TABLE products (
+  sku TEXT PRIMARY KEY,
+  status TEXT CHECK (status IN ('ON_SALE', 'OFF_SALE', 'DRAFT', 'DELETED'))
+);
+"""
+    prd = """## 前端规则
+- 用户端不展示下架商品、草稿商品、内部商品；
+"""
+    builder = BusinessStateGraphBuilder()
+    builder.build(prd, api_doc, db_schema)
+    contract = builder.behavior_contract()
+
+    invariant_slices = [item for item in contract["slices"] if item["kind"] == "invariant" and item["entity"] == "product"]
+    assert invariant_slices
+    states = {state for item in invariant_slices for state in item["states"]}
+    assert any("/api/products" in item["endpoints"] for item in invariant_slices)
+    assert any("不展示下架商品" in ref["quote"] for item in invariant_slices for ref in item["source_refs"])
+    assert {"OFF_SALE", "DRAFT"} <= states
+    assert "ON_SALE" not in states
+    assert all(gap["title"] != "前端规则" for gap in contract["coverage_gaps"])
 
 
 def test_cart_items_schema_entity_reuses_cart_collection_observation_route():
@@ -392,6 +425,156 @@ def test_login_parameter_fuzzer_uses_registry_credentials(tmp_path):
             "login_path": "/api/auth/login",
         }
     ]
+
+
+def test_login_parameter_fuzzer_falls_back_to_api_login_example(tmp_path):
+    class StubFuzzer:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+
+        def login(self, email: str = "", password: str = "", login_path: str = "", body_template=None) -> bool:
+            self.calls.append({"email": email, "password": password, "login_path": login_path})
+            return True
+
+    stub = StubFuzzer()
+    api_doc = """
+### POST /api/auth/login
+
+请求：
+
+```json
+{"email":"buyer01@example.com","password":"Test@123456"}
+```
+"""
+
+    assert _login_parameter_fuzzer(
+        stub,
+        [{"method": "POST", "path": "/api/auth/login", "operation_id": "login"}],
+        "demo",
+        tmp_path,
+        api_doc=api_doc,
+    )
+    assert stub.calls == [
+        {
+            "email": "buyer01@example.com",
+            "password": "Test@123456",
+            "login_path": "/api/auth/login",
+        }
+    ]
+
+
+def test_login_parameter_fuzzer_prefers_configured_default_credential_without_role_names(tmp_path):
+    registry_path = tmp_path / "platform_workspace" / "demo" / "enterprise_pilot_runtime" / "connector_registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "connectors": [],
+                "test_profile": {
+                    "test_credentials": {
+                        "ops_reader": {
+                            "email": "ops-reader@example.com",
+                            "password": "Reader@123456",
+                        },
+                        "portal_primary": {
+                            "email": "portal-primary@example.com",
+                            "password": "Portal@123456",
+                            "default": True,
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    class StubFuzzer:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+
+        def login(self, email: str = "", password: str = "", login_path: str = "", body_template=None) -> bool:
+            self.calls.append({"email": email, "password": password, "login_path": login_path})
+            return True
+
+    stub = StubFuzzer()
+
+    assert _login_parameter_fuzzer(
+        stub,
+        [{"method": "POST", "path": "/api/auth/login", "operation_id": "login"}],
+        "demo",
+        tmp_path,
+    )
+    assert stub.calls[0]["email"] == "portal-primary@example.com"
+
+
+def test_coupon_validation_scenario_is_enriched_with_db_discovered_sample(monkeypatch):
+    scenario = SimpleNamespace(
+        entity="coupon",
+        oracle_rules=["CouponOracle.expired_coupon_must_be_invalid"],
+        runtime_hints={"coupon_validation_rule": "expired_coupon_must_be_invalid"},
+        steps=[SimpleNamespace(body_template={"code": "NEW100"})],
+        evidence_gaps=[],
+        execution_policy="approved_sandbox_write",
+    )
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline._coupon_validation_samples",
+        lambda dsn: {
+            "expired_coupon_must_be_invalid": {
+                "body": {
+                    "code": "EXPIRED50",
+                    "items": [{"sku": "SKU-PHONE-001", "qty": 1, "price": 6999.0}],
+                    "totalAmount": 6999.0,
+                },
+                "coupon_code": "EXPIRED50",
+            }
+        },
+    )
+
+    _enrich_coupon_validation_scenarios([scenario], "postgresql://demo")
+
+    assert scenario.steps[0].body_template["code"] == "EXPIRED50"
+    assert scenario.runtime_hints["coupon_validation_sample"]["coupon_code"] == "EXPIRED50"
+    assert scenario.execution_policy == "approved_sandbox_write"
+
+
+def test_visibility_oracle_flags_hidden_state_resource_exposed_in_collection_response():
+    results = OracleEngine().evaluate(
+        {
+            "title": "[来源约束不变量] product: OFF_SALE",
+            "description": "- 用户端不展示下架商品、草稿商品、内部商品；",
+            "category": "invariant",
+            "entity": "product",
+            "expected_state": "OFF_SALE",
+            "oracle_rules": [
+                "ConsistencyOracle.source_grounded_invariant",
+                "- 用户端不展示下架商品、草稿商品、内部商品；",
+            ],
+        },
+        {
+            "steps": [
+                {
+                    "method": "GET",
+                    "path": "/api/products",
+                    "response": {
+                        "status_code": 200,
+                        "body": [
+                            {"sku": "SKU-ON-001", "status": "ON_SALE"},
+                            {"sku": "SKU-OFF-001", "status": "OFF_SALE"},
+                        ],
+                    },
+                }
+            ]
+        },
+    )
+    violation = next((item for item in results if item.oracle_name == "VisibilityOracle"), None)
+    assert violation is not None
+    assert violation.passed is False
+    assert violation.violated_rule == "hidden_entity_exposed"
+    assert "SKU-OFF-001" in violation.actual
 
 
 def test_slice_budget_is_hard_capped_at_fifteen(monkeypatch):
@@ -596,6 +779,127 @@ def test_scheduler_spreads_budget_across_distinct_selection_families():
     assert set(selection["selected_slice_ids"]) == {"BHV_pay_a", "BHV_cancel", "BHV_refund"}
 
 
+def test_scheduler_prioritizes_distinct_entities_before_repeating_existing_entity_cluster():
+    ranked = _rank_behavior_slices_for_selection(
+        [
+            {"slice_id": "BHV_pay_a", "entity": "order", "kind": "invariant", "priority": 0.95, "source_refs": [{"source_type": "requirement"}], "endpoints": ["/api/payments/pay"]},
+            {"slice_id": "BHV_pay_b", "entity": "order", "kind": "invariant", "priority": 0.94, "source_refs": [{"source_type": "requirement"}], "endpoints": ["/api/payments/pay"]},
+            {"slice_id": "BHV_cancel", "entity": "order", "kind": "invariant", "priority": 0.93, "source_refs": [{"source_type": "requirement"}], "endpoints": ["/api/orders/{id}/cancel"]},
+            {"slice_id": "BHV_product_visibility", "entity": "product", "kind": "invariant", "priority": 0.5, "source_refs": [{"source_type": "requirement"}], "endpoints": ["/api/products"]},
+            {"slice_id": "BHV_inventory_risk", "entity": "inventory", "kind": "invariant", "priority": 0.48, "source_refs": [{"source_type": "requirement"}], "endpoints": ["/api/reports/inventory-risk"]},
+        ],
+        [
+            SimpleNamespace(
+                behavior_slice_id="BHV_pay_a",
+                title="order: CREATED -> /api/payments/pay",
+                execution_policy="approved_sandbox_write",
+                category="concurrency",
+                severity="P0",
+                evidence_gaps=[],
+                steps=[1, 2, 3, 4],
+                confidence=0.95,
+                is_forbidden_path=False,
+                is_boundary_path=False,
+                is_concurrent=True,
+            ),
+            SimpleNamespace(
+                behavior_slice_id="BHV_pay_b",
+                title="order: CREATED -> /api/payments/pay",
+                execution_policy="approved_sandbox_write",
+                category="concurrency",
+                severity="P0",
+                evidence_gaps=[],
+                steps=[1, 2, 3, 4],
+                confidence=0.94,
+                is_forbidden_path=False,
+                is_boundary_path=False,
+                is_concurrent=True,
+            ),
+            SimpleNamespace(
+                behavior_slice_id="BHV_cancel",
+                title="order: CREATED -> /api/orders/{id}/cancel",
+                execution_policy="approved_sandbox_write",
+                category="state_machine",
+                severity="P0",
+                evidence_gaps=[],
+                steps=[1, 2, 3],
+                confidence=0.9,
+                is_forbidden_path=True,
+                is_boundary_path=False,
+                is_concurrent=False,
+            ),
+            SimpleNamespace(
+                behavior_slice_id="BHV_product_visibility",
+                title="product: hidden states must not appear in /api/products",
+                execution_policy="safe_read_only",
+                category="state_machine",
+                severity="P1",
+                evidence_gaps=[],
+                steps=[1, 2],
+                confidence=0.7,
+                is_forbidden_path=True,
+                is_boundary_path=False,
+                is_concurrent=False,
+            ),
+            SimpleNamespace(
+                behavior_slice_id="BHV_inventory_risk",
+                title="inventory: /api/reports/inventory-risk",
+                execution_policy="safe_read_only",
+                category="source_observation",
+                severity="P1",
+                evidence_gaps=[],
+                steps=[1],
+                confidence=0.65,
+                is_forbidden_path=False,
+                is_boundary_path=False,
+                is_concurrent=False,
+            ),
+        ],
+    )
+    selection = _schedule_behavior_slices(
+        ranked,
+        {"slice_budget": 3, "round_number": 2, "round_limit": 3},
+        [{"behavior_slice_ledger": {"attempted_slice_ids": ["BHV_history"], "confirmed_slice_ids": []}}],
+    )
+    assert selection["status"] == "planned"
+    assert selection["selection_mode"] == "next_unattempted_executable_after_history"
+    selected_ids = set(selection["selected_slice_ids"])
+    assert "BHV_product_visibility" in selected_ids
+    assert "BHV_inventory_risk" in selected_ids
+    assert len(selected_ids & {"BHV_pay_a", "BHV_pay_b", "BHV_cancel"}) == 1
+
+
+def test_scheduler_prefers_invariant_over_dependency_for_entity_first_slot():
+    selection = _schedule_behavior_slices(
+        [
+            {"slice_id": "BHV_product_dependency", "entity": "product", "kind": "dependency", "priority": 0.9, "endpoints": ["/api/products"]},
+            {"slice_id": "BHV_product_hidden", "entity": "product", "kind": "invariant", "priority": 0.4, "endpoints": ["/api/products"]},
+            {"slice_id": "BHV_coupon_hidden", "entity": "coupon", "kind": "invariant", "priority": 0.3, "endpoints": ["/api/coupons/validate"]},
+        ],
+        {"slice_budget": 2, "round_number": 2, "round_limit": 3},
+        [{"behavior_slice_ledger": {"attempted_slice_ids": ["BHV_history"], "confirmed_slice_ids": []}}],
+    )
+    assert selection["status"] == "planned"
+    assert set(selection["selected_slice_ids"]) == {"BHV_product_hidden", "BHV_coupon_hidden"}
+
+
+def test_scheduler_prioritizes_unconfirmed_state_variant_after_same_entity_slice_was_confirmed():
+    selection = _schedule_behavior_slices(
+        [
+            {"slice_id": "BHV_order_paid", "entity": "order", "kind": "invariant", "states": ["PAID"], "priority": 0.8, "endpoints": ["/api/orders"]},
+            {"slice_id": "BHV_inventory_low", "entity": "inventory", "kind": "invariant", "states": ["LOW"], "priority": 0.79, "endpoints": ["/api/reports/inventory-risk"]},
+            {"slice_id": "BHV_product_off_sale", "entity": "product", "kind": "invariant", "states": ["OFF_SALE"], "priority": 0.55, "endpoints": ["/api/products"]},
+            {"slice_id": "BHV_product_deleted", "entity": "product", "kind": "invariant", "states": ["DELETED"], "priority": 0.54, "endpoints": ["/api/products"]},
+            {"slice_id": "BHV_product_draft", "entity": "product", "kind": "invariant", "states": ["DRAFT"], "priority": 0.53, "endpoints": ["/api/products"]},
+        ],
+        {"slice_budget": 3, "round_number": 2, "round_limit": 3},
+        [{"behavior_slice_ledger": {"attempted_slice_ids": ["BHV_product_draft"], "confirmed_slice_ids": ["BHV_product_draft"]}}],
+    )
+    assert selection["status"] == "planned"
+    assert "BHV_product_off_sale" in selection["selected_slice_ids"]
+    assert "BHV_product_deleted" not in selection["selected_slice_ids"]
+
+
 def test_rank_behavior_slices_prioritizes_newly_materialized_fallback_slice():
     ranked = _rank_behavior_slices_for_selection(
         [
@@ -669,6 +973,70 @@ def test_scheduler_respects_explicit_round_limit():
     )
     assert selection["status"] == "stopped"
     assert selection["stop_reason"] == "configured_round_limit_reached"
+
+
+def test_execute_scenario_stops_when_runtime_path_binding_is_missing(monkeypatch):
+    from ai_test_asset_center.semantic_scenario_generator import ExecutableScenario, ScenarioStep
+
+    calls: list[tuple[str, str]] = []
+
+    class FakeResponse:
+        def __init__(self, status: int, body: dict[str, object] | list[object]) -> None:
+            self.status = status
+            self._body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.headers = Message()
+            self.headers["Content-Type"] = "application/json"
+
+        def read(self, _size: int = -1) -> bytes:
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    def fake_urlopen(request, timeout=10):  # noqa: ANN001
+        method = str(request.get_method() or "")
+        url = str(request.full_url or "")
+        calls.append((method, url))
+        if url.endswith("/api/auth/login"):
+            return FakeResponse(200, {"token": "tok_buyer2"})
+        if url.endswith("/api/cart/items"):
+            return FakeResponse(200, [])
+        if url.endswith("/api/cart/items/{id}"):
+            return FakeResponse(500, {"error": "should_not_execute"})
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    scenario = ExecutableScenario(
+        id="SCN_permission_missing_id",
+        title="[Actor permission probe] buyer2 -> PATCH /api/cart/items/:id",
+        description="",
+        category="permission",
+        severity="P1",
+        entity="cart",
+        steps=[
+            ScenarioStep(order=1, action="login", api_method="POST", api_path="/api/auth/login", expected_status=200, actor="readonly", body_template={"email": "buyer02@example.com", "password": "Test@123456"}, extract_from_response=["token"]),
+            ScenarioStep(order=2, action="resolve_entity_id", api_method="GET", api_path="/api/cart/items", expected_status=200, actor="buyer2", extract_from_response=["id"]),
+            ScenarioStep(order=3, action="permission_probe_buyer2", api_method="PATCH", api_path="/api/cart/items/{id}", expected_status=403, actor="buyer2"),
+        ],
+        actors=["buyer2"],
+        execution_policy="safe_read_only",
+    )
+
+    trace = _execute_scenario(scenario, "http://127.0.0.1:8080", max_retries=0)
+
+    assert calls == [
+        ("POST", "http://127.0.0.1:8080/api/auth/login"),
+        ("GET", "http://127.0.0.1:8080/api/cart/items"),
+    ]
+    assert trace["errors"] == ["missing_runtime_path_binding:id"]
+    assert trace["precondition_not_met"] == [{"step": "permission_probe_buyer2", "path": "/api/cart/items/{id}", "missing_path_params": ["id"]}]
+    assert trace["steps"][-1]["path"] == "/api/cart/items/{id}"
+    assert trace["steps"][-1]["status"] == 0
+    assert trace["steps"][-1]["skipped_reason"] == "missing_runtime_path_binding:id"
 
 
 def test_pipeline_preserves_original_markdown_doc_for_dependency_write_scenarios(monkeypatch, tmp_path):
@@ -1142,6 +1510,57 @@ def test_pipeline_ignores_persisted_slice_history_from_different_snapshot(tmp_pa
     assert result["behavior_slice_ledger"]["stop_reason"] != "all_pending_slices_attempted_needs_new_evidence_or_policy"
 
 
+def test_pipeline_reuses_persisted_confirmed_history_from_same_source_hash(tmp_path):
+    builder = BusinessStateGraphBuilder()
+    builder.build(PRD, API_SPEC, DB_SCHEMA)
+    contract = builder.behavior_contract()
+    slice_ids = [item["slice_id"] for item in contract["slices"] if item.get("slice_id")]
+    assert len(slice_ids) >= 2
+    ledger_path = tmp_path / "platform_workspace" / "generic-project" / "defect_discovery" / "v12_behavior_slice_ledger.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "campaign_id": "CMP_old_snapshot",
+                "campaign_status": "coverage_deferred",
+                "scope_id": "scope-a",
+                "source_snapshot_hash": "different-snapshot",
+                "source_id": SOURCE_MANIFEST["source_id"],
+                "source_hash": SOURCE_MANIFEST["source_hash"],
+                "project": "generic-project",
+                "round": 1,
+                "round_limit": 3,
+                "slice_budget": 15,
+                "selection_mode": "history_exhausted",
+                "selected_slice_ids": [],
+                "attempted_slice_ids": [slice_ids[0]],
+                "confirmed_slice_ids": [slice_ids[0]],
+                "next_round": None,
+                "stop_reason": "all_pending_slices_attempted_needs_new_evidence_or_policy",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+        campaign_context={
+            "scope_id": "case-lifecycle",
+            "environment_ref": "approved-test",
+            "source_manifest": SOURCE_MANIFEST,
+        },
+    )
+
+    assert slice_ids[0] in result["behavior_slice_ledger"]["confirmed_slice_ids"]
+    assert slice_ids[0] not in result["behavior_slice_ledger"]["selected_slice_ids"]
+
+
 def test_pipeline_recovers_stale_deferred_campaign_without_attempt_history(tmp_path):
     initial = run_v12_pipeline(
         project="generic-project",
@@ -1473,6 +1892,37 @@ def test_direct_v12_target_execution_is_blocked_without_enterprise_contract(tmp_
     assert result["phases"]["execution"]["status"] == "blocked"
     assert result["auto_har"]["status"] == "no_traffic"
     assert result["campaign"]["confirmed_slice_count"] == 0
+
+
+def test_direct_v12_backfills_campaign_identity_from_connector_registry_when_context_missing(tmp_path):
+    registry_path = tmp_path / "platform_workspace" / "generic-project" / "enterprise_pilot_runtime" / "connector_registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "project_id": "generic-project",
+                "connectors": [],
+                "test_profile": {
+                    "scope_id": "registry-scope",
+                    "environment_ref": "registry-env",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+    )
+
+    assert result["campaign"]["scope_id"] == "registry-scope"
+    assert result["campaign"]["environment_ref"] == "registry-env"
 
 
 def test_direct_runtime_contract_accepts_verified_manifest_without_network_access():

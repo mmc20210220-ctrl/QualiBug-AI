@@ -27,6 +27,17 @@ from .real_project_onboarding import ROOT, _safe_project_id, _write_json, _load_
 # Service configuration
 # ---------------------------------------------------------------------------
 
+# Customer-maintained project-level metadata required by the main chain
+# (主链 1：客户维护被测系统信息). These are NOT auto-inferred — the customer
+# owns them, and they must drive downstream execution, not just be stored.
+PROJECT_INDUSTRY_KEY = "industry"
+PROJECT_MODULE_SCOPE_KEY = "module_scope"
+# List of path fragments / regex patterns describing data or endpoints the
+# system is forbidden to touch (e.g. production PII, finance settlement tables).
+# The executor consults this as a hard safety boundary — see
+# match_production_data_exclusion().
+PROJECT_PRODUCTION_DATA_EXCLUSION_KEY = "production_data_exclusion"
+
 EXAMPLE_MULTI_SERVICE_CONFIG = {
     "project_name": "acme_ecommerce",
     "services": [
@@ -379,6 +390,93 @@ class MultiServiceProject:
             "external_integration_count": len(self.external_integrations()),
             "issues": issues,
         }
+
+    # ------------------------------------------------------------------
+    # Customer-maintained project metadata (主链 1)
+    # ------------------------------------------------------------------
+    def set_project_metadata(self, *, industry: str | None = None,
+                             module_scope: list[str] | None = None,
+                             production_data_exclusion: list[str] | None = None) -> dict[str, Any]:
+        """Persist customer-maintained project-level metadata.
+
+        These fields are owned by the customer (not auto-inferred) and must
+        drive downstream execution. ``production_data_exclusion`` is consulted
+        by the probe executor as a hard safety boundary.
+        """
+        config = self.config
+        if industry is not None:
+            config[PROJECT_INDUSTRY_KEY] = str(industry).strip()
+        if module_scope is not None:
+            if not isinstance(module_scope, list):
+                raise ValueError("module_scope must be a list[str]")
+            config[PROJECT_MODULE_SCOPE_KEY] = [str(m).strip() for m in module_scope]
+        if production_data_exclusion is not None:
+            if not isinstance(production_data_exclusion, list):
+                raise ValueError("production_data_exclusion must be a list[str]")
+            config[PROJECT_PRODUCTION_DATA_EXCLUSION_KEY] = [
+                str(p).strip() for p in production_data_exclusion if str(p).strip()
+            ]
+        self._config = config
+        self._write_config()
+        return config
+
+    def get_execution_safety_boundary(self) -> list[str]:
+        """Return the normalized list of forbidden data/endpoint patterns.
+
+        Used by the probe executor to guarantee the system never touches
+        production data the customer marked off-limits.
+        """
+        raw = self.config.get(PROJECT_PRODUCTION_DATA_EXCLUSION_KEY) or []
+        return [str(p).strip() for p in raw if str(p).strip()]
+
+    def project_metadata(self) -> dict[str, Any]:
+        """Return the customer-maintained metadata block for API responses."""
+        return {
+            "industry": self.config.get(PROJECT_INDUSTRY_KEY, ""),
+            "module_scope": self.config.get(PROJECT_MODULE_SCOPE_KEY, []),
+            "production_data_exclusion": self.get_execution_safety_boundary(),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Production-data safety boundary
+# ---------------------------------------------------------------------------
+
+def match_production_data_exclusion(config: dict[str, Any], path: str,
+                                    risk_type: str = "") -> str | None:
+    """If ``path``/``risk_type`` hits a customer-defined forbidden-data pattern,
+    return a stable reason string; otherwise ``None``.
+
+    Pure, side-effect-free matcher — safe to call from the executor's decision
+    path. Matching is case-insensitive substring against the request path plus
+    an optional exact risk-type match. Patterns may be plain path fragments
+    (e.g. ``/api/admin/users``) or ``re:``-prefixed regular expressions.
+    """
+    if not isinstance(config, dict):
+        return None
+    exclusions = config.get(PROJECT_PRODUCTION_DATA_EXCLUSION_KEY) or []
+    if not exclusions:
+        return None
+    haystack = (path or "").lower()
+    risk = (risk_type or "").lower()
+    for raw in exclusions:
+        pattern = str(raw).strip()
+        if not pattern:
+            continue
+        if pattern.startswith("re:"):
+            import re
+            try:
+                if re.search(pattern[3:], haystack, re.IGNORECASE):
+                    return f"production_data_exclusion_matched:{pattern}"
+            except re.error:
+                # Treat an invalid regex as a literal fragment so it still guards.
+                if pattern[3:].lower() in haystack:
+                    return f"production_data_exclusion_matched:{pattern}"
+            continue
+        frag = pattern.lower()
+        if frag in haystack or (risk and frag in risk):
+            return f"production_data_exclusion_matched:{pattern}"
+    return None
 
 
 # ---------------------------------------------------------------------------

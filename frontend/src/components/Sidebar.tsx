@@ -45,8 +45,8 @@ function SvgIcon({ name }: { name: string }) {
 export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
-  const { projectName, findingsCount, clueCount, p0Count } = useProjectSummary(project);
-  const findingCount = findingsCount;
+  const { projectName, findingsCount, currentDefectCount, clueCount, p0Count } = useProjectSummary(project);
+  const shelfCount = findingsCount;
 
   const navEntries = navItems.map((item, index) => ({
     ...item,
@@ -56,11 +56,13 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
     ? '等待选择客户'
     : p0Count > 0
       ? '存在阻断项'
-      : (findingCount || 0) > 0
+      : (currentDefectCount || 0) > 0
         ? '可进入闭环'
-        : (clueCount || 0) > 0
-          ? '待补证'
-          : '待首次检测';
+        : (shelfCount || 0) > 0
+          ? '已有历史货架'
+          : (clueCount || 0) > 0
+            ? '待补证'
+            : '待首次检测';
 
   return (
     <>
@@ -86,8 +88,8 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
               <strong>{riskStateLabel}</strong>
             </div>
             <div className="side-project-metric">
-              <span>可交付</span>
-              <strong>{findingCount ?? 0}</strong>
+              <span>本轮可交付</span>
+              <strong>{currentDefectCount ?? 0}</strong>
             </div>
             <div className="side-project-metric">
               <span>待验证</span>
@@ -102,8 +104,8 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
             </div>
           ) : null;
 
-          const badge = item.badgeKey === 'findings' && findingCount !== null
-            ? findingCount
+          const badge = item.badgeKey === 'findings' && shelfCount !== null
+            ? shelfCount
             : item.badgeKey === 'clues'
               ? clueCount
               : item.badge;

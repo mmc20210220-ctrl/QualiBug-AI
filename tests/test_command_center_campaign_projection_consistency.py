@@ -96,6 +96,11 @@ def test_static_snapshot_and_real_project_preserve_command_center_campaign_proje
     campaign_projection = {
         "campaign": {
             "campaign_id": "CMP_ACTIVE",
+            "lineage_campaign_id": "CMP_LINEAGE",
+            "scope_id": "checkout-scope",
+            "environment_ref": "local-benchmark",
+            "source_hash": "a" * 64,
+            "source_snapshot_hash": "b" * 64,
             "confirmed_slice_count": 43,
         },
         "summary": {
@@ -130,6 +135,14 @@ def test_static_snapshot_and_real_project_preserve_command_center_campaign_proje
                 "executive_summary": {"ready_bugs": 1},
                 "scan_meta": {"ready_bug_count": 1},
                 "data_contract": {"display_key": "defects"},
+                "current_campaign_scope": {
+                    "campaign_id": "CMP_ACTIVE",
+                    "lineage_campaign_id": "CMP_LINEAGE",
+                    "scope_id": "checkout-scope",
+                    "environment_ref": "local-benchmark",
+                    "source_hash": "a" * 64,
+                    "source_snapshot_hash": "b" * 64,
+                },
                 "continuous_discovery_campaign": campaign_projection,
             },
         },
@@ -147,6 +160,9 @@ def test_static_snapshot_and_real_project_preserve_command_center_campaign_proje
     assert snapshot["continuous_discovery_campaign"]["summary"]["current_campaign_customer_ready_defect_count"] == 25
     assert snapshot["continuous_discovery_campaign"]["summary"]["family_customer_ready_defect_count"] == 27
     assert snapshot["continuous_discovery_campaign"]["summary"]["family_historical_carryover_defect_count"] == 2
+    assert snapshot["current_campaign_scope"]["campaign_id"] == "CMP_ACTIVE"
+    assert snapshot["current_campaign_scope"]["scope_id"] == "checkout-scope"
+    assert snapshot["current_campaign_scope"]["environment_ref"] == "local-benchmark"
 
     main_module._persist_customer_ready_static_artifacts(project, tmp_path, {"project": project})
     saved_scan = json.loads(scan_result_path.read_text(encoding="utf-8"))
@@ -154,7 +170,10 @@ def test_static_snapshot_and_real_project_preserve_command_center_campaign_proje
 
     assert saved_scan["customer_ready_snapshot"]["continuous_discovery_campaign"]["summary"]["current_campaign_confirmed_slice_count"] == 43
     assert saved_scan["customer_ready_snapshot"]["continuous_discovery_campaign"]["summary"]["current_campaign_customer_ready_defect_count"] == 25
+    assert saved_scan["customer_ready_snapshot"]["current_campaign_scope"]["lineage_campaign_id"] == "CMP_LINEAGE"
     assert saved_real_project["continuous_discovery_campaign"]["summary"]["current_campaign_confirmed_slice_count"] == 43
     assert saved_real_project["continuous_discovery_campaign"]["summary"]["current_campaign_customer_ready_defect_count"] == 25
     assert saved_real_project["continuous_discovery_campaign"]["summary"]["family_customer_ready_defect_count"] == 27
     assert saved_real_project["continuous_discovery_campaign"]["summary"]["family_historical_carryover_defect_count"] == 2
+    assert saved_real_project["current_campaign_scope"]["source_hash"] == "a" * 64
+    assert saved_real_project["current_campaign_scope"]["source_snapshot_hash"] == "b" * 64

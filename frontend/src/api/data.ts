@@ -8,7 +8,7 @@ const CUSTOMER_READY_MIN_EVIDENCE_SCORE = 90;
 
 type JsonRecord = Record<string, unknown>;
 type ScanCompletedDetail = { project: string };
-type ProjectSummary = { resolvedProjectId: string; projectName: string; findingsCount: number; clueCount: number; p0Count: number };
+type ProjectSummary = { resolvedProjectId: string; projectName: string; findingsCount: number; currentDefectCount: number; clueCount: number; p0Count: number };
 
 function asRecord(value: unknown): JsonRecord { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
 function asArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
@@ -70,10 +70,12 @@ function getCompletedAt(raw: unknown): string { const record = asRecord(raw); re
 function hasMaterializedFindingData(raw: unknown): boolean { const record = asRecord(raw); const executive = asRecord(record.executive_summary); const contract = asRecord(record.data_contract); return getReportFindings(raw).length > 0 || firstFiniteNumber(contract.materialized_risk_count, executive.materialized_findings, executive.total_findings) > 0 || asFiniteNumber(field(record.runtime_verification, 'confirmed')) > 0 || asFiniteNumber(field(record.db_verification, 'confirmed')) > 0; }
 function campaignFrom(raw: unknown): JsonRecord {
   const record = asRecord(raw);
+  const continuous = asRecord(record.continuous_discovery_campaign || record.continuousDiscoveryCampaign);
+  const nestedCampaign = asRecord(continuous.campaign);
+  if (Object.keys(nestedCampaign).length > 0) return nestedCampaign;
   const direct = asRecord(record.campaign);
   if (Object.keys(direct).length > 0) return direct;
-  const continuous = asRecord(record.continuous_discovery_campaign || record.continuousDiscoveryCampaign);
-  return asRecord(continuous.campaign || continuous.summary);
+  return asRecord(continuous.summary);
 }
 function isContinuousDiscoveryActive(raw: unknown): boolean {
   const record = asRecord(raw);
@@ -89,11 +91,56 @@ function normalizeCampaignSnapshot(raw: unknown): JsonRecord {
   if (Object.keys(campaign).length === 0) return record;
   const continuous = asRecord(record.continuous_discovery_campaign || record.continuousDiscoveryCampaign);
   const currentRun = asRecord(continuous.current_run);
+  const summary = asRecord(continuous.summary);
+  const existingScanMeta = asRecord(record.scan_meta);
+  const currentCampaignScope = asRecord(
+    existingScanMeta.current_campaign_scope || record.current_campaign_scope || {
+      campaign_id: asString(campaign.campaign_id || summary.campaign_id || currentRun.campaign_id),
+      lineage_campaign_id: asString(campaign.lineage_campaign_id || summary.lineage_campaign_id),
+      scope_id: asString(campaign.scope_id || summary.scope_id || currentRun.scope_id),
+      environment_ref: asString(campaign.environment_ref || campaign.target_environment || summary.environment_ref || summary.target_environment || currentRun.environment_ref || currentRun.target_environment),
+      source_hash: asString(campaign.source_hash || summary.source_hash),
+      source_snapshot_hash: asString(campaign.source_snapshot_hash || summary.source_snapshot_hash),
+    },
+  );
+  const currentScopeFindingCount = firstFiniteNumber(
+    summary.current_campaign_bundle_finding_count_raw,
+    currentRun.current_campaign_bundle_finding_count_raw,
+    existingScanMeta.current_report_total_findings,
+    existingScanMeta.total_findings,
+  );
+  const currentScopeDefectCount = firstFiniteNumber(
+    summary.current_campaign_customer_ready_defect_count,
+    currentRun.current_campaign_customer_ready_defect_count,
+    existingScanMeta.current_report_customer_ready_defect_count,
+    existingScanMeta.customer_ready_defects,
+  );
   return {
     ...record,
     campaign,
     coverage_gaps: Array.isArray(record.coverage_gaps) ? record.coverage_gaps : [],
-    scan_meta: { ...asRecord(record.scan_meta), run_count: asFiniteNumber(campaign.round_count), total_ms: asFiniteNumber(currentRun.duration_ms) },
+    current_campaign_scope: currentCampaignScope,
+    scan_meta: {
+      ...existingScanMeta,
+      run_count: asFiniteNumber(campaign.round_count),
+      total_ms: asFiniteNumber(currentRun.duration_ms, asFiniteNumber(existingScanMeta.total_ms)),
+      current_report_total_findings: currentScopeFindingCount,
+      total_findings: firstFiniteNumber(existingScanMeta.total_findings, currentScopeFindingCount),
+      current_report_customer_ready_defect_count: currentScopeDefectCount,
+      customer_ready_defects: currentScopeDefectCount,
+      current_campaign_bundle_finding_count_raw: firstFiniteNumber(
+        summary.current_campaign_bundle_finding_count_raw,
+        currentRun.current_campaign_bundle_finding_count_raw,
+        existingScanMeta.current_campaign_bundle_finding_count_raw,
+        currentScopeFindingCount,
+      ),
+      family_customer_ready_defect_count: firstFiniteNumber(
+        existingScanMeta.family_customer_ready_defect_count,
+        summary.family_customer_ready_defect_count,
+        getReportFindings(record).length,
+      ),
+      current_campaign_scope: currentCampaignScope,
+    },
   };
 }
 function campaignBlocksRelease(raw: unknown): { blocked: boolean; status: string; reason: string } {
@@ -102,7 +149,20 @@ function campaignBlocksRelease(raw: unknown): { blocked: boolean; status: string
   const blocked = status === 'blocked' || status === 'coverage_deferred';
   return { blocked, status, reason: asString(campaign.coverage_deferred_reason) || asString(campaign.next_campaign_reason) };
 }
-function buildProjectSummary(raw: unknown, project: string): ProjectSummary { const record = asRecord(raw); const findings = getReportFindings(raw); return { resolvedProjectId: getResolvedProjectId(raw), projectName: (asString(record.project_name) || asString(record.projectName) || project).trim() || '未选择客户', findingsCount: findings.length, clueCount: getReportClues(raw).length, p0Count: findings.filter((finding) => finding.severity === 'P0').length }; }
+function buildProjectSummary(raw: unknown, project: string): ProjectSummary {
+  const normalized = normalizeCampaignSnapshot(raw);
+  const record = asRecord(normalized);
+  const findings = getReportFindings(normalized);
+  const scanMeta = asRecord(field(normalized, 'scan_meta'));
+  return {
+    resolvedProjectId: getResolvedProjectId(normalized),
+    projectName: (asString(record.project_name) || asString(record.projectName) || project).trim() || '未选择客户',
+    findingsCount: findings.length,
+    currentDefectCount: firstFiniteNumber(scanMeta.current_report_customer_ready_defect_count, scanMeta.customer_ready_defects),
+    clueCount: getReportClues(normalized).length,
+    p0Count: findings.filter((finding) => finding.severity === 'P0').length,
+  };
+}
 
 function hasValidatedEvidenceQuality(finding: Finding): boolean {
   const quality = finding?.evidence_quality;
@@ -171,7 +231,7 @@ export function useWorkspaceDirectory() {
 }
 
 export function useProjectSummary(project: string) {
-  const empty = useCallback((): ProjectSummary => ({ resolvedProjectId: '', projectName: project || '未选择客户', findingsCount: 0, clueCount: 0, p0Count: 0 }), [project]);
+  const empty = useCallback((): ProjectSummary => ({ resolvedProjectId: '', projectName: project || '未选择客户', findingsCount: 0, currentDefectCount: 0, clueCount: 0, p0Count: 0 }), [project]);
   const [summary, setSummary] = useState<ProjectSummary>(empty); const [loading, setLoading] = useState(true);
   const load = useCallback(() => { if (!project) { setSummary(empty()); setLoading(false); return; } setLoading(true); getFindings(project).then((raw) => setSummary(buildProjectSummary(raw, project))).catch(() => setSummary(empty())).finally(() => setLoading(false)); }, [empty, project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
@@ -186,10 +246,10 @@ export function usePipelineData(project: string) {
 }
 
 export function useFindingsData(project: string) {
-  const [findings, setFindings] = useState<Finding[]>([]); const [clues, setClues] = useState<Finding[]>([]); const [commercialAssets, setCommercialAssets] = useState<CommercialAssets | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = useCallback(() => { setLoading(true); setError(''); getFindings(project).then((raw) => { setFindings(getReportFindings(raw)); setClues(getReportClues(raw)); setCommercialAssets(getCommercialAssets(raw)); }).catch((caught: unknown) => { setFindings([]); setClues([]); setCommercialAssets(null); setError(caught instanceof Error ? caught.message : '加载失败'); }).finally(() => setLoading(false)); }, [project]);
+  const [findings, setFindings] = useState<Finding[]>([]); const [clues, setClues] = useState<Finding[]>([]); const [commercialAssets, setCommercialAssets] = useState<CommercialAssets | null>(null); const [scanMeta, setScanMeta] = useState<JsonRecord>({}); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
+  const load = useCallback(() => { setLoading(true); setError(''); getFindings(project).then((raw) => { const record = asRecord(raw); setFindings(getReportFindings(raw)); setClues(getReportClues(raw)); setCommercialAssets(getCommercialAssets(raw)); setScanMeta(asRecord(record.scan_meta)); }).catch((caught: unknown) => { setFindings([]); setClues([]); setCommercialAssets(null); setScanMeta({}); setError(caught instanceof Error ? caught.message : '加载失败'); }).finally(() => setLoading(false)); }, [project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { findings, clues, commercialAssets, loading, error, refetch: load };
+  return { findings, clues, commercialAssets, scanMeta, loading, error, refetch: load };
 }
 
 function parseKnowledgeSources(raw: unknown): KnowledgeSource[] {

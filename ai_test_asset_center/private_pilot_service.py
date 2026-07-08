@@ -102,6 +102,7 @@ def _dbg_fingerprint_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
 
     row = payload if isinstance(payload, dict) else {}
     source_manifest = row.get("source_manifest") if isinstance(row.get("source_manifest"), dict) else {}
+    ui_target_resolution = row.get("ui_target_resolution") if isinstance(row.get("ui_target_resolution"), dict) else {}
     prd_text = str(row.get("prd") or "")
     api_doc = str(row.get("api_doc") or row.get("api_doc_text") or "")
     return {
@@ -111,6 +112,10 @@ def _dbg_fingerprint_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "execution_approval_id": str(row.get("execution_approval_id") or ""),
         "execution_mode": str(row.get("execution_mode") or ""),
         "base_url": str(row.get("base_url") or ""),
+        "ui_base_url": str(row.get("ui_base_url") or ""),
+        "ui_base_url_source": str(row.get("ui_base_url_source") or ""),
+        "ui_target_resolution_status": str(ui_target_resolution.get("status") or ""),
+        "ui_target_resolution_reason": str(ui_target_resolution.get("reason") or ""),
         "prd_len": len(prd_text),
         "prd_sha": hashlib.sha256(prd_text.encode("utf-8")).hexdigest() if prd_text else "",
         "api_len": len(api_doc),
@@ -131,6 +136,70 @@ def _first_text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _http_url_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith(("http://", "https://")):
+        return text
+    return ""
+
+
+def _frontend_entry_url_candidates(frontend_urls: Any) -> list[dict[str, Any]]:
+    if not isinstance(frontend_urls, dict):
+        return []
+    candidates: list[dict[str, Any]] = []
+    for key, value in sorted(frontend_urls.items(), key=lambda item: str(item[0]).lower()):
+        url = ""
+        explicit_default = False
+        if isinstance(value, dict):
+            url = _first_text(
+                _http_url_text(value.get("ui_base_url")),
+                _http_url_text(value.get("url")),
+                _http_url_text(value.get("base_url")),
+                _http_url_text(value.get("entry_url")),
+                _http_url_text(value.get("target_url")),
+                _http_url_text(value.get("href")),
+            )
+            explicit_default = any(
+                value.get(flag) is True for flag in ("default", "primary", "is_default", "is_primary")
+            )
+        else:
+            url = _http_url_text(value)
+            explicit_default = str(key or "").strip().lower() in {"default", "primary", "main", "entry"}
+        if url:
+            candidates.append({"key": str(key or "").strip(), "url": url, "default": explicit_default})
+    return candidates
+
+
+def _resolve_ui_base_url_from_profile(profile: dict[str, Any]) -> tuple[str, bool, str]:
+    if not isinstance(profile, dict):
+        return "", False, ""
+    explicit = _first_text(
+        _http_url_text(profile.get("ui_base_url")),
+        _http_url_text(profile.get("target_ui_base_url")),
+        _http_url_text(profile.get("frontend_default_url")),
+        _http_url_text(profile.get("entry_url")),
+    )
+    if explicit:
+        return explicit, False, "connector_registry.test_profile.ui_base_url"
+    candidates = _frontend_entry_url_candidates(profile.get("frontend_urls"))
+    default_candidates = [item for item in candidates if item.get("default") is True]
+    if default_candidates:
+        default_entry = default_candidates[0]
+        return (
+            str(default_entry.get("url") or ""),
+            False,
+            f"connector_registry.test_profile.frontend_urls.{str(default_entry.get('key') or 'default').strip()}",
+        )
+    if len(candidates) == 1:
+        single_entry = candidates[0]
+        return (
+            str(single_entry.get("url") or ""),
+            False,
+            f"connector_registry.test_profile.frontend_urls.{str(single_entry.get('key') or 'default').strip()}",
+        )
+    return "", len(candidates) > 1, ""
 
 
 def _read_json_safe(path: Path, default: Any) -> Any:
@@ -166,6 +235,32 @@ def _regression_status_label(status: str) -> str:
     }.get(normalized, normalized or "未知")
 
 
+def _regression_lifecycle(status: str, included_in_suite: bool) -> dict[str, str]:
+    normalized = str(status or "").strip().lower()
+    if normalized == "passed":
+        return {"code": "verified_fixed", "label": "回归通过", "description": "最新一次回归已验证该缺陷不再复现。"}
+    if normalized == "failed":
+        return {"code": "regression_failed", "label": "回归失败", "description": "最新一次回归仍能触发该缺陷，需继续修复。"}
+    if normalized == "needs_review":
+        return {"code": "manual_review_required", "label": "待人工复核", "description": "已执行回归，但当前断言不足以自动判定，需要 QA 复核。"}
+    if normalized == "skipped":
+        return {"code": "regression_skipped", "label": "回归已跳过", "description": "该缺陷探针被安全策略跳过，尚未完成验证。"}
+    if normalized == "pending":
+        return {"code": "pending_regression", "label": "待回归", "description": "缺陷已纳入回归套件，等待执行验证。"}
+    if included_in_suite:
+        return {"code": "pending_regression", "label": "待回归", "description": "缺陷已纳入回归套件，等待执行验证。"}
+    return {"code": "pending_fix", "label": "待纳入回归", "description": "该缺陷尚未纳入正式回归套件，暂不能验证修复结果。"}
+
+
+def _load_regression_history(root: Path, project_id: str) -> list[dict[str, Any]]:
+    history_candidates = [
+        root / "platform_outputs" / project_id / "regression_run" / "regression_run_history.json",
+        root / "platform_workspace" / project_id / "defect_discovery" / "regression_run_history.json",
+    ]
+    history = next((_read_json_safe(path, []) for path in history_candidates if path.exists()), [])
+    return history if isinstance(history, list) else []
+
+
 def _regression_summary_title(summary: dict[str, Any]) -> str:
     gate_status = str(summary.get("gate_status") or "").strip().lower()
     failed = int(summary.get("failed_defect_count") or 0)
@@ -183,6 +278,115 @@ def _regression_summary_title(summary: dict[str, Any]) -> str:
     return "当前还没有与客户缺陷关联的回归结果。"
 
 
+def _regression_trend_direction(recent_runs: list[dict[str, Any]]) -> tuple[str, str]:
+    if len(recent_runs) < 2:
+        return "insufficient_history", "需要至少两轮回归后才能判断趋势。"
+    latest = recent_runs[0]
+    previous = recent_runs[1]
+    latest_failed = int(latest.get("failed_count") or 0)
+    previous_failed = int(previous.get("failed_count") or 0)
+    latest_review = int(latest.get("needs_review_count") or 0)
+    previous_review = int(previous.get("needs_review_count") or 0)
+    latest_gate = _first_text(latest.get("gate_status"))
+    previous_gate = _first_text(previous.get("gate_status"))
+    if latest_gate == "passed" and previous_gate != "passed":
+        return "improving", "最近一轮回归已经通过，趋势向好。"
+    if latest_failed < previous_failed:
+        return "improving", f"最近一轮回归失败项从 {previous_failed} 降到 {latest_failed}。"
+    if latest_failed > previous_failed:
+        return "regressing", f"最近一轮回归失败项从 {previous_failed} 升到 {latest_failed}。"
+    if latest_review < previous_review:
+        return "improving", f"待人工复核项从 {previous_review} 降到 {latest_review}。"
+    if latest_review > previous_review:
+        return "regressing", f"待人工复核项从 {previous_review} 升到 {latest_review}。"
+    return "stable", "最近两轮回归结果基本持平。"
+
+
+def _build_regression_validation_summary(
+    recent_runs: list[dict[str, Any]],
+    history_run_count: int,
+    repeated_failure_defect_count: int,
+) -> dict[str, Any]:
+    double_run_verified = history_run_count >= 2
+    if not recent_runs:
+        headline = "当前还没有真实回归运行记录。"
+    elif not double_run_verified:
+        headline = "当前仅有单轮回归，尚未满足最小双轮验真。"
+    elif repeated_failure_defect_count > 0:
+        headline = f"最近多轮回归显示有 {repeated_failure_defect_count} 个缺陷反复失败。"
+    else:
+        headline = "当前已满足最小双轮验真，且未发现反复失败缺陷。"
+    return {
+        "history_run_count": history_run_count,
+        "minimum_required_runs": 2,
+        "double_run_verified": double_run_verified,
+        "repeated_failure_defect_count": repeated_failure_defect_count,
+        "latest_to_previous_change": _first_text(recent_runs[0].get("gate_status")) if recent_runs else "",
+        "headline": headline,
+    }
+
+
+def _build_regression_release_guidance(summary: dict[str, Any], commercial_assets: dict[str, Any]) -> dict[str, str]:
+    latest_run = summary.get("latest_run") if isinstance(summary.get("latest_run"), dict) else {}
+    validation_summary = summary.get("validation_summary") if isinstance(summary.get("validation_summary"), dict) else {}
+    trend_direction = _first_text(summary.get("trend_direction"))
+    gate_status = _first_text(latest_run.get("gate_status"))
+    failed_defects = int(summary.get("failed_defect_count") or 0)
+    pending_defects = int(summary.get("pending_defect_count") or 0)
+    double_run_verified = bool(validation_summary.get("double_run_verified"))
+    repeated_failure_defect_count = int(validation_summary.get("repeated_failure_defect_count") or 0)
+    delivery_status = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
+    handoff_status = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
+
+    if gate_status == "failed" or failed_defects > 0 or trend_direction == "regressing":
+        return {
+            "release_recommendation": "block_release",
+            "release_recommendation_label": "建议阻断发布",
+            "release_recommendation_reason": "最近回归仍有失败缺陷或趋势恶化，继续发布会放大真实业务风险。",
+            "customer_delivery_readiness": "blocked",
+            "customer_delivery_readiness_label": "暂不进入客户交付",
+        }
+    if not double_run_verified:
+        return {
+            "release_recommendation": "continue_regression",
+            "release_recommendation_label": "建议继续执行真实回归",
+            "release_recommendation_reason": "当前历史轮次不足，尚未满足最小双轮验真，不能把一次通过当成稳定结论。",
+            "customer_delivery_readiness": "needs_more_validation",
+            "customer_delivery_readiness_label": "继续验真后再决定交付",
+        }
+    if pending_defects > 0 or repeated_failure_defect_count > 0:
+        return {
+            "release_recommendation": "hold_for_validation",
+            "release_recommendation_label": "建议先完成剩余回归",
+            "release_recommendation_reason": "当前仍有待回归或反复失败缺陷，需要先完成复验收口。",
+            "customer_delivery_readiness": "validation_in_progress",
+            "customer_delivery_readiness_label": "交付验真进行中",
+        }
+    if gate_status == "passed" and trend_direction == "improving" and delivery_status == "created":
+        return {
+            "release_recommendation": "candidate_release",
+            "release_recommendation_label": "可进入候选发布",
+            "release_recommendation_reason": "最近回归通过且趋势向好，交付包已生成，可进入候选发布或客户验收。",
+            "customer_delivery_readiness": "ready_for_customer_delivery",
+            "customer_delivery_readiness_label": "可进入客户交付",
+        }
+    if gate_status == "passed" and trend_direction in {"improving", "stable"} and handoff_status:
+        return {
+            "release_recommendation": "candidate_acceptance",
+            "release_recommendation_label": "可进入客户验收",
+            "release_recommendation_reason": "最近回归已经稳定，建议结合当前商业交付资产推进客户验收。",
+            "customer_delivery_readiness": "ready_for_customer_acceptance",
+            "customer_delivery_readiness_label": "可进入客户验收",
+        }
+    return {
+        "release_recommendation": "continue_monitoring",
+        "release_recommendation_label": "建议继续观察后续轮次",
+        "release_recommendation_reason": "当前缺少足够强的发布/交付信号，建议继续保留持续回归。",
+        "customer_delivery_readiness": "monitoring",
+        "customer_delivery_readiness_label": "持续观察中",
+    }
+
+
 def _load_regression_projection(root: Path, project_id: str, defects: list[dict[str, Any]]) -> dict[str, Any]:
     suite_candidates = [
         root / "platform_outputs" / project_id / "regression_suite" / "regression_suite.json",
@@ -194,6 +398,7 @@ def _load_regression_projection(root: Path, project_id: str, defects: list[dict[
     ]
     suite = next((_read_json_safe(path, {}) for path in suite_candidates if path.exists()), {})
     run = next((_read_json_safe(path, {}) for path in run_candidates if path.exists()), {})
+    run_history = _load_regression_history(root, project_id)
 
     suite_modes = suite.get("modes") if isinstance(suite, dict) else {}
     suite_index: dict[str, set[str]] = {}
@@ -221,9 +426,44 @@ def _load_regression_projection(root: Path, project_id: str, defects: list[dict[
         for lookup_key in lookup_keys:
             run_index.setdefault(lookup_key, item)
 
+    issue_history_index: dict[str, list[dict[str, Any]]] = {}
+    for history_entry in reversed(run_history):
+        if not isinstance(history_entry, dict):
+            continue
+        history_items = history_entry.get("items") if isinstance(history_entry.get("items"), list) else []
+        for history_item in history_items:
+            if not isinstance(history_item, dict):
+                continue
+            history_snapshot = {
+                "generated_at": _first_text(history_entry.get("generated_at")),
+                "suite_mode": _first_text(history_entry.get("suite_mode")),
+                "suite_mode_label": _first_text(history_entry.get("suite_mode_label")),
+                "gate_status": _first_text(history_entry.get("gate_status")),
+                "ci_message": _first_text(history_entry.get("ci_message")),
+                "status": _first_text(history_item.get("status")),
+                "status_label": _regression_status_label(_first_text(history_item.get("status"))),
+                "reason": _first_text(history_item.get("reason")),
+                "regression_probe_id": _first_text(history_item.get("regression_probe_id")),
+                "issue_id": _first_text(history_item.get("issue_id")),
+                "path": _first_text(history_item.get("path")),
+                "method": _first_text(history_item.get("method")),
+                "title": _first_text(history_item.get("title")),
+                "severity": _first_text(history_item.get("severity")),
+            }
+            lookup_keys = _regression_lookup_keys(
+                history_item.get("issue_id"),
+                history_item.get("regression_probe_id"),
+                history_item.get("path"),
+                history_item.get("title"),
+            )
+            for lookup_key in lookup_keys:
+                issue_history_index.setdefault(lookup_key, []).append(history_snapshot)
+
     annotated_defects = 0
     covered_defects = 0
     defect_status_counts = {key: 0 for key in ("passed", "failed", "needs_review", "skipped", "pending", "not_covered")}
+    lifecycle_counts: dict[str, int] = {}
+    repeated_failure_defect_count = 0
     latest_run_summary = run.get("summary") if isinstance(run, dict) and isinstance(run.get("summary"), dict) else {}
     latest_ci_feedback = run.get("ci_feedback") if isinstance(run, dict) and isinstance(run.get("ci_feedback"), dict) else {}
 
@@ -250,6 +490,25 @@ def _load_regression_projection(root: Path, project_id: str, defects: list[dict[
             if isinstance(matched_run_item, dict)
             else "pending" if matched_suite_modes else "not_covered"
         ) or "not_covered"
+        matched_history: list[dict[str, Any]] = []
+        seen_history_keys: set[tuple[str, str, str]] = set()
+        for lookup_key in lookup_keys:
+            for history_snapshot in issue_history_index.get(lookup_key, []):
+                dedupe_key = (
+                    _first_text(history_snapshot.get("generated_at")),
+                    _first_text(history_snapshot.get("status")),
+                    _first_text(history_snapshot.get("regression_probe_id"), history_snapshot.get("path")),
+                )
+                if dedupe_key in seen_history_keys:
+                    continue
+                seen_history_keys.add(dedupe_key)
+                matched_history.append(history_snapshot)
+        matched_history = matched_history[:6]
+        failure_count_in_history = len([item for item in matched_history if _first_text(item.get("status")) == "failed"])
+        if failure_count_in_history >= 2:
+            repeated_failure_defect_count += 1
+        lifecycle = _regression_lifecycle(latest_status, bool(matched_suite_modes))
+        lifecycle_counts[lifecycle["code"]] = lifecycle_counts.get(lifecycle["code"], 0) + 1
         if latest_status not in defect_status_counts:
             defect_status_counts[latest_status] = 0
         defect_status_counts[latest_status] += 1
@@ -270,7 +529,39 @@ def _load_regression_projection(root: Path, project_id: str, defects: list[dict[
             ),
             "regression_probe_id": _first_text(matched_run_item.get("regression_probe_id")) if isinstance(matched_run_item, dict) else "",
             "issue_id": _first_text(matched_run_item.get("issue_id"), defect.get("id")) if isinstance(matched_run_item, dict) else _first_text(defect.get("id")),
+            "history": matched_history,
+            "history_count": len(matched_history),
+            "lifecycle_status": lifecycle["code"],
+            "lifecycle_label": lifecycle["label"],
+            "lifecycle_description": lifecycle["description"],
         }
+
+    gate_status_counts: dict[str, int] = {}
+    recent_runs: list[dict[str, Any]] = []
+    for history_entry in reversed(run_history):
+        if not isinstance(history_entry, dict):
+            continue
+        gate_status = _first_text(history_entry.get("gate_status")) or "unknown"
+        gate_status_counts[gate_status] = gate_status_counts.get(gate_status, 0) + 1
+        summary_payload = history_entry.get("summary") if isinstance(history_entry.get("summary"), dict) else {}
+        recent_runs.append(
+            {
+                "generated_at": _first_text(history_entry.get("generated_at")),
+                "suite_mode": _first_text(history_entry.get("suite_mode")),
+                "suite_mode_label": _first_text(history_entry.get("suite_mode_label")),
+                "gate_status": gate_status,
+                "ci_message": _first_text(history_entry.get("ci_message")),
+                "total_probe_count": int(summary_payload.get("total_probe_count") or 0),
+                "executed_count": int(summary_payload.get("executed_count") or 0),
+                "passed_count": int(summary_payload.get("passed_count") or 0),
+                "failed_count": int(summary_payload.get("failed_count") or 0),
+                "needs_review_count": int(summary_payload.get("needs_review_count") or 0),
+                "skipped_count": int(summary_payload.get("skipped_count") or 0),
+            }
+        )
+    recent_runs = recent_runs[:5]
+    trend_direction, trend_summary = _regression_trend_direction(recent_runs)
+    validation_summary = _build_regression_validation_summary(recent_runs, len(run_history), repeated_failure_defect_count)
 
     summary = {
         "suite_exists": bool(isinstance(suite, dict) and suite),
@@ -298,6 +589,13 @@ def _load_regression_projection(root: Path, project_id: str, defects: list[dict[
             "run_status_counts": run_status_counts,
             "reopen_issue_ids": list(latest_ci_feedback.get("reopen_issue_ids") or []),
         },
+        "history_run_count": len(run_history),
+        "recent_runs": recent_runs,
+        "gate_status_counts": gate_status_counts,
+        "trend_direction": trend_direction,
+        "trend_summary": trend_summary,
+        "lifecycle_counts": lifecycle_counts,
+        "validation_summary": validation_summary,
         "customer_ready_defect_count": annotated_defects,
         "covered_defect_count": covered_defects,
         "passed_defect_count": int(defect_status_counts.get("passed") or 0),
@@ -329,7 +627,7 @@ def _validate_scan_base_url(base_url: str, *, local_dev_mode: bool) -> None:
     validate_url(str(base_url).strip(), allow_internal=local_dev_mode)
 
 
-def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any]) -> dict[str, str]:
+def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any]) -> dict[str, Any]:
     scope_id = _first_text(body.get("scope_id"), os.environ.get("QUALIBUG_SCOPE_ID"))
     environment_ref = _first_text(
         body.get("environment_ref"),
@@ -337,6 +635,24 @@ def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any
         os.environ.get("QUALIBUG_ENVIRONMENT_REF"),
         os.environ.get("QUALIBUG_TARGET_ENVIRONMENT"),
     )
+    ui_base_url = ""
+    ui_base_url_source = ""
+    explicit_ui_base_url = _http_url_text(body.get("ui_base_url"))
+    if explicit_ui_base_url:
+        ui_base_url = explicit_ui_base_url
+        ui_base_url_source = "request_body.ui_base_url"
+    else:
+        env_ui_base_url = _first_text(
+            _http_url_text(os.environ.get("QUALIBUG_BROWSER_UI_BASE_URL")),
+            _http_url_text(os.environ.get("QUALIBUG_TARGET_UI_BASE_URL")),
+        )
+        if env_ui_base_url:
+            ui_base_url = env_ui_base_url
+            ui_base_url_source = (
+                "env.QUALIBUG_BROWSER_UI_BASE_URL"
+                if _http_url_text(os.environ.get("QUALIBUG_BROWSER_UI_BASE_URL"))
+                else "env.QUALIBUG_TARGET_UI_BASE_URL"
+            )
     registry_profile: dict[str, Any] = {}
     try:
         from .enterprise_pilot_runtime import load_connector_registry
@@ -368,10 +684,30 @@ def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any
         registry_profile.get("environment"),
         deployment.get("environment_class"),
     )
-    return {"scope_id": scope_id[:160], "environment_ref": environment_ref[:160]}
+    ambiguous_ui_targets = False
+    if not ui_base_url:
+        resolved_ui_base_url, ambiguous_ui_targets, resolved_ui_base_url_source = _resolve_ui_base_url_from_profile(registry_profile)
+        ui_base_url = _first_text(ui_base_url, resolved_ui_base_url)
+        ui_base_url_source = _first_text(ui_base_url_source, resolved_ui_base_url_source)
+    return {
+        "scope_id": scope_id[:160],
+        "environment_ref": environment_ref[:160],
+        "ui_base_url": ui_base_url[:500],
+        "ui_base_url_source": ui_base_url_source[:200],
+        "ui_target_resolution": "ambiguous" if ambiguous_ui_targets and not ui_base_url else "resolved",
+    }
 
 
 def _read_project_prd_text(project: str, root: Path) -> str:
+    try:
+        from .__main__ import _load_project_prd_text
+
+        aggregated = str(_load_project_prd_text(root, project) or "").strip()
+        if aggregated:
+            return aggregated
+    except Exception:
+        pass
+
     def _safe_read(path: Path) -> str:
         try:
             resolved = path.resolve()
@@ -551,6 +887,20 @@ def _prepare_v12_scan_body(project: str, root: Path, actor: dict[str, str], body
         prepared["scope_id"] = defaults["scope_id"]
     if defaults["environment_ref"] and not str(prepared.get("environment_ref") or "").strip():
         prepared["environment_ref"] = defaults["environment_ref"]
+    if defaults.get("ui_base_url") and not str(prepared.get("ui_base_url") or "").strip():
+        prepared["ui_base_url"] = str(defaults["ui_base_url"]).strip()
+    if defaults.get("ui_base_url_source") and not str(prepared.get("ui_base_url_source") or "").strip():
+        prepared["ui_base_url_source"] = str(defaults["ui_base_url_source"]).strip()
+    if (
+        str(defaults.get("ui_target_resolution") or "").strip() == "ambiguous"
+        and not str(prepared.get("ui_base_url") or "").strip()
+        and not (isinstance(prepared.get("ui_execution_requests"), list) and prepared.get("ui_execution_requests"))
+    ):
+        prepared["disable_ui_execution_autogen"] = True
+        prepared["ui_target_resolution"] = {
+            "status": "ambiguous",
+            "reason": "MULTIPLE_FRONTEND_URLS_REQUIRE_UI_BASE_URL",
+        }
     if str(prepared.get("base_url") or "").strip():
         if not str(prepared.get("execution_mode") or "").strip():
             prepared["execution_mode"] = default_scan_execution_mode(prepared)
@@ -577,7 +927,11 @@ def _prepare_v12_scan_body(project: str, root: Path, actor: dict[str, str], body
 def _load_followup_ui_execution_requests(project: str, root: Path, body: dict[str, Any]) -> list[dict[str, Any]]:
     if body.get("disable_ui_execution_autogen") is True:
         return []
-    base_url = str(body.get("base_url") or "").strip()
+    base_url = str(body.get("ui_base_url") or body.get("base_url") or "").strip()
+    base_url_source = str(
+        body.get("ui_base_url_source")
+        or ("request_body.ui_base_url" if str(body.get("ui_base_url") or "").strip() else "request_body.base_url")
+    ).strip()
     if not base_url:
         return []
     bridge = body.get("page_agent_bridge") if isinstance(body.get("page_agent_bridge"), dict) else {}
@@ -639,6 +993,9 @@ def _load_followup_ui_execution_requests(project: str, root: Path, body: dict[st
                     "auto_generated": True,
                     "request_origin": "private_pilot_service_followup_asset",
                     "bridge_mode": str(metadata.get("bridge_mode") or "page_agent_browser_plan"),
+                    "resolved_start_url_base": base_url,
+                    "resolved_start_url_base_source": base_url_source,
+                    "resolved_path": path,
                 },
             }
         )
@@ -648,7 +1005,11 @@ def _load_followup_ui_execution_requests(project: str, root: Path, body: dict[st
 def _load_followup_ui_test_data_requests(project: str, root: Path, body: dict[str, Any]) -> list[dict[str, Any]]:
     if body.get("disable_ui_execution_autogen") is True:
         return []
-    base_url = str(body.get("base_url") or "").strip()
+    base_url = str(body.get("ui_base_url") or body.get("base_url") or "").strip()
+    base_url_source = str(
+        body.get("ui_base_url_source")
+        or ("request_body.ui_base_url" if str(body.get("ui_base_url") or "").strip() else "request_body.base_url")
+    ).strip()
     if not base_url:
         return []
     bridge = body.get("page_agent_bridge") if isinstance(body.get("page_agent_bridge"), dict) else {}
@@ -695,6 +1056,9 @@ def _load_followup_ui_test_data_requests(project: str, root: Path, body: dict[st
                     "auto_generated": True,
                     "request_origin": request_origin,
                     "bridge_mode": str(promoted_metadata.get("bridge_mode") or "page_agent_browser_plan"),
+                    "resolved_start_url_base": base_url,
+                    "resolved_start_url_base_source": base_url_source,
+                    "resolved_path": path,
                 },
             }
         )
@@ -1271,6 +1635,36 @@ def _augment_continuous_discovery_campaign(
     return campaign_payload
 
 
+def _current_campaign_scope_summary(payload: dict[str, Any]) -> dict[str, str]:
+    campaign_payload = payload if isinstance(payload, dict) else {}
+    campaign = campaign_payload.get("campaign") if isinstance(campaign_payload.get("campaign"), dict) else {}
+    summary = campaign_payload.get("summary") if isinstance(campaign_payload.get("summary"), dict) else {}
+    current_run = campaign_payload.get("current_run") if isinstance(campaign_payload.get("current_run"), dict) else {}
+    campaign_id = _first_text(campaign.get("campaign_id"), summary.get("campaign_id"), current_run.get("campaign_id"))
+    scope_id = _first_text(campaign.get("scope_id"), summary.get("scope_id"), current_run.get("scope_id"))
+    environment_ref = _first_text(
+        campaign.get("environment_ref"),
+        campaign.get("target_environment"),
+        summary.get("environment_ref"),
+        summary.get("target_environment"),
+        current_run.get("environment_ref"),
+        current_run.get("target_environment"),
+    )
+    lineage_campaign_id = _first_text(campaign.get("lineage_campaign_id"), summary.get("lineage_campaign_id"))
+    source_hash = _first_text(campaign.get("source_hash"), summary.get("source_hash"))
+    source_snapshot_hash = _first_text(campaign.get("source_snapshot_hash"), summary.get("source_snapshot_hash"))
+    if not any((campaign_id, scope_id, environment_ref, lineage_campaign_id, source_hash, source_snapshot_hash)):
+        return {}
+    return {
+        "campaign_id": campaign_id,
+        "lineage_campaign_id": lineage_campaign_id,
+        "scope_id": scope_id,
+        "environment_ref": environment_ref,
+        "source_hash": source_hash,
+        "source_snapshot_hash": source_snapshot_hash,
+    }
+
+
 def _current_campaign_bundle_finding_stats(
     project_id: str,
     root: Path,
@@ -1389,6 +1783,7 @@ def _load_real_project_discovery_payload(root: Path, project_id: str) -> dict[st
         except Exception:
             continue
         if isinstance(payload, dict):
+            payload.setdefault("report_source_path", str(candidate.relative_to(root)) if candidate.is_relative_to(root) else str(candidate))
             return payload
     return None
 
@@ -1925,6 +2320,15 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
         existing_executive_summary.get("total_bugs_found"),
         fallback=current_scope_customer_ready_defects,
     )
+    campaign_scope = (
+        existing_scan_meta.get("current_campaign_scope")
+        if isinstance(existing_scan_meta.get("current_campaign_scope"), dict)
+        else data.get("current_campaign_scope")
+        if isinstance(data.get("current_campaign_scope"), dict)
+        else _current_campaign_scope_summary(
+            data.get("continuous_discovery_campaign") if isinstance(data.get("continuous_discovery_campaign"), dict) else {}
+        )
+    )
     family_customer_ready_defect_count = len(defects)
     p0_count = int(severity_counts.get("P0") or sum(1 for item in defects if item.get("severity") == "P0"))
     p1_count = int(severity_counts.get("P1") or sum(1 for item in defects if item.get("severity") == "P1"))
@@ -1950,6 +2354,8 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
     value_metrics["current_report_total_findings"] = current_scope_total_findings
     value_metrics["current_report_customer_ready_defect_count"] = current_scope_customer_ready_defects
     value_metrics["family_customer_ready_defect_count"] = family_customer_ready_defect_count
+    if campaign_scope:
+        value_metrics["current_campaign_scope"] = campaign_scope
     value_metrics["status_counts"] = customer_contract.get("status_counts") if isinstance(customer_contract.get("status_counts"), dict) else {}
     value_metrics["commercial_asset_materialized"] = 1 if commercial_assets.get("status") == "materialized" else 0
     value_metrics["commercial_delivery_package_created"] = 1 if _first_text((commercial_assets.get("delivery_package") or {}).get("status")) == "created" else 0
@@ -1986,6 +2392,8 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
         executive_summary["ui_execution_summary"] = str(execution_evidence_summary.get("summary") or "")
     executive_summary["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
     executive_summary["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
+    if campaign_scope:
+        executive_summary["current_campaign_scope"] = campaign_scope
 
     scan_meta = dict(data.get("scan_meta") or {})
     scan_meta["total_findings"] = current_scope_total_findings
@@ -2013,6 +2421,8 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
     scan_meta["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
     scan_meta["external_tracker_sync_payload_status"] = _first_text((commercial_assets.get("tracker_sync") or {}).get("payload_status"))
     scan_meta["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
+    if campaign_scope:
+        scan_meta["current_campaign_scope"] = campaign_scope
 
     data["defects"] = defects
     data["clues"] = clues
@@ -2021,6 +2431,8 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
         data["commercial_assets"] = commercial_assets
     if execution_evidence_summary:
         data["execution_evidence_summary"] = execution_evidence_summary
+    if campaign_scope:
+        data["current_campaign_scope"] = campaign_scope
     data["scan_meta"] = scan_meta
     data["value_metrics"] = value_metrics
     data["data_contract"] = {
@@ -2608,7 +3020,14 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
                 _dbg_report(
                     hypothesis_id="C",
                     msg="[DEBUG] command-center built",
-                    data={"project_id": pid, "elapsed_ms": int((time.perf_counter() - started) * 1000), "keys": list(payload.keys())[:16]},
+                    data={
+                        "project_id": pid,
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                        "keys": list(payload.keys())[:16],
+                        "defect_count": len(((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("defects") or [])),
+                        "clue_count": len(((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("clues") or [])),
+                        "scan_meta": (((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("scan_meta") if isinstance((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("scan_meta"), dict) else {})),
+                    },
                     trace_id=trace_id,
                 )
                 return self._json(payload)
@@ -2820,7 +3239,12 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             return
         try:
             body = self._body()
-            project = _safe_project_id(str(body.get("project_id") or self._project()))
+            route_project = ""
+            if parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/regression/run"):
+                parts = parsed.path.split("/")
+                if len(parts) >= 5:
+                    route_project = urllib.parse.unquote(parts[4])
+            project = _safe_project_id(str(body.get("project_id") or route_project or self._project()))
             if not self._require_project_scope(project):
                 return
             if parsed.path == "/api/knowledge/ingest":
@@ -2860,10 +3284,16 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 return self._handle_db_test(body)
             elif parsed.path == "/api/v1/replay":
                 return self._handle_replay(project, root, body)
+            elif parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/regression/run"):
+                return self._handle_regression_run(project, root, body)
             elif parsed.path == "/api/v1/services/credentials":
                 if self.command == "GET":
                     return self._handle_get_service_credentials(project, root)
                 return self._handle_save_service_credentials(project, root, body)
+            elif parsed.path == "/api/v1/project/metadata":
+                if self.command == "GET":
+                    return self._handle_get_project_metadata(project, root)
+                return self._handle_save_project_metadata(project, root, body)
             elif parsed.path == "/api/settings/save":
                 if not self._require_role(actor, SETTINGS_MANAGER_ROLES, "system settings update"):
                     return
@@ -3185,7 +3615,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                             ep = c.get("endpoint_ref", "")
                             if ep and (ep.startswith("http://") or ep.startswith("https://")):
                                 base_url = ep; break
-                    if not api_doc:
+                    if False:  # disabled: never fabricate API doc from hardcoded endpoint templates (fake bugs / industry lock-in)
                         lines = []
                         for c in enabled:
                             ep = c.get("endpoint_ref", "")
@@ -3200,8 +3630,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                                 lines.append(f"| GET | {ep}/api/products | 鍟嗗搧鍒楄〃 | |")
                         if lines:
                             api_doc = "\n".join(lines)
-                # Fallback
-                if not api_doc and base_url:
+                # Fallback disabled: never synthesize endpoints from base_url alone (would create fake bugs).
+                if False and not api_doc and base_url:
                     api_doc = f"| POST | {base_url}/api/orders | 鍒涘缓 |\n| GET | {base_url}/api/products | 鍟嗗搧鍒楄〃 |\n| GET | {base_url}/api/admin/stats | 绠＄悊缁熻 |"
             if api_doc and not prepared_body.get("api_doc"):
                 prepared_body["api_doc"] = api_doc
@@ -3404,6 +3834,76 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         except Exception as e:
             return self._json({"ok": False, "error": "V12_SCAN_FAILED", "message": str(e)[:500]}, 500)
 
+    def _handle_regression_run(self, project: str, root: Path, body: dict[str, Any]) -> None:
+        if not self._require_known_project(project, root):
+            return
+        mode = str(body.get("mode") or "release").strip().lower() or "release"
+        if mode not in {"smoke", "release", "full"}:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "BAD_REGRESSION_MODE",
+                    "message": "回归模式仅支持 smoke、release 或 full。",
+                },
+                400,
+            )
+        allow_destructive = bool(body.get("allow_destructive_execution") is True)
+        dry_run = bool(body.get("dry_run") is True)
+        try:
+            from .regression_runner import run_regression_suite
+
+            result = run_regression_suite(
+                project_id=project,
+                root=root,
+                options={
+                    "mode": mode,
+                    "allow_destructive_execution": allow_destructive,
+                    "dry_run": dry_run,
+                },
+            )
+        except Exception as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "REGRESSION_RUN_FAILED",
+                    "message": str(exc)[:400],
+                },
+                500,
+            )
+
+        regression_summary: dict[str, Any] = {}
+        try:
+            command_center = self._build_command_center(project, root)
+            if isinstance(command_center, dict):
+                regression_summary = command_center.get("data", {}).get("regression_summary", {})
+        except Exception:
+            regression_summary = {}
+
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        ci_feedback = result.get("ci_feedback") if isinstance(result.get("ci_feedback"), dict) else {}
+        failures = result.get("failures") if isinstance(result.get("failures"), list) else []
+        return self._json(
+            {
+                "ok": True,
+                "project_id": project,
+                "mode": mode,
+                "summary": summary,
+                "ci_feedback": ci_feedback,
+                "regression_summary": regression_summary,
+                "failures": failures[:20],
+                "artifacts": {
+                    "regression_suite_ref": str(result.get("regression_suite_ref") or ""),
+                    "run_result_ref": f"platform_outputs/{project}/regression_run/regression_run_result.json",
+                    "run_report_ref": f"platform_outputs/{project}/regression_run/regression_failure_report.html",
+                },
+                "governance": {
+                    "dry_run": dry_run,
+                    "allow_destructive_execution": allow_destructive,
+                    "safe_by_default": not allow_destructive,
+                },
+            }
+        )
+
     @staticmethod
     def _read_json_dict(path: Path) -> dict[str, Any]:
         if not path.exists() or not path.is_file():
@@ -3494,6 +3994,51 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     continue
         return fallback
 
+    @staticmethod
+    def _discovery_current_scope_summary(payload: dict[str, Any]) -> dict[str, Any]:
+        campaign_projection = payload.get("continuous_discovery_campaign") if isinstance(payload.get("continuous_discovery_campaign"), dict) else {}
+        summary = campaign_projection.get("summary") if isinstance(campaign_projection.get("summary"), dict) else {}
+        current_run = campaign_projection.get("current_run") if isinstance(campaign_projection.get("current_run"), dict) else {}
+        campaign = campaign_projection.get("campaign") if isinstance(campaign_projection.get("campaign"), dict) else {}
+        scopes = [current_run, summary, campaign_projection, campaign]
+
+        def _pick_int(*keys: str) -> int | None:
+            for scope in scopes:
+                if not isinstance(scope, dict):
+                    continue
+                for key in keys:
+                    if key not in scope:
+                        continue
+                    try:
+                        return int(float(scope.get(key)))
+                    except Exception:
+                        continue
+            return None
+
+        total_findings = _pick_int(
+            "current_campaign_bundle_finding_count_raw",
+            "current_report_total_findings",
+            "total_findings",
+        )
+        customer_ready_defects = _pick_int(
+            "current_campaign_customer_ready_defect_count",
+            "current_report_customer_ready_defect_count",
+            "customer_ready_defects",
+            "ready_bug_count",
+        )
+        confirmed_slice_count = _pick_int(
+            "current_campaign_confirmed_slice_count",
+            "confirmed_slice_count",
+        )
+        if total_findings is None and customer_ready_defects is None and confirmed_slice_count is None:
+            return {}
+        return {
+            "total_findings": max(0, int(total_findings or 0)),
+            "customer_ready_defects": max(0, int(customer_ready_defects or 0)),
+            "confirmed_slice_count": max(0, int(confirmed_slice_count or 0)),
+            "report_source_path": str(payload.get("report_source_path") or ""),
+        }
+
     def _load_v12_report(self, project_id: str, root: Path) -> dict[str, Any]:
         project = _safe_project_id(project_id)
         explicit_candidates = [
@@ -3572,10 +4117,14 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
     def _load_current_scan_report(self, project_id: str, root: Path) -> dict[str, Any]:
         project = _safe_project_id(project_id)
         candidates = [
+            root / "platform_outputs" / project / "intelligence_report.json",
+            root / "platform_outputs" / project / "v12_report.json",
             root / "platform_outputs" / project / "scan_result.json",
+            root / "platform_workspace" / project / "intelligence_report.json",
+            root / "platform_workspace" / project / "v12_report.json",
             root / "platform_workspace" / project / "scan_result.json",
         ]
-        chosen: tuple[float, dict[str, Any]] | None = None
+        chosen: tuple[float, int, dict[str, Any]] | None = None
         for path in candidates:
             if not path.exists():
                 continue
@@ -3584,9 +4133,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 continue
             payload.setdefault("report_source_path", str(path.relative_to(root)) if path.is_relative_to(root) else str(path))
             score = path.stat().st_mtime
-            if chosen is None or score > chosen[0]:
-                chosen = (score, payload)
-        return chosen[1] if chosen else {}
+            signal_count = self._report_signal_count(payload)
+            if chosen is None or (score, signal_count) > (chosen[0], chosen[1]):
+                chosen = (score, signal_count, payload)
+        return chosen[2] if chosen else {}
 
     def _load_evidence_bundle_report_candidates(
         self,
@@ -4330,10 +4880,11 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
     def _build_command_center(self, project_id: str, root: Path) -> dict:
         report = self._load_v12_report(project_id, root)
         current_scan_report = self._load_current_scan_report(project_id, root)
+        real_discovery_payload = _load_real_project_discovery_payload(root, project_id)
         current_report_source = current_scan_report if current_scan_report else report
+        discovery_current_scope = self._discovery_current_scope_summary(real_discovery_payload or {})
         enterprise_docs = self._load_enterprise_docs(project_id, root)
         knowledge_summary = self._load_knowledge_summary(project_id, root)
-        real_discovery_payload = _load_real_project_discovery_payload(root, project_id)
         discovery_payload = real_discovery_payload or self._auto_discovery_payload(project_id, root, report)
         risks = self._v12_findings(report, enterprise_docs)
         risks.extend(self._load_db_findings(root, project_id))
@@ -4594,10 +5145,13 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 continue
             category = str(item.get("category") or item.get("risk_type") or "uncategorized").strip() or "uncategorized"
             current_report_category_counts[category] = current_report_category_counts.get(category, 0) + 1
+        current_report_path = str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or "")
+        if discovery_current_scope.get("report_source_path"):
+            current_report_path = str(discovery_current_scope.get("report_source_path") or current_report_path)
         current_report_breakdown = {
             "total_findings": len(current_report_findings),
             "category_counts": current_report_category_counts,
-            "report_source_path": str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or ""),
+            "report_source_path": current_report_path,
         }
         current_campaign_bundle_stats = {"raw": 0, "deduped": 0}
         if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
@@ -4606,7 +5160,13 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 root,
                 discovery_payload["continuous_discovery_campaign"],
             )
-        current_scope_total_findings = max(0, int(current_report_breakdown.get("total_findings") or 0))
+        discovery_total_findings = int(discovery_current_scope.get("total_findings") or 0)
+        current_scope_total_findings = max(
+            0,
+            int(current_report_breakdown.get("total_findings") or 0),
+            discovery_total_findings,
+            int(current_campaign_bundle_stats.get("raw") or 0),
+        )
         current_scope_raw_candidate_findings = max(
             current_scope_total_findings,
             int(current_report_source.get("raw_total") or current_report_source.get("total_findings") or current_scope_total_findings or 0),
@@ -4621,6 +5181,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 fallback=current_scope_total_findings,
             ) or current_scope_total_findings),
         )
+        current_scope_customer_ready_defect_count = max(
+            current_scope_customer_ready_defect_count,
+            int(discovery_current_scope.get("customer_ready_defects") or 0),
+        )
         current_scope_customer_ready_defect_count = min(
             current_scope_customer_ready_defect_count or current_scope_total_findings,
             current_scope_total_findings or len(delivery_defects),
@@ -4630,6 +5194,11 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             current_scope_total_findings,
         )
         family_customer_ready_defect_count = len(delivery_defects)
+        campaign_scope = _current_campaign_scope_summary(
+            discovery_payload.get("continuous_discovery_campaign")
+            if isinstance(discovery_payload.get("continuous_discovery_campaign"), dict)
+            else {}
+        )
 
         canonical_total = materialized_total
         raw_candidate_total = int(display_contract.get("raw_candidate_risk_count") or canonical_total)
@@ -4670,6 +5239,11 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             report.get("ui_execution_summary"),
             report.get("ui_execution"),
         )
+        commercial_assets = _select_commercial_assets(report.get("external_commercial_assets"), report.get("commercial_assets"))
+        if regression_summary:
+            regression_summary.update(_build_regression_release_guidance(regression_summary, commercial_assets))
+        validation_summary = regression_summary.get("validation_summary") if isinstance(regression_summary.get("validation_summary"), dict) else {}
+
         scan_meta = {
             "scan_id": str(current_report_source.get("scan_id") or report.get("scan_id") or ""),
             "run_count": int(scan_counter.get("count") or 0),
@@ -4702,9 +5276,17 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "regression_failed_defect_count": int(regression_summary.get("failed_defect_count") or 0),
             "regression_pending_defect_count": int(regression_summary.get("pending_defect_count") or 0),
             "regression_covered_defect_count": int(regression_summary.get("covered_defect_count") or 0),
-            "report_path": str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or report.get("report_source_path") or report.get("report_path") or ""),
+            "regression_history_run_count": int(regression_summary.get("history_run_count") or 0),
+            "regression_trend_direction": _first_text(regression_summary.get("trend_direction")),
+            "release_recommendation": _first_text(regression_summary.get("release_recommendation")),
+            "customer_delivery_readiness": _first_text(regression_summary.get("customer_delivery_readiness")),
+            "regression_double_run_verified": 1 if validation_summary.get("double_run_verified") else 0,
+            "regression_repeated_failure_defect_count": int(validation_summary.get("repeated_failure_defect_count") or 0),
+            "report_path": current_report_path or str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or report.get("report_source_path") or report.get("report_path") or ""),
             "current_report_breakdown": current_report_breakdown,
         }
+        if campaign_scope:
+            scan_meta["current_campaign_scope"] = campaign_scope
         data = {
             "project_id": project_id,
             "project_name": str(report.get("project_name") or project_id),
@@ -4757,6 +5339,12 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "regression_not_covered_defect_count": int(regression_summary.get("not_covered_defect_count") or 0),
                 "regression_gate_status": _first_text((regression_summary.get("latest_run") or {}).get("gate_status")),
                 "regression_last_run_mode": _first_text((regression_summary.get("latest_run") or {}).get("suite_mode")),
+                "regression_history_run_count": int(regression_summary.get("history_run_count") or 0),
+                "regression_trend_direction": _first_text(regression_summary.get("trend_direction")),
+                "release_recommendation": _first_text(regression_summary.get("release_recommendation")),
+                "customer_delivery_readiness": _first_text(regression_summary.get("customer_delivery_readiness")),
+                "regression_double_run_verified": 1 if validation_summary.get("double_run_verified") else 0,
+                "regression_repeated_failure_defect_count": int(validation_summary.get("repeated_failure_defect_count") or 0),
                 "scores": scores,
                 "commercial_value": commercial_value,
                 "current_report_breakdown": current_report_breakdown,
@@ -4812,6 +5400,14 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "regression_failed_defects": int(regression_summary.get("failed_defect_count") or 0),
                 "regression_pending_defects": int(regression_summary.get("pending_defect_count") or 0),
                 "regression_covered_defects": int(regression_summary.get("covered_defect_count") or 0),
+                "regression_history_run_count": int(regression_summary.get("history_run_count") or 0),
+                "regression_trend_direction": _first_text(regression_summary.get("trend_direction")),
+                "release_recommendation": _first_text(regression_summary.get("release_recommendation")),
+                "release_recommendation_label": _first_text(regression_summary.get("release_recommendation_label")),
+                "customer_delivery_readiness": _first_text(regression_summary.get("customer_delivery_readiness")),
+                "customer_delivery_readiness_label": _first_text(regression_summary.get("customer_delivery_readiness_label")),
+                "regression_double_run_verified": 1 if validation_summary.get("double_run_verified") else 0,
+                "regression_repeated_failure_defects": int(validation_summary.get("repeated_failure_defect_count") or 0),
                 "llm_powered_analyses": ai_points,
                 "system_grade": scan_meta["grade"],
                 "overall_score": scan_meta["score"],
@@ -4823,9 +5419,12 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "regression_summary": regression_summary,
             },
         }
+        if campaign_scope:
+            data["current_campaign_scope"] = campaign_scope
+            data["value_metrics"]["current_campaign_scope"] = campaign_scope
+            data["executive_summary"]["current_campaign_scope"] = campaign_scope
         if knowledge_summary:
             data["knowledge_summary"] = knowledge_summary
-        commercial_assets = _select_commercial_assets(report.get("external_commercial_assets"), report.get("commercial_assets"))
         if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
             data["continuous_discovery_campaign"] = _augment_continuous_discovery_campaign(
                 discovery_payload["continuous_discovery_campaign"],
@@ -5374,6 +5973,49 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "auth_check": auth_check,
         })
 
+    # ── Project-level customer metadata (主链 1) ──
+
+    def _handle_get_project_metadata(self, project: str, root: Path) -> None:
+        """Return customer-maintained project metadata (industry / module_scope
+        / production_data_exclusion safety boundary)."""
+        from .enterprise_project_config import MultiServiceProject
+        try:
+            msp = MultiServiceProject(project, root)
+            return self._json({"ok": True, "project": project, **msp.project_metadata()})
+        except Exception as exc:
+            return self._json({"ok": False, "error": "METADATA_READ_FAILED", "message": str(exc)[:300]}, 500)
+
+    def _handle_save_project_metadata(self, project: str, root: Path, body: dict) -> None:
+        """Persist customer-maintained project metadata.
+
+        Accepted fields (all optional; only provided fields are updated):
+          - industry: str
+          - module_scope: list[str]
+          - production_data_exclusion: list[str]  (hard safety boundary consumed
+            by the probe executor; the system will never touch these paths/data)
+        """
+        from .enterprise_project_config import MultiServiceProject
+        industry = body.get("industry")
+        module_scope = body.get("module_scope")
+        production_data_exclusion = body.get("production_data_exclusion")
+        try:
+            msp = MultiServiceProject(project, root)
+            updated = msp.set_project_metadata(
+                industry=industry if industry is not None else None,
+                module_scope=module_scope if module_scope is not None else None,
+                production_data_exclusion=production_data_exclusion if production_data_exclusion is not None else None,
+            )
+            return self._json({
+                "ok": True,
+                "project": project,
+                "saved": msp.project_metadata(),
+                "services_count": len(updated.get("services", [])),
+            })
+        except (ValueError, TypeError) as exc:
+            return self._json({"ok": False, "error": "BAD_REQUEST", "message": str(exc)}, 400)
+        except Exception as exc:
+            return self._json({"ok": False, "error": "METADATA_SAVE_FAILED", "message": str(exc)[:300]}, 500)
+
     def _get_spectrum_status(self, project: str, root: Path) -> None:
         """Get the latest full-spectrum scan result."""
         result_file = root / "platform_outputs" / project / "spectrum" / "spectrum_result.json"
@@ -5469,6 +6111,18 @@ def run_private_pilot_service(root: Path | None = None, host: str | None = None,
     selected_port = int(os.environ.get("QUALIBUG_PORT", "8088")) if port is None else int(port)
     server = ThreadingHTTPServer((host, selected_port), PrivatePilotHandler)
     server.qualibug_private_root = root
+    # #region debug-point A:run-private-pilot-service
+    _dbg_report(
+        hypothesis_id="A",
+        msg="[DEBUG] private-pilot service bound",
+        data={
+            "pid": os.getpid(),
+            "root": str(root),
+            "host": host,
+            "port": selected_port,
+        },
+    )
+    # #endregion
     return server
 
 

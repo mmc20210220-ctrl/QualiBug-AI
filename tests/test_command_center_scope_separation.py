@@ -169,3 +169,98 @@ def test_build_command_center_separates_current_scan_counts_from_family_defect_s
     assert data["executive_summary"]["family_customer_ready_defects"] == 2
     assert data["value_metrics"]["current_report_total_findings"] == 1
     assert data["value_metrics"]["family_customer_ready_defect_count"] == 2
+
+
+def test_build_command_center_prefers_real_project_current_scope_over_stale_scan_result(monkeypatch, tmp_path) -> None:
+    install_customer_delivery_gate_patch()
+    handler = PrivatePilotHandler.__new__(PrivatePilotHandler)
+    handler.headers = {}
+
+    monkeypatch.setattr(
+        handler,
+        "_load_v12_report",
+        lambda project_id, root: {
+            "project_name": project_id,
+            "generated_at_utc": "2026-07-08T00:10:00Z",
+            "report_source_path": "platform_outputs/enterprise-project/intelligence_report.json",
+            "real_findings": [_ready_item("FAM-1"), _ready_item("FAM-2"), _ready_item("FAM-3"), _ready_item("FAM-4")],
+            "scan_id": "scan_family_demo",
+            "total_findings": 4,
+        },
+    )
+    monkeypatch.setattr(
+        handler,
+        "_load_current_scan_report",
+        lambda project_id, root: {
+            "scan_id": "stale_scan_result",
+            "total_findings": 0,
+            "real_findings": [],
+            "report_source_path": "platform_outputs/enterprise-project/scan_result.json",
+        },
+    )
+    monkeypatch.setattr(handler, "_load_enterprise_docs", lambda project_id, root: [])
+    monkeypatch.setattr(handler, "_load_knowledge_summary", lambda project_id, root: {})
+    monkeypatch.setattr(display_ready_formatter, "format_findings_display_ready", lambda risks, enterprise_ctx, report: (risks, {}))
+    monkeypatch.setattr(display_ready_formatter, "sanitize_customer_evidence_payload", lambda payload: payload)
+    monkeypatch.setattr(
+        handler,
+        "_v12_findings",
+        lambda report, enterprise_docs=None: [_ready_item("BUG-1"), _ready_item("BUG-2"), _ready_item("BUG-3"), _ready_item("BUG-4")],
+    )
+    monkeypatch.setattr(handler, "_load_db_findings", lambda root, project_id: [])
+    monkeypatch.setattr(handler, "_load_perf_regressions", lambda root, project_id: [])
+    monkeypatch.setattr(handler, "_load_spectrum_findings", lambda root, project_id: [])
+    monkeypatch.setattr(handler, "_load_multi_layer_findings", lambda root, project_id: [])
+    monkeypatch.setattr(handler, "_dedupe_risks", lambda risks: risks)
+    monkeypatch.setattr(handler, "_scan_counter", lambda project_id, root: {"count": 4, "last_scan_at": "2026-07-08T00:11:00Z"})
+    monkeypatch.setattr(
+        private_pilot_service,
+        "_load_real_project_discovery_payload",
+        lambda root, project_id: {
+            "report_source_path": "platform_outputs/enterprise-project/real_project/real_project_defect_data.json",
+            "continuous_discovery_campaign": {
+                "campaign": {
+                    "campaign_id": "CMP_REAL",
+                    "lineage_campaign_id": "CMP_LINEAGE",
+                    "scope_id": "checkout-scope",
+                    "environment_ref": "local-benchmark",
+                    "source_hash": "a" * 64,
+                    "source_snapshot_hash": "b" * 64,
+                },
+                "summary": {
+                    "current_campaign_bundle_finding_count_raw": 18,
+                    "current_campaign_customer_ready_defect_count": 7,
+                    "current_campaign_confirmed_slice_count": 6,
+                    "family_customer_ready_defect_count": 4,
+                },
+                "current_run": {
+                    "status": "completed",
+                    "current_campaign_bundle_finding_count_raw": 18,
+                    "current_campaign_customer_ready_defect_count": 7,
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(private_pilot_service, "_current_campaign_bundle_finding_stats", lambda project_id, root, campaign_payload: {"raw": 18, "deduped": 7})
+
+    payload = handler._build_command_center("enterprise-project", tmp_path)
+    data = payload["data"]
+
+    assert data["scan_meta"]["scan_id"] == "stale_scan_result"
+    assert data["scan_meta"]["total_findings"] == 18
+    assert data["scan_meta"]["current_report_total_findings"] == 18
+    assert data["scan_meta"]["customer_ready_defects"] == 7
+    assert data["scan_meta"]["current_report_customer_ready_defect_count"] == 7
+    assert data["scan_meta"]["family_customer_ready_defect_count"] == 4
+    assert data["scan_meta"]["current_campaign_bundle_finding_count_raw"] == 18
+    assert data["scan_meta"]["report_path"] == "platform_outputs/enterprise-project/real_project/real_project_defect_data.json"
+    assert data["scan_meta"]["current_report_breakdown"]["report_source_path"] == "platform_outputs/enterprise-project/real_project/real_project_defect_data.json"
+    assert data["scan_meta"]["current_campaign_scope"]["campaign_id"] == "CMP_REAL"
+    assert data["scan_meta"]["current_campaign_scope"]["lineage_campaign_id"] == "CMP_LINEAGE"
+    assert data["scan_meta"]["current_campaign_scope"]["scope_id"] == "checkout-scope"
+    assert data["scan_meta"]["current_campaign_scope"]["environment_ref"] == "local-benchmark"
+    assert data["current_campaign_scope"]["scope_id"] == "checkout-scope"
+    assert data["executive_summary"]["total_findings"] == 18
+    assert data["executive_summary"]["customer_ready_defects"] == 7
+    assert data["executive_summary"]["current_campaign_scope"]["environment_ref"] == "local-benchmark"
+    assert data["value_metrics"]["current_campaign_scope"]["source_hash"] == "a" * 64

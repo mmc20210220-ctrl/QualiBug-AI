@@ -117,12 +117,41 @@ def execute_browser_plan(
     execution_id = _safe_run_id(run_id)
     artifact_dir = Path(root) / "platform_workspace" / project / "browser_runs" / execution_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    playwright_runtime = None
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+        from .auto_browser_setup import ensure_browser
+    except Exception:
+        ensure_browser = None
+
+    browser = None
+    browser_error = ""
+    if ensure_browser is not None:
+        try:
+            playwright_runtime, browser_or_error = ensure_browser(headless=True, timeout=30_000)
+        except Exception as exc:
+            browser_or_error = f"browser_runtime_bootstrap_failed:{type(exc).__name__}"
+            playwright_runtime = None
+        if playwright_runtime is not None:
+            browser = browser_or_error
+        else:
+            browser_error = str(browser_or_error or "").strip()
+
+    if browser is None and not browser_error:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            browser_error = "playwright_import_missing"
+        else:
+            try:
+                playwright_runtime = sync_playwright().start()
+                browser = playwright_runtime.chromium.launch(headless=True)
+            except Exception as exc:
+                browser_error = f"{type(exc).__name__}:{str(exc)[:300]}"
+
+    if browser is None:
         return {
             "status": "blocked",
-            "reason": "BROWSER_RUNTIME_UNAVAILABLE",
+            "reason": f"BROWSER_RUNTIME_UNAVAILABLE:{browser_error or 'unknown'}",
             "execution_status": "not_executed",
             "confirmation_status": "blocked",
             "artifact_dir": str(artifact_dir.relative_to(Path(root))),
@@ -138,47 +167,55 @@ def execute_browser_plan(
     status = "executed"
     reason = ""
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context()
-            context.tracing.start(screenshots=True, snapshots=True, sources=True)
-            page = context.new_page()
-            page.on("console", lambda message: console.append({"type": message.type, "text": message.text[:4000]}))
-            page.on("response", lambda response: network.append({"url": _redact_url(response.url), "status": response.status, "method": response.request.method}))
-            for step in validated["steps"]:
-                action = step["action"]
-                receipt: dict[str, Any] = {"step_index": step["step_index"], "action": action, "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-                if action == "goto":
-                    response = page.goto(step["url"], wait_until=str(step.get("wait_until") or "networkidle"), timeout=int(step.get("timeout_ms") or 30_000))
-                    receipt.update({"url": _redact_url(step["url"]), "status": response.status if response else 0})
-                elif action == "expect_text":
-                    page.locator(step["selector"]).filter(has_text=str(step.get("text") or "")).first.wait_for(timeout=int(step.get("timeout_ms") or 10_000))
-                elif action == "expect_url":
-                    page.wait_for_url(str(step.get("pattern") or step.get("url")), timeout=int(step.get("timeout_ms") or 10_000))
-                elif action == "wait_for_load":
-                    page.wait_for_load_state(str(step.get("state") or "networkidle"), timeout=int(step.get("timeout_ms") or 30_000))
-                elif action == "screenshot":
-                    output = artifact_dir / f"step_{step['step_index']}.png"
-                    page.screenshot(path=str(output), full_page=bool(step.get("full_page", True)))
-                    receipt["screenshot"] = output.name
-                elif action == "click":
-                    page.locator(step["selector"]).click(timeout=int(step.get("timeout_ms") or 10_000))
-                elif action == "fill":
-                    page.locator(step["selector"]).fill(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
-                elif action == "check":
-                    page.locator(step["selector"]).check(timeout=int(step.get("timeout_ms") or 10_000))
-                elif action == "select_option":
-                    page.locator(step["selector"]).select_option(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
-                elif action == "press":
-                    page.locator(step["selector"]).press(str(step.get("key") or "Enter"), timeout=int(step.get("timeout_ms") or 10_000))
-                receipts.append(receipt)
-            page.screenshot(path=str(screenshot_path), full_page=True)
-            context.tracing.stop(path=str(trace_path))
-            context.close()
-            browser.close()
+        context = browser.new_context()
+        context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        page = context.new_page()
+        page.on("console", lambda message: console.append({"type": message.type, "text": message.text[:4000]}))
+        page.on("response", lambda response: network.append({"url": _redact_url(response.url), "status": response.status, "method": response.request.method}))
+        for step in validated["steps"]:
+            action = step["action"]
+            receipt: dict[str, Any] = {"step_index": step["step_index"], "action": action, "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            if action == "goto":
+                response = page.goto(step["url"], wait_until=str(step.get("wait_until") or "networkidle"), timeout=int(step.get("timeout_ms") or 30_000))
+                receipt.update({"url": _redact_url(step["url"]), "status": response.status if response else 0})
+            elif action == "expect_text":
+                page.locator(step["selector"]).filter(has_text=str(step.get("text") or "")).first.wait_for(timeout=int(step.get("timeout_ms") or 10_000))
+            elif action == "expect_url":
+                page.wait_for_url(str(step.get("pattern") or step.get("url")), timeout=int(step.get("timeout_ms") or 10_000))
+            elif action == "wait_for_load":
+                page.wait_for_load_state(str(step.get("state") or "networkidle"), timeout=int(step.get("timeout_ms") or 30_000))
+            elif action == "screenshot":
+                output = artifact_dir / f"step_{step['step_index']}.png"
+                page.screenshot(path=str(output), full_page=bool(step.get("full_page", True)))
+                receipt["screenshot"] = output.name
+            elif action == "click":
+                page.locator(step["selector"]).click(timeout=int(step.get("timeout_ms") or 10_000))
+            elif action == "fill":
+                page.locator(step["selector"]).fill(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
+            elif action == "check":
+                page.locator(step["selector"]).check(timeout=int(step.get("timeout_ms") or 10_000))
+            elif action == "select_option":
+                page.locator(step["selector"]).select_option(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
+            elif action == "press":
+                page.locator(step["selector"]).press(str(step.get("key") or "Enter"), timeout=int(step.get("timeout_ms") or 10_000))
+            receipts.append(receipt)
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        context.tracing.stop(path=str(trace_path))
+        context.close()
     except Exception as exc:
         status = "failed"
         reason = f"{type(exc).__name__}:{str(exc)[:300]}"
+    finally:
+        try:
+            if browser is not None:
+                browser.close()
+        except Exception:
+            pass
+        try:
+            if playwright_runtime is not None:
+                playwright_runtime.stop()
+        except Exception:
+            pass
     result = {
         "status": status,
         "reason": reason,

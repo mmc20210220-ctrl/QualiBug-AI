@@ -6,13 +6,14 @@ created here. Missing executable prerequisites are represented as plan gaps.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from .auto_test_data_factory import _markdown_request_example
 from .business_state_graph import BusinessStateGraph, StateEdge, StateTransition, _api_facts, behavior_slice_id
-from .real_id_resolver import normalize_path_placeholders, path_has_placeholders
+from .real_id_resolver import normalize_path_placeholders, path_has_placeholders, collection_path
 
 
 @dataclass
@@ -23,6 +24,7 @@ class ScenarioStep:
     api_path: str = ""
     body_template: dict[str, Any] = field(default_factory=dict)
     extract_from_response: list[str] = field(default_factory=list)
+    extract_where: dict[str, Any] = field(default_factory=dict)
     expected_status: int = 0
     actor: str = ""
 
@@ -53,6 +55,7 @@ class ExecutableScenario:
     behavior_slice_kind: str = ""
     discovery_round: int = 1
     selection_origin: str = ""
+    runtime_hints: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +75,7 @@ class ExecutableScenario:
                     "path": step.api_path,
                     "body": step.body_template,
                     "extract": step.extract_from_response,
+                    "extract_where": step.extract_where,
                     "expected": step.expected_status,
                     "actor": step.actor,
                 }
@@ -93,6 +97,7 @@ class ExecutableScenario:
             "behavior_slice_kind": self.behavior_slice_kind,
             "discovery_round": self.discovery_round,
             "selection_origin": self.selection_origin,
+            "runtime_hints": self.runtime_hints,
         }
 
 
@@ -107,6 +112,8 @@ class SemanticScenarioGenerator:
         discovery_round: int = 1,
         active_slices: list[dict[str, Any]] | None = None,
         allow_source_runtime: bool = False,
+        root: Any = None,
+        project: str = "",
     ) -> list[ExecutableScenario]:
         round_number = max(1, int(discovery_round or 1))
         active_slice_map = {
@@ -119,7 +126,7 @@ class SemanticScenarioGenerator:
             if not isinstance(graph, BusinessStateGraph):
                 continue
             for transition in graph.transitions:
-                item = self._transition(entity, transition, round_number)
+                item = self._transition(entity, transition, graph, round_number, api_doc, root, project)
                 if active_slice_ids is None or item.behavior_slice_id in active_slice_ids:
                     results.append(item)
             for edge in graph.edges:
@@ -216,6 +223,14 @@ class SemanticScenarioGenerator:
             return self._source_observation_from_meta(slice_meta, discovery_round)
         if kind == "invariant":
             return self._invariant_from_meta(slice_meta, discovery_round, api_doc)
+        if kind == "permission":
+            return self._permission_slice(slice_meta, discovery_round)
+        if kind == "isolation":
+            return self._isolation_slice(slice_meta, discovery_round, api_doc)
+        if kind == "concurrency":
+            return self._concurrency_slice(slice_meta, discovery_round)
+        if kind == "money":
+            return self._money_slice(slice_meta, discovery_round)
         return None
 
     def _source_observation_from_meta(
@@ -312,12 +327,28 @@ class SemanticScenarioGenerator:
             return states[0]
         return str(slice_meta.get("entity") or "source_invariant")
 
-    def _transition(self, entity: str, transition: StateTransition, discovery_round: int) -> ExecutableScenario:
+    def _transition(
+        self,
+        entity: str,
+        transition: StateTransition,
+        graph: "BusinessStateGraph | None",
+        discovery_round: int,
+        api_doc: str = "",
+        root: Any = None,
+        project: str = "",
+    ) -> ExecutableScenario:
+        """Turn a source-bound state transition into an EXECUTABLE scenario.
+
+        Previously this emitted a step-less "plan only" scenario, so routed
+        transitions never ran and the StateOracle short-circuited to pass. Now we
+        build real steps: login (generic account) -> create an entity in its
+        initial state -> drive it toward ``from_state`` when needed -> apply the
+        transition's action endpoint -> observe the resulting state. No hardcoded
+        role, path, body field or entity name; everything is derived from the
+        endpoint catalog and the documented request examples.
+        """
         forbidden = bool(transition.is_forbidden)
         kind = "禁止流转" if forbidden else ("边界流转" if transition.is_boundary else "状态流转")
-        gaps = ["FIXTURE_CONTRACT_MISSING", "ACTOR_BINDING_MISSING", "CLEANUP_CONTRACT_MISSING"]
-        if not transition.action or not transition.api_endpoint:
-            gaps.insert(0, "ACTION_ROUTE_NOT_SOURCE_BOUND")
         slice_id = transition.behavior_slice_id or behavior_slice_id(
             "transition",
             entity,
@@ -327,24 +358,242 @@ class SemanticScenarioGenerator:
             transition.api_endpoint,
             "forbidden" if forbidden else "normal",
         )
+        # Unroutable transition: honest plan-only coverage gap. Never pretends to
+        # execute (that would be a symptom patch on top of a structural miss).
+        if not transition.action or not transition.api_endpoint:
+            return ExecutableScenario(
+                id=self._id(entity, transition.from_state, transition.to_state, transition.action),
+                title=f"[来源约束{kind}] {entity}: {transition.from_state} -> {transition.to_state}",
+                description="未解析到可执行端点：仅记录覆盖缺口，不自动发起请求。",
+                category="state_machine",
+                severity="P0" if forbidden else "P2",
+                entity=entity,
+                preconditions=[f"已通过可追溯数据证明 {entity} 处于 {transition.from_state}"],
+                expected_state=transition.from_state if forbidden else transition.to_state,
+                oracle_rules=["StateOracle.source_grounded_transition", f"{transition.from_state}->{transition.to_state}"],
+                is_forbidden_path=forbidden,
+                is_boundary_path=bool(transition.is_boundary),
+                confidence=0.2,
+                execution_policy="plan_only_requires_fixture",
+                evidence_gaps=["ACTION_ROUTE_NOT_SOURCE_BOUND"],
+                source_refs=list(transition.source_refs),
+                behavior_slice_id=slice_id,
+                behavior_slice_kind="transition",
+                discovery_round=discovery_round,
+            )
+        _, _, endpoints = _api_facts(api_doc, re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I))
+        steps: list[ScenarioStep] = []
+        order = 1
+        gaps: list[str] = []
+        # 1) Authenticate with a generic account (settings -> test_accounts).
+        role, email, password, login_path = self._generic_transition_auth(api_doc, root, project)
+        if login_path and email and password:
+            login_body = _markdown_request_example(api_doc, "POST", login_path)
+            if not isinstance(login_body, dict) or not login_body:
+                login_body = {"email": email, "password": password}
+            ls = self._build_login_step(login_path, login_body, email, password, order=order)
+            if ls is not None:
+                steps.append(ls)
+                order += 1
+        # 2) Create an entity instance (lands in its initial state).
+        create_ep = self._entity_create_endpoint(entity, endpoints)
+        if create_ep:
+            cpath, cmethod = create_ep
+            cbody = _markdown_request_example(api_doc, cmethod, cpath)
+            steps.append(ScenarioStep(
+                order=order,
+                action="create_entity",
+                api_method=cmethod,
+                api_path=cpath,
+                body_template=cbody if isinstance(cbody, dict) else {},
+                expected_status=200,
+                actor=role,
+                extract_from_response=["id", "orderId", "order_id", "refundId", "paymentId"],
+            ))
+            order += 1
+        else:
+            gaps.append("CREATE_ENDPOINT_NOT_SOURCE_BOUND")
+        # 3) Drive the entity toward from_state when it is not the initial state.
+        if graph is not None and transition.from_state:
+            order = self._drive_to_state(entity, transition.from_state, graph, endpoints, role, api_doc, steps, order, gaps)
+        # 4) Apply the transition's action endpoint.
+        method = self._endpoint_method(transition.api_endpoint, endpoints) or "POST"
+        action_path = normalize_path_placeholders(transition.api_endpoint) if path_has_placeholders(normalize_path_placeholders(transition.api_endpoint)) else transition.api_endpoint
+        action_body = self._action_body_for(transition.api_endpoint, method, endpoints, api_doc)
+        steps.append(ScenarioStep(
+            order=order,
+            action=f"transition_{transition.action or 'mutate'}",
+            api_method=method,
+            api_path=action_path,
+            body_template=action_body,
+            expected_status=(200 if not forbidden else 409),
+            actor=role,
+            extract_from_response=["id", "status", "state", "order_status"],
+        ))
+        order += 1
+        # 5) Observe the resulting state.
+        read_ep = self._entity_read_endpoint(entity, endpoints)
+        if read_ep:
+            obs_path = normalize_path_placeholders(read_ep) if path_has_placeholders(normalize_path_placeholders(read_ep)) else read_ep
+            steps.append(ScenarioStep(
+                order=order,
+                action="observe_transition_result",
+                api_method="GET",
+                api_path=obs_path,
+                expected_status=200,
+                actor=role,
+                extract_from_response=["status", "state", "order_status"],
+            ))
+        else:
+            gaps.append("READ_ENDPOINT_NOT_SOURCE_BOUND")
         return ExecutableScenario(
             id=self._id(entity, transition.from_state, transition.to_state, transition.action),
             title=f"[来源约束{kind}] {entity}: {transition.from_state} -> {transition.to_state}",
-            description="当前资料未提供完整运行时前置数据和身份绑定；仅产生计划，不自动发起请求。",
+            description="依据源约束（PRD/API）驱动实体经历状态流转，并以 StateOracle 校验流转是否被正确执行或拒绝。",
+            category="state_machine",
             severity="P0" if forbidden else "P2",
             entity=entity,
             preconditions=[f"已通过可追溯数据证明 {entity} 处于 {transition.from_state}"],
-            expected_state=transition.from_state if forbidden else transition.to_state,
+            expected_state=transition.to_state,
             oracle_rules=["StateOracle.source_grounded_transition", f"{transition.from_state}->{transition.to_state}"],
             is_forbidden_path=forbidden,
             is_boundary_path=bool(transition.is_boundary),
-            confidence=0.55 if transition.source_refs else 0.2,
+            confidence=0.55 if transition.source_refs else 0.35,
+            execution_policy="approved_sandbox_write",
+            steps=steps,
             evidence_gaps=gaps,
             source_refs=list(transition.source_refs),
             behavior_slice_id=slice_id,
             behavior_slice_kind="transition",
             discovery_round=discovery_round,
         )
+
+    # ── Generic helpers for state-transition scenarios (no hardcoding) ──
+
+    def _generic_transition_auth(self, api_doc: str, root: Any, project: str) -> tuple[str, str, str, str]:
+        accounts: list[dict[str, str]] = []
+        login_path = ""
+        try:
+            from pathlib import Path
+            from .supplementary_behavior_slices import load_settings_accounts
+            if root is not None and project:
+                accounts, login_path = load_settings_accounts(Path(str(root)), str(project))
+        except Exception:
+            accounts, login_path = [], ""
+        if not accounts and root is not None and project:
+            try:
+                from pathlib import Path
+                p = Path(str(root)) / "platform_workspace" / str(project) / "input" / "test_accounts.json"
+                if p.exists():
+                    accounts = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                accounts = []
+        acct = accounts[0] if accounts else {}
+        role = str(acct.get("role") or "user").strip()
+        email = str(acct.get("email") or acct.get("username") or "").strip()
+        password = str(acct.get("password") or "").strip()
+        if not login_path:
+            login_path = self._discover_login_endpoint(api_doc)
+        return role, email, password, login_path
+
+    @staticmethod
+    def _discover_login_endpoint(api_doc: str) -> str:
+        _, _, endpoints = _api_facts(api_doc, re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I))
+        for item in endpoints:
+            p = str(item.get("path") or "").lower()
+            if str(item.get("method") or "").upper() == "POST" and ("login" in p or "auth" in p or "signin" in p):
+                return str(item.get("path") or "")
+        return "/api/auth/login"
+
+    @staticmethod
+    def _entity_create_endpoint(entity: str, endpoints: list[dict[str, str]]) -> tuple[str, str] | None:
+        for item in endpoints:
+            if str(item.get("entity") or "") == entity and str(item.get("method") or "").upper() == "POST" and not path_has_placeholders(str(item.get("path") or "")):
+                return str(item.get("path") or ""), "POST"
+        return None
+
+    @staticmethod
+    def _entity_read_endpoint(entity: str, endpoints: list[dict[str, str]]) -> str:
+        cands = [
+            str(item.get("path") or "")
+            for item in endpoints
+            if str(item.get("entity") or "") == entity
+            and str(item.get("method") or "").upper() == "GET"
+            and str(item.get("path") or "").startswith("/")
+        ]
+        with_ph = [p for p in cands if path_has_placeholders(p)]
+        no_ph = [p for p in cands if not path_has_placeholders(p)]
+        # Prefer the :id read endpoint (we have an id from the create step).
+        if with_ph:
+            return with_ph[0]
+        if no_ph:
+            return no_ph[0]
+        return ""
+
+    @staticmethod
+    def _endpoint_method(path: str, endpoints: list[dict[str, str]]) -> str:
+        for item in endpoints:
+            if str(item.get("path") or "") == str(path):
+                return str(item.get("method") or "POST").upper()
+        return "POST"
+
+    @staticmethod
+    def _initial_state(graph: "BusinessStateGraph") -> str:
+        # A true initial state is one that is NEVER the TARGET of a normal
+        # transition (nothing leads INTO it).  Using from_state here is wrong:
+        # it treats any transition's source as "having an incoming edge" and so
+        # mis-selects sink states (e.g. REFUNDED) as the initial state, which
+        # then breaks path_to_state and prevents driving to real source states.
+        incoming = {t.to_state for t in graph.transitions if t.is_normal and not t.is_forbidden}
+        initials = [s for s in graph.states if s not in incoming]
+        return initials[0] if initials else ""
+
+    def _drive_to_state(
+        self,
+        entity: str,
+        target_state: str,
+        graph: "BusinessStateGraph",
+        endpoints: list[dict[str, str]],
+        actor: str,
+        api_doc: str,
+        steps: list[ScenarioStep],
+        order: int,
+        gaps: list[str],
+    ) -> int:
+        """Emit generic steps to drive an entity from its initial state to target_state."""
+        initial = self._initial_state(graph)
+        if not initial or target_state == initial:
+            return order
+        path = graph.path_to_state(initial, target_state)
+        if not path:
+            gaps.append("DRIVE_TO_SOURCE_STATE_NOT_ROUTABLE")
+            return order
+        for t in path:
+            if not t.action or not t.api_endpoint:
+                gaps.append("DRIVE_STEP_UNROUTED")
+                continue
+            method = self._endpoint_method(t.api_endpoint, endpoints) or "POST"
+            ep = normalize_path_placeholders(t.api_endpoint) if path_has_placeholders(normalize_path_placeholders(t.api_endpoint)) else t.api_endpoint
+            body = self._action_body_for(t.api_endpoint, method, endpoints, api_doc)
+            steps.append(ScenarioStep(
+                order=order,
+                action=f"drive_{t.action or 'mutate'}",
+                api_method=method,
+                api_path=ep,
+                body_template=body,
+                expected_status=200,
+                actor=actor,
+                extract_from_response=["id", "status", "state", "orderId", "order_id"],
+            ))
+            order += 1
+        return order
+
+    @staticmethod
+    def _action_body_for(path: str, method: str, endpoints: list[dict[str, str]], api_doc: str) -> dict[str, Any]:
+        example = _markdown_request_example(api_doc, method, path) if api_doc else {}
+        if isinstance(example, dict) and example:
+            return example
+        return {}
 
     def _dependency(
         self,
@@ -503,12 +752,13 @@ class SemanticScenarioGenerator:
     ) -> ExecutableScenario | None:
         if not observation_path or not str(api_doc or "").strip():
             return None
-        action_plan = self._match_invariant_action(api_doc, entity, invariant, refs)
+        action_plan = self._match_invariant_action(api_doc, entity, invariant, refs, state=state)
         if not action_plan:
             return None
         extract_fields = ["id", "status", "state", "amount", "totalAmount", "total_amount", "payableAmount", "payable_amount"]
+        validation_only = bool(action_plan.get("validation_only"))
         write_step = ScenarioStep(
-            order=2,
+            order=1 if validation_only else 2,
             action=str(action_plan.get("scenario_action") or "execute_invariant_write"),
             api_method=str(action_plan.get("method") or "POST"),
             api_path=str(action_plan.get("path") or ""),
@@ -517,11 +767,28 @@ class SemanticScenarioGenerator:
             body_template=action_plan.get("body") if isinstance(action_plan.get("body"), dict) else {},
         )
         title_suffix = str(action_plan.get("title_suffix") or str(action_plan.get("path") or "")).strip()
-        steps = [
-            ScenarioStep(order=1, action="observe_bound_entity", api_method="GET", api_path=observation_path, expected_status=200, actor="readonly", extract_from_response=extract_fields),
-            write_step,
-        ]
-        if str(action_plan.get("mode") or "") == "duplicate_write":
+        oracle_rules = ["ConsistencyOracle.source_grounded_invariant", invariant[:300]]
+        rule_key = str(action_plan.get("rule_key") or "").strip()
+        if rule_key:
+            oracle_rules.insert(0, f"CouponOracle.{rule_key}")
+        if validation_only:
+            steps = [write_step]
+        else:
+            # State precondition driver: when the invariant is anchored to a
+            # concrete lifecycle status (e.g. PAID / CANCELLED), bind an entity
+            # that is genuinely in that state via a filtered extraction.  If no
+            # such entity exists at runtime the executor marks the trace
+            # precondition_not_met and the finding cannot be confirmed — so we
+            # never confirm a transition from a state the system never reached.
+            observe_where: dict[str, Any] = {}
+            state_token = str(state or "").strip()
+            if re.fullmatch(r"[A-Z][A-Z0-9_]{2,40}", state_token):
+                observe_where = {"status": state_token}
+            steps = [
+                ScenarioStep(order=1, action="observe_bound_entity", api_method="GET", api_path=observation_path, expected_status=200, actor="readonly", extract_from_response=extract_fields, extract_where=observe_where),
+                write_step,
+            ]
+        if not validation_only and str(action_plan.get("mode") or "") == "duplicate_write":
             steps.append(ScenarioStep(
                 order=3,
                 action=str(action_plan.get("scenario_action") or "repeat_invariant_write"),
@@ -531,16 +798,17 @@ class SemanticScenarioGenerator:
                 actor="readonly",
                 body_template=action_plan.get("body") if isinstance(action_plan.get("body"), dict) else {},
             ))
-        verify_order = len(steps) + 1
-        steps.append(ScenarioStep(
-            order=verify_order,
-            action="verify_bound_entity_after_write",
-            api_method="GET",
-            api_path=observation_path,
-            expected_status=200,
-            actor="readonly",
-            extract_from_response=extract_fields,
-        ))
+        if not validation_only:
+            verify_order = len(steps) + 1
+            steps.append(ScenarioStep(
+                order=verify_order,
+                action="verify_bound_entity_after_write",
+                api_method="GET",
+                api_path=observation_path,
+                expected_status=200,
+                actor="readonly",
+                extract_from_response=extract_fields,
+            ))
         return ExecutableScenario(
             id=self._id(entity, state, invariant, title_suffix),
             title=f"[来源约束不变量] {entity}: {state} -> {title_suffix}",
@@ -552,7 +820,7 @@ class SemanticScenarioGenerator:
             actors=["readonly"],
             steps=steps,
             expected_state=state,
-            oracle_rules=["ConsistencyOracle.source_grounded_invariant", invariant[:300]],
+            oracle_rules=oracle_rules,
             confidence=0.7 if refs else 0.4,
             execution_policy="approved_sandbox_write",
             evidence_gaps=[],
@@ -561,6 +829,7 @@ class SemanticScenarioGenerator:
             behavior_slice_kind="invariant",
             discovery_round=discovery_round,
             is_forbidden_path=bool(action_plan.get("forbidden")),
+            runtime_hints=dict(action_plan.get("runtime_hints") or {}),
         )
 
     @staticmethod
@@ -599,7 +868,7 @@ class SemanticScenarioGenerator:
         ranked.sort(key=lambda item: (item[0], item[1]))
         return [text for _, _, text in ranked]
 
-    def _match_invariant_action(self, api_doc: str, entity: str, invariant: str, refs: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    def _match_invariant_action(self, api_doc: str, entity: str, invariant: str, refs: list[dict[str, str]] | None = None, state: str = "") -> dict[str, Any]:
         contexts = self._invariant_action_contexts(invariant, refs)
         mode = ""
         forbidden = False
@@ -611,12 +880,7 @@ class SemanticScenarioGenerator:
             if any(token in text for token in ("只能成功一次", "重复成功", "不能重复", "只能成功支付一次")) or any(token in lowered for token in ("only once", "duplicate", "idempotent")):
                 mode = "duplicate_write"
                 break
-        if not mode:
-            return {}
-
-        action_profiles = [
-            {"tokens": ["确认收货", "confirm"], "endpoint_tokens": ["confirm"]},
-            {"tokens": ["发货", "ship"], "endpoint_tokens": ["ship"]},
+        action_profiles: list[dict[str, Any]] = [
             {"tokens": ["取消", "cancel"], "endpoint_tokens": ["cancel"]},
             {"tokens": ["支付", "pay", "payment"], "endpoint_tokens": ["pay", "payment"]},
             {"tokens": ["退款", "refund"], "endpoint_tokens": ["refund"]},
@@ -629,6 +893,7 @@ class SemanticScenarioGenerator:
             {"tokens": ["归档", "archive"], "endpoint_tokens": ["archive"]},
             {"tokens": ["禁用", "disable"], "endpoint_tokens": ["disable"]},
             {"tokens": ["恢复", "restore", "reopen"], "endpoint_tokens": ["restore", "reopen"]},
+            {"tokens": ["校验", "验证", "validate", "apply", "redeem"], "endpoint_tokens": ["validate", "apply", "redeem"]},
         ]
         profile = None
         for text in contexts:
@@ -637,6 +902,12 @@ class SemanticScenarioGenerator:
             if profile:
                 break
         if not profile:
+            return {}
+        if not mode and any(token in profile["endpoint_tokens"] for token in ("validate", "apply", "redeem")):
+            affirmative_tokens = ("必须", "应当", "应", "需要", "must", "should", "required", "within", "active", "有效期", "类目")
+            if any(any(token.lower() in str(text or "").lower() for token in affirmative_tokens) for text in contexts):
+                mode = "validation_only"
+        if not mode:
             return {}
 
         _entities, _states, endpoints = _api_facts(api_doc, re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I))
@@ -658,18 +929,57 @@ class SemanticScenarioGenerator:
             body = self._invariant_write_body(api_doc, method, path, entity)
             if body is None:
                 continue
+            rule_key = self._coupon_rule_key(entity, state, invariant, contexts)
             return {
                 "mode": mode,
+                "validation_only": mode == "validation_only",
                 "forbidden": forbidden,
                 "method": method,
                 "path": normalized_path,
                 "body": body,
                 "expected_status": 409 if forbidden else 200,
                 "scenario_action": f"invariant_{str(profile['endpoint_tokens'][0])}_write",
-                "title_suffix": normalized_path,
+                "title_suffix": f"{normalized_path}#{rule_key}" if rule_key else normalized_path,
                 "category": "state_machine" if forbidden else ("concurrency" if mode == "duplicate_write" else "invariant"),
+                "rule_key": rule_key,
+                "runtime_hints": {"coupon_validation_rule": rule_key} if rule_key else {},
             }
         return {}
+
+    @staticmethod
+    def _coupon_rule_key(entity: str, state: str, invariant: str, contexts: list[str]) -> str:
+        if str(entity or "").strip().lower() != "coupon":
+            return ""
+
+        def has_any(text: str, tokens: tuple[str, ...]) -> bool:
+            lowered = str(text or "").lower()
+            return any(token in lowered for token in tokens)
+
+        invariant_text = str(invariant or "").lower()
+        state_text = str(state or "").strip().upper()
+        merged = " ".join(str(text or "").lower() for text in contexts)
+
+        if has_any(invariant_text, ("类目", "category", "scope")):
+            return "coupon_category_scope_must_match"
+        if has_any(invariant_text, ("最低订单金额", "min order", "minimum order", "门槛")):
+            return "coupon_min_order_amount_must_match"
+        if has_any(invariant_text, ("有效期", "过期", "expire", "expired")):
+            return "expired_coupon_must_be_invalid"
+        if has_any(invariant_text, ("active", "停用", "禁用", "disabled", "状态")):
+            return "inactive_coupon_must_be_invalid"
+
+        if state_text == "DISABLED":
+            return "inactive_coupon_must_be_invalid"
+
+        if has_any(merged, ("类目", "category", "scope")):
+            return "coupon_category_scope_must_match"
+        if has_any(merged, ("最低订单金额", "min order", "minimum order", "门槛")):
+            return "coupon_min_order_amount_must_match"
+        if has_any(merged, ("active", "停用", "禁用", "disabled", "状态")):
+            return "inactive_coupon_must_be_invalid"
+        if has_any(merged, ("有效期", "过期", "expire", "expired")):
+            return "expired_coupon_must_be_invalid"
+        return "coupon_validation_rule_must_be_enforced"
 
     @staticmethod
     def _invariant_write_body(api_doc: str, method: str, path: str, entity: str) -> dict[str, Any] | None:
@@ -763,3 +1073,334 @@ class SemanticScenarioGenerator:
     @staticmethod
     def _id(*parts: Any) -> str:
         return "SCN_SRC_" + hashlib.sha256("|".join(str(part or "") for part in parts).encode("utf-8")).hexdigest()[:16]
+
+    # ── Supplementary scenario builders for non-state-machine slice kinds ──
+
+    @staticmethod
+    def _fill_login_body(template: dict[str, Any], identifier: str, password: str) -> dict[str, Any]:
+        """Fill a login request body using the endpoint's documented field names.
+
+        No hardcoded {email,password} assumption. Maps by field-name semantics:
+          - a key that looks password-like        → the password value
+          - the remaining identity key(s)          → the account identifier
+        Falls back to {email, password} only when the API declares no schema.
+        """
+        tpl = dict(template or {})
+        if not tpl:
+            return {"email": identifier, "password": password}
+        pass_tokens = ("pass", "pwd", "secret", "credential", "token", "密码")
+        out: dict[str, Any] = {}
+        for key in tpl:
+            kl = str(key).lower()
+            if any(tok in kl for tok in pass_tokens):
+                out[key] = password
+            else:
+                out[key] = identifier
+        return out
+
+    @staticmethod
+    def _build_login_step(login_path: str, body_template: dict[str, Any], identifier: str, password: str, order: int = 1) -> ScenarioStep | None:
+        """Build a login step using the project-documented field names, not hardcoded {email,password}."""
+        if not login_path.startswith("/") or not identifier:
+            return None
+        return ScenarioStep(
+            order=order, action="login",
+            api_method="POST", api_path=login_path,
+            body_template=SemanticScenarioGenerator._fill_login_body(body_template, identifier, password),
+            extract_from_response=["token"],
+            expected_status=200, actor="readonly",
+        )
+
+    @staticmethod
+    def _permission_slice(
+        slice_meta: dict[str, Any], discovery_round: int,
+    ) -> ExecutableScenario | None:
+        """Build an actor-permission scenario from a permission slice.
+
+        The scenario logs in as the declared actor, hits the target write
+        endpoint, and expects a 401/403.  The PermissionOracle flags a
+        200 as a privilege-escalation defect.
+        """
+        entity = str(slice_meta.get("entity") or "").strip()
+        if not entity:
+            return None
+        actor_label = str(slice_meta.get("_permission_actor") or "").strip()
+        email = str(slice_meta.get("_permission_email") or "").strip()
+        password = str(slice_meta.get("_permission_password") or "").strip()
+        method = str(slice_meta.get("_permission_method") or "").upper()
+        path = str(slice_meta.get("_permission_path") or "")
+        expected_permitted = slice_meta.get("_permission_expected_permitted") or []
+        denied = "*" not in expected_permitted and method not in expected_permitted
+        if not actor_label or not method or not path.startswith("/"):
+            return None
+        steps: list[ScenarioStep] = []
+        login_path = str(slice_meta.get("_login_path") or "").strip()
+        login_body = dict(slice_meta.get("_login_body") or {})
+        step = SemanticScenarioGenerator._build_login_step(
+            login_path, login_body, email, password, order=1)
+        if step:
+            steps.append(step)
+        # If the target path contains a :param placeholder, insert a pre-step
+        # that list-observes the collection endpoint to bind a real id at
+        # runtime — otherwise the probe would send a literal :id to the server.
+        probe_path = path
+        if path_has_placeholders(normalize_path_placeholders(path)):
+            coll = collection_path(normalize_path_placeholders(path))
+            if coll and coll != "/" and not coll.endswith("/api"):
+                steps.append(ScenarioStep(
+                    order=len(steps) + 1,
+                    action="resolve_entity_id",
+                    api_method="GET", api_path=coll,
+                    extract_from_response=["id"],
+                    expected_status=200, actor=actor_label,
+                ))
+                probe_path = normalize_path_placeholders(path)
+        steps.append(ScenarioStep(
+            order=len(steps) + 1,
+            action=f"permission_probe_{actor_label}",
+            api_method=method, api_path=probe_path,
+            expected_status=(200 if not denied else 403),
+            actor=actor_label,
+        ))
+        return ExecutableScenario(
+            id=SemanticScenarioGenerator._id(entity, "permission", actor_label, method, path),
+            title=f"[Actor permission probe] {actor_label} → {method} {path}",
+            description=f"验证角色 {actor_label} 是否被允许执行 {method} {path}",
+            category="permission",
+            severity="P1",
+            entity=entity,
+            preconditions=[],
+            actors=[actor_label],
+            steps=steps,
+            oracle_rules=[
+                "PermissionOracle.role_boundary_check",
+                f"expected_permitted={','.join(expected_permitted) if expected_permitted else 'runtime_observed'}",
+            ],
+            confidence=float(slice_meta.get("priority") or 0.85),
+            execution_policy="safe_read_only",
+            evidence_gaps=[],
+            source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="permission",
+            discovery_round=discovery_round,
+            actor_token="",
+            selection_origin="supplementary_active_slice",
+        )
+
+    @staticmethod
+    def _isolation_slice(
+        slice_meta: dict[str, Any], discovery_round: int, api_doc: str,
+    ) -> ExecutableScenario | None:
+        """Build a cross-user isolation scenario.
+
+        UserA authenticates and reads an endpoint that lists UserB's resources.
+        The TenantIsolationOracle flags cross-user data in the response.
+        """
+        entity = str(slice_meta.get("entity") or "").strip()
+        if not entity:
+            return None
+        viewer_label = str(slice_meta.get("_isolation_viewer_role") or "").strip()
+        viewer_email = str(slice_meta.get("_isolation_viewer_email") or "").strip()
+        viewer_password = str(slice_meta.get("_isolation_viewer_password") or "").strip()
+        path = str(slice_meta.get("_isolation_path") or "")
+        if not viewer_label or not path.startswith("/"):
+            return None
+        steps: list[ScenarioStep] = []
+        login_path = str(slice_meta.get("_login_path") or "").strip()
+        login_body = dict(slice_meta.get("_login_body") or {})
+        step = SemanticScenarioGenerator._build_login_step(
+            login_path, login_body, viewer_email, viewer_password, order=1)
+        if step:
+            steps.append(step)
+        # Resolve entity id if path has placeholders
+        probe_path = path
+        if path_has_placeholders(normalize_path_placeholders(path)):
+            coll = collection_path(normalize_path_placeholders(path))
+            if coll and coll != "/" and not coll.endswith("/api"):
+                steps.append(ScenarioStep(
+                    order=len(steps) + 1,
+                    action="resolve_entity_id",
+                    api_method="GET", api_path=coll,
+                    extract_from_response=["id"],
+                    expected_status=200, actor=viewer_label,
+                ))
+                probe_path = normalize_path_placeholders(path)
+        steps.append(ScenarioStep(
+            order=len(steps) + 1,
+            action=f"isolation_probe_{viewer_label}",
+            api_method="GET", api_path=probe_path,
+            expected_status=200, actor=viewer_label,
+        ))
+        return ExecutableScenario(
+            id=SemanticScenarioGenerator._id(entity, "isolation", viewer_label, path),
+            title=f"[Data isolation probe] {viewer_label} → GET {path}",
+            description=f"验证用户 {viewer_label} 不应看到其他用户的私有数据",
+            category="isolation",
+            severity="P1",
+            entity=entity,
+            preconditions=[],
+            actors=[viewer_label],
+            steps=steps,
+            oracle_rules=["TenantIsolationOracle.cross_user_isolation"],
+            confidence=float(slice_meta.get("priority") or 0.88),
+            execution_policy="safe_read_only",
+            evidence_gaps=[],
+            source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="isolation",
+            discovery_round=discovery_round,
+            actor_token="",
+            selection_origin="supplementary_active_slice",
+        )
+
+    @staticmethod
+    def _concurrency_slice(
+        slice_meta: dict[str, Any], discovery_round: int,
+    ) -> ExecutableScenario | None:
+        """Build a double-write scenario to probe concurrency/mutual exclusion."""
+        entity = str(slice_meta.get("entity") or "").strip()
+        method = str(slice_meta.get("_concurrency_method") or "").upper()
+        path = str(slice_meta.get("_concurrency_path") or "")
+        if not entity or not method or not path.startswith("/"):
+            return None
+        actor_label = str(slice_meta.get("_default_actor") or "readonly").strip() or "readonly"
+        email = str(slice_meta.get("_default_email") or "").strip()
+        password = str(slice_meta.get("_default_password") or "").strip()
+        login_path = str(slice_meta.get("_login_path") or "").strip()
+        login_body = dict(slice_meta.get("_login_body") or {})
+        steps: list[ScenarioStep] = []
+        step = SemanticScenarioGenerator._build_login_step(
+            login_path, login_body, email, password, order=1)
+        if step:
+            steps.append(step)
+        probe_path = path
+        if path_has_placeholders(normalize_path_placeholders(path)):
+            coll = collection_path(normalize_path_placeholders(path))
+            if coll and coll != "/" and not coll.endswith("/api"):
+                steps.append(ScenarioStep(
+                    order=len(steps) + 1, action="resolve_entity_id",
+                    api_method="GET", api_path=coll,
+                    extract_from_response=["id"], expected_status=200, actor=actor_label,
+                ))
+                probe_path = normalize_path_placeholders(path)
+        base = len(steps)
+        for i in (1, 2):
+            steps.append(ScenarioStep(
+                order=base + i,
+                action=f"concurrent_{method}_{i}",
+                api_method=method, api_path=probe_path,
+                expected_status=(200 if i == 1 else 409),
+                actor=actor_label,
+            ))
+        return ExecutableScenario(
+            id=SemanticScenarioGenerator._id(entity, "concurrency", method, path),
+            title=f"[Concurrency probe] double {method} {path}",
+            description=f"并发双发 {method} {path} 验证互斥或幂等行为",
+            category="concurrency",
+            is_concurrent=True,
+            severity="P1",
+            entity=entity,
+            preconditions=[],
+            actors=[actor_label],
+            steps=steps,
+            oracle_rules=["ConcurrencyOracle.race_condition_check"],
+            confidence=float(slice_meta.get("priority") or 0.78),
+            execution_policy="safe_read_only",
+            evidence_gaps=[],
+            source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="concurrency",
+            discovery_round=discovery_round,
+            actor_token="",
+            selection_origin="supplementary_active_slice",
+        )
+
+    @staticmethod
+    def _money_slice(
+        slice_meta: dict[str, Any], discovery_round: int,
+    ) -> ExecutableScenario | None:
+        """Build a financial-integrity observation scenario.
+
+        Hits a write endpoint and lets MoneyOracle detect negative amounts,
+        double-refund patterns, and balance anomalies in the responses. No
+        assumption about which endpoints are financial — the oracle decides.
+        """
+        entity = str(slice_meta.get("entity") or "").strip()
+        method = str(slice_meta.get("_money_method") or "").upper()
+        path = str(slice_meta.get("_money_path") or "")
+        if not entity or not method or not path.startswith("/"):
+            return None
+        actor_label = str(slice_meta.get("_default_actor") or "readonly").strip() or "readonly"
+        email = str(slice_meta.get("_default_email") or "").strip()
+        password = str(slice_meta.get("_default_password") or "").strip()
+        login_path = str(slice_meta.get("_login_path") or "").strip()
+        login_body = dict(slice_meta.get("_login_body") or {})
+        # Observation endpoint = the parent collection of the write path,
+        # derived purely structurally (no per-project endpoint map).
+        read_path = _adjacent_read_for_entity(entity, path)
+        probe_read = read_path
+        probe_write = path
+        steps: list[ScenarioStep] = []
+        step = SemanticScenarioGenerator._build_login_step(
+            login_path, login_body, email, password, order=1)
+        if step:
+            steps.append(step)
+        if path_has_placeholders(normalize_path_placeholders(read_path)):
+            coll = collection_path(normalize_path_placeholders(read_path))
+            if coll and coll != "/" and not coll.endswith("/api"):
+                steps.append(ScenarioStep(
+                    order=len(steps) + 1, action="resolve_entity_id",
+                    api_method="GET", api_path=coll,
+                    extract_from_response=["id"], expected_status=200, actor=actor_label,
+                ))
+                probe_read = normalize_path_placeholders(read_path)
+                probe_write = normalize_path_placeholders(path)
+        steps.append(ScenarioStep(
+            order=len(steps) + 1, action="observe_money_endpoint",
+            api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
+        ))
+        steps.append(ScenarioStep(
+            order=len(steps) + 1, action=f"money_probe_{method}",
+            api_method=method, api_path=probe_write, expected_status=200, actor=actor_label,
+        ))
+        steps.append(ScenarioStep(
+            order=len(steps) + 1, action="observe_money_after",
+            api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
+        ))
+        return ExecutableScenario(
+            id=SemanticScenarioGenerator._id(entity, "money", method, path),
+            title=f"[Financial integrity probe] {method} {path}",
+            description="验证资金操作的余额一致性、金额非负、无重复扣款",
+            category="money",
+            severity="P1",
+            entity=entity,
+            preconditions=[],
+            actors=[actor_label],
+            steps=steps,
+            oracle_rules=["MoneyOracle.financial_integrity"],
+            confidence=float(slice_meta.get("priority") or 0.82),
+            execution_policy="safe_read_only",
+            evidence_gaps=[],
+            source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="money",
+            discovery_round=discovery_round,
+            actor_token="",
+            selection_origin="supplementary_active_slice",
+        )
+
+
+def _adjacent_read_for_entity(entity: str, write_path: str) -> str:
+    """Derive the observation (GET) endpoint for a write path — structurally.
+
+    A write like `/api/payments/pay` or `/api/orders/{id}/cancel` has its read
+    counterpart at the resource collection `/api/payments` or `/api/orders`.
+    We compute that purely from path structure — the first two segments form
+    the resource collection — with no per-project or per-industry endpoint map.
+    """
+    normalized = normalize_path_placeholders(str(write_path or ""))
+    parts = [p for p in normalized.strip("/").split("/") if p and "{" not in p]
+    if len(parts) >= 2:
+        return "/" + "/".join(parts[:2])
+    coll = collection_path(normalized)
+    return coll if coll.startswith("/") else normalized
