@@ -2211,7 +2211,7 @@ def _server_error_finding(code: int, *, probe: dict[str, Any], summary: Any, sen
     return result
 
 
-def _verify_observation(probe: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+def _verify_observation(probe: dict[str, Any], response: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
     risk_type = str(probe.get("risk_type") or "")
     status = response.get("status_code")
     payload = response.get("payload")
@@ -2226,6 +2226,73 @@ def _verify_observation(probe: dict[str, Any], response: dict[str, Any]) -> dict
         _obs_code = 0
     if _obs_code >= 500:
         return _server_error_finding(_obs_code, probe=probe, summary=summary, sensitive_keys=sensitive_keys)
+
+    # ── Universal identity-based data-isolation oracle ──
+    # For ownership_scope / auth_boundary READS at 2xx: extract the primary
+    # actor from the probe, decode their JWT identity, and scan the response
+    # payload for identity values.  Actor identity in the payload means the
+    # caller sees their own id/email in someone else's data → cross-owner leak.
+    # Generic: identity from standard JWT claims; match is any leaf string.
+    actors = [str(a).strip().lower() for a in (probe.get("actors") or []) if str(a).strip()]
+    primary_actor = actors[0] if actors else ""
+    if (config
+        and primary_actor
+        and primary_actor != "anonymous"
+        and risk_type in {"ownership_scope_probe", "auth_boundary_probe"}
+        and 200 <= _obs_code < 300
+        and isinstance(payload, dict)):
+        resolved = config.get("_resolved_account_headers") if isinstance(config.get("_resolved_account_headers"), dict) else {}
+        actor_headers = resolved.get(primary_actor) or {}
+        if not actor_headers:
+            for alias in (primary_actor, "buyer", "merchant", "admin"):
+                if resolved.get(alias):
+                    actor_headers = resolved[alias]
+                    break
+        identity_values: set[str] = set()
+        for token_key in ("Authorization", "authorization"):
+            token_val = str(actor_headers.get(token_key) or actor_headers.get(token_key.lower()) or "")
+            if token_val.startswith("Bearer "):
+                try:
+                    import base64 as _b64
+                    parts = token_val[7:].split(".")
+                    if len(parts) >= 2:
+                        padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+                        claims = json.loads(_b64.b64decode(padded).decode("utf-8", errors="replace"))
+                        for field in ("sub", "id", "user_id", "email", "role"):
+                            val = str(claims.get(field) or "").strip()
+                            if val:
+                                identity_values.add(val)
+                except Exception:
+                    pass
+        if identity_values:
+            def _leaf_strings(obj: Any) -> list[str]:
+                leaves: list[str] = []
+                if isinstance(obj, dict):
+                    for v in obj.values():
+                        leaves.extend(_leaf_strings(v))
+                elif isinstance(obj, list):
+                    for v in obj[:50]:
+                        leaves.extend(_leaf_strings(v))
+                elif isinstance(obj, str):
+                    leaves.append(obj)
+                return leaves
+            payload_strings = _leaf_strings(payload)
+            identity_matches = [s for s in payload_strings if s in identity_values]
+            if identity_matches:
+                return {
+                    "verdict": "validated_candidate",
+                    "reason": (
+                        f"{primary_actor} ownership_scope read returned 2xx with actor identity "
+                        f"({sorted(identity_values)[:2]}) in payload; cross-owner data-isolation likely violated"
+                    ),
+                    "confidence": 0.78,
+                    "payload_summary": summary,
+                    "sensitive_keys": sensitive_keys,
+                    "defect_class": "cross_owner_data_isolation",
+                    "matched_identities": sorted(identity_matches)[:10],
+                }
+    # ── end identity oracle ──
+
     if _read_negative_probe_was_accepted(probe, payload) and 200 <= int(status) < 300:
         return {
             "verdict": "validated_candidate",
@@ -3372,7 +3439,7 @@ def _execute_read_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
             base_url=base_url,
             timeout=timeout,
         )
-        verification = _verify_observation(probe, response)
+        verification = _verify_observation(probe, response, config=config)
         verification = _anchor_auth_boundary_fixture_evidence(probe, verification, response, config)
     cleanup_receipts = _execute_auto_fixture_requests(config, base_url, probe, "cleanup_requests", timeout) if setup_required else []
     return {

@@ -1893,6 +1893,7 @@ def write_grounded_candidate_outputs(input_dir: str | Path, output_dir: str | Pa
                 "risk_type": c.get("risk_type"),
                 "endpoint": c.get("endpoint"),
                 "execution_policy": c.get("execution_policy"),
+                "actors": c.get("actors") or [],
                 "probe_plan": c.get("probe_plan"),
                 "required_evidence": c.get("required_evidence"),
                 "source_refs": c.get("source_refs") or [],
