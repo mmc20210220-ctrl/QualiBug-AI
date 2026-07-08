@@ -2636,6 +2636,89 @@ class AutonomousDiscoveryEngine:
         except Exception as e:
             print(f"  [WARN] Deployment config persistence failed (non-fatal): {e}", flush=True)
 
+        # ── P3: Bug Ontology + Invariant Engine Integration ──────────
+        # Generate behavior slices, evaluate invariants, and compute coverage.
+        ontology_summary: dict[str, Any] = {}
+        invariant_results: dict[str, Any] = {}
+        coverage_matrix_data: dict[str, Any] = {}
+        evidence_classification: dict[str, Any] = {"confirmed": 0, "candidate": 0, "clue": 0}
+
+        try:
+            from .context_extractor import extract_context
+            from .bug_ontology_registry import get_ontology_registry
+            from .behavior_slice_gen import BehaviorSliceGenerator
+            from .invariant_engine import evaluate_all_invariants, invariant_coverage_report
+            from .coverage_matrix import compute_coverage_matrix
+
+            # Extract context from available data
+            ctx = extract_context(prd_text, api_spec_text)
+            registry = get_ontology_registry()
+
+            # Generate behavior slices
+            gen = BehaviorSliceGenerator(ctx, registry)
+            slices = gen.generate()
+            print(f"  [OK] Ontology: generated {gen.count()} behavior slices", flush=True)
+
+            # Evaluate invariants on findings' evidence
+            for finding in self.findings:
+                evidence = finding.evidence or {}
+                if evidence:
+                    inv_result = evaluate_all_invariants(evidence)
+                    evidence["_invariant_results"] = {
+                        k: v.to_dict() for k, v in inv_result.items()
+                    }
+
+            # Classify findings by evidence completeness
+            for finding in self.findings:
+                evidence = finding.evidence or {}
+                has_execution = bool(evidence.get("calls") or evidence.get("has_before_snapshot"))
+                has_req_resp = has_execution and bool(
+                    evidence.get("calls") and any(
+                        c.get("results", {}).get("admin", {}).get("status")
+                        for c in evidence.get("calls", []) if isinstance(c, dict)
+                    )
+                )
+                has_full_evidence = has_req_resp and bool(
+                    evidence.get("before_snapshot_ref") or evidence.get("after_snapshot_ref") or
+                    evidence.get("entity_binding")
+                )
+
+                if finding.verdict in ("confirmed", "validated_candidate") and has_full_evidence:
+                    evidence_classification["confirmed"] += 1
+                elif has_req_resp:
+                    evidence_classification["candidate"] += 1
+                else:
+                    evidence_classification["clue"] += 1
+
+            # Compute coverage matrix
+            block_list = []
+            matrix = compute_coverage_matrix(
+                [s.to_dict() for s in slices],
+                project_id=os.environ.get("QUALIBUG_PROJECT", "real_project_demo"),
+                scan_id=discovery_run_id,
+                findings=[{
+                    "hypothesis_id": f.hypothesis_id,
+                    "verdict": f.verdict,
+                    "customer_delivery_status": getattr(f, "customer_delivery_status", "clue"),
+                } for f in self.findings],
+                blocked_paths=block_list,
+            )
+            coverage_matrix_data = matrix.to_dict()
+
+            ontology_summary = {
+                "total_families": registry.count_families(),
+                "total_entries": registry.count_entries(),
+                "total_slices": gen.count(),
+                "coverage_by_family": registry.coverage_summary(),
+            }
+            print(f"  [OK] Coverage: {matrix.executed_slices}/{matrix.total_slices} slices executed, "
+                  f"confirmed={evidence_classification['confirmed']}, "
+                  f"candidate={evidence_classification['candidate']}, "
+                  f"clue={evidence_classification['clue']}", flush=True)
+        except Exception as onto_err:
+            print(f"  [WARN] Ontology integration degraded: {onto_err}", flush=True)
+            ontology_summary = {"error": str(onto_err)[:300]}
+
         return {
             "pipeline": "autonomous_discovery_v1",
             "runtime_status": "FAILED" if stage_failures else "OK",
@@ -2694,6 +2777,10 @@ class AutonomousDiscoveryEngine:
                 },
             } for f in self.findings],
             "auto_har": self._auto_har_report(),
+            # ── P3: Bug Ontology + Coverage Matrix ──
+            "ontology": ontology_summary,
+            "coverage_matrix": coverage_matrix_data,
+            "evidence_classification": evidence_classification,
         }
 
     def _auto_har_report(self) -> dict[str, Any]:

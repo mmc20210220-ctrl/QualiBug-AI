@@ -240,6 +240,107 @@ def evaluate_seed_bug_benchmark(scan_result: dict[str, Any] | list[dict[str, Any
             "false_negative_rate": false_negative_rate,
             "note": "corrected_recall uses unique bug-type deduplication to avoid recall > 1.0 from multi-oracle detection of the same defect.",
         },
+        # ── P3+: Invariant-level benchmark metrics ──
+        "p3_invariant_metrics": _compute_invariant_benchmark(findings, seed_defects, observations),
+    }
+
+
+def _compute_invariant_benchmark(
+    findings: list[dict[str, Any]],
+    seed_defects: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute per-invariant-type recall, precision, FPR, FNR, evidence completeness.
+
+    Maps each seeded defect to its risk family and invariant type using the
+    Bug Ontology Registry, then computes per-invariant benchmark metrics.
+    """
+    # Try to load ontology for invariant mapping
+    invariant_map: dict[str, str] = {}  # bug_type → invariant_type
+    family_map: dict[str, str] = {}     # bug_type → risk_family
+    try:
+        from .bug_ontology_registry import get_ontology_registry
+        registry = get_ontology_registry()
+        for entry in registry.list_entries():
+            invariant_map[entry.subtype] = entry.invariant_type
+            family_map[entry.subtype] = entry.family_id
+            # Also map normalized types
+            norm = _normalize_bug_type(entry.subtype)
+            if norm not in invariant_map:
+                invariant_map[norm] = entry.invariant_type
+                family_map[norm] = entry.family_id
+    except ImportError:
+        pass
+
+    # Group seeds by invariant type
+    by_invariant: dict[str, dict[str, Any]] = {}
+    for seed in seed_defects:
+        if not isinstance(seed, dict):
+            continue
+        bug_type = str(seed.get("bug_type") or seed.get("kind") or "")
+        norm = _normalize_bug_type(bug_type)
+        inv_type = invariant_map.get(norm, invariant_map.get(bug_type, "unknown"))
+        family = family_map.get(norm, family_map.get(bug_type, "unknown"))
+        seed_id = str(seed.get("id") or "")
+
+        entry = by_invariant.setdefault(inv_type, {
+            "invariant_type": inv_type,
+            "risk_family": family,
+            "total": 0,
+            "detected": 0,
+            "missed": [],
+            "detected_ids": [],
+        })
+        entry["total"] += 1
+
+        # Check if detected
+        found = any(f.get("seed_id") == seed_id for f in findings)
+        if found:
+            entry["detected"] += 1
+            entry["detected_ids"].append(seed_id)
+        else:
+            entry["missed"].append(seed_id)
+
+    # Build per-invariant metrics
+    per_invariant: dict[str, dict[str, Any]] = {}
+    for inv_type, entry in by_invariant.items():
+        total = entry["total"]
+        detected = entry["detected"]
+        recall = round(detected / total, 4) if total else 0.0
+        per_invariant[inv_type] = {
+            "invariant_type": inv_type,
+            "risk_family": entry["risk_family"],
+            "total_seeds": total,
+            "detected": detected,
+            "missed": len(entry["missed"]),
+            "recall": recall,
+            "false_negative_rate": round((total - detected) / total, 4) if total else 0.0,
+        }
+
+    # Evidence completeness per invariant
+    evidence_by_invariant: dict[str, dict[str, int]] = {}
+    for f in findings:
+        evidence = f.get("evidence", {})
+        inv_results = evidence.get("_invariant_results", {})
+        for inv_type, result in inv_results.items():
+            if isinstance(result, dict) and not result.get("passed", True):
+                e_entry = evidence_by_invariant.setdefault(inv_type, {"total": 0, "with_evidence": 0})
+                e_entry["total"] += 1
+                if evidence.get("calls") or evidence.get("before_snapshot_ref"):
+                    e_entry["with_evidence"] += 1
+
+    return {
+        "per_invariant_recall": per_invariant,
+        "evidence_completeness_by_invariant": {
+            k: {
+                "total_findings": v["total"],
+                "with_evidence": v["with_evidence"],
+                "completeness_rate": round(v["with_evidence"] / v["total"], 4) if v["total"] else 0.0,
+            }
+            for k, v in evidence_by_invariant.items()
+        },
+        "total_invariant_types_tested": len(by_invariant),
+        "invariant_coverage_rate": round(len(by_invariant) / 12, 4),  # 12 invariant types defined
     }
 
 

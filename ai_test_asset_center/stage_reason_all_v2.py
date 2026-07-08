@@ -1092,6 +1092,68 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         except Exception as e:
             print(f"  [WARN] 分析器集成失败: {e}", flush=True)
 
+    # ── P3: Bug Ontology-driven hypothesis generation ────────────────
+    # Generate ontology-guided behavior slices as additional hypotheses.
+    ontology_hypotheses: list[dict[str, Any]] = []
+    try:
+        from .context_extractor import extract_context
+        from .bug_ontology_registry import get_ontology_registry
+        from .behavior_slice_gen import BehaviorSliceGenerator
+
+        ctx = extract_context(prd_text, api_spec)
+        registry = get_ontology_registry()
+        gen = BehaviorSliceGenerator(ctx, registry)
+        slices = gen.generate()
+
+        # Convert slices to hypothesis format
+        for sl in slices:
+            d = sl.to_dict()
+            ontology_hypotheses.append({
+                "hypothesis_id": f"onto_{d['slice_id']}",
+                "title": d["invariant"],
+                "severity": d.get("severity", "P2"),
+                "category": d.get("risk_family", "ontology"),
+                "risk_type": d.get("risk_family", "ontology"),
+                "expected_behavior": d.get("expected_result", ""),
+                "verification_method": {"path": d.get("target", ""), "method": d.get("action", "").split()[0] if d.get("action") else "GET"},
+                "entity": d.get("source_entity", ""),
+                "source_entity": d.get("source_entity", ""),
+                "evidence": {"_slice_id": d["slice_id"], "ontology_subtype": d.get("ontology_subtype", "")},
+                "reproduction_steps": d.get("execution_plan", [])[:5],
+                "related_endpoints": [d.get("source_endpoint", "")],
+                "why_this_matters": d.get("invariant", ""),
+                "symptoms_if_broken": d.get("expected_result", ""),
+                "_reasoner_engine": "bug_ontology",
+                "_hypothesis_source": "ontology_slice",
+                "_ontology": {
+                    "family_id": d.get("risk_family", ""),
+                    "subtype": d.get("ontology_subtype", ""),
+                    "invariant_type": d.get("invariant_type", ""),
+                    "slice_id": d["slice_id"],
+                },
+            })
+
+        if ontology_hypotheses:
+            print(f"  [OK] Ontology: {len(ontology_hypotheses)} ontology-driven hypotheses generated", flush=True)
+            results_by_engine["bug_ontology"] = {
+                "engine_name": "bug_ontology",
+                "hypotheses": ontology_hypotheses,
+                "status": "success",
+                "attempts": 1,
+                "retry_used": False,
+                "raw_chars": 0,
+                "content_chars": sum(len(str(h)) for h in ontology_hypotheses),
+                "duration_seconds": 0.0,
+                "error": "",
+                "degradation_reason": "",
+            }
+            engine_names_for_report.append("bug_ontology")
+    except Exception as e:
+        print(f"  [WARN] Ontology integration degraded: {e}", flush=True)
+
+    # Merge ontology hypotheses into the main pool (with dedup weighting)
+    all_hypotheses.extend(ontology_hypotheses)
+
     # ── Quality gate: filter out low-quality hypotheses ──
     pre_filter_total = len(all_hypotheses)
     all_hypotheses = _filter_low_quality_hypotheses(all_hypotheses)

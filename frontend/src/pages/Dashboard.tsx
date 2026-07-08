@@ -386,6 +386,9 @@ export function Dashboard() {
   const valueMetrics = asRecord(record.value_metrics);
   const scanMeta = asRecord(record.scan_meta);
   const benchmarkMetrics = asRecord(scanMeta.benchmark_metrics);
+  // ── P3: Coverage Matrix from Bug Ontology ──
+  const coverageData = asRecord(record.coverage_matrix);
+  const evidenceClass = asRecord(record.evidence_classification);
   const benchmarkActive = Boolean(benchmarkMetrics.benchmark_active);
   const gatePatch = getGatePatchStatus(record);
   const gatePatchEnabled = Boolean(gatePatch.patched);
@@ -621,6 +624,74 @@ export function Dashboard() {
                     );
                   })}
               </div>
+            </>
+          )}
+          {/* ── P3: Coverage Matrix from Bug Ontology ── */}
+          {Object.keys(asRecord(coverageData.risk_family_coverage)).length > 0 && (
+            <>
+              <h4 style={{ margin: '14px 0 6px', fontSize: '0.95rem', fontWeight: 600 }}>
+                Risk Family 覆盖率 ({asNum(coverageData.summary?.risk_family_count)} 族)
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '6px' }}>
+                {Object.entries(asRecord(coverageData.risk_family_coverage))
+                  .sort(([, a], [, b]) => {
+                    const ra = asNum(asRecord(a).coverage_rate);
+                    const rb = asNum(asRecord(b).coverage_rate);
+                    return ra - rb;
+                  })
+                  .map(([family, dim]) => {
+                    const d = asRecord(dim);
+                    const rate = asNum(d.coverage_rate);
+                    const execRate = asNum(d.execution_rate);
+                    const pct = Math.round(rate * 100);
+                    const barColor = rate >= 0.8 ? 'var(--success-color, #16a34a)' : rate >= 0.5 ? 'var(--warning-color, #d97706)' : 'var(--danger-color, #dc2626)';
+                    return (
+                      <div key={family} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', borderRadius: '8px', background: '#f8fafc', border: '1px solid var(--border-color, #e2e8f0)' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 500, minWidth: '90px' }}>{family.replace(/_/g, ' ')}</span>
+                        <div style={{ flex: 1, height: '8px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.max(pct, 4)}%`, height: '100%', background: barColor, borderRadius: '4px' }} />
+                        </div>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: barColor, minWidth: '32px', textAlign: 'right' }}>{pct}%</span>
+                        <span style={{ fontSize: '0.65rem', color: 'var(--muted-color, #64748b)' }}>{asNum(d.covered_items)}/{asNum(d.total_items)}</span>
+                      </div>
+                    );
+                  })}
+              </div>
+              {/* Evidence Classification Summary */}
+              {asRecord(evidenceClass).confirmed !== undefined && (
+                <div style={{ marginTop: '12px', display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '0.82rem' }}>
+                  <span style={{ color: 'var(--success-color, #16a34a)', fontWeight: 600 }}>
+                    确认缺陷: {asNum(evidenceClass.confirmed)}
+                  </span>
+                  <span style={{ color: 'var(--warning-color, #d97706)', fontWeight: 600 }}>
+                    候选线索: {asNum(evidenceClass.candidate)}
+                  </span>
+                  <span style={{ color: 'var(--muted-color, #64748b)', fontWeight: 600 }}>
+                    待补证: {asNum(evidenceClass.clue)}
+                  </span>
+                </div>
+              )}
+              {/* Invariant Coverage Summary */}
+              {Object.keys(asRecord(coverageData.invariant_coverage)).length > 0 && (
+                <>
+                  <h4 style={{ margin: '12px 0 4px', fontSize: '0.85rem', fontWeight: 600 }}>
+                    Invariant 覆盖率 ({Object.keys(asRecord(coverageData.invariant_coverage)).length} 类)
+                  </h4>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {Object.entries(asRecord(coverageData.invariant_coverage)).map(([inv, dim]) => {
+                      const d = asRecord(dim);
+                      const rate = asNum(d.coverage_rate);
+                      const pct = Math.round(rate * 100);
+                      const color = rate >= 0.8 ? '#16a34a' : rate >= 0.5 ? '#d97706' : '#dc2626';
+                      return (
+                        <span key={inv} style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', background: '#f1f5f9', color, fontWeight: 500 }}>
+                          {inv.replace(/_/g, ' ')} {asNum(d.covered_items)}/{asNum(d.total_items)}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </>
           )}
         </article>
