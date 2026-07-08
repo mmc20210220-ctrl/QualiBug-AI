@@ -3780,6 +3780,31 @@ def _apply_coverage_honesty_guard(
         "honest": len(unexecuted) == 0,
         "downgraded": False,
     }
+    # ── Distinguish: 'resumable partial' (campaign is still active with a
+    # concrete next_round — the customer can re-run the scan to continue) vs
+    # 'terminal partial' (campaign claims completed yet high-value slices were
+    # silently skipped — genuine credibility risk). ──
+    _campaign = v12.get("campaign") if isinstance(v12.get("campaign"), dict) else {}
+    _campaign_status = str(_campaign.get("campaign_status") or ledger.get("campaign_status") or "").strip().lower()
+    _next_round = ledger.get("next_round")
+    _has_next = bool(
+        (_next_round is not None and str(_next_round).strip().isdigit() and int(_next_round) > 0)
+    )
+    honesty["campaign_status"] = _campaign_status or "unknown"
+    honesty["next_round"] = _next_round
+    honesty["resumable"] = _campaign_status == "active" and _has_next
+    honesty["terminal_skip"] = _campaign_status == "completed" and not honesty["honest"]
+    if honesty["terminal_skip"]:
+        honesty["actionable"] = (
+            "Campaign marked completed but high-value slices (permission/isolation/"
+            "money/concurrency) were never executed — this is a genuine coverage gap "
+            "that may hide authorization or data-integrity defects."
+        )
+    elif honesty["resumable"]:
+        honesty["actionable"] = (
+            "Campaign is still active — re-run the scan to continue from the "
+            "next round and cover the remaining high-value slices."
+        )
     # Only act on a *completed* campaign: a blocked / not-executed scan already
     # signals incompleteness through its own grade, and the phase-110 contract
     # tests rely on those staying 'blocked'/'inconclusive'.

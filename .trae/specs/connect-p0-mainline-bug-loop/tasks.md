@@ -74,6 +74,16 @@
   - [x] SubTask 13.4(B2): 部署无客户 UI——`Dockerfile`/`docker-compose` 只起后端 8088、不含 `frontend/dist`。修复:新增 `_serve_frontend`(路径穿越加固,`QUALIBUG_FRONTEND_DIST` 可覆盖),`do_GET` 对非 `/api` 且非 legacy 页路由托管预构建 SPA(公开、在认证门前,登录页可达);根 `Dockerfile` + `deploy/Dockerfile` COPY `frontend/dist` 并设 `QUALIBUG_FRONTEND_DIST`,实现单端口 API+UI 自包含。实证:GET `/`/`/login` 返回 SPA html;`/assets/*.js|.css` 字节与磁盘一致(486653/142558);`%2e%2e` 编码穿越返 404,`../conftest.py` 回落 index.html(无源码泄漏)。
   - [x] SubTask 13.5: 回归验证——`test_backend_main_enterprise_api` + `test_private_pilot_*` + `test_command_center_*` + `test_mainchain8/9` + `test_enterprise_ingest_execute_e2e` 等共 97 项全绿,零回归;两文件 `ast.parse` OK。架构取舍:采用单自包含 pilot 服务(8088 同托管 API+SPA);`/enterprise-api`->8000 的 aitestops 工具链保持独立、非客户路径,不动。
 
+# Task 14: 双后端不一致清理(用户裁决:前端 5174 + 单后端 8088)
+- [x] Task 14: 删除悬空 `/enterprise-api`->8000 死链路,消除 ChatGPT 审计"双后端不一致"。删 `frontend/src/api/enterprise.ts` + 两个孤儿页面(`EnterpriseCampaigns.tsx` `/campaigns`、`EnterpriseSourceAssets.tsx` `/source-assets`,均不在导航、端点在 8088 不存在、功能已被 /materials + Dashboard 覆盖);`App.tsx` 删 2 import+2 Route;`vite.config.ts` 删 `/enterprise-api` 代理与 `QUALIBUG_ENTERPRISE_API_ORIGIN`,只留 `/api`->8088。验证:全局零残留引用、`tsc --noEmit` 通过、`vite build` 成功(新 bundle)、起服务冒烟 SPA+新 asset 均 200。
+
+# Task 15: 真实浏览器 E2E 点穿全流程(L4/L5,含活体靶场)
+- [x] Task 15: 用 Playwright 驱动真实 Chromium,点穿"登录->上传资料->preflight->配置目标->扫描->缺陷->证据"完整客户闭环,并对活体 buggy SUT 复现真实缺陷。
+  - [x] SubTask 15.1: 交付 `e2e_buggy_sut.py`(纯 stdlib,注入 4 类业务缺陷:负数量下单/支付非幂等/退款超额破坏资金守恒/注册越权 role=admin)+ `e2e_browser_journey.py`(启动 SUT+后端+Playwright 全流程)。
+  - [x] SubTask 15.2: 修正 API 契约(ingest 用 `type`+`content`;项目 id==租户 id;localhost dev-actor 免 token)与登录选择器(账号/密码 placeholder),浏览器真实表单登录成功落 `/dashboard`(localStorage 持 JWT)。
+  - [x] SubTask 15.3: 结果——扫描对活体 SUT `execution_status=completed`、`grade=evidence_ready`、`score=8.0`、`coverage=1.0`,复现 1 个真实缺陷"double POST /api/orders"(幂等性违反);command-center API 携带该缺陷,Dashboard/Findings/Evidence 三页均渲染。截图与扫描响应存 `platform_outputs/e2e_browser/`。
+  - [x] SubTask 15.4: 诚实边界——注入 4 类缺陷本轮复现 1 类(最强 oracle 命中);无目标时管道正确返回 `inconclusive/0 findings/execution skipped`(不造假数据)。更多缺陷类型需更深场景生成/oracle 覆盖,后续可扩展。
+
 # Task Dependencies
 - Task 2 depends on Task 1
 - Task 3 depends on Task 1

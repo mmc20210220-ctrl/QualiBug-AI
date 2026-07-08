@@ -17,13 +17,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_test_asset_center.__main__ import _apply_coverage_honesty_guard  # noqa: E402
 
 
-def _v12(slices, slice_status=None, attempted=None):
+def _v12(slices, slice_status=None, attempted=None, campaign_status=None, next_round=None):
+    ledger = {
+        "slice_status": slice_status or {},
+        "attempted_slice_ids": attempted or [],
+    }
+    if campaign_status is not None:
+        ledger["campaign_status"] = campaign_status
+    if next_round is not None:
+        ledger["next_round"] = next_round
     return {
         "behavior_slices": slices,
-        "behavior_slice_ledger": {
-            "slice_status": slice_status or {},
-            "attempted_slice_ids": attempted or [],
-        },
+        "behavior_slice_ledger": ledger,
+        "campaign": {"campaign_status": campaign_status} if campaign_status is not None else {},
     }
 
 
@@ -127,3 +133,50 @@ def test_empty_v12_is_safe():
     assert honesty["honest"] is True
     assert honesty["total_slices"] == 0
     assert grade == "inconclusive"
+
+
+def test_resumable_partial_when_campaign_active_with_next_round():
+    """campaign active + next_round → resumable=True（重跑可续），非终态跳过。"""
+    slices = [
+        {"slice_id": "BHV_perm1", "kind": "permission", "entity": "order", "endpoints": ["/a"]},
+        {"slice_id": "BHV_inv1", "kind": "invariant", "entity": "inv", "endpoints": ["/b"]},
+    ]
+    v12 = _v12(slices, slice_status={"BHV_inv1": "running"}, campaign_status="active", next_round=5)
+    honesty, grade = _apply_coverage_honesty_guard(v12, "evidence_ready", "completed")
+
+    assert grade == "partial_coverage"  # 仍降级（本次确实未覆盖全部）
+    assert honesty["resumable"] is True
+    assert honesty["terminal_skip"] is False
+    assert honesty["next_round"] == 5
+    assert honesty["campaign_status"] == "active"
+    assert "re-run" in honesty["actionable"].lower()
+
+
+def test_terminal_skip_when_campaign_completed_but_high_value_unexecuted():
+    """campaign completed 却漏执行高价值切片 → terminal_skip=True（真风险）。"""
+    slices = [
+        {"slice_id": "BHV_perm1", "kind": "permission", "entity": "order", "endpoints": ["/a"]},
+        {"slice_id": "BHV_inv1", "kind": "invariant", "entity": "inv", "endpoints": ["/b"]},
+    ]
+    # campaign 报 completed、无 next_round，但 permission 未执行
+    v12 = _v12(slices, slice_status={"BHV_inv1": "passed"}, campaign_status="completed", next_round=None)
+    honesty, grade = _apply_coverage_honesty_guard(v12, "evidence_ready", "completed")
+
+    assert grade == "partial_coverage"
+    assert honesty["terminal_skip"] is True
+    assert honesty["resumable"] is False
+    assert "coverage gap" in honesty["actionable"].lower()
+
+
+def test_completed_campaign_all_high_value_executed_is_honest_no_flags():
+    """campaign completed 且高价值全执行 → honest，无 terminal_skip，不降级。"""
+    slices = [
+        {"slice_id": "BHV_perm1", "kind": "permission", "entity": "order", "endpoints": ["/a"]},
+    ]
+    v12 = _v12(slices, slice_status={"BHV_perm1": "confirmed"}, campaign_status="completed", next_round=None)
+    honesty, grade = _apply_coverage_honesty_guard(v12, "evidence_ready", "completed")
+
+    assert honesty["honest"] is True
+    assert honesty["terminal_skip"] is False
+    assert honesty["resumable"] is False
+    assert grade == "evidence_ready"
