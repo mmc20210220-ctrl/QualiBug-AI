@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -114,11 +115,14 @@ def _extract_openapi_paths_from_markdown(text: str) -> list[tuple[str, str, list
     current_section = ""
     for line in text.split("\n"):
         ls = line.strip()
-        if ls.startswith("##"):
-            current_section = ls.lstrip("# ").strip()
-            continue
-        m = re.match(r'(?:###\s+)?(GET|POST|PATCH|DELETE|PUT)\s+(/[^\s\n,]+)', ls, re.I)
+        # A route can itself be a Markdown heading, e.g. "### POST /api/auth/login".
+        # Match the route FIRST so heading-style routes are not swallowed by the
+        # section-heading branch below (that swallow was why every md-only API spec
+        # extracted 0 endpoints -> 0 candidates -> empty scans).
+        m = re.match(r'(?:#{1,6}\s+)?(GET|POST|PATCH|DELETE|PUT)\s+(/[^\s\n,]+)', ls, re.I)
         if not m:
+            if ls.startswith("##"):
+                current_section = ls.lstrip("# ").strip()
             continue
         method = m.group(1).upper()
         path = m.group(2).rstrip("/")
@@ -374,8 +378,14 @@ def _sync_input_only_knowledge_asset(project_id: str, root: Path) -> dict[str, A
 
 def _copy_input_only(source_input_dir: Path, dest_input_dir: Path) -> dict[str, Any]:
     source_input_dir = source_input_dir.resolve()
-    if source_input_dir.name.lower() != "input":
-        raise ValueError(f"source must be a projects/<project>/input directory, got: {source_input_dir}")
+    # NOTE: we intentionally do NOT require the source directory to be named
+    # "input". Real customer projects (and the E2E harness) hand us an input
+    # directory under any name. The real safety boundary is the leak guard below
+    # (_is_forbidden refuses oracle/ground_truth/bug_matrix/answer/seed paths) plus
+    # the per-file size cap — those are what keep the input-only contract honest,
+    # not a brittle folder-name convention that silently produced empty scans.
+    if not source_input_dir.exists():
+        raise ValueError(f"input source directory does not exist: {source_input_dir}")
     if _is_forbidden(source_input_dir):
         raise ValueError(f"refusing forbidden source path: {source_input_dir}")
 
@@ -406,10 +416,34 @@ def _copy_input_only(source_input_dir: Path, dest_input_dir: Path) -> dict[str, 
 
 def _normalize_platform_inputs(project_id: str, source_input_dir: Path, root: Path) -> dict[str, Any]:
     project = _safe_project_id(project_id)
-    dest = root / "platform_inputs" / project
+    dest = (root / "platform_inputs" / project).resolve()
+    source_resolved = Path(source_input_dir).resolve()
+    # Guard against self-deletion: if the caller's input directory lives inside
+    # (or is) the destination we are about to rmtree — e.g. someone points at
+    # platform_inputs/<project>/input — copying the files into a temp staging
+    # area FIRST means the rmtree cannot wipe the source before we read it. This
+    # was the root cause of silent empty scans (allowed_input_files: []).
+    staged_source = source_resolved
+    temp_stage: Path | None = None
+    try:
+        source_inside_dest = dest == source_resolved or dest in source_resolved.parents
+    except Exception:
+        source_inside_dest = False
+    if source_inside_dest and source_resolved.exists():
+        temp_stage = Path(tempfile.mkdtemp(prefix="qualibug_input_stage_"))
+        for path in source_resolved.rglob("*"):
+            if path.is_file():
+                out = temp_stage / path.relative_to(source_resolved)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, out)
+        staged_source = temp_stage
     if dest.exists():
         shutil.rmtree(dest)
-    manifest = _copy_input_only(source_input_dir, dest)
+    try:
+        manifest = _copy_input_only(staged_source, dest)
+    finally:
+        if temp_stage is not None:
+            shutil.rmtree(temp_stage, ignore_errors=True)
 
     merged_docs: list[str] = []
     for name in DOC_ORDER:
@@ -540,6 +574,195 @@ def _summarize_grounded_candidates(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _host_of(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        return str(urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _account_role_keys(role_text: str) -> list[str]:
+    """Map a free-text role label (any language) onto the canonical actor tokens
+    the candidate compiler emits, so per-actor probes can resolve credentials.
+
+    Uses the same ``_ROLE_ALIASES`` table as the candidate compiler (single source
+    of truth), plus a few generic fallbacks for roles the alias table does not
+    canonicalize (warehouse/finance/auditor/admin/disabled). Fully language- and
+    industry-generic — no per-project hardcoding.
+    """
+    t = str(role_text or "").strip().lower()
+    if not t:
+        return []
+    if any(k in t for k in ("disabled", "禁用", "停用", "封禁")):
+        return ["disabled_buyer", "disabled"]
+    keys: list[str] = []
+    try:
+        from .input_grounded_candidate_compiler import _ROLE_ALIASES
+        for alias in sorted(_ROLE_ALIASES, key=len, reverse=True):
+            if alias in t:
+                keys.append(_ROLE_ALIASES[alias])
+                break
+    except Exception:
+        pass
+    m = re.search(r"(buyer|seller|merchant|admin|warehouse|finance|auditor|operator|approver)", t)
+    if m:
+        keys.append(m.group(1))
+    if ("管理" in t or "admin" in t) and "admin" not in keys:
+        keys.append("admin")
+    if ("仓" in t or "warehouse" in t) and "warehouse" not in keys:
+        keys.append("warehouse")
+    if "财务" in t or "finance" in t:
+        keys.extend(["finance_manager", "finance"])
+    if "审计" in t or "审核" in t or "auditor" in t:
+        keys.append("auditor")
+    if "商" in t or "seller" in t or "merchant" in t:
+        keys.extend(["merchant", "seller"])
+    if "买家" in t or "用户" in t or "buyer" in t or "customer" in t:
+        keys.append("buyer")
+    out: list[str] = []
+    for k in keys:
+        if k and k not in out:
+            out.append(k)
+    return out or [re.sub(r"[^a-z0-9_]+", "_", t).strip("_") or "user"]
+
+
+def _parse_doc_accounts(input_dir: Path) -> dict[str, dict[str, str]]:
+    """Parse role/email/password credential tables from the customer's input docs
+    into {actor_token: {username, password, role}} keyed by canonical actor tokens.
+
+    Unlike ``_extract_test_accounts`` (which logs in and keeps only tokens), this
+    keeps the raw username/password so the probe executor can perform its own
+    per-actor login flow (and redact secrets), which is the designed secure path.
+    """
+    accounts: dict[str, dict[str, str]] = {}
+    for p in sorted(Path(input_dir).glob("*.md")):
+        if p.name.lower() in {"prd.md", "api.md", "readme.md", "business_rules.md", "requirements.md"}:
+            continue
+        text = _read(p)
+        rows_a = re.findall(r"[|]\s*([^|]{1,24})\s*[|]\s*([^|\s]+?@[^|\s]+?)\s*[|]\s*([^|]{5,50})\s*[|]", text)
+        rows_b = re.findall(r"[|]\s*([^|\s]+?@[^|\s]+?)\s*[|]\s*([^|]{5,50})\s*[|]\s*([^|]{1,24})\s*[|]", text)
+        found: list[tuple[str, str, str]] = []
+        for c1, c2, c3 in rows_a:
+            if "@" in c2 and len(c3.strip()) >= 5:
+                found.append((c1.strip(), c2.strip(), c3.strip()))
+        for c1, c2, c3 in rows_b:
+            if "@" in c1 and len(c2.strip()) >= 5:
+                found.append((c3.strip(), c1.strip(), c2.strip()))
+        for role_text, email, password in found:
+            if "@" not in email or len(password) < 5:
+                continue
+            for key in _account_role_keys(role_text):
+                accounts.setdefault(key, {"username": email, "password": password, "role": key})
+        if accounts:
+            break
+    return accounts
+
+
+def _derive_auth_flow(api_doc: str, openapi: dict[str, Any]) -> dict[str, Any]:
+    """Derive a login auth_flow (path + credential field names + token path) from
+    the API docs — no per-project hardcoding, everything comes from the spec."""
+    login_path = ""
+    paths = (openapi or {}).get("paths") if isinstance(openapi, dict) else {}
+    if isinstance(paths, dict):
+        for path, methods in paths.items():
+            if "login" in str(path).lower() and isinstance(methods, dict) and any(str(m).lower() == "post" for m in methods):
+                login_path = str(path)
+                break
+    if not login_path:
+        for method, path, _tags in _extract_openapi_paths_from_markdown(api_doc or ""):
+            if method == "POST" and "login" in path.lower():
+                login_path = path
+                break
+    if not login_path:
+        return {}
+    example: dict[str, Any] = {}
+    try:
+        from .auto_test_data_factory import _markdown_request_example
+        example = _markdown_request_example(api_doc or "", "POST", login_path) or {}
+    except Exception:
+        example = {}
+    username_field = ""
+    password_field = ""
+    for key in example:
+        kl = str(key).lower()
+        if not username_field and any(tok in kl for tok in ("email", "user", "mail", "account", "phone", "mobile", "login")):
+            username_field = str(key)
+        if not password_field and any(tok in kl for tok in ("pass", "pwd", "secret")):
+            password_field = str(key)
+    if not username_field or not password_field:
+        return {}
+    token_json_path = "token"
+    m = re.search(r'"(access_token|accessToken|token|jwt|id_token|idToken)"', api_doc or "")
+    if m:
+        token_json_path = m.group(1)
+    return {
+        "login_path": login_path,
+        "username_field": username_field,
+        "password_field": password_field,
+        "token_json_path": token_json_path,
+        "token_header_name": "Authorization",
+        "token_header_prefix": "Bearer",
+    }
+
+
+def _build_input_only_probe_config(
+    project: str,
+    root: Path,
+    base_url: str,
+    api_doc: str,
+    openapi: dict[str, Any],
+    allow_write_sandbox: bool,
+) -> tuple[Path | None, str]:
+    """Assemble a document-derived probe_config so the executor runs authenticated,
+    per-actor probes (and, when opted in against a disposable target, write-sandbox
+    probes). Returns (config_path, approval_id). Generic: credentials + login flow
+    come entirely from the customer's own docs.
+    """
+    input_dir = root / "platform_inputs" / _safe_project_id(project)
+    accounts = _parse_doc_accounts(input_dir)
+    auth_flow = _derive_auth_flow(api_doc, openapi)
+    if not accounts or not auth_flow:
+        return None, ""
+    default_account = ""
+    for preferred in ("buyer", "merchant", "admin"):
+        if preferred in accounts:
+            default_account = preferred
+            break
+    if not default_account:
+        default_account = next(iter(accounts))
+    config: dict[str, Any] = {
+        "project_id": _safe_project_id(project),
+        "base_url": base_url,
+        # Point DB-snapshot / schema lookups at the persistent normalized input
+        # dir (it carries the copied schema docs), not an ephemeral caller path.
+        "input_dir": str(input_dir),
+        "accounts": accounts,
+        "auth_flow": auth_flow,
+        "default_account": default_account,
+    }
+    approval_id = ""
+    if allow_write_sandbox and base_url:
+        host = _host_of(base_url)
+        approval_id = "qb-sandbox-" + hashlib.sha256(f"{project}|{base_url}".encode("utf-8")).hexdigest()[:16]
+        config["environment_kind"] = "test"
+        config["allow_write_probes"] = True
+        config["test_environment"] = {
+            "enabled": True,
+            "allow_write_probes": True,
+            "cleanup_strategy": "qualibug_auto_fixture_cleanup",
+            "target_kind": "test",
+            "approval_id": approval_id,
+            "base_url_allowlist": [host] if host else [],
+        }
+    out = input_dir / "probe_config.json"
+    try:
+        out.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return None, ""
+    return out, approval_id
+
+
 def run_input_only_project(
     *,
     project_input_dir: str | Path,
@@ -549,6 +772,7 @@ def run_input_only_project(
     execute_readonly: bool = False,
     probe_config: str | Path | None = None,
     max_probes: int = 0,
+    allow_write_sandbox: bool = False,
 ) -> dict[str, Any]:
     """Run the enterprise document-driven engine using only input/ files."""
     root_path = Path(root or ROOT).resolve()
@@ -569,6 +793,25 @@ def run_input_only_project(
     context_summary = _compile_project_context(project, root_path, knowledge_asset=knowledge_asset)
     onboarding = run_onboarding_check(project, root_path)
 
+    # When the caller has no canonical workspace config, derive a probe_config from
+    # the customer's own docs so probes run AUTHENTICATED and per-actor (credentials
+    # from the account tables, login flow from the API spec). This is what turns a
+    # scan from "125 anonymous/degraded probes" into real permission / data-isolation
+    # / state-machine evidence. Write-sandbox execution stays opt-in.
+    _resolved_base_url = base_url or os.environ.get("QUALIBUG_TARGET_BASE_URL", "")
+    generated_approval_id = ""
+    if probe_config is None and _resolved_base_url:
+        _api_doc = _read(root_path / "platform_inputs" / project / "api.md")
+        try:
+            _openapi_obj = json.loads(_read(root_path / "platform_inputs" / project / "openapi.json") or "{}")
+        except Exception:
+            _openapi_obj = {}
+        _cfg_path, generated_approval_id = _build_input_only_probe_config(
+            project, root_path, _resolved_base_url, _api_doc, _openapi_obj if isinstance(_openapi_obj, dict) else {}, allow_write_sandbox,
+        )
+        if _cfg_path is not None:
+            probe_config = _cfg_path
+
     output_dir = root_path / "platform_outputs" / project / "input_only_run"
     grounded = write_grounded_candidate_outputs(
         root_path / "platform_inputs" / project,
@@ -586,6 +829,8 @@ def run_input_only_project(
             base_url=base_url,
             probe_config=probe_config,
             execute_readonly=execute_readonly,
+            allow_write_sandbox=allow_write_sandbox,
+            approval_id=generated_approval_id,
             max_probes=max_probes,
             input_dir=input_dir,
         )

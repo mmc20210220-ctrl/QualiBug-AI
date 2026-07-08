@@ -431,6 +431,29 @@ export function deleteKnowledge(projectId: string, sourceId: string): Promise<un
   return fetchJSON<unknown>(`${API_BASE}/knowledge/delete`, { method: 'POST', body: JSON.stringify({ project_id: projectId, source_id: sourceId }) });
 }
 
+export type ScanPreflight = {
+  ok: boolean;
+  ready: boolean;
+  reasons: Array<{ code: string; message: string }>;
+};
+
+/**
+ * Customer-facing readiness check for the one-click Run Center. Talks to the
+ * single backend at /api/v1/scan/preflight and surfaces actionable blockers
+ * (NO_CREDENTIALS / NO_SOURCE / NO_TARGET) BEFORE a scan is launched, so the UI
+ * can tell the customer exactly what is still missing instead of failing late.
+ */
+export async function getScanPreflight(projectId: string): Promise<ScanPreflight> {
+  const resolvedProjectId = await resolveProjectId(projectId);
+  if (!resolvedProjectId) return { ok: false, ready: false, reasons: [{ code: 'NO_PROJECT', message: '未选择有效项目，无法运行检测。' }] };
+  const payload = asRecord(await fetchJSON<unknown>(`${API_V1_BASE}/scan/preflight?project=${encodeURIComponent(resolvedProjectId)}`));
+  return {
+    ok: asBoolean(payload.ok, true),
+    ready: asBoolean(payload.ready),
+    reasons: asArray(payload.reasons).map(asRecord).map((item) => ({ code: asString(item.code), message: asString(item.message) })).filter((item) => item.code || item.message),
+  };
+}
+
 export function runV12Scan(projectId: string, options?: { api_doc?: string; base_url?: string; scope_id?: string; environment_ref?: string; source_id?: string; source_hash?: string; test_data_contract?: JsonRecord }): Promise<V12ScanResult> {
   return fetchJSON<V12ScanResult>(`${API_BASE}/v1/scan`, {
     method: 'POST',

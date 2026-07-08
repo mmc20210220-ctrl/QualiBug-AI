@@ -10,6 +10,7 @@ import { EvidenceChain } from './pages/EvidenceChain';
 import { BehaviorSpace } from './pages/BehaviorSpace';
 import { TestTasks } from './pages/TestTasks';
 import { EnterpriseMaterials } from './pages/EnterpriseMaterials';
+import { EnterpriseCampaigns } from './pages/EnterpriseCampaigns';
 import { ReleaseGate } from './pages/ReleaseGate';
 import { Settings } from './pages/Settings';
 import { Products } from './pages/Products';
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/behavior-space" element={<BehaviorSpace />} />
               <Route path="/test-tasks" element={<TestTasks />} />
               <Route path="/materials" element={<EnterpriseMaterials />} />
+              <Route path="/campaigns" element={<EnterpriseCampaigns />} />
               <Route path="/release" element={<ReleaseGate />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/products" element={<Products />} />

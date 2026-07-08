@@ -250,6 +250,16 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
     release_policy = as_dict(body.get("release_policy"))
     if release_policy:
         context["release_policy"] = release_policy
+    # Thread a client-supplied, source-bound runtime scenario contract through to
+    # the V12 campaign context. This lets automation / CI / benchmark harnesses (and
+    # the Run Center advanced mode) submit an EXPLICIT deterministic scenario set for
+    # reproducible real execution instead of depending on LLM discovery to derive
+    # scenarios. It weakens no gate: runtime_scenario_contract_gaps() still validates
+    # execution_policy / actor / source-bound steps, and execution_mode + approval +
+    # write/cleanup + production-safety boundaries are still enforced downstream.
+    runtime_scenario_contract = as_dict(body.get("runtime_scenario_contract"))
+    if runtime_scenario_contract:
+        context["runtime_scenario_contract"] = runtime_scenario_contract
     page_agent_bridge = as_dict(body.get("page_agent_bridge"))
     if page_agent_bridge:
         context["page_agent_bridge"] = page_agent_bridge

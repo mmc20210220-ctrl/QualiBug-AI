@@ -36,6 +36,8 @@ Thumbs.db
 
 # Local agent run scratch (ephemeral test/probe outputs)
 .e2e_run_*.log
+_e2e_run/
+_e2e_stage/
 .pytest_tmp/
 .pytest_tmp_*/
 .workbuddy/

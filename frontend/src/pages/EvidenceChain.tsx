@@ -25,10 +25,6 @@ function asKnowledgeDocument(value: unknown): KnowledgeDocument | null {
 }
 
 function moduleName(finding: Finding): string { return String(finding.business_impact.module || finding.source_entity || finding.defect_family_label || '未归类').trim() || '未归类'; }
-function evidenceSource(finding: Finding): string {
-  const api = hasRealReplayAsset(finding); const database = finding.risk_type.includes('db') || finding.defect_family === 'data_integrity';
-  return api && database ? '接口 + 数据库证据' : api ? '接口/回放证据' : database ? '数据库证据' : '文档/规则证据';
-}
 function acceptanceHeadline(count: number, replayReady: number, clues: number): string {
   if (replayReady) return '当前可以进入客户复验。';
   if (count) return '当前已有证据包，但仍需补齐真实复验入口。';

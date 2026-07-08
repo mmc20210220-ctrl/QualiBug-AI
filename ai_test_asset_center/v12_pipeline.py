@@ -103,13 +103,13 @@ def _behavior_slice_settings() -> dict[str, int]:
         from .policy_wiring import get_policy_value
         budget = get_policy_value("execution", "max_behavior_slices_per_round", 15)
         round_number = get_policy_value("execution", "incremental_discovery_round", 1)
-        round_limit = get_policy_value("execution", "incremental_discovery_round_limit", 3)
+        round_limit = get_policy_value("execution", "incremental_discovery_round_limit", 8)
     except Exception:
-        budget, round_number, round_limit = 15, 1, 3
+        budget, round_number, round_limit = 15, 1, 8
     return {
         "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, 15),
         "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 12),
-        "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 3, 1, 12),
+        "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 8, 1, 12),
     }
 
 

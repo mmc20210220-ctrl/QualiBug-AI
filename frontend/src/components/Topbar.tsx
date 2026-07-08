@@ -12,7 +12,6 @@ const pageLabels: Record<string, string> = {
   '/evidence': '证据链',
   '/behavior-space': '行为空间',
   '/materials': '企业资料',
-  '/source-assets': '来源资产',
   '/campaigns': '运行中心',
   '/release': '发布门禁',
   '/settings': '项目设置',

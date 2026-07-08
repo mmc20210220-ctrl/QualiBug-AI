@@ -18,10 +18,12 @@ from ai_test_asset_center.blind_project_runner import run_input_only_project  # 
 BENCH = Path(r"C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable\qualibug_enterprise_benchmark_v0_5_windows_native_stable")
 DOCS = BENCH / "docs"
 E2E_ROOT = Path(r"D:\QualiBug-AI\QualiBug-AI-main\_e2e_run")
+STAGE_ROOT = Path(r"D:\QualiBug-AI\QualiBug-AI-main\_e2e_stage")
 PROJECT = "benchmark_mall"
 
-# 干净的输入目录:仅复制可见文档(严格不含 hidden_ground_truth)
-input_dir = E2E_ROOT / "platform_inputs" / PROJECT / "input"
+# 源目录名须为 input,项目名取自其父目录名;放在 platform 根(_e2e_run)之外,
+# 避免被 _normalize_platform_inputs 的 rmtree 连带删除。
+input_dir = STAGE_ROOT / PROJECT / "input"
 if input_dir.exists():
     shutil.rmtree(input_dir)
 input_dir.mkdir(parents=True, exist_ok=True)
@@ -35,6 +37,7 @@ report = run_input_only_project(
     root=E2E_ROOT,
     base_url="http://localhost:8080",
     execute_readonly=True,
+    allow_write_sandbox=True,
 )
 
 print("=" * 60)

@@ -24,11 +24,11 @@ def test_registry_persists_incremental_slice_policy_defaults(tmp_path):
 
     assert active.max_behavior_slices_per_round == 15
     assert active.incremental_discovery_round == 1
-    assert active.incremental_discovery_round_limit == 3
+    assert active.incremental_discovery_round_limit == 8
     assert active.require_runtime_receipt_for_slice_confirmation is True
 
     restored = PolicyRegistry(path)
     restored_execution = restored.get_active_strategy().execution
     assert restored_execution.max_behavior_slices_per_round == 15
     assert restored_execution.incremental_discovery_round == 1
-    assert restored_execution.incremental_discovery_round_limit == 3
+    assert restored_execution.incremental_discovery_round_limit == 8

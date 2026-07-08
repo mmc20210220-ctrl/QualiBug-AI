@@ -117,7 +117,12 @@ class ExecutionPolicy:
     # V12 source-bound incremental behavior discovery.
     max_behavior_slices_per_round: int = 15
     incremental_discovery_round: int = 1
-    incremental_discovery_round_limit: int = 3
+    # Default raised 3 -> 8 so a single customer scan converges on a rich behavior
+    # model (8 rounds x 15 slices/round = 120 slice capacity, comfortably covering
+    # models like benchmark_mall's 73 slices incl. all permission/isolation checks).
+    # The campaign still stops early at natural convergence (no unattempted
+    # source-executable slices), so small models are unaffected.
+    incremental_discovery_round_limit: int = 8
     require_runtime_receipt_for_slice_confirmation: bool = True
 
     def __post_init__(self) -> None:

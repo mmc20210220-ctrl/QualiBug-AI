@@ -317,7 +317,22 @@ class DBSnapshotVerifier:
                 captured_at=timestamp,
             )
 
+        # The captured rows now live in memory (verify() never touches the DB
+        # again), so release the connection immediately. Without this, a scan that
+        # snapshots hundreds of write probes leaks one connection per probe and
+        # exhausts the server's connection limit — which then surfaces as an opaque
+        # locale-encoded driver error, not as "too many connections".
+        self.close()
         return snapshots
+
+    def close(self) -> None:
+        try:
+            if self._conn is not None:
+                self._conn.close()
+        except Exception:
+            pass
+        finally:
+            self._conn = None
 
     def snapshot_before(self, tables: list[str]) -> None:
         self._before = self.snapshot(tables, "before")

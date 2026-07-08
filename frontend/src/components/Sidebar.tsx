@@ -12,7 +12,6 @@ const navItems = [
   { to: 'test-tasks', icon: 'campaign', label: '测试任务看板', section: null },
   { to: 'settings', icon: 'settings', label: '项目设置', section: '产品主线' },
   { to: 'materials', icon: 'knowledge', label: '企业资料', section: null },
-  { to: 'source-assets', icon: 'source', label: '来源资产', section: null },
   { to: 'campaigns', icon: 'campaign', label: '运行中心', section: null },
   { to: 'release', icon: 'release', label: '发布门禁', section: null },
   { to: 'products', icon: 'product', label: '产品矩阵', section: '商业化' },

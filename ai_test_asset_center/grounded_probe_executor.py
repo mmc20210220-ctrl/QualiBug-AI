@@ -54,7 +54,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
-from .real_id_resolver import infer_path_params
+from .real_id_resolver import infer_path_params, normalize_path_placeholders
 from .enterprise_project_config import match_production_data_exclusion
 from .runtime_finding_evidence_packager import package_runtime_finding_evidence
 from .runtime_finding_customer_triage import triage_runtime_finding
@@ -2182,6 +2182,35 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
     return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "execute_readonly", "eligible_read_only_probe", req)
 
 
+def _server_error_finding(code: int, *, probe: dict[str, Any], summary: Any, sensitive_keys: Any, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Universal server-error oracle.
+
+    A correct HTTP API must answer any request — including malformed, negative or
+    cross-boundary probes — with a 4xx client error, never a 5xx. A 5xx therefore
+    means the request reached unguarded server code: an unhandled exception, a
+    missing input validation, or a crash. That is a real defect on its own, so we
+    surface it instead of burying it as "inconclusive". This is fully generic — it
+    encodes only the HTTP contract, no per-project or per-industry assumptions.
+    """
+    method = str((probe.get("endpoint") or {}).get("method") or "").upper()
+    path = str((probe.get("endpoint") or {}).get("path") or "")
+    result = {
+        "verdict": "validated_candidate",
+        "reason": (
+            f"server returned HTTP {code} for {method} {path} — unhandled server error / missing "
+            f"input validation (a correct API must answer with a 4xx client error, never 5xx)"
+        ),
+        "confidence": 0.8,
+        "payload_summary": summary,
+        "sensitive_keys": sensitive_keys,
+        "server_error_defect": True,
+        "defect_class": "server_error_5xx",
+    }
+    if extra:
+        result.update(extra)
+    return result
+
+
 def _verify_observation(probe: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
     risk_type = str(probe.get("risk_type") or "")
     status = response.get("status_code")
@@ -2191,6 +2220,12 @@ def _verify_observation(probe: dict[str, Any], response: dict[str, Any]) -> dict
 
     if status is None:
         return {"verdict": "inconclusive", "reason": response.get("error") or "network_error", "confidence": 0.0, "payload_summary": summary, "sensitive_keys": sensitive_keys}
+    try:
+        _obs_code = int(status)
+    except Exception:
+        _obs_code = 0
+    if _obs_code >= 500:
+        return _server_error_finding(_obs_code, probe=probe, summary=summary, sensitive_keys=sensitive_keys)
     if _read_negative_probe_was_accepted(probe, payload) and 200 <= int(status) < 300:
         return {
             "verdict": "validated_candidate",
@@ -2713,6 +2748,9 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
     if code in expected:
         return {"verdict": "falsified_or_protected", "reason": f"negative sandbox write was rejected with expected HTTP {code}", "confidence": 0.82, "payload_summary": summary, "sensitive_keys": sensitive_keys, "business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence}
 
+    if code >= 500:
+        return _server_error_finding(code, probe=probe, summary=summary, sensitive_keys=sensitive_keys, extra={"business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence})
+
     if 200 <= code < 300 and _negative_probe_payload_was_accepted(probe, payload):
         method = str(first.get("method") or "").upper()
         fallback_note = " via safe GET fallback" if method == "GET" and str(first.get("fallback_from_method") or "").upper() == "POST" else ""
@@ -2815,6 +2853,29 @@ def _execute_snapshots(config: dict[str, Any], base_url: str, probe: dict[str, A
     return out
 
 
+def _markdown_schema_tables(text: str) -> set[str]:
+    """Extract candidate database table names from a schema doc that is Markdown
+    rather than raw ``CREATE TABLE`` DDL — e.g. a "主要表" listing or ``table.column``
+    references. Generic: relies only on identifier shape, no per-project names.
+    """
+    names: set[str] = set()
+    t = str(text or "")
+    for m in re.finditer(r"create\s+table\s+(?:if\s+not\s+exists\s+)?[\"`]?([a-z_][a-z0-9_]*)", t, re.I):
+        names.add(m.group(1).lower())
+    _stop = {"table", "field", "column", "index", "note", "notes", "desc", "http", "json", "api", "url", "the", "and"}
+    for line in t.splitlines():
+        mm = re.match(r"\s*\|\s*([A-Za-z_][A-Za-z0-9_]{2,40})\s*\|", line)
+        if mm:
+            tok = mm.group(1).lower()
+            if tok not in _stop:
+                names.add(tok)
+    for m in re.finditer(r"\b([a-z_][a-z0-9_]{2,40})\.[a-z_][a-z0-9_]+\b", t):
+        tok = m.group(1).lower()
+        if tok not in _stop and not tok.endswith("_md"):
+            names.add(tok)
+    return {n for n in names if len(n) >= 3 and not n.isdigit()}
+
+
 def _db_snapshot_tables(config: dict[str, Any], probe: dict[str, Any]) -> list[str]:
     tables: list[str] = []
     try:
@@ -2824,6 +2885,7 @@ def _db_snapshot_tables(config: dict[str, Any], probe: dict[str, Any]) -> list[s
 
     input_dir = config.get("input_dir") or config.get("project_input_dir")
     schema_text = ""
+    parsed_tables: dict[str, dict[str, Any]] = {}
     if input_dir:
         schema_path = Path(str(input_dir)) / "schema.sql"
         if schema_path.exists():
@@ -2831,10 +2893,20 @@ def _db_snapshot_tables(config: dict[str, Any], probe: dict[str, Any]) -> list[s
                 schema_text = schema_path.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 schema_text = ""
-    if not schema_text:
-        return tables
-
-    parsed_tables = _parse_sql_tables(schema_text)
+    if schema_text:
+        parsed_tables = _parse_sql_tables(schema_text)
+    if not parsed_tables and input_dir:
+        # Fallback: many real customers document their schema as Markdown (table
+        # listings / field references) instead of shipping CREATE TABLE DDL. Derive
+        # table names from any schema-like doc so DB before/after evidence is still
+        # captured — this closes the "证据链可复现" gap on md-only projects.
+        md_names: set[str] = set()
+        for p in sorted(Path(str(input_dir)).glob("*.md")):
+            try:
+                md_names |= _markdown_schema_tables(p.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                continue
+        parsed_tables = {name: {} for name in md_names}
     if not parsed_tables:
         return tables
 

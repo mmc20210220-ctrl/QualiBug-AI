@@ -3970,6 +3970,19 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "layers": result.get("layers",{}),
                 "spectrum": result.get("spectrum", {}),
                 "auto_har": result.get("auto_har", {}),
+                # Honest run-status fields the Run Center / Dashboard need to
+                # distinguish executed / blocked / plan_only / partial_coverage
+                # instead of misleading the customer. scan() already computes these;
+                # they were previously dropped from the HTTP envelope so the frontend
+                # always saw execution_status == undefined.
+                "execution_status": result.get("execution_status", ""),
+                "campaign": result.get("campaign", {}),
+                "coverage_gaps": result.get("coverage_gaps", []),
+                "runtime_contract": result.get("runtime_contract", {}),
+                "test_data_plan": result.get("test_data_plan", {}),
+                "release_gate": result.get("release_gate", {}),
+                "execution_evidence_summary": result.get("execution_evidence_summary", {}),
+                "report_path": result.get("report_path", ""),
                 "cumulative": merge_result,})
         except Exception as e:
             return self._json({"ok": False, "error": "V12_SCAN_FAILED", "message": str(e)[:500]}, 500)

@@ -3954,9 +3954,9 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             _run_v12 = None
         if _run_v12 is not None:
             try:
-                _max_rounds = int(os.environ.get("QUALIBUG_SCAN_MAX_ROUNDS", "4") or "4")
+                _max_rounds = int(os.environ.get("QUALIBUG_SCAN_MAX_ROUNDS", "8") or "8")
             except (TypeError, ValueError):
-                _max_rounds = 4
+                _max_rounds = 8
             _max_rounds = max(1, min(_max_rounds, 12))
             _acc_findings: list[dict[str, Any]] = [f for f in (v12.get("findings") or []) if isinstance(f, dict)]
             _seen_keys = {(str(f.get("behavior_slice_id") or ""), str(f.get("title") or "")) for f in _acc_findings}
