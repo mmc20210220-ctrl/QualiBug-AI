@@ -397,6 +397,25 @@ def _build_ci_feedback(project: str, mode: str, summary: dict[str, Any], failure
     }
 
 
+def _lifecycle_for_status(status: str) -> str:
+    """Map probe execution status to a lifecycle state.
+
+    ── P5 lifecycle contract ──
+    * passed      → regression_passed   (the fix held)
+    * failed      → regression_failed    (the defect returned)
+    * needs_review → pending_review      (requires QA human judgment)
+    * skipped     → lifecycle_skipped    (not executed, e.g. destructive/production-data)
+    * default     → lifecycle_unknown    (unexpected status)
+    """
+    mapping = {
+        "passed": "regression_passed",
+        "failed": "regression_failed",
+        "needs_review": "pending_review",
+        "skipped": "lifecycle_skipped",
+    }
+    return mapping.get(status, "lifecycle_unknown")
+
+
 def _append_regression_history(project: str, root: Path, result: dict[str, Any]) -> list[dict[str, Any]]:
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     ci_feedback = result.get("ci_feedback") if isinstance(result.get("ci_feedback"), dict) else {}
@@ -425,6 +444,7 @@ def _append_regression_history(project: str, root: Path, result: dict[str, Any])
                 "severity": item.get("severity"),
                 "status": item.get("status"),
                 "reason": item.get("reason"),
+                "lifecycle": _lifecycle_for_status(str(item.get("status") or "")),
             }
             for item in items
             if isinstance(item, dict)
