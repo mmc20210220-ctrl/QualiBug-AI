@@ -270,6 +270,26 @@ def _db_dialect_from_dsn(dsn: str) -> str:
     return "other"
 
 
+def _db_dialect_from_dsn(dsn: str) -> str:
+    """Infer the SQL dialect from a DSN prefix.  Returns "" for NoSQL schemes."""
+    _dsn = str(dsn or "").strip().lower()
+    if not _dsn:
+        return ""
+    if _dsn.startswith(("postgresql://", "postgres://")):
+        return "postgresql"
+    if _dsn.startswith(("mysql://", "mariadb://")):
+        return "mysql"
+    if _dsn.startswith(("sqlite:///", "sqlite:")):
+        return "sqlite"
+    if _dsn.startswith(("mssql://", "sqlserver://")):
+        return "mssql"
+    if _dsn.startswith("oracle://"):
+        return "oracle"
+    if "://" in _dsn:
+        return ""
+    return "other"
+
+
 def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
     """Return DB-discovered coupon samples for validation scenarios.
 
@@ -284,13 +304,12 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
     _dsn = str(dsn).strip()
     _dialect = _db_dialect_from_dsn(_dsn)
     if not _dialect:
-        return {}  # NoSQL or unrecognized — nothing to query
+        return {}  # NoSQL or unrecognized
 
     conn = None
     _placeholder = "%s"
     _is_sqlite = _dialect == "sqlite"
 
-    # ── Open connection ──────────────────────────────────────────
     if _dialect == "sqlite":
         import sqlite3
         _db_path = _dsn
@@ -310,7 +329,6 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
         except Exception:
             return {}
     else:
-        # MySQL / MariaDB / MSSQL / Oracle / generic — pyodbc
         try:
             import pyodbc
             conn = pyodbc.connect(_dsn)
@@ -321,11 +339,8 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
     if conn is None:
         return {}
 
-    # ── Dialect helpers ──────────────────────────────────────────
     def _now() -> str:
-        if _is_sqlite:
-            return "datetime('now')"
-        return "NOW()"
+        return "datetime('now')" if _is_sqlite else "NOW()"
 
     def _nulls_last(order_col: str) -> str:
         if _is_sqlite:
@@ -335,7 +350,7 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
     try:
         cur = conn.cursor()
 
-        def one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
+        def one(sql: str, params: tuple = ()) -> dict:
             if _placeholder == "?":
                 sql = sql.replace("%s", "?")
             cur.execute(sql, params)
@@ -347,7 +362,7 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
             cols = [str(item[0]) for item in cur.description]
             return dict(zip(cols, row))
 
-        def saleable_product(*, excluded_category: str = "") -> dict[str, Any]:
+        def saleable_product(*, excluded_category: str = "") -> dict:
             if excluded_category:
                 return one(
                     f"""
@@ -372,12 +387,13 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
                 """
             )
 
-        def quantity_for(min_order_amount: Any, price: Any) -> int:
+        def quantity_for(min_order_amount, price) -> int:
+            import math as _math
             price_value = max(float(price or 0.0), 0.01)
             minimum = max(float(min_order_amount or 0.0), 0.0)
-            return max(1, int(math.ceil(max(minimum, price_value) / price_value)))
+            return max(1, int(_math.ceil(max(minimum, price_value) / price_value)))
 
-        samples: dict[str, dict[str, Any]] = {}
+        samples: dict = {}
         expired = one(
             f"""
             SELECT code, min_order_amount, category_scope, status, expires_at
@@ -469,7 +485,6 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
             conn.close()
         except Exception:
             pass
-
 
 def _enrich_coupon_validation_scenarios(scenarios: list[Any], dsn: str) -> None:
     samples = _coupon_validation_samples(dsn)

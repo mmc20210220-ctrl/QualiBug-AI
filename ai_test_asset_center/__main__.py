@@ -2686,7 +2686,7 @@ def _load_registered_source(project: str, root: Path, context: dict[str, Any]) -
                 _is_api = 0 if _type in _api_spec_types else 1
                 return (_is_api, str(item.get("updated_at_utc") or ""), str(item.get("source_id") or ""))
 
-            latest = max(
+            latest = min(
                 (
                     item
                     for item in assets
