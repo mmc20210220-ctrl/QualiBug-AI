@@ -9,6 +9,7 @@ import { InternalClues } from './pages/InternalClues';
 import { EvidenceChain } from './pages/EvidenceChain';
 import { BehaviorSpace } from './pages/BehaviorSpace';
 import { TestTasks } from './pages/TestTasks';
+import { CoverageMatrix } from './pages/CoverageMatrix';
 import { EnterpriseMaterials } from './pages/EnterpriseMaterials';
 import { EnterpriseCampaigns } from './pages/EnterpriseCampaigns';
 import { ReleaseGate } from './pages/ReleaseGate';
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/evidence" element={<EvidenceChain />} />
               <Route path="/behavior-space" element={<BehaviorSpace />} />
               <Route path="/test-tasks" element={<TestTasks />} />
+              <Route path="/coverage" element={<CoverageMatrix />} />
               <Route path="/materials" element={<EnterpriseMaterials />} />
               <Route path="/campaigns" element={<EnterpriseCampaigns />} />
               <Route path="/release" element={<ReleaseGate />} />
