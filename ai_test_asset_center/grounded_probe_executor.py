@@ -5815,8 +5815,51 @@ def run_grounded_probe_executor(
                 coupon_probe["_coupon_body"] = dict(case.get("body") or {})
                 probes.append(coupon_probe)
         except Exception:
-            pass  # DB sampled coupon probes best-effort; never block the scan
-    # ── end coupon enrichment ──
+            pass  # coupon probes best-effort
+
+    # ── Multi-actor permission probe expansion ──
+    # For every auth_boundary / role_downgrade write probe in the plan that only
+    # tests a single actor, create sibling probes for EVERY other available actor
+    # (including admin).  A buyer succeeding on an admin-only endpoint is a
+    # validated permission bug.  Fully generic: actors come from the resolved
+    # account headers, paths from the probe plan, expected rejection is 4xx.
+    resolved_actors = list((config.get("_resolved_account_headers") or {}).keys())
+    # filter to meaningful role tokens only
+    privileged_roles = [a for a in resolved_actors if a not in ("anonymous", "disabled", "disabled_buyer", "user")]
+    if len(privileged_roles) >= 3:
+        seen_endpoints: set[tuple[str, str]] = set()
+        originals = list(probes)
+        for p in originals:
+            rt = str(p.get("risk_type") or "")
+            if rt not in ("auth_boundary_probe", "role_downgrade_auth_boundary_probe"):
+                continue
+            ep = p.get("endpoint") or {}
+            method = str(ep.get("method") or "").upper()
+            path = str(ep.get("path") or "")
+            if method not in WRITE_METHODS:
+                continue
+            key = (method, path)
+            if key in seen_endpoints:
+                continue
+            seen_endpoints.add(key)
+            for actor in privileged_roles:
+                # Don't duplicate the original probe's actor if it already exists
+                existing_actors = [str(a).strip().lower() for a in (p.get("actors") or [])]
+                if actor in existing_actors:
+                    continue
+                perm_probe = dict(p)
+                perm_probe["candidate_id"] = f"{p.get('candidate_id','')}-ACTOR-{actor}"
+                perm_probe["actors"] = [actor]
+                pp = dict(p.get("probe_plan") or {})
+                pp["expected_status"] = [401, 403, 404]
+                pp["steps"] = [f"Actor {actor} attempts {method} {path} — must be rejected unless role permits"]
+                perm_probe["probe_plan"] = pp
+                perm_probe["execution_policy"] = "runtime_approved"
+                perm_probe["source_refs"] = list(p.get("source_refs") or []) + [
+                    {"file": "multi_actor_expansion", "section": f"{actor}_on_{method}_{path}", "kind": "role_coverage"}
+                ]
+                probes.append(perm_probe)
+    # ── end multi-actor expansion ──
 
     if max_probes and max_probes > 0:
         before_max = len(probes)
