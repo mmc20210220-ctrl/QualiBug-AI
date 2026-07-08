@@ -56,6 +56,13 @@ def _blocked_scan(scan_module: Any, project: str, root: Path, started: float, ga
 
 
 def _contract_steps(raw_steps: Any, policy: str, actor_id: str, step_cls: Any) -> list[Any]:
+    """Convert raw contract steps to ScenarioStep instances.
+
+    Supports per-step actor override: if a step declares its own ``actor`` field
+    (dict with id/name/token), that actor's id and token are used for that step.
+    This enables P3-19 multi-role view inconsistency detection — different steps
+    in the same scenario can execute as different actors.
+    """
     steps: list[Any] = []
     for index, row in enumerate(raw_steps if isinstance(raw_steps, list) else []):
         if not isinstance(row, dict):
@@ -68,6 +75,19 @@ def _contract_steps(raw_steps: Any, policy: str, actor_id: str, step_cls: Any) -
             continue
         if policy != "safe_read_only" and method not in _READ_ONLY_METHODS | _WRITE_METHODS:
             continue
+
+        # ── Per-step actor override (P3-19: multi-role view inconsistency) ──
+        step_actor_raw = row.get("actor")
+        step_actor_id = actor_id
+        step_actor_token = ""
+        if isinstance(step_actor_raw, dict):
+            step_actor_id = (
+                str(step_actor_raw.get("id") or step_actor_raw.get("name") or "") or actor_id
+            )
+            step_actor_token = str(step_actor_raw.get("token") or "")
+        elif isinstance(step_actor_raw, str) and step_actor_raw.strip():
+            step_actor_id = step_actor_raw.strip()
+
         steps.append(
             step_cls(
                 order=int(row.get("order") or index + 1),
@@ -77,13 +97,21 @@ def _contract_steps(raw_steps: Any, policy: str, actor_id: str, step_cls: Any) -
                 body_template=row.get("body") if isinstance(row.get("body"), dict) else (row.get("body_template") if isinstance(row.get("body_template"), dict) else {}),
                 extract_from_response=[str(item) for item in row.get("extract", row.get("extract_from_response", [])) if str(item)],
                 expected_status=int(row.get("expected_status") or row.get("expected") or (200 if method in _READ_ONLY_METHODS else 201)),
-                actor=str(row.get("actor") or actor_id),
+                actor=step_actor_id,
             )
         )
     return steps
 
 
 def _runtime_contract_scenarios(generator_module: Any, contract: dict[str, Any], discovery_round: int) -> list[Any]:
+    """Convert runtime contract scenarios into ExecutableScenario instances.
+
+    Supports P3-19 multi-role view inconsistency detection:
+    - Each step can declare its own ``actor`` (per-step role injection)
+    - A scenario can declare ``actors`` (list) for cross-role comparison:
+      the same steps are duplicated for each actor, enabling detection of
+      view inconsistencies across roles (e.g., admin sees data that user shouldn't).
+    """
     if not isinstance(contract, dict) or not contract:
         return []
     policy = str(contract.get("execution_policy") or "safe_read_only").strip()
@@ -95,39 +123,77 @@ def _runtime_contract_scenarios(generator_module: Any, contract: dict[str, Any],
     scenario_cls = getattr(generator_module, "ExecutableScenario")
     behavior_slice_id = getattr(generator_module, "behavior_slice_id")
     scenarios: list[Any] = []
+
     for index, row in enumerate(contract.get("scenarios") if isinstance(contract.get("scenarios"), list) else []):
         if not isinstance(row, dict):
             continue
-        steps = _contract_steps(row.get("steps"), policy, actor_id, step_cls)
-        if not steps:
-            continue
-        cleanup = _contract_steps(row.get("cleanup_steps") or row.get("cleanup"), "approved_sandbox_write", actor_id, step_cls)
-        declared_slice_id = str(row.get("behavior_slice_id") or "").strip()
-        slice_id = declared_slice_id or behavior_slice_id("runtime_contract", str(row.get("entity") or "runtime"), steps[0].api_method, steps[0].api_path)
-        scenarios.append(
-            scenario_cls(
-                id=str(row.get("id") or f"SCN_RUNTIME_{index}"),
-                title=str(row.get("title") or f"[运行合同] {steps[0].api_method} {steps[0].api_path}")[:160],
-                description=str(row.get("description") or "Customer-approved runtime scenario contract."),
-                category=str(row.get("category") or "runtime_contract"),
-                severity=str(row.get("severity") or "P2"),
-                entity=str(row.get("entity") or "runtime"),
-                preconditions=[str(item) for item in row.get("preconditions", []) if str(item)] or ["runtime_scenario_contract_approved"],
-                actors=[actor_id],
-                steps=steps,
-                expected_state=str(row.get("expected_state") or "runtime_observed"),
-                oracle_rules=[str(item) for item in row.get("oracle_rules", []) if str(item)] or ["RuntimeContract.approved_step_executes"],
-                cleanup_steps=cleanup,
-                confidence=float(row.get("confidence") or 0.9),
-                actor_token=str(actor.get("token") or ""),
-                execution_policy=policy,
-                evidence_gaps=[],
-                source_refs=[{"source": "runtime_scenario_contract", "scenario_id": str(row.get("id") or index)}],
-                behavior_slice_id=slice_id,
-                behavior_slice_kind="runtime_contract",
-                discovery_round=max(1, int(discovery_round or 1)),
+
+        # ── Multi-role support (P3-19): scenario-level actors list ──
+        scenario_actors_raw = row.get("actors")
+        scenario_actors: list[dict[str, Any]] = []
+        if isinstance(scenario_actors_raw, list):
+            for item in scenario_actors_raw:
+                if isinstance(item, dict):
+                    scenario_actors.append(item)
+                elif isinstance(item, str) and item.strip():
+                    scenario_actors.append({"id": item.strip()})
+        if not scenario_actors:
+            # Fall back to contract-level actor
+            scenario_actors = [{"id": actor_id, "token": str(actor.get("token") or "")}]
+
+        for actor_index, step_actor in enumerate(scenario_actors):
+            step_actor_id = str(step_actor.get("id") or step_actor.get("name") or actor_id)
+            step_actor_token = str(step_actor.get("token") or actor.get("token") or "")
+            # Inject per-step actor context into each raw step
+            raw_steps = row.get("steps")
+            enriched_steps: list[dict[str, Any]] = []
+            if isinstance(raw_steps, list):
+                for s in raw_steps:
+                    if isinstance(s, dict):
+                        enriched = dict(s)
+                        # Only apply scenario-level actor if step doesn't have its own
+                        if not enriched.get("actor"):
+                            enriched["actor"] = {
+                                "id": step_actor_id,
+                                "token": step_actor_token,
+                            }
+                        enriched_steps.append(enriched)
+
+            steps = _contract_steps(enriched_steps, policy, step_actor_id, step_cls)
+            if not steps:
+                continue
+            cleanup = _contract_steps(row.get("cleanup_steps") or row.get("cleanup"), "approved_sandbox_write", step_actor_id, step_cls)
+            declared_slice_id = str(row.get("behavior_slice_id") or "").strip()
+            slice_id = declared_slice_id or behavior_slice_id("runtime_contract", str(row.get("entity") or "runtime"), steps[0].api_method, steps[0].api_path)
+
+            # Suffix scenario id with actor for cross-role duplicate avoidance
+            scenario_suffix = f"_{step_actor_id}" if len(scenario_actors) > 1 else ""
+            multi_role_label = f" [角色:{step_actor_id}]" if len(scenario_actors) > 1 else ""
+
+            scenarios.append(
+                scenario_cls(
+                    id=str(row.get("id") or f"SCN_RUNTIME_{index}") + scenario_suffix,
+                    title=(str(row.get("title") or f"[运行合同] {steps[0].api_method} {steps[0].api_path}")[:160]) + multi_role_label,
+                    description=str(row.get("description") or "Customer-approved runtime scenario contract."),
+                    category=str(row.get("category") or "runtime_contract"),
+                    severity=str(row.get("severity") or "P2"),
+                    entity=str(row.get("entity") or "runtime"),
+                    preconditions=[str(item) for item in row.get("preconditions", []) if str(item)] or ["runtime_scenario_contract_approved"],
+                    actors=[step_actor_id],
+                    steps=steps,
+                    expected_state=str(row.get("expected_state") or "runtime_observed"),
+                    oracle_rules=[str(item) for item in row.get("oracle_rules", []) if str(item)] or ["RuntimeContract.approved_step_executes"],
+                    cleanup_steps=cleanup,
+                    confidence=float(row.get("confidence") or 0.9),
+                    actor_token=step_actor_token,
+                    execution_policy=policy,
+                    evidence_gaps=[],
+                    source_refs=[{"source": "runtime_scenario_contract", "scenario_id": str(row.get("id") or index), "actor": step_actor_id}],
+                    behavior_slice_id=slice_id,
+                    behavior_slice_kind="runtime_contract",
+                    discovery_round=max(1, int(discovery_round or 1)),
+                )
             )
-        )
     return scenarios
 
 

@@ -341,6 +341,89 @@ def _short_err(e: Exception) -> str:
     return msg[:150] if len(msg) > 150 else msg
 
 
+def diagnose_session(project_id: str, output_dir: str | None = None) -> dict:
+    """Diagnose the loop runtime session health for a project.
+
+    Returns human-readable diagnostics about stale/corrupt sessions that
+    could cause scan() to permanently return blocked/stopped results.
+    Integrates with LoopRuntimeSession.diagnose() and can be called from
+    preflight checks or standalone troubleshooting.
+    """
+    try:
+        from .loop_runtime import LoopRuntimeSession
+        diag = LoopRuntimeSession.diagnose(project_id, output_dir)
+    except Exception as exc:
+        return {
+            "project_id": project_id,
+            "session_exists": False,
+            "healthy": True,
+            "error": f"diagnose_failed: {_short_err(exc)}",
+            "checks": [],
+        }
+
+    checks: list[dict] = []
+    if diag.get("session_exists"):
+        lease = diag.get("lease", {})
+        checks.append({
+            "name": "循环租约状态",
+            "passed": diag["healthy"],
+            "message": (
+                f"状态={lease.get('status', '?')}, "
+                f"步骤={lease.get('step', '?')}, "
+                f"PID={lease.get('pid', '?')}"
+                f"{'(存活)' if lease.get('alive') else '(已终止)'}"
+                f"{'(已过期)' if lease.get('expired') else ''}"
+            ),
+            "severity": "error" if not diag["healthy"] else "info",
+        })
+    else:
+        checks.append({
+            "name": "循环租约状态",
+            "passed": True,
+            "message": "无活跃租约，可以安全启动新扫描",
+            "severity": "info",
+        })
+
+    if diag.get("heartbeat"):
+        hb = diag["heartbeat"]
+        hb_passed = hb.get("status") != "RUNNING" or hb.get("age_seconds", 0) < 300
+        checks.append({
+            "name": "心跳文件状态",
+            "passed": hb_passed,
+            "message": (
+                f"状态={hb.get('status', '?')}, "
+                f"步骤={hb.get('step', '?')}, "
+                f"距今{hb.get('age_seconds', 0):.0f}秒"
+            ),
+            "severity": "warn" if not hb_passed else "info",
+        })
+
+    for issue in diag.get("blocking_issues", []):
+        checks.append({
+            "name": f"会话问题: {issue.get('kind', 'unknown')}",
+            "passed": False,
+            "message": issue.get("detail", ""),
+            "severity": "error",
+            "suggestion": f"建议执行: {diag.get('recommended_action', 'manual_intervention_required')}",
+        })
+
+    errors = [c for c in checks if c.get("severity") == "error"]
+    return {
+        "project_id": project_id,
+        "session_exists": diag.get("session_exists", False),
+        "healthy": diag.get("healthy", True),
+        "recommended_action": diag.get("recommended_action", "none"),
+        "blocking_issues": diag.get("blocking_issues", []),
+        "checks": checks,
+        "ready": len(errors) == 0,
+        "errors": len(errors),
+        "summary": (
+            "会话健康，可以启动扫描" if not errors
+            else f"存在{len(errors)}个会话问题，建议先执行 force_reset_stale_session()"
+        ),
+    }
+
+
 if __name__ == "__main__":
     # Test
     import json

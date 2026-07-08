@@ -3712,6 +3712,21 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
     _persist_customer_ready_static_artifacts(project, root, result)
+
+    # ── Phase 108R: Auto-generate Issue Lifecycle Center after scan ──
+    # Acceptance Criterion 12: lifecycle center aggregates discovery + regression
+    # states and auto-migrates bug status based on evidence.
+    try:
+        from .issue_lifecycle_center import build_issue_lifecycle_center
+        lifecycle = build_issue_lifecycle_center(project, root, options={"auto_generate_missing": False})
+        result["lifecycle_center"] = {
+            "ref": f"platform_outputs/{_safe_project(project)}/issue_lifecycle/issue_lifecycle.json",
+            "summary": lifecycle.get("summary", {}),
+            "active_issue_count": lifecycle.get("summary", {}).get("active_issue_count", 0),
+        }
+    except Exception:
+        pass
+
     return result
 
 
@@ -3858,6 +3873,36 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     project = str(project or "").strip()
     if not project:
         return {"success": False, "error": "project is required"}
+
+    # ── Session health gate: auto-detect and recover from stale/corrupt sessions ──
+    # Long-running loops can leave behind FAILED_TERMINAL or orphaned RUNNING
+    # leases that block all subsequent scan() calls. This gate diagnoses and
+    # auto-recovers without requiring manual git reset --hard.
+    try:
+        from .loop_runtime import LoopRuntimeSession
+        session_health = LoopRuntimeSession.ensure_session_healthy(project, root / "platform_outputs" / _safe_project(project))
+        if not session_health.get("can_proceed", True):
+            return {
+                "success": False,
+                "error": "session_unhealthy",
+                "session_health": session_health,
+                "hint": "A stale or corrupt loop session is blocking scans. "
+                        "Try restarting the backend service or manually running: "
+                        "LoopRuntimeSession.force_reset_stale_session(project_id, output_dir)",
+            }
+        if session_health.get("action") == "auto_reset":
+            # Log that we auto-recovered so operators can see it
+            import sys as _sys
+            print(
+                f"[scan] auto-recovered from stale session: "
+                f"{session_health.get('reset_summary', {}).get('cleaned', [])}",
+                file=_sys.stderr, flush=True,
+            )
+    except Exception:
+        # Never block a scan due to a session-health check failure itself;
+        # the check is advisory.
+        pass
+
     context = dict(campaign_context or {})
     context_defaults = _scan_campaign_context_defaults(project, root)
     if context_defaults.get("scope_id") and not str(context.get("scope_id") or "").strip():
@@ -4039,6 +4084,20 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     v12["external_findings"] = external_findings
     try:
         evidence_bundle = _persist_execution_evidence(project, root, scan_id, campaign, runtime_contract, execution_status, v12)
+
+        # ── Phase 108Q: Bridge browser execution HAR/screenshot to evidence bundle ──
+        # Acceptance Criterion 10: end-to-end P4 UI evidence chain.
+        if isinstance(ui_execution, dict) and ui_execution.get("har_ref"):
+            try:
+                from .har_bridge import bridge_browser_har_to_findings
+                all_findings = confirmed + candidates
+                har_enriched = bridge_browser_har_to_findings(
+                    ui_execution, all_findings, root=root,
+                )
+                result["p4_ui_evidence_bridge"] = har_enriched.get("har_summary", {})
+            except Exception:
+                result["p4_ui_evidence_bridge"] = {"status": "bridge_skipped"}
+
     except Exception as exc:
         evidence_bundle = {"status": "persistence_failed", "reason": type(exc).__name__}
         if confirmed:
@@ -4151,6 +4210,15 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         db_verification = {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []}
     # ── Score/coverage wired to real findings instead of a constant 0.0 ──
     score, coverage = _compute_scan_score(confirmed, candidates, execution_status)
+    # ── Benchmark metrics against seeded ground truth (P6) ──
+    benchmark_metrics: dict[str, Any] = {}
+    try:
+        from .benchmark_compute import compute_benchmark, persist_benchmark_result
+        benchmark_metrics = compute_benchmark(project, confirmed, candidates=candidates, root=root)
+        if benchmark_metrics:
+            persist_benchmark_result(project, benchmark_metrics, root=root)
+    except Exception:
+        benchmark_metrics = {}
     ui_findings = v12.get("ui_findings") if isinstance(v12.get("ui_findings"), list) else []
     ui_candidate_findings = _ui_candidate_gate(ui_findings)
     ui_candidate_findings = _verify_ui_candidate_findings(ui_candidate_findings, root=root, runtime_contract=runtime_contract)
@@ -4212,6 +4280,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         "execution_status": execution_status,
         "coverage_honesty": coverage_honesty,
         "db_verification": db_verification,
+        "benchmark_metrics": benchmark_metrics,
         "dedupe_report": dedupe_report,
         "discovery_verdict": _discovery_verdict(confirmed, db_verification),
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
@@ -4226,6 +4295,21 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
     _persist_customer_ready_static_artifacts(project, root, result)
+
+    # ── Phase 108R: Auto-generate Issue Lifecycle Center after scan ──
+    # Acceptance Criterion 12: lifecycle center aggregates discovery + regression
+    # states and auto-migrates bug status based on evidence.
+    try:
+        from .issue_lifecycle_center import build_issue_lifecycle_center
+        lifecycle = build_issue_lifecycle_center(project, root, options={"auto_generate_missing": False})
+        result["lifecycle_center"] = {
+            "ref": f"platform_outputs/{_safe_project(project)}/issue_lifecycle/issue_lifecycle.json",
+            "summary": lifecycle.get("summary", {}),
+            "active_issue_count": lifecycle.get("summary", {}).get("active_issue_count", 0),
+        }
+    except Exception:
+        pass
+
     return result
 
 

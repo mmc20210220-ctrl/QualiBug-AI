@@ -1,9 +1,13 @@
 """
-[DEPRECATED] Issue Lifecycle Center
-Status: NEAR-ZOMBIE -- 0 active cross-references.
-Roadmap: Central issue lifecycle tracking (status transitions, SLA monitoring).
-         Wire into runtime_finding_lifecycle_registry.py.
-See DEPRECATED.md for architecture decisions.
+Issue Lifecycle Center — unified defect status tracking across the full pipeline.
+
+Integrates: discovery → QA confirmation → export → fix verification → regression → release gate.
+Each regression run auto-updates lifecycle states: regression_passed, reopened, needs_review.
+Activated by regression_runner.py (Phase 92F) and scan() pipeline (Phase 108R).
+
+Wired into:
+  - regression_runner.run_regression_suite() → auto lifecycle update after regression
+  - __main__.scan() → auto lifecycle center generation after multi-round convergence
 """
 from __future__ import annotations
 
@@ -18,7 +22,8 @@ from .real_project_onboarding import ROOT, _html_escape, _safe_project_id, load_
 from .real_project_defect_discovery import run_real_project_discovery
 from .issue_sync_exporter import build_issue_export_bundle
 from .fix_verification_loop import run_fix_verification
-from .regression_runner import run_regression_suite
+# NOTE: regression_runner is imported lazily inside _load_regression_run()
+# to avoid circular import with regression_runner -> issue_lifecycle_center.
 
 PRIVATE_MARKERS = {
     "private_ground_truth",
@@ -179,6 +184,7 @@ def _load_regression_run(project: str, root: Path, options: dict[str, Any]) -> l
         return [i for i in items if isinstance(i, dict)]
     if options.get("auto_generate_missing", False):
         try:
+            from .regression_runner import run_regression_suite
             generated = run_regression_suite(project, root=root, options={"mode": options.get("regression_mode", "release"), "dry_run": bool(options.get("dry_run", True))})
             return [i for i in generated.get("items", []) if isinstance(i, dict)]
         except Exception:

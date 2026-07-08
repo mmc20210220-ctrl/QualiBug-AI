@@ -3,6 +3,12 @@
 The adapter intentionally does not infer click paths from generic UI text.
 Callers supply a source-bound plan. Safe-read-only mode permits observation
 only; interactive steps require an approved sandbox-write contract.
+
+Evidence captured per execution:
+  - Playwright trace (trace.zip) — full DOM snapshots + screenshots
+  - HAR file (network.har) — HTTP Archive of all network requests
+  - Per-step screenshots + final full-page screenshot
+  - Console logs and network event summary
 """
 from __future__ import annotations
 
@@ -163,11 +169,15 @@ def execute_browser_plan(
     console: list[dict[str, str]] = []
     network: list[dict[str, Any]] = []
     trace_path = artifact_dir / "trace.zip"
+    har_path = artifact_dir / "network.har"
     screenshot_path = artifact_dir / "final.png"
     status = "executed"
     reason = ""
     try:
-        context = browser.new_context()
+        context = browser.new_context(
+            record_har_path=str(har_path),
+            record_har_content="embed",
+        )
         context.tracing.start(screenshots=True, snapshots=True, sources=True)
         page = context.new_page()
         page.on("console", lambda message: console.append({"type": message.type, "text": message.text[:4000]}))
@@ -224,6 +234,7 @@ def execute_browser_plan(
         "execution_mode": validated["execution_mode"],
         "artifact_dir": str(artifact_dir.relative_to(Path(root))),
         "trace_ref": str(trace_path.relative_to(Path(root))) if trace_path.exists() else "",
+        "har_ref": str(har_path.relative_to(Path(root))) if har_path.exists() else "",
         "screenshot_ref": str(screenshot_path.relative_to(Path(root))) if screenshot_path.exists() else "",
         "steps": receipts,
         "console": console,
@@ -252,29 +263,41 @@ def capture_page_screenshot_locally(
     *,
     wait_until: str = "networkidle",
     timeout_ms: int = 30000,
+    record_har: bool = False,
+    har_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Capture a single page screenshot using local Playwright.
 
     Returns a dict with keys: ok, screenshot_path, title, status_code, error.
+    If record_har=True, also records an HTTP Archive file at har_path.
     """
     import json as _json
     try:
         from playwright.sync_api import sync_playwright
         output = Path(screenshot_path)
         output.parent.mkdir(parents=True, exist_ok=True)
+        har_output = Path(har_path) if har_path else output.parent / "capture.har"
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
+            context_kwargs: dict[str, Any] = {}
+            if record_har:
+                context_kwargs["record_har_path"] = str(har_output)
+                context_kwargs["record_har_content"] = "embed"
+            context = browser.new_context(**context_kwargs)
             page = context.new_page()
             try:
                 response = page.goto(url, wait_until=wait_until, timeout=timeout_ms)
                 status_code = response.status if response else 0
                 title = page.title()
                 page.screenshot(path=str(output), full_page=True)
-                return {
+                result: dict[str, Any] = {
                     "ok": True, "screenshot_path": str(output),
                     "title": title, "status_code": status_code, "error": "",
                 }
+                if record_har:
+                    # HAR is finalized on context.close()
+                    result["har_path"] = str(har_output) if har_output.exists() else ""
+                return result
             finally:
                 context.close(); browser.close()
     except Exception as exc:

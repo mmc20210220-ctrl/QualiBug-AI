@@ -56,6 +56,13 @@ from .authorization import (
     analyze_authorization
 )
 
+from .ui_api_availability import (
+    UIApiAvailabilityCheck,
+    check_api_ui_availability,
+    scan_api_ui_availability,
+    build_findings_from_checks,
+)
+
 __all__ = [
     # Business Rules
     'BusinessRulesAnalyzer',
@@ -81,4 +88,9 @@ __all__ = [
     # Authorization
     'AuthorizationAnalyzer',
     'analyze_authorization',
+    # UI/API Availability (P3-13)
+    'UIApiAvailabilityCheck',
+    'check_api_ui_availability',
+    'scan_api_ui_availability',
+    'build_findings_from_checks',
 ]

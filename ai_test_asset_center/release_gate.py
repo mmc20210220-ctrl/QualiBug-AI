@@ -85,9 +85,39 @@ def evaluate_release_gate(
     if p1 and not allow_p1:
         reasons.append({"code": "CONFIRMED_P1_FINDINGS", "detail": str(len(p1))})
 
+    # ═══════════════════════════════════════════════════════════════════
+    # P3-20: Coverage gap severity analysis — release blocking risk
+    # ═══════════════════════════════════════════════════════════════════
+    # Even without confirmed findings, if the campaign has high-severity
+    # coverage gaps (P0/P1 paths not probed), the release should be blocked
+    # because we simply don't know if those paths are safe.
+    _HIGH_RISK_GAP_KINDS = {
+        "permission", "isolation", "money", "concurrency",
+        "authorization", "tenant_isolation", "payment", "idempotency",
+        "privilege_escalation", "security_boundary",
+    }
+    high_risk_gaps: list[dict[str, Any]] = []
+    total_gaps = 0
+    for gap in _list(coverage_gaps):
+        total_gaps += 1
+        gap_kind = str(gap.get("kind") or gap.get("code") or "").lower()
+        if any(risk in gap_kind for risk in _HIGH_RISK_GAP_KINDS):
+            high_risk_gaps.append(dict(gap))
+
+    # P3-20: Block release when high-risk paths have zero coverage
+    if high_risk_gaps:
+        gap_labels = [str(g.get("kind") or g.get("code") or "unknown") for g in high_risk_gaps[:5]]
+        reasons.append({
+            "code": "HIGH_RISK_COVERAGE_GAPS",
+            "detail": f"{len(high_risk_gaps)} high-risk path(s) not probed: {', '.join(gap_labels[:3])}",
+            "p3_20_risk": True,
+        })
+
     campaign_not_closed_blocks = gate_policy.get("campaign_not_closed_verdict") != "not_ready"
     hard_block = any(
-        reason["code"] == "CONFIRMED_P0_FINDINGS" or (campaign_not_closed_blocks and reason["code"] == "CAMPAIGN_NOT_CLOSED")
+        reason["code"] == "CONFIRMED_P0_FINDINGS"
+        or reason["code"] == "HIGH_RISK_COVERAGE_GAPS"
+        or (campaign_not_closed_blocks and reason["code"] == "CAMPAIGN_NOT_CLOSED")
         for reason in reasons
     ) or runtime_status == "blocked"
     if not reasons:
@@ -110,4 +140,9 @@ def evaluate_release_gate(
         "evidence_bundle_id": _text(bundle.get("bundle_id")),
         "evidence_bundle_verified": bundle_valid,
         "reasons": reasons,
+        "p3_20_coverage_risk": {
+            "high_risk_gap_count": len(high_risk_gaps),
+            "total_gap_count": total_gaps,
+            "release_blocked_by_gaps": bool(high_risk_gaps),
+        } if coverage_gaps else None,
     }

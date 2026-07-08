@@ -385,6 +385,8 @@ export function Dashboard() {
   const regressionSummary = asRecord(record.regression_summary) as unknown as RegressionSummary;
   const valueMetrics = asRecord(record.value_metrics);
   const scanMeta = asRecord(record.scan_meta);
+  const benchmarkMetrics = asRecord(scanMeta.benchmark_metrics);
+  const benchmarkActive = Boolean(benchmarkMetrics.benchmark_active);
   const gatePatch = getGatePatchStatus(record);
   const gatePatchEnabled = Boolean(gatePatch.patched);
   const gatePatchSource = asText(gatePatch.source) || '未上报';
@@ -570,6 +572,59 @@ export function Dashboard() {
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>进入内部线索页</button>
         </article>
       )}
+      {benchmarkActive && (
+        <article className={`customer-secondary-card${asNum(benchmarkMetrics.recall) >= 0.8 ? '' : ' muted'}`}>
+          <span className="customer-value-kicker">检测能力 Benchmark</span>
+          <h3>召回率 {Math.round(asNum(benchmarkMetrics.recall) * 100)}% · 精度 {Math.round(asNum(benchmarkMetrics.precision) * 100)}%</h3>
+          <p>
+            Ground Truth {asNum(benchmarkMetrics.ground_truth_bug_count)} 个 Seeded Bug · 检出 {asNum(benchmarkMetrics.true_positives)} 个 · 误报 {asNum(benchmarkMetrics.false_positives)} 个 · 漏检 {asNum(benchmarkMetrics.false_negatives)} 个。
+            {asNum(benchmarkMetrics.high_value_recall) > 0 ? ` 高价值缺陷 (P0/P1) 召回率 ${Math.round(asNum(benchmarkMetrics.high_value_recall) * 100)}%。` : ''}
+          </p>
+          <div className="customer-secondary-meta">
+            <span><em>F1 Score</em><b>{Math.round(asNum(benchmarkMetrics.f1_score) * 100)}%</b></span>
+            <span><em>误报率</em><b>{Math.round(asNum(benchmarkMetrics.false_positive_rate) * 100)}%</b></span>
+            <span><em>漏检率</em><b>{Math.round(asNum(benchmarkMetrics.false_negative_rate) * 100)}%</b></span>
+            <span><em>证据完整</em><b>{asNum(benchmarkMetrics.evidence_complete_count)}/{asNum(benchmarkMetrics.evidence_total_count)}</b></span>
+            <span><em>复现成功率</em><b>{Math.round(asNum(benchmarkMetrics.reproduction_success_rate) * 100)}%</b></span>
+            {asNum(benchmarkMetrics.regression_total_count) > 0 && (
+              <span><em>回归成功率</em><b>{Math.round(asNum(benchmarkMetrics.regression_success_rate) * 100)}% ({asNum(benchmarkMetrics.regression_passed_count)}/{asNum(benchmarkMetrics.regression_total_count)})</b></span>
+            )}
+          </div>
+          {Object.keys(asRecord(benchmarkMetrics.bug_type_breakdown)).length > 0 && (
+            <>
+              <h4 style={{ margin: '14px 0 6px', fontSize: '0.95rem', fontWeight: 600 }}>Bug 类型覆盖矩阵</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '6px' }}>
+                {Object.entries(asRecord(benchmarkMetrics.bug_type_breakdown))
+                  .sort(([, a], [, b]) => {
+                    const ca = asRecord(a); const cb = asRecord(b);
+                    const ra = asNum(ca.total) > 0 ? asNum(ca.detected) / asNum(ca.total) : 0;
+                    const rb = asNum(cb.total) > 0 ? asNum(cb.detected) / asNum(cb.total) : 0;
+                    return ra - rb; // lowest first → attention
+                  })
+                  .map(([btype, counts]) => {
+                    const c = asRecord(counts);
+                    const detected = asNum(c.detected);
+                    const total = asNum(c.total);
+                    const rate = total > 0 ? detected / total : 0;
+                    const pct = Math.round(rate * 100);
+                    const barColor = rate >= 0.8 ? 'var(--success-color, #16a34a)' : rate >= 0.5 ? 'var(--warning-color, #d97706)' : 'var(--danger-color, #dc2626)';
+                    const bgColor = rate >= 0.8 ? '#dcfce7' : rate >= 0.5 ? '#fef3c7' : '#fee2e2';
+                    return (
+                      <div key={btype} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', borderRadius: '8px', background: '#f8fafc', border: '1px solid var(--border-color, #e2e8f0)' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 500, minWidth: '100px', textTransform: 'capitalize' }}>{btype.replace(/_/g, ' ')}</span>
+                        <div style={{ flex: 1, height: '10px', background: '#e2e8f0', borderRadius: '5px', overflow: 'hidden', position: 'relative' }}>
+                          <div style={{ width: `${Math.max(pct, 4)}%`, height: '100%', background: barColor, borderRadius: '5px', transition: 'width 0.3s' }} />
+                        </div>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 600, minWidth: '40px', textAlign: 'right', color: barColor }}>{pct}%</span>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--muted-color, #64748b)', minWidth: '36px' }}>{detected}/{total}</span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </>
+          )}
+        </article>
+      )}
       {commercialAssets && (
         <article className={`customer-secondary-card${commercialAssets.status === 'materialized' ? '' : ' muted'}`}>
           <span className="customer-value-kicker">商业交付资产</span>
@@ -749,6 +804,18 @@ export function Dashboard() {
             val: deliveryPackageLabel(commercialAssets),
             tone: commercialAssets.delivery_package.status === 'created' ? 'success' : 'warning',
             note: `${trackerSyncLabel(commercialAssets)} · 客户复验资产 ${commercialAssets.customer_ready_reproduction_count} 条`,
+          }] : []),
+          ...(benchmarkActive ? [{
+            label: 'Benchmark 召回率',
+            val: `${Math.round(asNum(benchmarkMetrics.recall) * 100)}%`,
+            tone: asNum(benchmarkMetrics.recall) >= 0.8 ? 'success' : asNum(benchmarkMetrics.recall) >= 0.5 ? 'warning' : 'danger',
+            note: `精度 ${Math.round(asNum(benchmarkMetrics.precision) * 100)}% · F1 ${Math.round(asNum(benchmarkMetrics.f1_score) * 100)}%`,
+          }] : []),
+          ...(benchmarkActive ? [{
+            label: '证据完整率',
+            val: `${Math.round(asNum(benchmarkMetrics.evidence_completeness_rate) * 100)}%`,
+            tone: asNum(benchmarkMetrics.evidence_completeness_rate) >= 0.9 ? 'success' : 'warning',
+            note: `${asNum(benchmarkMetrics.evidence_complete_count)} / ${asNum(benchmarkMetrics.evidence_total_count)} 项具备完整证据`,
           }] : []),
         ].map((item) => (
           <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.val}</strong><small>{item.note}</small></article>

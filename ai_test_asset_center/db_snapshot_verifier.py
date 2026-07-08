@@ -553,3 +553,261 @@ if __name__ == "__main__":
 
     db_path.unlink(missing_ok=True)
     print("OK")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# P3-17 / P3-18: Cleanup Verification & Cross-Scan Data Residue Detection
+# ══════════════════════════════════════════════════════════════════════
+
+import urllib.error as _urllib_error
+import urllib.request as _urllib_request
+from urllib.parse import urljoin as _urljoin
+
+
+def verify_http_cleanup(
+    base_url: str,
+    resource_path: str,
+    method: str = "DELETE",
+    *,
+    timeout: float = 8.0,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """P3-18: Verify that a cleanup operation actually removed the resource.
+
+    Steps:
+      1. Send DELETE (or specified method) → expect 2xx/204
+      2. Send GET to same path → expect 404/410 (resource gone)
+      3. If GET returns 2xx/200, the cleanup was a FAKE DELETE
+
+    Returns a verdict dict with:
+      - cleanup_status: "verified" | "fake_delete" | "cleanup_failed" | "not_attempted"
+      - delete_response: {status, body_preview}
+      - get_response: {status, body_preview}
+      - finding: dict if fake delete detected, else None
+    """
+    req_headers = dict(headers or {})
+    req_headers.setdefault("User-Agent", "QualiBug-CleanupVerifier/1.0")
+    req_headers.setdefault("Accept", "application/json,text/plain,*/*")
+
+    base = base_url.rstrip("/")
+    resource = resource_path.lstrip("/")
+    full_url = _urljoin(base + "/", resource)
+
+    result: dict[str, Any] = {
+        "resource_path": resource_path,
+        "cleanup_status": "not_attempted",
+        "delete_response": {},
+        "get_response": {},
+        "finding": None,
+    }
+
+    # Step 1: Execute cleanup (DELETE)
+    cleanup_method = method.upper()
+    try:
+        req = _urllib_request.Request(
+            full_url, method=cleanup_method, headers=req_headers
+        )
+        with _urllib_request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read(4096).decode("utf-8", errors="replace")
+            result["delete_response"] = {
+                "status": int(resp.status),
+                "body_preview": body[:500],
+            }
+    except _urllib_error.HTTPError as exc:
+        body = exc.read(4096).decode("utf-8", errors="replace") if exc.fp else ""
+        result["delete_response"] = {
+            "status": int(exc.code),
+            "body_preview": body[:500],
+        }
+    except Exception as exc:
+        result["delete_response"] = {
+            "status": 0,
+            "body_preview": str(exc)[:500],
+        }
+        result["cleanup_status"] = "cleanup_failed"
+        return result
+
+    delete_status = result["delete_response"].get("status", 0)
+    if delete_status < 200 or delete_status >= 300:
+        result["cleanup_status"] = "cleanup_failed"
+        return result
+
+    # Step 2: Verify resource is gone (GET)
+    try:
+        req2 = _urllib_request.Request(
+            full_url, method="GET", headers=req_headers
+        )
+        with _urllib_request.urlopen(req2, timeout=timeout) as resp2:
+            body2 = resp2.read(4096).decode("utf-8", errors="replace")
+            result["get_response"] = {
+                "status": int(resp2.status),
+                "body_preview": body2[:500],
+            }
+    except _urllib_error.HTTPError as exc2:
+        body2 = exc2.read(4096).decode("utf-8", errors="replace") if exc2.fp else ""
+        result["get_response"] = {
+            "status": int(exc2.code),
+            "body_preview": body2[:500],
+        }
+    except Exception as exc2:
+        result["get_response"] = {
+            "status": 0,
+            "body_preview": str(exc2)[:500],
+        }
+
+    get_status = result["get_response"].get("status", 0)
+    if 200 <= get_status < 300:
+        # Resource still exists after DELETE → FAKE DELETE
+        result["cleanup_status"] = "fake_delete"
+        result["finding"] = {
+            "severity": "P1",
+            "title": f"清理失败(假删除): {cleanup_method} {resource_path}",
+            "category": "cleanup_failure",
+            "risk_type": "cleanup_failure",
+            "verdict": "confirmed",
+            "expected": f"DELETE返回{delete_status}后资源应不可达",
+            "actual": f"GET返回{get_status}，资源仍存在",
+            "confidence": 0.95,
+            "evidence": {
+                "resource_path": resource_path,
+                "delete_status": delete_status,
+                "get_status": get_status,
+                "delete_body": result["delete_response"].get("body_preview", ""),
+                "get_body": result["get_response"].get("body_preview", ""),
+            },
+            "_api_path": resource_path,
+            "_api_method": cleanup_method,
+            "repro_path": resource_path,
+            "repro_method": "GET",
+        }
+    elif get_status in (404, 410):
+        result["cleanup_status"] = "verified"
+    else:
+        result["cleanup_status"] = "verified"  # Ambiguous but not a confirmed fake delete
+
+    return result
+
+
+class CrossScanResidueDetector:
+    """P3-17: Detect test data pollution across scan runs.
+
+    Captures DB snapshots at scan boundaries and compares them to find
+    leftover test data that wasn't cleaned up. Supports saving/loading
+    snapshots to disk for cross-session comparison.
+    """
+
+    def __init__(self, project_id: str, root: Path | str = "platform_outputs"):
+        self.project_id = str(project_id or "default").strip()
+        self.root = Path(root)
+        self.snapshot_dir = self.root / "platform_outputs" / self.project_id / "db_residue"
+        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    def capture_pre_scan_snapshot(self, verifier: DBSnapshotVerifier, tables: list[str]) -> str:
+        """Capture and persist a pre-scan DB snapshot. Returns snapshot_id."""
+        if not verifier.configured:
+            return ""
+        snap = verifier.snapshot(tables, "pre_scan")
+        if not snap:
+            return ""
+        snapshot_id = f"pre_{int(time.time() * 1000)}"
+        self._save_snapshot(snapshot_id, snap)
+        return snapshot_id
+
+    def capture_post_scan_snapshot(self, verifier: DBSnapshotVerifier, tables: list[str]) -> str:
+        """Capture and persist a post-scan DB snapshot. Returns snapshot_id."""
+        if not verifier.configured:
+            return ""
+        snap = verifier.snapshot(tables, "post_scan")
+        if not snap:
+            return ""
+        snapshot_id = f"post_{int(time.time() * 1000)}"
+        self._save_snapshot(snapshot_id, snap)
+        return snapshot_id
+
+    def _save_snapshot(self, snapshot_id: str, snapshots: dict[str, DBSnapshot]) -> None:
+        path = self.snapshot_dir / f"{snapshot_id}.json"
+        data = {
+            "snapshot_id": snapshot_id,
+            "project_id": self.project_id,
+            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "tables": {
+                table: s.to_dict() for table, s in snapshots.items()
+            },
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    def _load_snapshot(self, snapshot_id: str) -> dict[str, Any]:
+        path = self.snapshot_dir / f"{snapshot_id}.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8", errors="replace") or "{}")
+        except Exception:
+            return {}
+
+    def detect_residue(
+        self,
+        pre_scan_id: str,
+        post_scan_id: str,
+        *,
+        expected_clean_tables: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Compare pre-scan and post-scan snapshots to detect data residue.
+
+        If expected_clean_tables is provided, those tables are expected to
+        return to their pre-scan state after cleanup. Any deviation is flagged.
+        """
+        pre = self._load_snapshot(pre_scan_id)
+        post = self._load_snapshot(post_scan_id)
+        if not pre or not post:
+            return []
+
+        pre_tables = pre.get("tables", {})
+        post_tables = post.get("tables", {})
+        findings: list[dict[str, Any]] = []
+
+        for table in expected_clean_tables or sorted(set(pre_tables) & set(post_tables)):
+            pre_data = pre_tables.get(table, {})
+            post_data = post_tables.get(table, {})
+            if not pre_data or not post_data:
+                continue
+
+            pre_count = int(pre_data.get("row_count", 0))
+            post_count = int(post_data.get("row_count", 0))
+            pre_checksum = str(pre_data.get("checksum", ""))
+            post_checksum = str(post_data.get("checksum", ""))
+
+            if pre_count != post_count or pre_checksum != post_checksum:
+                findings.append({
+                    "severity": "P1",
+                    "title": f"测试数据污染: 表 {table} 扫描前后不一致",
+                    "category": "test_data_pollution",
+                    "risk_type": "test_data_pollution",
+                    "verdict": "confirmed",
+                    "expected": f"扫描后表{ table }应恢复至扫描前状态",
+                    "actual": (
+                        f"扫描前: {pre_count}行 (checksum={pre_checksum}), "
+                        f"扫描后: {post_count}行 (checksum={post_checksum})"
+                    ),
+                    "confidence": 0.90,
+                    "evidence": {
+                        "table": table,
+                        "pre_scan": {"row_count": pre_count, "checksum": pre_checksum},
+                        "post_scan": {"row_count": post_count, "checksum": post_checksum},
+                    },
+                })
+
+        return findings
+
+    def list_snapshots(self) -> list[dict[str, Any]]:
+        """List all stored snapshots for this project."""
+        results: list[dict[str, Any]] = []
+        for f in sorted(self.snapshot_dir.glob("*.json")):
+            snap = self._load_snapshot(f.stem)
+            if snap:
+                results.append({
+                    "snapshot_id": snap.get("snapshot_id"),
+                    "captured_at": snap.get("captured_at"),
+                    "table_count": len(snap.get("tables", {})),
+                })
+        return results

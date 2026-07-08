@@ -470,6 +470,166 @@ def _append_regression_history(project: str, root: Path, result: dict[str, Any])
     return history
 
 
+def detect_lifecycle_regressions(project: str, root: Path | None = None) -> list[dict[str, Any]]:
+    """P3-7: Detect lifecycle regressions by comparing regression history across runs.
+
+    A lifecycle regression is when a probe that previously passed (bug was fixed)
+    now fails again (bug has returned). This requires ≥2 runs in history.
+
+    Returns list of lifecycle regression findings.
+    """
+    root = root or ROOT
+    history_path = root / "platform_outputs" / project / "regression_run" / "regression_run_history.json"
+    history = _load_json_safe(history_path, [])
+    if not isinstance(history, list) or len(history) < 2:
+        return []
+
+    lifecycle_findings: list[dict[str, Any]] = []
+    # Compare each run against the previous one
+    for i in range(1, len(history)):
+        prev = history[i - 1]
+        curr = history[i]
+        prev_items = {
+            (item.get("issue_id") or item.get("regression_probe_id") or ""): item
+            for item in (prev.get("items") or [])
+            if isinstance(item, dict)
+        }
+        curr_items = {
+            (item.get("issue_id") or item.get("regression_probe_id") or ""): item
+            for item in (curr.get("items") or [])
+            if isinstance(item, dict)
+        }
+
+        for probe_id, curr_item in curr_items.items():
+            if not probe_id:
+                continue
+            prev_item = prev_items.get(probe_id)
+            if not prev_item:
+                continue
+            curr_status = str(curr_item.get("status") or "")
+            prev_status = str(prev_item.get("status") or "")
+
+            # Pattern: was fixed (passed in previous run) → now broken (failed in current run)
+            if prev_status == "passed" and curr_status == "failed":
+                lifecycle_findings.append({
+                    "severity": "P0",
+                    "title": f"生命周期回归: {curr_item.get('title', probe_id)}",
+                    "category": "lifecycle_regression",
+                    "risk_type": "lifecycle_regression",
+                    "verdict": "confirmed",
+                    "expected": "已修复的缺陷应保持修复状态",
+                    "actual": (
+                        f"第{i}轮通过 → 第{i + 1}轮失败: "
+                        f"{prev_item.get('reason', '')} → {curr_item.get('reason', '')}"
+                    ),
+                    "confidence": 0.95,
+                    "evidence": {
+                        "probe_id": probe_id,
+                        "prev_run_index": i - 1,
+                        "curr_run_index": i,
+                        "prev_status": prev_status,
+                        "curr_status": curr_status,
+                        "prev_gate": prev.get("gate_status"),
+                        "curr_gate": curr.get("gate_status"),
+                        "path": curr_item.get("path"),
+                        "method": curr_item.get("method"),
+                    },
+                    "_api_path": curr_item.get("path"),
+                    "_api_method": curr_item.get("method"),
+                    "repro_path": curr_item.get("path"),
+                    "repro_method": curr_item.get("method"),
+                })
+
+            # Pattern: was clean (not in previous run) → now broken (new failure)
+            elif prev_status != "failed" and curr_status == "failed" and probe_id not in prev_items:
+                lifecycle_findings.append({
+                    "severity": "P1",
+                    "title": f"新引入回归: {curr_item.get('title', probe_id)}",
+                    "category": "lifecycle_regression",
+                    "risk_type": "new_regression",
+                    "verdict": "confirmed",
+                    "expected": "新版本不应引入已知缺陷",
+                    "actual": f"第{i + 1}轮新增失败: {curr_item.get('reason', '')}",
+                    "confidence": 0.85,
+                    "evidence": {
+                        "probe_id": probe_id,
+                        "curr_run_index": i,
+                        "curr_status": curr_status,
+                        "path": curr_item.get("path"),
+                        "method": curr_item.get("method"),
+                    },
+                })
+
+    return lifecycle_findings
+
+
+def evaluate_regression_stability(project: str, root: Path | None = None) -> dict[str, Any]:
+    """P5: Evaluate regression suite stability across ≥2 runs.
+
+    A suite is declared "stable" when:
+      - At least 2 consecutive runs exist
+      - All probes passed in the last 2 runs (no failures)
+      - No new failures introduced between runs
+      - No lifecycle regressions detected
+
+    Returns stability declaration with evidence.
+    """
+    root = root or ROOT
+    history_path = root / "platform_outputs" / project / "regression_run" / "regression_run_history.json"
+    history = _load_json_safe(history_path, [])
+    if not isinstance(history, list) or len(history) < 2:
+        return {
+            "stable": False,
+            "reason": "insufficient_history",
+            "run_count": len(history) if isinstance(history, list) else 0,
+            "min_runs_required": 2,
+            "declaration": "需要至少2轮回归执行才能声明稳定",
+        }
+
+    # Check the last 2 runs
+    recent = history[-2:]
+    run_summaries = []
+    all_passed = True
+    for run in recent:
+        summary = run.get("summary", {})
+        failed = int(summary.get("failed_count", 0))
+        needs_review = int(summary.get("needs_review_count", 0))
+        run_summaries.append({
+            "generated_at": run.get("generated_at"),
+            "gate_status": run.get("gate_status"),
+            "failed_count": failed,
+            "needs_review_count": needs_review,
+        })
+        if failed > 0:
+            all_passed = False
+
+    # Check for lifecycle regressions between the two runs
+    lifecycle_regressions = detect_lifecycle_regressions(project, root)
+    recent_regressions = [
+        lr for lr in lifecycle_regressions
+        if lr.get("evidence", {}).get("curr_run_index", -1) >= len(history) - 2
+    ]
+
+    stable = all_passed and len(recent_regressions) == 0
+    return {
+        "stable": stable,
+        "run_count": len(history),
+        "analyzed_runs": len(recent),
+        "recent_runs": run_summaries,
+        "lifecycle_regressions_found": len(recent_regressions),
+        "lifecycle_regression_details": recent_regressions[:10],
+        "declaration": (
+            "✅ 回归套件稳定: 最近2轮全部通过且无生命周期回归"
+            if stable
+            else "❌ 回归套件不稳定: 存在失败或生命周期回归，不建议发布"
+            if recent_regressions
+            else "⚠️ 回归套件未稳定: 最近2轮存在失败项"
+            if not all_passed
+            else "需要更多轮回归验证"
+        ),
+    }
+
+
 def _render_failure_report(result: dict[str, Any]) -> str:
     summary = result.get("summary") or {}
     ci = result.get("ci_feedback") or {}
@@ -621,6 +781,19 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
     history = _append_regression_history(project, root, result)
     result["history_ref"] = f"platform_outputs/{project}/regression_run/regression_run_history.json"
     result["history_size"] = len(history)
+
+    # ── Phase 92F: Auto-update Issue Lifecycle Center after regression ──
+    # Acceptance Criterion 12: regression results auto-migrate bug status
+    # (regression_passed → defect stays fixed; regression_failed → defect reopens).
+    # The lifecycle center reads regression_run_result.json and promotes state.
+    try:
+        from .issue_lifecycle_center import build_issue_lifecycle_center
+        lifecycle = build_issue_lifecycle_center(project, root, options={"auto_generate_missing": False, "regression_mode": mode, "dry_run": dry_run})
+        result["lifecycle_ref"] = f"platform_outputs/{project}/issue_lifecycle/issue_lifecycle.json"
+        result["lifecycle_summary"] = lifecycle.get("summary", {})
+    except Exception:
+        result["lifecycle_ref"] = None
+
     return result
 
 

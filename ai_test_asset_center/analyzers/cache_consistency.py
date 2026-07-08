@@ -8,6 +8,7 @@ QualiBug AI - 缓存一致性分析器 (C21)
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
@@ -295,3 +296,164 @@ def analyze_cache_consistency(api_spec: Dict[str, Any], prd_text: Optional[str] 
         "bugs": bugs,
         "summary": summary
     }
+
+
+def detect_frontend_backend_state_drift(
+    api_response: dict[str, Any],
+    ui_data: dict[str, Any],
+    endpoint: str,
+    *,
+    tolerance_fields: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """P3-11: Detect state drift between API response and UI rendering.
+
+    Compares key fields from an API response against the same fields extracted
+    from a UI page (e.g., from DOM scraping or HAR recording). Mismatches
+    indicate frontend-backend state drift — the API has one value but the UI
+    shows another.
+
+    Args:
+        api_response: JSON response from API endpoint
+        ui_data: Corresponding data extracted from UI rendering
+        endpoint: The API endpoint path for evidence
+        tolerance_fields: Field names to exclude from comparison (e.g., timestamps)
+
+    Returns:
+        List of drift findings
+    """
+    skip = set(tolerance_fields or [])
+    findings: list[dict[str, Any]] = []
+
+    for key in set(api_response) & set(ui_data):
+        if key in skip:
+            continue
+        api_val = api_response.get(key)
+        ui_val = ui_data.get(key)
+        if api_val != ui_val:
+            findings.append({
+                "severity": "P2",
+                "title": f"前后端状态漂移: {endpoint}.{key}",
+                "category": "cache_consistency",
+                "risk_type": "frontend_backend_drift",
+                "verdict": "confirmed",
+                "expected": f"API和UI的{key}字段应一致",
+                "actual": f"API={_safe_repr(api_val)}, UI={_safe_repr(ui_val)}",
+                "confidence": 0.80,
+                "evidence": {
+                    "endpoint": endpoint,
+                    "field": key,
+                    "api_value": str(api_val)[:200],
+                    "ui_value": str(ui_val)[:200],
+                },
+            })
+
+    # Also flag fields present in API but missing from UI
+    for key in set(api_response) - set(ui_data):
+        if key in skip:
+            continue
+        findings.append({
+            "severity": "P3",
+            "title": f"UI缺失API字段: {endpoint}.{key}",
+            "category": "cache_consistency",
+            "risk_type": "frontend_backend_drift",
+            "verdict": "candidate",
+            "expected": f"UI应展示API返回的{key}字段",
+            "actual": f"API返回了{key}={_safe_repr(api_response[key])}但UI未展示",
+            "confidence": 0.60,
+            "evidence": {
+                "endpoint": endpoint,
+                "field": key,
+                "api_value": str(api_response[key])[:200],
+            },
+        })
+
+    return findings
+
+
+def detect_cache_drift_via_double_get(
+    url: str,
+    *,
+    timeout: float = 8.0,
+    interval_seconds: float = 1.0,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """P3-11: Detect cache drift by comparing two consecutive GET responses.
+
+    Issues two GET requests to the same URL with a short interval. If the
+    responses differ, it may indicate:
+      - Stale cache (first response cached, second fresh)
+      - Read-write split inconsistency
+      - Cache not invalidated after a recent write
+
+    Returns dict with drift_detected, responses, and findings.
+    """
+    import urllib.request as _ur
+    import urllib.error as _ue
+    req_headers = dict(headers or {})
+    req_headers.setdefault("User-Agent", "QualiBug-CacheDrift/1.0")
+    req_headers.setdefault("Accept", "application/json")
+
+    def _get(u: str) -> tuple[int, str, str]:
+        req = _ur.Request(u, headers=req_headers, method="GET")
+        try:
+            with _ur.urlopen(req, timeout=timeout) as r:
+                return int(r.status), r.read(8192).decode("utf-8", errors="replace"), ""
+        except _ue.HTTPError as e:
+            body = e.read(4096).decode("utf-8", errors="replace") if e.fp else ""
+            return int(e.code), body, f"HTTPError:{e.code}"
+        except Exception as exc:
+            return 0, "", str(exc)[:300]
+
+    status1, body1, err1 = _get(url)
+    time.sleep(max(0.1, interval_seconds))
+    status2, body2, err2 = _get(url)
+
+    drift_detected = False
+    findings: list[dict[str, Any]] = []
+
+    if status1 != status2:
+        drift_detected = True
+        findings.append({
+            "severity": "P1",
+            "title": f"缓存漂移(状态码不一致): {url}",
+            "category": "cache_consistency",
+            "risk_type": "cache_drift",
+            "verdict": "confirmed",
+            "expected": "连续两次GET应返回一致的状态码",
+            "actual": f"首次={status1}, 间隔{interval_seconds}s后={status2}",
+            "confidence": 0.90,
+            "evidence": {"url": url, "status1": status1, "status2": status2, "interval_s": interval_seconds},
+        })
+    elif body1 != body2 and status1 >= 200 and status2 >= 200:
+        drift_detected = True
+        findings.append({
+            "severity": "P2",
+            "title": f"缓存漂移(响应体不一致): {url}",
+            "category": "cache_consistency",
+            "risk_type": "cache_drift",
+            "verdict": "confirmed",
+            "expected": "连续两次GET应返回一致的响应体",
+            "actual": f"响应体不同(长度 {len(body1)} vs {len(body2)})",
+            "confidence": 0.75,
+            "evidence": {
+                "url": url,
+                "body1_preview": body1[:500],
+                "body2_preview": body2[:500],
+                "interval_s": interval_seconds,
+            },
+        })
+
+    return {
+        "drift_detected": drift_detected,
+        "first_response": {"status": status1, "body_preview": body1[:500], "error": err1},
+        "second_response": {"status": status2, "body_preview": body2[:500], "error": err2},
+        "interval_seconds": interval_seconds,
+        "findings": findings,
+    }
+
+
+def _safe_repr(value: Any) -> str:
+    if value is None:
+        return "null"
+    text = str(value)
+    return text[:80] + ("..." if len(text) > 80 else "")

@@ -268,3 +268,84 @@ def load_har_entries(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
         # Legacy format: entries might be stored as calls
         return auto_har.get("calls", auto_har.get("records", []))
     return []
+
+
+def load_playwright_har(har_file_path: str | Path) -> list[dict[str, Any]]:
+    """Load a Playwright-generated HAR file (standard HAR 1.2 format).
+
+    Extracts entries into the same format used by match_finding_to_har()
+    and enrich_finding_with_har(). Returns empty list on missing/corrupt files.
+    """
+    path = Path(har_file_path)
+    if not path.exists() or not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8", errors="replace") or "{}")
+    except Exception:
+        return []
+    log = raw.get("log") if isinstance(raw, dict) else {}
+    entries = log.get("entries") if isinstance(log, dict) else []
+    if not isinstance(entries, list):
+        return []
+    # Normalize each entry to the format expected by match_finding_to_har
+    normalized: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+        response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+        normalized.append({
+            "request": {
+                "method": str(request.get("method") or "GET").upper(),
+                "url": str(request.get("url") or ""),
+            },
+            "response": {
+                "status": int(response.get("status") or 0),
+                "body": str(response.get("content", {}).get("text", "") if isinstance(response.get("content"), dict) else ""),
+            },
+            "time": int(entry.get("time") or 0),
+            "startedDateTime": str(entry.get("startedDateTime") or ""),
+        })
+    return normalized
+
+
+def bridge_browser_har_to_findings(
+    browser_execution_result: dict[str, Any],
+    findings: list[dict[str, Any]],
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Connect a browser_execution HAR file to findings for evidence enrichment.
+
+    Args:
+        browser_execution_result: Output of execute_browser_plan()
+        findings: List of finding dicts to enrich
+        root: Project root for resolving relative har_ref paths
+
+    Returns:
+        Dict with enriched_findings list and har_summary stats.
+    """
+    har_ref = str(browser_execution_result.get("har_ref") or "")
+    if not har_ref:
+        return {"enriched_findings": findings, "har_summary": {"status": "no_har_ref", "entry_count": 0}}
+
+    har_path = Path(har_ref)
+    if root and not har_path.is_absolute():
+        har_path = Path(root) / har_ref
+
+    entries = load_playwright_har(har_path)
+    if not entries:
+        return {"enriched_findings": findings, "har_summary": {"status": "har_empty_or_missing", "entry_count": 0}}
+
+    enriched = enrich_findings_batch_with_har(findings, entries)
+    matched_count = sum(1 for f in enriched if isinstance(f, dict) and f.get("har_evidence"))
+    return {
+        "enriched_findings": enriched,
+        "har_summary": {
+            "status": "enriched",
+            "har_path": str(har_path),
+            "har_entry_count": len(entries),
+            "findings_enriched": matched_count,
+            "findings_total": len(findings),
+        },
+    }

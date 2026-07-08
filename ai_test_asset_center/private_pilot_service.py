@@ -4014,6 +4014,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "release_gate": result.get("release_gate", {}),
                 "execution_evidence_summary": result.get("execution_evidence_summary", {}),
                 "report_path": result.get("report_path", ""),
+                "benchmark_metrics": result.get("benchmark_metrics", {}),
                 "cumulative": merge_result,})
         except Exception as e:
             return self._json({"ok": False, "error": "V12_SCAN_FAILED", "message": str(e)[:500]}, 500)
@@ -5509,6 +5510,18 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "report_path": current_report_path or str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or report.get("report_source_path") or report.get("report_path") or ""),
             "current_report_breakdown": current_report_breakdown,
         }
+        # ── P6: Benchmark metrics (only when ground truth exists) ──
+        benchmark_data: dict[str, Any] = {}
+        _bm_path = root / "platform_outputs" / project_id / "benchmark" / "benchmark_metrics.json"
+        if _bm_path.exists():
+            try:
+                benchmark_data = json.loads(_bm_path.read_text(encoding="utf-8") or "{}")
+                if not isinstance(benchmark_data, dict):
+                    benchmark_data = {}
+            except Exception:
+                pass
+        if benchmark_data:
+            scan_meta["benchmark_metrics"] = benchmark_data
         if campaign_scope:
             scan_meta["current_campaign_scope"] = campaign_scope
         data = {

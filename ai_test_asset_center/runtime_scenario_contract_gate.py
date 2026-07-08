@@ -46,8 +46,18 @@ def runtime_scenario_contract_gaps(context: dict[str, Any]) -> list[dict[str, st
 
     if policy not in ALLOWED_POLICIES:
         gaps.append({"kind": "RUNTIME_SCENARIO_CONTRACT_GAP", "code": "RUNTIME_SCENARIO_POLICY_INVALID", "detail": "runtime_scenario_contract.execution_policy is not allowed."})
-    if not str(actor.get("id") or actor.get("name") or actor.get("actor") or "").strip():
-        gaps.append({"kind": "RUNTIME_SCENARIO_CONTRACT_GAP", "code": "RUNTIME_SCENARIO_ACTOR_MISSING", "detail": "runtime_scenario_contract requires an explicit customer-approved actor."})
+
+    # ── Actor validation (P3-19: support per-step and multi-role actors) ──
+    # The contract-level actor is required as a fallback, but individual steps
+    # and scenarios may declare their own actors for cross-role comparison.
+    has_contract_actor = bool(str(actor.get("id") or actor.get("name") or actor.get("actor") or "").strip())
+    # Check if any scenario declares its own actors list
+    has_scenario_actors = any(
+        isinstance(row.get("actors"), list) and row.get("actors")
+        for row in scenarios if isinstance(row, dict)
+    ) if scenarios else False
+    if not has_contract_actor and not has_scenario_actors:
+        gaps.append({"kind": "RUNTIME_SCENARIO_CONTRACT_GAP", "code": "RUNTIME_SCENARIO_ACTOR_MISSING", "detail": "runtime_scenario_contract requires an explicit customer-approved actor (at contract or scenario level)."})
     if not scenarios:
         gaps.append({"kind": "RUNTIME_SCENARIO_CONTRACT_GAP", "code": "RUNTIME_SCENARIO_STEPS_MISSING", "detail": "runtime_scenario_contract requires at least one scenario with source-bound steps."})
 
@@ -73,4 +83,14 @@ def runtime_scenario_contract_gaps(context: dict[str, Any]) -> list[dict[str, st
             gaps.append({"kind": "RUNTIME_SCENARIO_CONTRACT_GAP", "code": "WRITE_APPROVAL_MISSING", "detail": "Write-capable runtime scenarios require test_data_contract.write_approved=true."})
         if has_write and not _has_cleanup(row):
             gaps.append({"kind": "RUNTIME_SCENARIO_CONTRACT_GAP", "code": "CLEANUP_CONTRACT_MISSING", "detail": f"scenario[{index}] contains write steps but no cleanup_steps contract."})
+
+        # ── Validate per-step actors (P3-19) ──
+        for step_idx, step in enumerate(steps):
+            step_actor = _as_dict(step.get("actor"))
+            # Per-step actor is optional; contract/scenario-level actor serves as fallback
+            if step_actor:
+                step_actor_id = str(step_actor.get("id") or step_actor.get("name") or "")
+                if not step_actor_id and not has_contract_actor:
+                    gaps.append({"kind": "RUNTIME_SCENARIO_CONTRACT_GAP", "code": "STEP_ACTOR_ID_MISSING", "detail": f"scenario[{index}].step[{step_idx}] has an actor object but no id/name."})
+
     return gaps

@@ -404,3 +404,243 @@ class LoopRuntimeSession:
         data["alive"] = _is_pid_alive(int(data["pid"]))
         data["expired"] = float(data["expires_at"]) <= time.time()
         return data
+
+    @classmethod
+    def diagnose(cls, project_id: str, output_dir: Path | str | None = None) -> dict:
+        """Return comprehensive session health diagnostics.
+
+        Checks: lease existence, PID liveness, expiry, heartbeat file
+        integrity, and terminal status that would block new scans.
+        Returns a dict suitable for scan_diagnostics / preflight reporting.
+        """
+        out = Path(output_dir or Path("platform_outputs") / project_id)
+        now = time.time()
+        result: dict = {
+            "project_id": project_id,
+            "checked_at": now,
+            "session_exists": False,
+            "healthy": True,
+            "blocking_issues": [],
+            "recommended_action": "none",
+        }
+
+        # ── Check SQLite lease ──
+        db_path = out / ".loop_runtime.sqlite"
+        lease_data: dict = {}
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                try:
+                    row = conn.execute(
+                        "SELECT owner_id, pid, acquired_at, renewed_at, expires_at, "
+                        "step, detail, round_num, status, last_error "
+                        "FROM loop_lease WHERE project_id = ?",
+                        (project_id,),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if row:
+                    keys = [
+                        "owner_id", "pid", "acquired_at", "renewed_at",
+                        "expires_at", "step", "detail", "round_num",
+                        "status", "last_error",
+                    ]
+                    lease_data = dict(zip(keys, row))
+            except Exception as exc:
+                result["blocking_issues"].append(
+                    {"kind": "LEASE_DB_CORRUPT", "detail": str(exc)[:200]}
+                )
+                result["healthy"] = False
+                result["recommended_action"] = "force_reset_stale_session"
+
+        if lease_data:
+            result["session_exists"] = True
+            result["lease"] = {
+                k: lease_data.get(k)
+                for k in ("owner_id", "pid", "step", "status", "last_error")
+            }
+            pid = int(lease_data.get("pid", 0))
+            status = str(lease_data.get("status", ""))
+            expired = float(lease_data.get("expires_at", 0)) <= now
+            alive = _is_pid_alive(pid)
+
+            result["lease"]["alive"] = alive
+            result["lease"]["expired"] = expired
+            result["lease"]["expires_at"] = lease_data.get("expires_at")
+
+            # Blocking conditions
+            if status in ("FAILED_TERMINAL", "FAILED_RETRYABLE"):
+                result["blocking_issues"].append({
+                    "kind": "SESSION_IN_FAILED_STATE",
+                    "detail": f"Previous session ended with status={status}, "
+                              f"last_error={str(lease_data.get('last_error', ''))[:120]}",
+                })
+                result["healthy"] = False
+            if status == "RUNNING" and not alive:
+                result["blocking_issues"].append({
+                    "kind": "STALE_RUNNING_SESSION",
+                    "detail": f"PID {pid} is dead but lease still shows RUNNING; "
+                              f"expires_at={lease_data.get('expires_at')}",
+                })
+                if expired:
+                    result["healthy"] = False
+                    result["recommended_action"] = "force_reset_stale_session"
+            if status == "RUNNING" and expired:
+                result["blocking_issues"].append({
+                    "kind": "LEASE_EXPIRED",
+                    "detail": f"Lease expired at {lease_data.get('expires_at')} "
+                              f"but status still RUNNING.",
+                })
+                result["healthy"] = False
+                result["recommended_action"] = "force_reset_stale_session"
+            if not alive and expired and status not in ("COMPLETED",):
+                result["blocking_issues"].append({
+                    "kind": "ORPHANED_LEASE",
+                    "detail": f"Stale lease from pid={pid}, status={status}",
+                })
+                result["healthy"] = False
+                result["recommended_action"] = "force_reset_stale_session"
+
+        # ── Check heartbeat JSON integrity ──
+        heartbeat_path = out / ".loop_heartbeat.json"
+        if heartbeat_path.exists():
+            try:
+                hb = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+                hb_status = str(hb.get("status", ""))
+                hb_ts = float(hb.get("ts", 0))
+                result["heartbeat"] = {
+                    "status": hb_status,
+                    "step": str(hb.get("step", "")),
+                    "age_seconds": round(now - hb_ts, 1),
+                }
+                # Stale heartbeat (> 5 minutes with no lease renewal)
+                if hb_status == "RUNNING" and (now - hb_ts) > 300:
+                    result["blocking_issues"].append({
+                        "kind": "STALE_HEARTBEAT",
+                        "detail": f"Heartbeat last written {now - hb_ts:.0f}s ago "
+                                  f"but status still RUNNING.",
+                    })
+                    if not result.get("lease"):
+                        result["healthy"] = False
+                        result["recommended_action"] = "force_reset_stale_session"
+            except Exception as exc:
+                result["blocking_issues"].append({
+                    "kind": "HEARTBEAT_CORRUPT",
+                    "detail": str(exc)[:200],
+                })
+
+        if not result["blocking_issues"]:
+            result["recommended_action"] = "none"
+        return result
+
+    @classmethod
+    def force_reset_stale_session(
+        cls, project_id: str, output_dir: Path | str | None = None
+    ) -> dict:
+        """Idempotently clean up any stale lease, heartbeat, and final-state files.
+
+        Safe to call before starting a new scan — will only remove sessions
+        that are confirmed dead/stale. Returns a summary of what was cleaned.
+        """
+        out = Path(output_dir or Path("platform_outputs") / project_id)
+        now = time.time()
+        cleaned: list[str] = []
+        errors: list[str] = []
+
+        # ── Clean SQLite lease if stale ──
+        db_path = out / ".loop_runtime.sqlite"
+        if db_path.exists():
+            should_clean = False
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                try:
+                    row = conn.execute(
+                        "SELECT pid, expires_at, status FROM loop_lease WHERE project_id = ?",
+                        (project_id,),
+                    ).fetchone()
+                    if row:
+                        pid, expires_at, status = row
+                        alive = _is_pid_alive(int(pid))
+                        expired = float(expires_at) <= now
+                        if not alive or expired or status in (
+                            "FAILED_TERMINAL", "FAILED_RETRYABLE",
+                        ):
+                            should_clean = True
+                finally:
+                    conn.close()
+                if should_clean:
+                    # Reconnect to delete
+                    conn2 = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
+                    try:
+                        conn2.execute(
+                            "DELETE FROM loop_lease WHERE project_id = ?",
+                            (project_id,),
+                        )
+                        cleaned.append("loop_lease_row")
+                    finally:
+                        conn2.close()
+            except Exception as exc:
+                # If SQLite is truly corrupt, remove the DB file
+                errors.append(f"lease_cleanup_error: {exc}")
+                try:
+                    db_path.unlink(missing_ok=True)
+                    cleaned.append("corrupt_lease_db")
+                except Exception as exc2:
+                    errors.append(f"lease_db_removal_error: {exc2}")
+
+        # ── Clean heartbeat JSON if stale ──
+        heartbeat_path = out / ".loop_heartbeat.json"
+        if heartbeat_path.exists():
+            try:
+                hb = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+                hb_ts = float(hb.get("ts", 0))
+                hb_status = str(hb.get("status", ""))
+                if hb_status != "RUNNING" or (now - hb_ts) > 300:
+                    heartbeat_path.unlink(missing_ok=True)
+                    cleaned.append("stale_heartbeat")
+            except Exception:
+                heartbeat_path.unlink(missing_ok=True)
+                cleaned.append("corrupt_heartbeat")
+
+        # ── Clean final state ──
+        final_path = out / ".loop_runtime_final.json"
+        if final_path.exists():
+            try:
+                final_path.unlink(missing_ok=True)
+                cleaned.append("final_state")
+            except Exception as exc:
+                errors.append(f"final_state_removal_error: {exc}")
+
+        return {
+            "project_id": project_id,
+            "cleaned_at": now,
+            "cleaned": cleaned,
+            "errors": errors,
+            "reset_complete": len(errors) == 0,
+        }
+
+    @classmethod
+    def ensure_session_healthy(
+        cls, project_id: str, output_dir: Path | str | None = None
+    ) -> dict:
+        """Pre-scan gate: diagnose and auto-recover from stale sessions.
+
+        Called at scan() entry. If the session is unhealthy, attempts
+        force_reset_stale_session() and re-diagnoses. Returns final
+        health status — scan should proceed only if healthy=True.
+        """
+        diag = cls.diagnose(project_id, output_dir)
+        if diag["healthy"]:
+            return {"healthy": True, "action": "none", "diagnosis": diag}
+
+        # Attempt auto-recovery for known stale patterns
+        reset = cls.force_reset_stale_session(project_id, output_dir)
+        diag2 = cls.diagnose(project_id, output_dir)
+        return {
+            "healthy": diag2["healthy"],
+            "action": "auto_reset" if reset["cleaned"] else "manual_intervention_required",
+            "diagnosis_before": diag,
+            "diagnosis_after": diag2,
+            "reset_summary": reset,
+            "can_proceed": diag2["healthy"],
+        }

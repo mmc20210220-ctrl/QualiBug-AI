@@ -172,6 +172,54 @@ def evaluate_seed_bug_benchmark(scan_result: dict[str, Any] | list[dict[str, Any
             missed.append({**row, "status": "missed"})
     total = len(findings) + len(missed)
     detection_rate = (len(findings) / total) if total else 0.0
+
+    # ── P6: Recall by unique bug type (deduplicate shared bug categories) ──
+    # A single seeded bug may be detected by multiple oracles (e.g., HttpStatusOracle
+    # AND SchemaOracle both flag the same defect). The original detection_rate counts
+    # each oracle hit separately, which can produce recall > 1.0.
+    # Corrected recall counts unique bug types detected vs total unique types seeded.
+    unique_seed_types = sorted(set(
+        str(seed.get("bug_type") or seed.get("kind") or seed.get("title") or "")
+        for seed in seed_defects if isinstance(seed, dict)
+    ))
+    unique_found_types = sorted(set(
+        str(seed.get("bug_type") or seed.get("kind") or seed.get("title") or "")
+        for seed in seed_defects
+        if isinstance(seed, dict)
+        and any(
+            f["seed_id"] == str(seed.get("id") or "")
+            for f in findings
+        )
+    ))
+    unique_normalized_types = sorted(set(
+        _normalize_bug_type(str(seed.get("bug_type") or seed.get("kind") or ""))
+        for seed in seed_defects if isinstance(seed, dict)
+    ))
+    unique_found_normalized = sorted(set(
+        _normalize_bug_type(str(seed.get("bug_type") or seed.get("kind") or ""))
+        for seed in seed_defects
+        if isinstance(seed, dict)
+        and any(
+            f["seed_id"] == str(seed.get("id") or "")
+            for f in findings
+        )
+    ))
+    raw_recall = round(len(findings) / total, 4) if total else 0.0
+    corrected_recall = round(len(unique_found_normalized) / len(unique_normalized_types), 4) if unique_normalized_types else 0.0
+
+    # ── P6: False negative rate ──
+    # Missed defects: seeded bugs that were NOT detected by ANY oracle.
+    missed_bug_types = sorted(set(
+        _normalize_bug_type(str(seed.get("bug_type") or seed.get("kind") or ""))
+        for seed in seed_defects
+        if isinstance(seed, dict)
+        and all(
+            f["seed_id"] != str(seed.get("id") or "")
+            for f in findings
+        )
+    ))
+    false_negative_rate = round(len(missed_bug_types) / len(unique_normalized_types), 4) if unique_normalized_types else 0.0
+
     return {
         "schema_version": "p3-seed-bug-benchmark-v1",
         "total_seed_defects": total,
@@ -182,4 +230,46 @@ def evaluate_seed_bug_benchmark(scan_result: dict[str, Any] | list[dict[str, Any
         "findings": findings,
         "missed": missed,
         "grade": "passed" if total and len(findings) == total else ("partial" if findings else "failed"),
+        # P6 corrected metrics
+        "p6_corrected_metrics": {
+            "raw_recall": raw_recall,
+            "corrected_recall": corrected_recall,
+            "total_unique_bug_types": len(unique_normalized_types),
+            "unique_bug_types_detected": len(unique_found_normalized),
+            "unique_bug_types_missed": missed_bug_types,
+            "false_negative_rate": false_negative_rate,
+            "note": "corrected_recall uses unique bug-type deduplication to avoid recall > 1.0 from multi-oracle detection of the same defect.",
+        },
     }
+
+
+def _normalize_bug_type(bug_type: str) -> str:
+    """Normalize bug type/category labels for consistent comparison."""
+    mapping = {
+        "privilege_escalation": "authorization",
+        "permission_bypass": "authorization",
+        "idor": "authorization",
+        "tenant_isolation": "isolation",
+        "multi_tenant": "isolation",
+        "money_conservation": "conservation",
+        "idempotency": "idempotency",
+        "duplicate_submit": "idempotency",
+        "concurrency_race": "concurrency",
+        "state_machine": "state_machine",
+        "contract_inconsistency": "contract",
+        "schema_mismatch": "contract",
+        "parameter_boundary": "boundary",
+        "db_inconsistency": "db_consistency",
+        "db_state_mismatch": "db_consistency",
+        "cache_drift": "cache_consistency",
+        "frontend_backend_drift": "cache_consistency",
+        "ui_api_mismatch": "ui_api_availability",
+        "error_handling": "error_handling",
+        "security_boundary": "security",
+        "historical_recurrence": "regression",
+        "lifecycle_regression": "regression",
+        "test_data_pollution": "data_hygiene",
+        "cleanup_failure": "data_hygiene",
+    }
+    normalized = bug_type.strip().lower().replace(" ", "_").replace("-", "_")
+    return mapping.get(normalized, normalized)
