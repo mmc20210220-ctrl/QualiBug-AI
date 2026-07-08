@@ -17,3 +17,4 @@
 - [x] 修复 `scan_diagnostics` 预检 `routes` UnboundLocalError 崩溃与 `report_source_path` 跨平台分隔符
 - [x] "本轮扫描 vs 缺陷货架"scope 分离已闭环：后端 customer_ready_defects 取 campaign 去重数、前端 buildProjectSummary 采用 raw payload 口径(用户裁决)、Dashboard 货架提示改 JSX 插值；相关 17 项测试全绿
 - [x] 主链回归护栏套件已就位并全绿：主链2/4/5/6/7/8 共 31 项 + 后端主链核心(phase108/109 + project_config + frontend_scope)共 131 项全绿、零回归、零 error，固化 P0 闭环不失守
+- [x] 测试隔离性加固已闭环：conftest 三处修复(JWT 缺省占位 / 每会话唯一 basetemp / `_heal_basetemp` 自愈合)消除历史级联红测；全量 `pytest tests/` = 1038 passed, 13 skipped, 0 failed, 0 error(原 270 errors/51 failures 已全消)
