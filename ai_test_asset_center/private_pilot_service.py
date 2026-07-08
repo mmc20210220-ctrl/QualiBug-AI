@@ -235,10 +235,13 @@ def _regression_status_label(status: str) -> str:
     }.get(normalized, normalized or "未知")
 
 
-def _regression_lifecycle(status: str, included_in_suite: bool) -> dict[str, str]:
+def _regression_lifecycle(status: str, included_in_suite: bool, consecutive_passes: int = 0) -> dict[str, str]:
     normalized = str(status or "").strip().lower()
+    # Stable: 2+ consecutive regression passes verify the fix is solid.
+    if normalized == "passed" and consecutive_passes >= 2:
+        return {"code": "stable", "label": "回归稳定", "description": f"已连续 {consecutive_passes} 轮回归通过，缺陷确认修复稳定。"}
     if normalized == "passed":
-        return {"code": "verified_fixed", "label": "回归通过", "description": "最新一次回归已验证该缺陷不再复现。"}
+        return {"code": "verified_fixed", "label": "回归通过", "description": "最新一次回归已验证该缺陷不再复现，建议再执行一轮确认稳定性。"}
     if normalized == "failed":
         return {"code": "regression_failed", "label": "回归失败", "description": "最新一次回归仍能触发该缺陷，需继续修复。"}
     if normalized == "needs_review":
@@ -507,7 +510,14 @@ def _load_regression_projection(root: Path, project_id: str, defects: list[dict[
         failure_count_in_history = len([item for item in matched_history if _first_text(item.get("status")) == "failed"])
         if failure_count_in_history >= 2:
             repeated_failure_defect_count += 1
-        lifecycle = _regression_lifecycle(latest_status, bool(matched_suite_modes))
+        # Compute consecutive regression passes for stability tracking
+        consecutive_passes = 0
+        for history_item in matched_history:
+            if _first_text(history_item.get("status")) == "passed":
+                consecutive_passes += 1
+            else:
+                break  # only count consecutive from most recent
+        lifecycle = _regression_lifecycle(latest_status, bool(matched_suite_modes), consecutive_passes=consecutive_passes)
         lifecycle_counts[lifecycle["code"]] = lifecycle_counts.get(lifecycle["code"], 0) + 1
         if latest_status not in defect_status_counts:
             defect_status_counts[latest_status] = 0
@@ -534,6 +544,8 @@ def _load_regression_projection(root: Path, project_id: str, defects: list[dict[
             "lifecycle_status": lifecycle["code"],
             "lifecycle_label": lifecycle["label"],
             "lifecycle_description": lifecycle["description"],
+            "consecutive_passes": consecutive_passes,
+            "stable": lifecycle["code"] == "stable",
         }
 
     gate_status_counts: dict[str, int] = {}
