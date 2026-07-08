@@ -1,0 +1,1993 @@
+INPUT_FILES: ['API_SPEC.md', 'BUSINESS_RULES.md', 'DB_SCHEMA.md', 'DEPLOYMENT.md', 'HISTORICAL_BUGS.md', 'PRD.md', 'TEST_ACCOUNTS.md', 'USER_ROLES.md', 'WINDOWS_NATIVE_START.md']
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=unknown
+  [WARN] universal_api_parser: unknown format, returning empty spec
+  [INFO] universal_api_parser: detected format=openapi3
+  [WARN] default/admin: no credentials configured, skipping login
+  [WARN] default/viewer: no credentials configured, skipping login
+============================================================
+DISCOVERY_SUMMARY: {"issue_count": 660, "high_confidence_issues": 660, "suggested_release_blockers": 647, "needs_human_review": 660, "confirmed_runtime_bugs": 458, "risk_types": ["auth_boundary_probe", "business_rule_probe", "conservation_probe", "ownership_scope_probe", "read_consistency_probe", "state_transition_probe"], "by_execution_policy": {"disposable_sandbox_required": 535, "read_only_safe": 125}, "candidate_mode": "document_grounded_input_only", "flow_probe_count": 45, "flow_high_confidence": 43, "protected_runtime_candidates": 54, "runtime_evidence_ready": true}
+PROBE_EXEC_SUMMARY: {"probe_count": 660, "original_probe_count": 660, "runtime_rerun_selection_enabled": false, "runtime_evidence_carry_forward_supported": true, "runtime_rerun_selection_status": "disabled_full_probe_plan_selected", "runtime_rerun_selected_probe_count": 660, "runtime_rerun_skipped_probe_count": 0, "runtime_rerun_missing_candidate_count": 0, "runtime_carry_forward_status": "disabled_no_targeted_rerun_or_no_excluded_candidates", "runtime_carry_forward_candidate_count": 0, "runtime_carry_forward_reproduction_count": 0, "runtime_carry_forward_probe_ledger_count": 0, "runtime_progress_delta_status": "no_previous_runtime_evidence_found", "runtime_progress_delta_regression_count": 0, "runtime_progress_delta_resolved_gap_count": 0, "runtime_progress_delta_new_gap_count": 8, "runtime_promotion_gate_status": "runtime_evidence_promotion_blocked_by_remediation_queue", "runtime_promotion_gate_ready": false, "runtime_promotion_gate_blocker_count": 5, "runtime_promotion_gate_approved_candidate_count": 20, "runtime_delivery_manifest_status": "runtime_delivery_manifest_blocked_by_promotion_gate", "runtime_delivery_manifest_ready": false, "runtime_delivery_manifest_hashed_required_artifact_count": 7, "runtime_delivery_manifest_missing_required_artifact_count": 0, "runtime_delivery_manifest_baseline_id": "qbruntime-8d425f41f1c3642de451", "runtime_delivery_manifest_verification_status": "runtime_delivery_manifest_verification_failed", "runtime_delivery_manifest_verified": false, "runtime_delivery_manifest_verification_failed_required_artifact_count": 0, "phase94_added_probe_count": 0, "phase94_added_p0_probe_count": 0, "phase94_multistep_flow_scenario_count": 0, "executed_readonly_count": 125, "executed_write_sandbox_count": 535, "blocked_count": 0, "dry_run_count": 0, "validated_candidate_count": 458, "protected_count": 54, "needs_more_evidence_count": 0, "probe_outcome_count": 660, "probe_outcome_counts": {"falsified_or_protected": 54, "inconclusive": 20, "observed_no_finding": 128, "validated_candidate": 458}, "auto_fixture_setup_request_count": 535, "auto_fixture_cleanup_request_count": 513, "auto_snapshot_request_count": 5350, "auto_snapshot_observer_kinds": ["collection_projection", "inventory_projection", "primary_resource_detail"], "auto_snapshot_observer_kind_count": 3, "semantic_joined_observer_graph_count": 535, "cross_observer_conservation_checked_count": 0, "customer_ready_evidence_package_count": 458, "strong_evidence_finding_count": 439, "critical_finding_count": 0, "high_finding_count": 254, "by_priority": {"P1": 254, "P2": 204}, "by_decision": {"execute_readonly": 125, "execute_write_sandbox": 535}, "onboarding_preflight_status": "degraded", "onboarding_preflight_blocking_count": 0, "onboarding_preflight_warning_count": 3, "ready_for_p0_p1_runtime_validation": false, "runtime_ready_probe_count": 660, "runtime_degraded_probe_count": 0, "runtime_capability_blocked_probe_count": 0, "onboarding_remediation_action_count": 1, "onboarding_remediation_p0_action_count": 0, "runtime_runbook_step_count": 4, "runtime_evidence_readiness_score": 100, "runtime_evidence_sla_gate_passed": true, "runtime_execution_integrity_score": 52.25, "runtime_scoreboard_binding_success_rate": 6.16, "runtime_scoreboard_fixture_setup_success_rate": 19.44, "runtime_scoreboard_cleanup_success_rate": 36.65, "runtime_scoreboard_snapshot_success_rate": 51.25, "runtime_scoreboard_top_gap_count": 1, "runtime_probe_ledger_entry_count": 660, "runtime_probe_ledger_customer_ready_count": 20, "runtime_probe_ledger_evidence_gap_count": 20, "runtime_sla_must_run_count": 561, "runtime_sla_blocked_before_sla_count": 0, "runtime_sla_gap_prioritized_action_count": 1, "runtime_sla_estimated_score_after_top_actions": 100, "onboarding_patch_safety_issue_count": 0, "onboarding_patch_safe_to_send": true, "write_sandbox_approval_required": true, "write_sandbox_approval_ready": true, "commercial_handoff_status": "handoff_blocked_by_runtime_evidence_promotion_gate", "commercial_handoff_blocker_count": 3, "commercial_handoff_artifact_count": 44, "commercial_handoff_acceptance_status": "acceptance_blocked", "commercial_handoff_acceptance_gate_passed": false, "commercial_handoff_acceptance_violation_count": 4, "commercial_handoff_secret_audit_status": "handoff_secret_audit_passed", "commercial_handoff_secret_audit_issue_count": 0, "commercial_handoff_safe_for_customer": true, "commercial_handoff_secret_redaction_plan_status": "handoff_secret_redaction_not_required", "commercial_handoff_secret_redaction_action_count": 0, "commercial_handoff_redacted_runtime_evidence_status": "handoff_redacted_runtime_evidence_not_required", "commercial_handoff_redacted_runtime_evidence_safe": true, "commercial_handoff_redacted_runtime_evidence_action_count": 0, "handoff_archive_manifest_status": "immutable_archive_receipt_ready", "handoff_archive_hashed_artifact_count": 85, "handoff_archive_missing_required_artifact_count": 0, "immutable_run_receipt_status": "immutable_archive_receipt_ready", "immutable_run_lineage_id": "qbrun-99b06e675a3dd26ac244", "handoff_receipt_comparison_status": "no_previous_receipt", "handoff_receipt_change_count": 0, "handoff_receipt_lineage_match": false, "handoff_rerun_audit_status": "rerun_baseline_only_no_previous_receipt", "handoff_rerun_closure_allowed": false, "handoff_rerun_audit_blocker_count": 0, "commercial_evidence_lineage_dashboard_status": "lineage_dashboard_baseline_only", "commercial_evidence_lineage_closure_claim_state": "closure_claim_baseline_only", "commercial_evidence_lineage_changed_hash_count": 0, "commercial_lineage_reviewer_signoff_status": "lineage_reviewer_signoff_required", "commercial_lineage_reviewer_signoff_required": true, "commercial_lineage_reviewer_signoff_item_count": 1, "commercial_closure_acceptance_ledger_status": "closure_acceptance_ledger_pending_reviewer_signoff", "commercial_closure_acceptance_ledger_entry_count": 0, "commercial_audit_event_stream_status": "commercial_audit_event_stream_requires_review", "commercial_audit_event_count": 5, "commercial_audit_export_status": "commercial_audit_exports_ready_for_reviewer_import", "commercial_audit_jira_issue_count": 5, "commercial_audit_linear_issue_count": 5, "commercial_audit_csv_row_count": 5, "commercial_closure_external_tracking_key_count": 0, "commercial_audit_import_gate_status": "commercial_audit_import_gate_blocked", "commercial_audit_import_ready": false, "commercial_audit_import_violation_count": 10, "commercial_audit_import_placeholder_count": 10, "commercial_external_tracker_reconciliation_status": "external_tracker_reconciliation_blocked_by_import_gate", "commercial_external_tracker_reconciliation_entry_count": 15, "runtime_scoreboard_execution_coverage_rate": 100.0, "runtime_scoreboard_target_response_rate": 100.0, "runtime_scoreboard_oracle_resolution_rate": 77.58, "runtime_scoreboard_recommended_action_count": 5, "runtime_scoreboard_evidence_maturity_level": "runtime_evidence_blocked", "runtime_scoreboard_customer_ready": false, "runtime_probe_ledger_carried_forward_count": 0, "runtime_reproduction_pack_finding_count": 458, "runtime_reproduction_pack_customer_ready_count": 20, "runtime_reproduction_pack_carried_forward_count": 0, "runtime_reproduction_pack_status": "ready", "runtime_remediation_plan_status": "runtime_remediation_required", "runtime_remediation_plan_p0_group_count": 4, "runtime_remediation_plan_queued_candidate_count": 635, "fix_verification_required_count": 254, "closed_by_rerun_count": 0, "still_open_after_rerun_count": 0, "reopened_finding_count": 0, "stable_lifecycle_match_count": 0, "remediation_work_item_count": 254, "external_tracker_closure_sync_status": "external_tracker_closure_sync_no_claims", "external_tracker_closure_sync_policy_count": 0, "external_tracker_closure_sync_ready_count": 0, "external_tracker_sync_payload_status": "external_tracker_sync_payloads_blocked_or_empty", "external_tracker_jira_transition_payload_count": 0, "external_tracker_linear_update_payload_count": 0, "external_tracker_sync_hold_item_count": 0, "external_tracker_sync_payload_gate_status": "external_tracker_sync_payload_gate_hold_only", "external_tracker_sync_payload_import_ready": false, "external_tracker_sync_payload_gate_violation_count": 0, "external_tracker_sync_receipt_status": "external_tracker_sync_receipt_empty", "external_tracker_sync_receipt_entry_count": 0, "external_tracker_sync_confirmed_count": 0}
+FLOW_SUMMARY: {"issue_count": 45, "high_confidence_issues": 43, "suggested_release_blockers": 0, "needs_human_review": 45, "confirmed_runtime_bugs": 0, "risk_types": ["assurance_coverage_gap", "audit_log_missing", "browser_ui_replay", "frontend_execution_runtime", "openapi_security_static_scan", "stability_timeout"]}
+CANDIDATES_FILE: D:\QualiBug-AI\QualiBug-AI-main\_e2e_run\platform_outputs\benchmark_mall\input_only_run\grounded_candidates.json
+EXEC_REPORT_FILE: D:\QualiBug-AI\QualiBug-AI-main\_e2e_run\platform_outputs\benchmark_mall\input_only_run\grounded_probe_execution_report.json
+FLOW_ISSUES_FILE: D:\QualiBug-AI\QualiBug-AI-main\_e2e_run\platform_outputs\benchmark_mall\real_project\discovered_issues.json

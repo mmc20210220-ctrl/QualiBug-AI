@@ -1989,6 +1989,12 @@ def _configured_body(config: dict[str, Any], candidate_id: str, method: str, pat
     elif bodies:
         return None, "request_bodies_not_object"
 
+    # Coupon probes injected by pre-scan enrichment carry a concrete DB-sampled
+    # body (real coupon code + sku + qty).  Use it verbatim so the validate
+    # endpoint receives actual data the customer DB already contains.
+    if probe is not None and isinstance(probe.get("_coupon_body"), dict):
+        return dict(probe["_coupon_body"]), "db_sampled_coupon_case"
+
     if probe is not None and _auto_fixture_enabled(config):
         bundle = _auto_fixture_bundle(config, probe)
         body = bundle.get("request_body") if isinstance(bundle, dict) else None
@@ -5713,6 +5719,45 @@ def run_grounded_probe_executor(
     probes = original_probes + list(bug_discovery_expansion.get("probes") or [])
     runtime_rerun_selection: dict[str, Any]
     probes, runtime_rerun_selection = _apply_runtime_rerun_selection(probes, config)
+
+    # ── Coupon validation enrichment (pre-scan, DB-driven) ──
+    # If the customer has a database DSN, query real expired / inactive /
+    # category-mismatched coupons and inject probes that submit them against the
+    # validate endpoint.  These are fully generic — the coupon codes come from
+    # the DB, the expected rejection (4xx) is encoded in the HTTP contract, so
+    # any 2xx acceptance of a known-invalid coupon is a real money/rule defect.
+    _db_dsn = os.environ.get("QUALIBUG_DB_DSN", "")
+    if _db_dsn:
+        try:
+            from .v12_pipeline import _coupon_validation_samples
+            coupon_cases = _coupon_validation_samples(_db_dsn)
+            for label, case in coupon_cases.items():
+                if not isinstance(case, dict) or not case.get("body"):
+                    continue
+                coupon_code = str(case.get("coupon_code") or "")
+                coupon_probe = {
+                    "candidate_id": f"CUP-{label}",
+                    "risk_type": "business_rule_probe",
+                    "endpoint": {"method": "POST", "path": "/api/coupons/validate"},
+                    "execution_policy": "safe_read_only",
+                    "actors": ["buyer"],
+                    "probe_plan": {
+                        "steps": [f"Submit known-{label.replace('_',' ')} coupon {coupon_code} for validation"],
+                        "expected_status": [400, 422, 404],
+                        "focus_rule": label,
+                    },
+                    "required_evidence": ["request_response_pair", "status_code"],
+                    "source_refs": [{"file": "coupon_validation_samples", "section": label}],
+                    "grounding_basis": {"source": "db_sampled_coupon", "label": label},
+                    "validation_priority": 0,
+                }
+                # Attach the concrete request body so the probe has real data.
+                coupon_probe["_coupon_body"] = dict(case.get("body") or {})
+                probes.append(coupon_probe)
+        except Exception:
+            pass  # DB sampled coupon probes best-effort; never block the scan
+    # ── end coupon enrichment ──
+
     if max_probes and max_probes > 0:
         before_max = len(probes)
         probes = probes[:max_probes]

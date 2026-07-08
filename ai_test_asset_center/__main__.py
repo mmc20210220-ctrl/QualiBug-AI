@@ -261,9 +261,12 @@ def _persist_customer_ready_static_artifacts(project: str, root: Path, result: O
     customer_ready_family_shelf = {
         "project": project,
         "generated_at_utc": snapshot.get("generated_at_utc"),
-        "defects": snapshot.get("defects", []),
+        "defects": snapshot.get("defects", []) or (
+            [dict(f, is_reproducible=True) for f in (result.get("findings") or [])
+             if isinstance(f, dict) and f.get("customer_delivery_status") == "defect"]
+            if isinstance(result, dict) else []
+        ),
         "clues": snapshot.get("clues", []),
-        "risks": snapshot.get("defects", []),
         "value_metrics": snapshot.get("value_metrics", {}),
         "executive_summary": snapshot.get("executive_summary", {}),
         "scan_meta": snapshot.get("scan_meta", {}),
