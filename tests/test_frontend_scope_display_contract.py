@@ -43,10 +43,10 @@ def test_project_summary_reuses_normalized_campaign_snapshot() -> None:
 
     assert "const normalized = normalizeCampaignSnapshot(raw);" in source
     assert "const record = asRecord(normalized);" in source
-    assert "const findings = getReportFindings(normalized);" in source
+    assert "const findings = getReportFindings(raw);" in source
     assert "const scanMeta = asRecord(field(normalized, 'scan_meta'));" in source
     assert "resolvedProjectId: getResolvedProjectId(normalized)," in source
-    assert "clueCount: getReportClues(normalized).length," in source
+    assert "clueCount: getReportClues(raw).length," in source
 
 
 def test_dashboard_surfaces_current_scan_and_family_shelf_separately() -> None:

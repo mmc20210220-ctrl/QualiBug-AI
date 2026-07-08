@@ -55,22 +55,28 @@ def _normalize_probe_id(raw: Any, index: int) -> str:
     return (text or f"REGRESSION_{index:04d}")[:96]
 
 
+_COMMON_PATH_PREFIXES = {
+    "api", "apis", "rest", "restful", "v1", "v2", "v3", "v4",
+    "public", "internal", "service", "services", "gateway", "app", "web",
+}
+
+
 def _infer_module(path: str, risk_type: str, title: str = "") -> str:
-    haystack = f"{path} {risk_type} {title}".lower()
-    mapping = [
-        ("auth", ["auth", "login", "token", "role", "rbac", "permission", "admin", "user", "tenant", "idor"]),
-        ("order", ["order", "cart", "checkout", "cancel"]),
-        ("payment", ["pay", "payment", "callback", "trade"]),
-        ("refund", ["refund", "return"]),
-        ("inventory", ["stock", "inventory", "sku"]),
-        ("coupon", ["coupon", "discount", "promotion"]),
-        ("account", ["account", "profile", "address"]),
+    # Data-driven, industry-agnostic: derive the module from the real URL path
+    # (first meaningful resource segment), never from hardcoded business keywords.
+    parts = [
+        p for p in str(path or "").strip("/").split("/")
+        if p and "{" not in p and ":" not in p
     ]
-    for module, keys in mapping:
-        if any(k in haystack for k in keys):
-            return module
-    parts = [p for p in path.strip("/").split("/") if p]
-    return re.sub(r"[^A-Za-z0-9_\-]+", "_", (parts[0] if parts else "general"))[:48] or "general"
+    for part in parts:
+        if part.lower() in _COMMON_PATH_PREFIXES:
+            continue
+        slug = re.sub(r"[^A-Za-z0-9_\-]+", "_", part).strip("_")
+        if slug:
+            return slug[:48]
+    # No usable resource segment: fall back to the risk type as a neutral label.
+    slug = re.sub(r"[^A-Za-z0-9_\-]+", "_", str(risk_type or "").strip()).strip("_")
+    return slug[:48] or "general"
 
 
 def _is_destructive(method: str, risk_type: str) -> bool:
@@ -202,7 +208,7 @@ def _load_customer_ready_defect_probes(project: str, root: Path) -> list[dict[st
             "severity": item.get("severity") or "P2",
             "method": method,
             "path": path,
-            "actor": har_evidence.get("actor") or request_raw.get("actor") or "normal_user",
+            "actor": har_evidence.get("actor") or request_raw.get("actor") or "unspecified",
             "expected": expected_actual.get("expected") or item.get("expected") or "原缺陷信号不应复现，若缺少自动断言则应进入人工复核。",
             "source": "customer_ready_defect_data",
             "candidate_tier": "customer_ready_defect",

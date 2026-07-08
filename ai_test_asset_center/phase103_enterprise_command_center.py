@@ -20,6 +20,7 @@ import re
 import time
 from collections import Counter, defaultdict
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 PHASE103_VERSION = "phase103-enterprise-command-center-v1"
@@ -28,6 +29,43 @@ SAFE_EXECUTION_MODES = {"read_only", "write_restricted", "sandbox_write"}
 WRITE_TEST_MODES = {"write", "write_restricted", "write_after_cleanup"}
 LAUNCH_DECISIONS = {"GO", "CONDITIONAL_GO", "HOLD", "NO_GO", "UNKNOWN"}
 SEVERITY_WEIGHTS = {"critical": 100, "high": 60, "medium": 30, "low": 10, "info": 2}
+
+# ── 主链 4: probe-type gating is data-driven, not hardcoded industry vocab ──
+# Which flows earn a state-consistency / report-accuracy probe is decided by the
+# replaceable `probe_gating_keywords` overlay in policies/semantic_lexicon.json,
+# merged (union) over this built-in fallback. Deployments extend per-industry
+# without touching plan code.
+_SEMANTIC_LEXICON_PATH = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+_PROBE_GATING_DEFAULT: dict[str, list[str]] = {
+    "state_consistency": ["支付", "交易", "库存", "工单", "结算", "计费", "订单"],
+    "report_accuracy": ["报表", "财务", "对账", "审计"],
+}
+_PROBE_GATING_CACHE: dict[str, list[str]] | None = None
+
+
+def _probe_gating_keywords() -> dict[str, list[str]]:
+    global _PROBE_GATING_CACHE
+    if _PROBE_GATING_CACHE is not None:
+        return _PROBE_GATING_CACHE
+    merged: dict[str, list[str]] = {key: list(values) for key, values in _PROBE_GATING_DEFAULT.items()}
+    try:
+        data = json.loads(_SEMANTIC_LEXICON_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    overlay = data.get("probe_gating_keywords") if isinstance(data, dict) else None
+    if isinstance(overlay, dict):
+        for key, values in overlay.items():
+            if key == "comment" or not isinstance(values, list):
+                continue
+            extra = [str(item).strip() for item in values if str(item).strip()]
+            if not extra:
+                continue
+            base = merged.setdefault(str(key), [])
+            for term in extra:
+                if term not in base:
+                    base.append(term)
+    _PROBE_GATING_CACHE = merged
+    return merged
 RISK_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
 SENSITIVE_KEY_RE = re.compile(
@@ -763,7 +801,10 @@ def generate_ai_test_plan(
 
 def _default_probes_for_flow(flow: Mapping[str, Any], safe_mode: str) -> list[dict[str, Any]]:
     flow_id = str(flow.get("business_flow_id"))
-    roles = list(map(str, flow.get("required_roles", []))) or ["normal_user"]
+    # Industry-agnostic: use only the roles the flow actually declares. Never
+    # fabricate a business role (e.g. "normal_user") — a role-less flow in a
+    # non-consumer industry must not be forced into a consumer role.
+    roles = [role for role in map(str, flow.get("required_roles", []) or []) if role.strip()]
     probes: list[dict[str, Any]] = [
         {
             "probe_id": _slug([flow_id, "auth"], "probe", 10),
@@ -793,7 +834,7 @@ def _default_probes_for_flow(flow: Mapping[str, Any], safe_mode: str) -> list[di
             "estimated_test_points": max(3, len(flow.get("nodes", []))),
         },
     ]
-    if any(keyword in str(flow.get("name")) for keyword in ["支付", "交易", "库存", "工单", "结算", "计费", "订单"]):
+    if any(keyword in str(flow.get("name")) for keyword in _probe_gating_keywords().get("state_consistency", [])):
         probes.append(
             {
                 "probe_id": _slug([flow_id, "state"], "probe", 10),
@@ -805,7 +846,7 @@ def _default_probes_for_flow(flow: Mapping[str, Any], safe_mode: str) -> list[di
                 "estimated_test_points": 4,
             }
         )
-    if any(keyword in str(flow.get("name")) for keyword in ["报表", "财务", "对账", "审计"]):
+    if any(keyword in str(flow.get("name")) for keyword in _probe_gating_keywords().get("report_accuracy", [])):
         probes.append(
             {
                 "probe_id": _slug([flow_id, "report"], "probe", 10),

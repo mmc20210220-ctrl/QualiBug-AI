@@ -143,9 +143,9 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
             "info"))
 
     # ── 4. API doc parsing ──
+    routes: list[str] = []
     if api_doc:
         import re
-        routes = []
         for m in re.finditer(r'^#{2,4}\s+(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)', api_doc, re.MULTILINE):
             routes.append(f"{m.group(1)} {m.group(2)}")
         if routes:

@@ -12,6 +12,10 @@ from urllib.parse import urljoin
 
 from .real_project_onboarding import ROOT, _html_escape, _safe_project_id, load_real_project_config
 from .regression_suite_builder import build_regression_suite
+from .enterprise_project_config import (
+    match_production_data_exclusion,
+    _load_execution_safety_boundary,
+)
 
 PRIVATE_MARKERS = {
     "private_ground_truth",
@@ -64,6 +68,17 @@ def _is_destructive(probe: dict[str, Any]) -> bool:
     return bool(probe.get("destructive")) or method in DESTRUCTIVE_METHODS or risk_type in {"payment", "refund", "duplicate_submit", "idempotency", "concurrency", "delete", "cancel_order"}
 
 
+def _is_production_data_blocked(boundary: dict[str, Any], probe: dict[str, Any]) -> str:
+    """主链 9 × 主链 1: a regression probe whose path/risk_type matches a
+    customer-declared production-data-exclusion must NEVER be sent — not in real
+    mode and not even in dry_run. Returns the matched reason or '' when allowed."""
+    if not isinstance(boundary, dict):
+        return ""
+    return match_production_data_exclusion(
+        boundary, str(probe.get("path") or ""), str(probe.get("risk_type") or "")
+    ) or ""
+
+
 def _load_or_build_suite(project: str, root: Path, options: dict[str, Any]) -> dict[str, Any]:
     suite_path = root / "platform_outputs" / project / "regression_suite" / "regression_suite.json"
     suite = _load_json_safe(suite_path, {})
@@ -73,16 +88,30 @@ def _load_or_build_suite(project: str, root: Path, options: dict[str, Any]) -> d
 
 
 def _headers_from_accounts(project: str, root: Path) -> dict[str, str]:
-    # Keep this intentionally conservative. Real auth/token orchestration belongs to onboarding.
-    # The regression runner can still use a manually supplied bearer token from test_accounts.json.
+    # Keep this intentionally conservative and industry-agnostic. Real auth/token
+    # orchestration belongs to onboarding. Never hardcode a role name: prefer a
+    # top-level token, then any account explicitly flagged default, then the first
+    # account entry that carries a usable token.
     accounts = _load_json_safe(root / "platform_inputs" / project / "test_accounts.json", {})
     headers = {"User-Agent": "AI-Test-Asset-Center-RegressionRunner/1.0", "Accept": "application/json,text/plain,*/*"}
+
+    def _token_of(entry: Any) -> str:
+        if isinstance(entry, dict):
+            return str(entry.get("token") or entry.get("bearer_token") or "").strip()
+        return ""
+
+    token = ""
     if isinstance(accounts, dict):
-        token = accounts.get("token") or accounts.get("bearer_token")
-        if not token and isinstance(accounts.get("normal_user"), dict):
-            token = accounts["normal_user"].get("token") or accounts["normal_user"].get("bearer_token")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        token = str(accounts.get("token") or accounts.get("bearer_token") or "").strip()
+        if not token:
+            entries = [v for v in accounts.values() if isinstance(v, dict)]
+            default_entries = [v for v in entries if v.get("default") or v.get("is_default")]
+            for entry in default_entries + entries:
+                token = _token_of(entry)
+                if token:
+                    break
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
@@ -97,10 +126,26 @@ def _encode_request_body(probe: dict[str, Any]) -> bytes | None:
     return None
 
 
-def _execute_http_probe(probe: dict[str, Any], cfg: dict[str, Any], project: str, root: Path, timeout: float) -> dict[str, Any]:
+def _execute_http_probe(probe: dict[str, Any], cfg: dict[str, Any], project: str, root: Path, timeout: float, safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
     base_url = str(cfg.get("base_url") or "").strip()
     method = str(probe.get("method") or "GET").upper()
     path = str(probe.get("path") or "/")
+    # 主链 9 × 主链 1: defense-in-depth — even if called directly (bypassing the
+    # loop-level guard), a probe targeting a production-data-exclusion path is
+    # never sent. The request simply never leaves the process.
+    _block = match_production_data_exclusion(
+        safety_boundary or {}, path, str(probe.get("risk_type") or "")
+    )
+    if _block:
+        return {
+            "reachable": False,
+            "error": "production_data_blocked",
+            "status_code": None,
+            "body_excerpt": "",
+            "production_data_blocked": True,
+            "block_reason": _block,
+            "url": None,
+        }
     if not base_url:
         return {"reachable": False, "error": "base_url_missing", "status_code": None, "body_excerpt": ""}
     url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
@@ -188,6 +233,110 @@ def _judge_probe(probe: dict[str, Any], execution: dict[str, Any], skipped: bool
 
 def _count(items: list[dict[str, Any]], status: str) -> int:
     return sum(1 for i in items if i.get("status") == status)
+
+
+def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], safety_boundary: dict[str, Any], timeout: float, dry_run: bool) -> dict[str, Any]:
+    """主链 9 Gap B2: post-fix regression verification of already-confirmed defects.
+
+    Consumes the 主链 6 product (``confirmed_findings.json`` — deliverable confirmed
+    defects keyed by stable evidence_id) and the 主链 7 product (``evidence_chains/
+    {evidence_id}.json`` for invariant context), replays each reproduction request
+    under the SAME production-data safety boundary, and judges:
+
+    * ``resolved``     — the fix removed the defect (replay status differs from the
+                         recorded buggy status code, or the probe is now healthy).
+    * ``persisted``    — the defect still reproduces (replay returns the same buggy
+                         status code) → a real regression that must block release.
+    * ``blocked``      — the reproduction path is excluded by the safety boundary;
+                         cannot be auto-verified, surfaced for manual review.
+    * ``needs_review`` — the system was unreachable / no oracle, or a dry run.
+
+    Returns a dict with the per-defect verdicts and a summary count block.
+    """
+    ws = root / "platform_workspace" / project / "defect_discovery"
+    ledger = _load_json_safe(ws / "confirmed_findings.json", {})
+    if not isinstance(ledger, dict) or not ledger:
+        return {"consumed": False, "verdicts": [], "counts": {"total": 0, "resolved": 0, "persisted": 0, "blocked": 0, "needs_review": 0}}
+    verdicts: list[dict[str, Any]] = []
+    c = {"total": 0, "resolved": 0, "persisted": 0, "blocked": 0, "needs_review": 0}
+    for evidence_id, defect in ledger.items():
+        if not isinstance(defect, dict):
+            continue
+        c["total"] += 1
+        repro = defect.get("reproduction") if isinstance(defect.get("reproduction"), dict) else {}
+        method = str(repro.get("method") or "GET").upper()
+        path = str(repro.get("path") or "").strip()
+        buggy_status = int(defect.get("buggy_status_code") or 0)
+        # Consume 主链 7 evidence chain for invariant context (best-effort).
+        invariant_ctx = ""
+        chain = _load_json_safe(ws / "evidence_chains" / f"{evidence_id}.json", {})
+        if isinstance(chain, dict):
+            for layer in (chain.get("layers") if isinstance(chain.get("layers"), list) else []):
+                if isinstance(layer, dict) and layer.get("invariant_evaluation"):
+                    invariant_ctx = str(layer.get("invariant_evaluation") or "")
+                    break
+        probe = {"method": method, "path": path, "risk_type": str(repro.get("risk_type") or ""), "expected": str(defect.get("expected") or "")}
+        # Hard safety boundary applies to re-verification exactly as to discovery.
+        block = _is_production_data_blocked(safety_boundary, probe)
+        if block:
+            verdicts.append({
+                "evidence_id": evidence_id,
+                "title": str(defect.get("title") or ""),
+                "severity": str(defect.get("severity") or "P2"),
+                "status": "blocked",
+                "buggy_status_code": buggy_status,
+                "current_status_code": None,
+                "reason": f"复现路径命中生产数据禁触边界，已跳过自动复验：{block}",
+                "invariant_context": invariant_ctx,
+            })
+            c["blocked"] += 1
+            continue
+        if dry_run:
+            verdicts.append({
+                "evidence_id": evidence_id,
+                "title": str(defect.get("title") or ""),
+                "severity": str(defect.get("severity") or "P2"),
+                "status": "needs_review",
+                "buggy_status_code": buggy_status,
+                "current_status_code": None,
+                "reason": "dry run 模式下未发起真实复现请求，需 QA 复核。",
+                "invariant_context": invariant_ctx,
+            })
+            c["needs_review"] += 1
+            continue
+        execution = _execute_http_probe(probe, cfg, project, root, timeout, safety_boundary)
+        if not execution.get("reachable"):
+            verdicts.append({
+                "evidence_id": evidence_id,
+                "title": str(defect.get("title") or ""),
+                "severity": str(defect.get("severity") or "P2"),
+                "status": "needs_review",
+                "buggy_status_code": buggy_status,
+                "current_status_code": execution.get("status_code"),
+                "reason": f"被测系统不可访问（{execution.get('error')}），无法判定修复结果。",
+                "invariant_context": invariant_ctx,
+            })
+            c["needs_review"] += 1
+            continue
+        current = int(execution.get("status_code") or 0)
+        if buggy_status and current == buggy_status:
+            status = "persisted"
+            reason = f"复现请求仍返回缺陷状态码 {current}，缺陷未修复（疑似回归）。"
+        else:
+            status = "resolved"
+            reason = f"复现请求返回 {current}，与缺陷状态码 {buggy_status} 不同，缺陷已修复。"
+        verdicts.append({
+            "evidence_id": evidence_id,
+            "title": str(defect.get("title") or ""),
+            "severity": str(defect.get("severity") or "P2"),
+            "status": status,
+            "buggy_status_code": buggy_status,
+            "current_status_code": current,
+            "reason": reason,
+            "invariant_context": invariant_ctx,
+        })
+        c[status] += 1
+    return {"consumed": True, "verdicts": verdicts, "counts": c}
 
 
 def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
@@ -354,11 +503,25 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
     dry_run = bool(options.get("dry_run", False) or _bool_env("REGRESSION_RUN_DRY_RUN", False))
     cfg = load_real_project_config(project, root)
     timeout = float(options.get("timeout_seconds") or cfg.get("request_timeout_seconds") or 3)
+    # 主链 9 × 主链 1: load the SAME production-data safety boundary the v12
+    # executor honors, so regression probes cannot touch customer-excluded paths.
+    safety_boundary = _load_execution_safety_boundary(project, root)
     suite = _load_or_build_suite(project, root, {"allow_destructive_regression": allow_destructive})
     suite_mode = suite.get("modes", {}).get(mode, {}) if isinstance(suite.get("modes"), dict) else {}
     probes = [p for p in (suite_mode.get("items") or []) if isinstance(p, dict)]
     items: list[dict[str, Any]] = []
+    production_data_blocked = 0
     for raw in probes:
+        # 主链 9 × 主链 1: hard safety boundary — never probe production-data
+        # exclusion paths, even in dry_run. This is checked before destructive/
+        # dry_run branching so the guard holds in every mode.
+        _block = _is_production_data_blocked(safety_boundary, raw)
+        if _block:
+            _blocked = _judge_probe(raw, {}, skipped=True, skip_reason=_block)
+            _blocked["production_data_blocked"] = True
+            items.append(_blocked)
+            production_data_blocked += 1
+            continue
         destructive = _is_destructive(raw)
         if destructive and not allow_destructive:
             items.append(_judge_probe(raw, {}, skipped=True, skip_reason="默认跳过破坏性回归探针。"))
@@ -366,9 +529,12 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
         if dry_run:
             execution = {"reachable": True, "status_code": _expected_status_from_text(str(raw.get("expected") or "")) or 200, "body_excerpt": "dry run", "error": ""}
         else:
-            execution = _execute_http_probe(raw, cfg, project, root, timeout)
+            execution = _execute_http_probe(raw, cfg, project, root, timeout, safety_boundary)
         items.append(_judge_probe(raw, execution))
     failures = [i for i in items if i.get("status") == "failed"]
+    # 主链 9 Gap B2: re-verify already-confirmed (主链 6) defects after the fix,
+    # consuming both the confirmed-findings ledger and the 主链 7 evidence chains.
+    reverification = _reverify_confirmed_findings(project, root, cfg, safety_boundary, timeout, dry_run)
     summary = {
         "phase": "phase32_regression_runner_ci_feedback",
         "project_id": project,
@@ -384,6 +550,8 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
         "failed_count": _count(items, "failed"),
         "needs_review_count": _count(items, "needs_review"),
         "skipped_count": _count(items, "skipped"),
+        "production_data_blocked_count": production_data_blocked,
+        "reverification": dict(reverification.get("counts") or {}),
         "p0_p1_failed_count": sum(1 for i in failures if i.get("severity") in {"P0", "P1"}),
         "module_distribution": _count_by(items, "module"),
         "risk_distribution": _count_by(items, "risk_type"),
@@ -398,6 +566,8 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
         "failures": failures,
         "ci_feedback": ci_feedback,
         "regression_suite_ref": f"platform_outputs/{project}/regression_suite/regression_suite.json",
+        # 主链 9 Gap B2: post-fix re-verification verdicts for 主链 6/7 products.
+        "reverification": reverification,
         "governance": {
             "real_project_mode": True,
             "uses_regression_suite": True,
@@ -418,6 +588,7 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
     _write_text(out_dir / "regression_failure_report.html", _render_failure_report(result))
     _write_json(ws_dir / "regression_run_result.json", result)
     _write_json(ws_dir / "regression_ci_feedback.json", ci_feedback)
+    _write_json(ws_dir / "regression_reverification.json", reverification)
     history = _append_regression_history(project, root, result)
     result["history_ref"] = f"platform_outputs/{project}/regression_run/regression_run_history.json"
     result["history_size"] = len(history)

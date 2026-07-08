@@ -55,6 +55,39 @@ RISK_HINTS: dict[str, list[str]] = {
     "state_transition": ["status", "state", "cancel", "close", "publish", "状态", "流转", "取消", "发布"],
 }
 
+_SEMANTIC_LEXICON_PATH = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+_RISK_HINTS_CACHE: dict[str, list[str]] | None = None
+
+
+def _effective_risk_hints() -> dict[str, list[str]]:
+    """Risk-signal keyword lexicon, data-driven from the replaceable config asset.
+
+    The industry-specific vocabulary lives in ``policies/semantic_lexicon.json``
+    under ``risk_hints`` so product/deployment teams can replace or extend it
+    per industry WITHOUT changing parser code. ``RISK_HINTS`` here is only a
+    built-in fallback: the config overlay is merged (union) over it, so a
+    deployment can add domain terms while universal signals stay intact.
+    """
+    global _RISK_HINTS_CACHE
+    if _RISK_HINTS_CACHE is not None:
+        return _RISK_HINTS_CACHE
+    merged: dict[str, list[str]] = {risk: list(hints) for risk, hints in RISK_HINTS.items()}
+    overlay = _load_json(_SEMANTIC_LEXICON_PATH, {})
+    overlay_hints = overlay.get("risk_hints") if isinstance(overlay, dict) else None
+    if isinstance(overlay_hints, dict):
+        for risk, values in overlay_hints.items():
+            if not isinstance(values, list):
+                continue
+            extra = [str(item).strip() for item in values if str(item).strip()]
+            if not extra:
+                continue
+            base = merged.setdefault(str(risk), [])
+            for term in extra:
+                if term not in base:
+                    base.append(term)
+    _RISK_HINTS_CACHE = merged
+    return merged
+
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -328,7 +361,7 @@ def retrieve_enterprise_knowledge(query: str, documents: list[dict[str, Any]], t
 def _infer_risks_for_text(text: str) -> list[str]:
     lower = (text or "").lower()
     scores: dict[str, int] = {}
-    for risk, hints in RISK_HINTS.items():
+    for risk, hints in _effective_risk_hints().items():
         score = sum(1 for h in hints if h.lower() in lower)
         if risk == "idempotency" and any(w in lower for w in ["post", "put", "patch", "delete"]):
             score += 1

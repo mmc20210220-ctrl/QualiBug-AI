@@ -361,6 +361,11 @@ class BehaviorSlice:
     priority: float = 0.0
     source_refs: list[dict[str, str]] = field(default_factory=list)
     evidence_gaps: list[str] = field(default_factory=list)
+    # 主链 4: every generated test task carries an explicit lifecycle status so
+    # it can be tracked (pending/running/passed/failed/blocked) and surfaced to
+    # the frontend. Defaults to "pending" at planning time; the execution
+    # campaign flips it as the task is attempted and confirmed.
+    status: str = field(default="pending")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -372,6 +377,7 @@ class BehaviorSlice:
             "priority": self.priority,
             "source_refs": _refs(self.source_refs),
             "evidence_gaps": _unique(self.evidence_gaps),
+            "status": self.status,
         }
 
 

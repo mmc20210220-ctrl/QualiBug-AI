@@ -1049,7 +1049,7 @@ def test_pipeline_preserves_original_markdown_doc_for_dependency_write_scenarios
     }
     executed: list[dict[str, object]] = []
 
-    def fake_execute(scenario, base_url: str, max_retries: int = 2):
+    def fake_execute(scenario, base_url: str, max_retries: int = 2, **kwargs):
         executed.append(
             {
                 "entity": getattr(scenario, "entity", ""),
@@ -1108,7 +1108,7 @@ def test_pipeline_promotes_runtime_write_oracle_violation_to_confirmed_receipt(m
         "source_origin": "declared_manifest",
     }
 
-    def fake_execute(scenario, base_url: str, max_retries: int = 2):
+    def fake_execute(scenario, base_url: str, max_retries: int = 2, **kwargs):
         return {
             "scenario_id": getattr(scenario, "id", "?"),
             "steps": [

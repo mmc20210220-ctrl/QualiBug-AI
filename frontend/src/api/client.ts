@@ -363,6 +363,13 @@ export function getKnowledgePreview(sourceId: string): Promise<unknown> {
   return fetchJSON<unknown>(`${API_BASE}/knowledge/preview?source_id=${encodeURIComponent(sourceId)}`);
 }
 
+// Build a direct URL for a browser/UI evidence artifact (screenshot, HAR, trace).
+// Used as an <img>/<a> src so real visual evidence renders inline; the backend
+// path-traversal-hardened endpoint enforces the browser_runs subtree + whitelist.
+export function evidenceArtifactUrl(projectId: string, ref: string): string {
+  return `${API_BASE}/evidence/artifact?project=${encodeURIComponent(projectId)}&ref=${encodeURIComponent(ref)}`;
+}
+
 export function saveSettings(body: JsonRecord): Promise<unknown> {
   return fetchJSON<unknown>(`${API_BASE}/settings/save`, { method: 'POST', body: JSON.stringify(body) });
 }
@@ -465,4 +472,19 @@ export function getServiceCredentials(projectId: string): Promise<unknown> {
 
 export function saveServiceCredentials(body: JsonRecord): Promise<unknown> {
   return fetchJSON<unknown>(`${API_BASE}/v1/services/credentials`, { method: 'POST', body: JSON.stringify(body) });
+}
+
+// --- Project metadata (industry / module scope / production-data exclusion) ---
+export interface ProjectMetadata {
+  industry?: string;
+  module_scope?: string[] | string;
+  production_data_exclusion?: string[] | string;
+}
+
+export function getProjectMetadata(projectId: string): Promise<ProjectMetadata> {
+  return fetchJSON<ProjectMetadata>(`${API_BASE}/v1/project/metadata?project=${encodeURIComponent(projectId)}`);
+}
+
+export function saveProjectMetadata(body: JsonRecord): Promise<unknown> {
+  return fetchJSON<unknown>(`${API_BASE}/v1/project/metadata`, { method: 'POST', body: JSON.stringify(body) });
 }

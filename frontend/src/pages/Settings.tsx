@@ -5,6 +5,7 @@ import { useLiveStatus, useWorkspaceDirectory } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { SettingsCustomerSection } from '../components/settings/SettingsCustomerSection';
+import { SettingsMetadataSection } from '../components/settings/SettingsMetadataSection';
 import { SettingsTopologySection } from '../components/settings/SettingsTopologySection';
 import { SettingsLlmSection } from '../components/settings/SettingsLlmSection';
 import { SettingsInfoSection } from '../components/settings/SettingsInfoSection';
@@ -89,9 +90,9 @@ function normalizeRoleAccounts(accounts: RoleAccount[]) {
     }))
     .filter((account) => account.role || account.username || account.password);
 
-  const admin = cleaned.find((account) => account.role.toLowerCase() === 'admin');
-  const extras = cleaned.filter((account) => account.role.toLowerCase() !== 'admin');
-  return admin ? [{ ...admin, role: admin.role || 'admin' }, ...extras] : extras;
+  // Industry-agnostic: preserve the customer-declared role order. Do not force any
+  // specific role (e.g. admin) to the top; role names vary across industries.
+  return cleaned;
 }
 
 function extractRoleAccounts(config?: SavedServiceConfig | null): RoleAccount[] {
@@ -117,7 +118,7 @@ function extractRoleAccounts(config?: SavedServiceConfig | null): RoleAccount[] 
   }
 
   const normalized = normalizeRoleAccounts(accounts);
-  return normalized.length ? normalized : [{ role: 'admin', username: '', password: '' }];
+  return normalized.length ? normalized : [{ role: '', username: '', password: '' }];
 }
 
 function extractAuthType(config?: SavedServiceConfig | null): 'password_login' | 'bearer_token' | 'api_key' {
@@ -712,6 +713,7 @@ export function Settings() {
           onImportIdChange={setImportId}
           onCreateWorkspace={handleCreateWorkspace}
         />
+        <SettingsMetadataSection project={project} />
         <SettingsTopologySection
           project={project}
           topology={topology}

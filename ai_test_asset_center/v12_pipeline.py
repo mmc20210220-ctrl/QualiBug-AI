@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -19,6 +20,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 from .enterprise_campaign import (
     EnterpriseCampaign,
     EnterpriseCampaignStore,
@@ -26,6 +29,10 @@ from .enterprise_campaign import (
     source_snapshot_hash,
 )
 from .real_id_resolver import infer_path_params, normalize_path_placeholders, path_has_placeholders
+from .enterprise_project_config import (
+    match_production_data_exclusion,
+    _load_execution_safety_boundary,
+)
 
 _v12_har_entries: list[dict[str, Any]] = []
 _SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
@@ -100,7 +107,7 @@ def _behavior_slice_settings() -> dict[str, int]:
     except Exception:
         budget, round_number, round_limit = 15, 1, 3
     return {
-        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, 40),
+        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, 15),
         "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 12),
         "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 3, 1, 12),
     }
@@ -506,6 +513,108 @@ def _slice_ledger_path(root: Path, project: str) -> Path:
     return root / "platform_workspace" / str(project) / "defect_discovery" / "v12_behavior_slice_ledger.json"
 
 
+def _evidence_chain_path(root: Path, project: str, evidence_id: str) -> Path:
+    return root / "platform_workspace" / str(project) / "defect_discovery" / "evidence_chains" / f"{evidence_id}.json"
+
+
+def _persist_evidence_chain(root: Path, project: str, evidence: dict[str, Any]) -> str:
+    """主链 7: land a collected evidence chain on disk keyed by its (stable)
+    evidence_id so it can be retrieved for regression (主链 9) and delivery
+    (主链 8). Returns the written path, or '' when the evidence has no id."""
+    evidence_id = str(evidence.get("evidence_id") or "").strip()
+    if not evidence_id:
+        return ""
+    path = _evidence_chain_path(root, project, evidence_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return ""
+    return str(path)
+
+
+def _confirmed_findings_path(root: Path, project: str) -> Path:
+    """主链 9 Gap B1: location of the persistable confirmed-defect ledger. The
+    regression runner reads this file to re-verify already-confirmed defects
+    after a fix — closing the loop between 主链 6/7 and 主链 9.
+
+    Uses the same ``platform_workspace/<project>/defect_discovery`` base as the
+    evidence chains (主链 7) so 主链 9 can read both products from one place.
+    """
+    return root / "platform_workspace" / str(project) / "defect_discovery" / "confirmed_findings.json"
+
+
+def _persist_confirmed_findings(root: Path, project: str, findings: list[dict[str, Any]]) -> int:
+    """主链 9 Gap B1: persist every *deliverable* confirmed defect
+    (``customer_delivery_status == "defect"``, must carry a stable ``evidence_id``)
+    into ``defect_discovery/confirmed_findings.json`` keyed by evidence_id, so the
+    regression runner can replay its reproduction reliably and tell resolved from
+    regression.
+
+    Only real defects are persisted — findings blocked by the 主链 1 production-data
+    safety boundary (``blocked_safety_boundary``) are deliberately excluded, exactly
+    as they are excluded from the customer delivery gate. Returns the number saved.
+    """
+    if not isinstance(findings, list):
+        return 0
+    ledger: dict[str, dict[str, Any]] = {}
+    path = _confirmed_findings_path(root, project)
+    if path.exists():
+        try:
+            _loaded = json.loads(path.read_text(encoding="utf-8") or "{}")
+            if isinstance(_loaded, dict):
+                ledger = _loaded
+        except Exception:
+            ledger = {}
+    saved = 0
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        if str(f.get("customer_delivery_status") or "") != "defect":
+            continue
+        evidence_id = str(f.get("evidence_id") or "").strip()
+        if not evidence_id:
+            continue
+        ev = f.get("evidence") if isinstance(f.get("evidence"), dict) else {}
+        raw_evidence = f.get("raw_evidence") if isinstance(f.get("raw_evidence"), dict) else {}
+        response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+        try:
+            buggy_status_code = int(response_raw.get("status_code") or 0)
+        except (TypeError, ValueError):
+            buggy_status_code = 0
+        ledger[evidence_id] = {
+            "evidence_id": evidence_id,
+            "title": str(f.get("title") or ""),
+            "severity": str(f.get("severity") or "P2"),
+            "confirmation_status": str(f.get("confirmation_status") or ""),
+            "bug_status": str(f.get("bug_status") or ""),
+            "customer_delivery_status": "defect",
+            "expected": str(f.get("expected") or ""),
+            "actual": str(f.get("actual") or ""),
+            "buggy_status_code": buggy_status_code,
+            "behavior_slice_id": str(f.get("behavior_slice_id") or ""),
+            "discovery_round": f.get("discovery_round"),
+            "campaign_id": str(f.get("campaign_id") or ""),
+            "timestamp": str(f.get("timestamp") or ""),
+            "reproduction": {
+                "request": str(ev.get("request") or ""),
+                "target": str(ev.get("target") or ""),
+                "method": str((ev.get("request") or "").split(" ", 1)[0].strip()),
+                "path": "/" + str((ev.get("request") or "").split(" ", 1)[-1].lstrip("/")) if " " in str(ev.get("request") or "") else "",
+                "actor": str(ev.get("actor") or ""),
+                "reproduction_steps": list(ev.get("reproduction_steps") or []),
+            },
+        }
+        saved += 1
+    if saved:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            return 0
+    return saved
+
+
 def _load_persisted_slice_history(
     root: Path,
     project: str,
@@ -533,8 +642,49 @@ def _load_persisted_slice_history(
     return [{"behavior_slice_ledger": payload}]
 
 
+def _derive_slice_status(
+    attempted_ids: list[str] | set[str] | tuple[str, ...],
+    confirmed_ids: list[str] | set[str] | tuple[str, ...],
+    campaign_status: str,
+) -> dict[str, str]:
+    """主链 4: turn raw campaign progress into an explicit per-task status map so
+    the task list surfaced to the API/frontend carries pending/running/passed/blocked
+    instead of only opaque id sets.
+
+    - attempted & confirmed        -> passed
+    - attempted & not confirmed     -> running (or blocked when the campaign is blocked)
+    - not attempted (planned)       -> omitted from the map, implicitly "pending"
+    """
+    confirmed_set = set()
+    for value in confirmed_ids:
+        if value is None:
+            continue
+        s = str(value).strip()
+        if s:
+            confirmed_set.add(s)
+    status: dict[str, str] = {}
+    blocked = str(campaign_status or "").strip() == "blocked"
+    for value in attempted_ids:
+        if value is None:
+            continue
+        sid = str(value).strip()
+        if not sid:
+            continue
+        if sid in confirmed_set:
+            status[sid] = "passed"
+        else:
+            status[sid] = "blocked" if blocked else "running"
+    return status
+
+
 def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> None:
     path = _slice_ledger_path(root, project)
+    attempted = [str(value) for value in ledger.get("attempted_slice_ids", []) if str(value)]
+    confirmed = [str(value) for value in ledger.get("confirmed_slice_ids", []) if str(value)]
+    # 主链 4: derive an explicit per-task status map from the campaign progress
+    # so the task list surfaced to the API/frontend carries pending/running/
+    # passed/blocked instead of only opaque id sets.
+    slice_status = _derive_slice_status(attempted, confirmed, ledger.get("campaign_status") or "")
     safe = {
         "campaign_id": str(ledger.get("campaign_id") or ""),
         "campaign_status": str(ledger.get("campaign_status") or ""),
@@ -548,8 +698,9 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
         "slice_budget": int(ledger.get("slice_budget") or 0),
         "selection_mode": str(ledger.get("selection_mode") or ""),
         "selected_slice_ids": [str(value) for value in ledger.get("selected_slice_ids", []) if str(value)],
-        "attempted_slice_ids": [str(value) for value in ledger.get("attempted_slice_ids", []) if str(value)],
-        "confirmed_slice_ids": [str(value) for value in ledger.get("confirmed_slice_ids", []) if str(value)],
+        "attempted_slice_ids": attempted,
+        "confirmed_slice_ids": confirmed,
+        "slice_status": slice_status,
         "next_round": ledger.get("next_round"),
         "stop_reason": str(ledger.get("stop_reason") or ""),
         "updated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1048,6 +1199,56 @@ def _recover_stale_campaign_state(campaign: EnterpriseCampaign, slices: list[dic
     return True
 
 
+def _knowledge_asset_planning_text(asset: dict[str, Any]) -> str:
+    """Flatten the structured enterprise knowledge asset into a planning text
+    block the behavior-graph builder can parse, so uploaded docs (business
+    rules, permission matrix, historical-bug patterns) drive the test plan —
+    主链 2: parsed knowledge must feed test planning, not just sit in a report.
+
+    Fully generic: no industry/endpoint/field hardcoding — only the customer's
+    own parsed statements are surfaced.
+    """
+    parts: list[str] = []
+
+    rules = asset.get("rule_library") or []
+    if isinstance(rules, list):
+        lines = []
+        for r in rules[:300]:
+            if not isinstance(r, dict):
+                continue
+            stmt = str(r.get("statement") or r.get("expression") or "").strip()
+            if stmt:
+                lines.append(f"- {stmt}")
+        if lines:
+            parts.append("## 企业资料解析出的业务规则（驱动数据一致性/金额/库存/状态类测试）\n" + "\n".join(lines))
+
+    perms = asset.get("permission_matrix") or []
+    if isinstance(perms, list):
+        lines = []
+        for p in perms[:300]:
+            if not isinstance(p, dict):
+                continue
+            stmt = str(p.get("statement") or p.get("expression") or p.get("rule") or "").strip()
+            if stmt:
+                lines.append(f"- {stmt}")
+        if lines:
+            parts.append("## 企业资料解析出的权限矩阵（驱动越权/未授权访问测试）\n" + "\n".join(lines))
+
+    risks = asset.get("risk_domains") or []
+    if isinstance(risks, list):
+        lines = []
+        for r in risks[:300]:
+            if not isinstance(r, dict):
+                continue
+            stmt = str(r.get("statement") or r.get("description") or r.get("risk_type") or "").strip()
+            if stmt:
+                lines.append(f"- {stmt}")
+        if lines:
+            parts.append("## 企业资料解析出的历史风险/历史Bug模式（驱动回归测试）\n" + "\n".join(lines))
+
+    return "\n\n".join(parts)
+
+
 def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None) -> dict[str, Any]:
     global _v12_har_entries
     _v12_har_entries = []
@@ -1084,6 +1285,29 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     try:
         graph_started = time.time()
         from .business_state_graph import BusinessStateGraphBuilder
+        # 主链 2: fold the structured enterprise knowledge asset (parsed from the
+        # customer's uploaded docs) into the planning text so business rules,
+        # permission boundaries and historical-bug patterns drive the live test
+        # plan. Additive only — when no asset exists the pipeline is unchanged.
+        try:
+            from .enterprise_knowledge_center import (
+                build_enterprise_business_knowledge_asset,
+                load_enterprise_business_knowledge_asset,
+            )
+            _asset = load_enterprise_business_knowledge_asset(project, root)
+            if _asset is None:
+                _asset = build_enterprise_business_knowledge_asset(project, root)
+            if _asset:
+                _enrich = _knowledge_asset_planning_text(_asset)
+                if _enrich:
+                    prd_text = (prd_text or "") + "\n\n" + _enrich
+        except Exception as _ka_exc:
+            import sys as _sys
+            try:
+                _sys.stderr.write(f"[v12_knowledge_asset] project={project} enrichment skipped: {_ka_exc}\n")
+                _sys.stderr.flush()
+            except Exception:
+                pass
         builder = BusinessStateGraphBuilder()
         graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
         graphs = builder.build(prd_text, graph_api_doc, db_schema_text)
@@ -1184,6 +1408,13 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "selected_slice_ids": selection["selected_slice_ids"],
             "attempted_slice_ids": selection["attempted_slice_ids"],
             "confirmed_slice_ids": selection["confirmed_slice_ids"],
+            # 主链 4: surface the per-task status map in the scan result so the
+            # API/frontend can render real task states, not just id sets.
+            "slice_status": _derive_slice_status(
+                selection["attempted_slice_ids"],
+                selection["confirmed_slice_ids"],
+                campaign.status,
+            ),
             "next_round": selection["next_round"],
             "stop_reason": selection["stop_reason"],
         }
@@ -1192,6 +1423,11 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             and str(runtime_contract.get("reason") or "") == "execution_approval_required"
         )
         ledger_for_persistence = None if skip_history_persistence else dict(result["behavior_slice_ledger"])
+        # 主链 8: surface the planned test-task slices (each carrying its lifecycle
+        # `status` from 主链 4) so the frontend "测试任务看板" can render the full
+        # task board, not just the id-only ledger. Backend is the single source of
+        # truth; the frontend renders this verbatim (zero transform).
+        result["behavior_slices"] = list(behavior_contract.get("slices", []) or [])
         result["phases"]["state_graph"] = {
             "status": "completed",
             "entities": sorted(graphs),
@@ -1306,10 +1542,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         elif not executable:
             result["phases"]["execution"] = {"status": "plan_only", "reason": "fixture_actor_cleanup_contract_required", "planned_only": len(plan_only), "executed": 0}
         else:
+            # 主链 5 × 主链 1: load the production-data safety boundary once and
+            # enforce it on every real request the executor fires. Single source
+            # of truth with grounded_probe_executor (match_production_data_exclusion).
+            _safety_boundary = _load_execution_safety_boundary(project, root)
             execution_started, failed = time.time(), 0
             for scenario in executable:
                 try:
-                    trace = _execute_scenario(scenario, approved_base_url, max_retries=2)
+                    trace = _execute_scenario(scenario, approved_base_url, max_retries=2, safety_boundary=_safety_boundary)
                     traces.append((scenario, trace))
                     slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
                     if slice_id:
@@ -1330,9 +1570,29 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                                 "confirmation_status": "candidate",
                                 "evidence": {"calls": [{"call": f"{step.get('method', '')} {step.get('path', '')}", "results": {"execution": {"status": step.get("status"), "body": step.get("response", {}).get("body", {})}}}]},
                             })
-                except Exception:
+                except Exception as _exec_err:
+                    # Fail Fast / observable: never swallow an error silently.
+                    # Real execution failures (HTTP/timeout) are expected and
+                    # counted as `failed`; but a programming error (e.g. a
+                    # signature mismatch) must be visible in the logs so it is
+                    # not mistaken for a routine execution failure.
+                    logger.error(
+                        "scenario execution failed scenario=%s type=%s err=%s",
+                        getattr(scenario, "behavior_slice_id", "") or getattr(scenario, "id", "?"),
+                        type(_exec_err).__name__,
+                        str(_exec_err)[:300],
+                    )
                     failed += 1
-            result["phases"]["execution"] = {"status": "completed", "executed": len(traces), "failed": failed, "planned_only": len(plan_only), "duration_ms": int((time.time() - execution_started) * 1000)}
+            result["phases"]["execution"] = {
+                "status": "completed",
+                "executed": len(traces),
+                "failed": failed,
+                "planned_only": len(plan_only),
+                # 主链 5 × 主链 1: observability — how many scenarios were blocked
+                # by the customer's production-data safety boundary (never touched).
+                "production_data_blocked": sum(1 for _, t in traces if t.get("production_data_blocked")),
+                "duration_ms": int((time.time() - execution_started) * 1000),
+            }
         try:
             from .ui_execution_adapter import execute_ui_execution_requests
 
@@ -1431,6 +1691,18 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     base_url=approved_base_url,
                 ))
         result["phases"]["oracle"] = {"status": "completed", "total_evaluated": len(traces), "violations_found": len(result["findings"]), "duration_ms": int((time.time() - oracle_started) * 1000)}
+        # 主链 7: persist every collected evidence chain keyed by its stable
+        # evidence_id so it is retrievable for regression (主链 9) & delivery.
+        _evidence_chains_saved = 0
+        for _eg in result["evidence_graphs"]:
+            if isinstance(_eg, dict) and _persist_evidence_chain(root, project, _eg):
+                _evidence_chains_saved += 1
+        result["phases"]["oracle"]["evidence_chains_saved"] = _evidence_chains_saved
+        # 主链 9 Gap B1: persist deliverable confirmed defects keyed by their
+        # stable evidence_id so the regression runner can re-verify them.
+        result["phases"]["oracle"]["confirmed_findings_saved"] = _persist_confirmed_findings(
+            root, project, result["findings"]
+        )
         try:
             from .risk_clue_pool import save_risk_clues
             result["risk_clues_saved"] = save_risk_clues(project, root, result["findings"]).get("new_this_scan", 0)
@@ -1450,10 +1722,25 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
             result["behavior_slice_ledger"]["campaign_status"] = campaign.status
             result["behavior_slice_ledger"]["attempted_slice_ids"] = list(campaign.attempted_slice_ids)
-            result["behavior_slice_ledger"]["confirmed_slice_ids"] = sorted(campaign.confirmation_receipts)
+            # confirmed_slice_ids = newly confirmed this cycle (campaign receipts)
+            # UNION carried-forward confirmations for the same source (selection
+            # history, keyed on source_hash). Dropping the carried-forward set here
+            # made same-source reruns lose previously confirmed slices.
+            result["behavior_slice_ledger"]["confirmed_slice_ids"] = sorted(
+                set(campaign.confirmation_receipts)
+                | {str(v) for v in (selection.get("confirmed_slice_ids") or []) if str(v)}
+            )
+            # 主链 4: keep the per-task status map consistent with the final
+            # attempted/confirmed ids after the campaign cycle is recorded.
+            result["behavior_slice_ledger"]["slice_status"] = _derive_slice_status(
+                result["behavior_slice_ledger"]["attempted_slice_ids"],
+                result["behavior_slice_ledger"]["confirmed_slice_ids"],
+                campaign.status,
+            )
             result["phases"]["incremental_discovery"]["campaign_status"] = campaign.status
             ledger_for_persistence = dict(result["behavior_slice_ledger"])
     except Exception as exc:
+        logger.exception("run_v12_pipeline unexpected error")
         result["error"] = str(exc)[:500]
     if ledger_for_persistence is not None and not result.get("error"):
         try:
@@ -1465,14 +1752,16 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     return result
 
 
-def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2) -> dict[str, Any]:
+# NOTE: _load_execution_safety_boundary now lives in enterprise_project_config.py
+# (single source of truth shared with regression_runner) and is imported above.
+
+
+def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2,
+                      safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
     for attempt in range(max_retries + 1):
         try:
-            return __execute_scenario_once(scenario, base_url)
+            return __execute_scenario_once(scenario, base_url, safety_boundary=safety_boundary)
         except Exception as exc:
-            # #region debug-point D:scenario-retry
-            exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'D', 'location': 'v12_pipeline.py:_execute_scenario', 'msg': '[DEBUG] scenario raised before retry handling', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'attempt': attempt, 'error': str(exc)}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
-            # #endregion
             if attempt < max_retries:
                 time.sleep(0.5 * (attempt + 1))
                 continue
@@ -1480,7 +1769,8 @@ def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2) -> dic
     return {"scenario_id": "?", "steps": [], "errors": ["unreachable"], "duration_ms": 0}
 
 
-def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
+def __execute_scenario_once(scenario: Any, base_url: str,
+                            safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
     trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}
     bindings: dict[str, Any] = {}
 
@@ -1507,9 +1797,6 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
         except Exception as _db_exc:
             trace["db_evidence"] = {"status": "unavailable", "reason": f"db_snapshot_setup_failed:{type(_db_exc).__name__}"}
             _db_verifier = None
-    # #region debug-point A:scenario-start
-    exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'A', 'location': 'v12_pipeline.py:__execute_scenario_once:start', 'msg': '[DEBUG] scenario execution started', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'step_count': len(getattr(scenario, 'steps', []) or [])}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
-    # #endregion
     for step in getattr(scenario, "steps", []) or []:
         method = str(getattr(step, "api_method", "") or "").upper()
         path = str(getattr(step, "api_path", "") or "")
@@ -1539,6 +1826,33 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
                 "skipped_reason": reason,
             })
             break
+        # 主链 5 × 主链 1: honor the customer-defined production-data safety
+        # boundary during REAL execution. Reuses match_production_data_exclusion
+        # — the single source of truth shared with grounded_probe_executor
+        # (主链 1). If a step would touch excluded production data we MUST NOT
+        # fire the request: block only, never enable. The step is recorded as
+        # blocked so the oracle knows the evidence is intentionally absent (not
+        # a fabricated pass).
+        if safety_boundary:
+            _excl = match_production_data_exclusion(
+                safety_boundary, path, str(getattr(step, "risk_type", "") or "")
+            )
+            if _excl:
+                trace.setdefault("production_data_blocked", True)
+                trace["production_data_block_reason"] = _excl
+                trace["errors"].append(_excl)
+                trace["steps"].append({
+                    "action": getattr(step, "action", ""),
+                    "method": method,
+                    "path": path,
+                    "status": 0,
+                    "request": {"body": _redact(body)} if body else {},
+                    "response": {"status_code": 0, "headers": {}, "body": {"error": _excl}},
+                    "expected_status": getattr(step, "expected_status", 0),
+                    "skipped_reason": _excl,
+                    "execution_blocked": True,
+                })
+                continue
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
         headers = {"Accept": "application/json"}
         if data is not None:
@@ -1553,9 +1867,6 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         started, url = time.time(), base_url.rstrip("/") + path
-        # #region debug-point B:before-request
-        exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'B', 'location': 'v12_pipeline.py:__execute_scenario_once:before_request', 'msg': '[DEBUG] step request about to send', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'action': getattr(step, 'action', ''), 'method': method, 'path': path, 'actor': actor}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
-        # #endregion
         try:
             request = urllib.request.Request(url, method=method, data=data, headers=headers)
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -1567,9 +1878,6 @@ def __execute_scenario_once(scenario: Any, base_url: str) -> dict[str, Any]:
         except Exception as exc:
             status, response_body, response_headers = 0, {"error": str(exc)}, {}
             trace["errors"].append(str(exc))
-        # #region debug-point C:after-request
-        exec("try:\n _p='.dbg/scan-round3-hang.env'; _u='http://127.0.0.1:7777/event'; _s='scan-round3-hang'\n try:\n  _c=open(_p, encoding='utf-8').read(); _u=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SERVER_URL=')), _u); _s=next((l.split('=',1)[1] for l in _c.split('\\n') if l.startswith('DEBUG_SESSION_ID=')), _s)\n except BaseException:\n  pass\n urllib.request.urlopen(urllib.request.Request(_u, data=json.dumps({'sessionId': _s, 'runId': 'pre-fix', 'hypothesisId': 'C', 'location': 'v12_pipeline.py:__execute_scenario_once:after_request', 'msg': '[DEBUG] step request completed', 'data': {'scenario_id': getattr(scenario, 'id', '?'), 'behavior_slice_id': getattr(scenario, 'behavior_slice_id', ''), 'action': getattr(step, 'action', ''), 'method': method, 'path': path, 'status': status, 'elapsed_ms': int((time.time() - started) * 1000), 'error': trace['errors'][-1] if trace.get('errors') else ''}, 'ts': int(time.time()*1000)}).encode(), headers={'Content-Type': 'application/json'}), timeout=1).read(1)\nexcept BaseException:\n pass")
-        # #endregion
         _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
         for field in getattr(step, "extract_from_response", []) or []:
             value = _extract(response_body, str(field))
@@ -1773,6 +2081,17 @@ def _confirmed_oracle_finding(
     base_url: str,
 ) -> dict[str, Any]:
     step = _trace_primary_step(trace, oracle_result)
+    # 主链 6 × 主链 1/5: a finding whose primary evidence step was deliberately
+    # blocked by the customer's production-data safety boundary carries NO real
+    # evidence (the request was never sent). It must never be claimed as a
+    # reproduced/confirmed defect — only as an auditable, blocked candidate.
+    _step_blocked = bool(step.get("execution_blocked"))
+    _trace_blocked = bool(trace.get("production_data_blocked"))
+    safety_boundary_blocked = _step_blocked or _trace_blocked
+    safety_boundary_reason = (
+        str(step.get("skipped_reason") or "") if _step_blocked
+        else str(trace.get("production_data_block_reason") or "")
+    )
     path = str(step.get("path") or "")
     method = str(step.get("method") or "").upper()
     response = step.get("response") if isinstance(step.get("response"), dict) else {}
@@ -1795,9 +2114,14 @@ def _confirmed_oracle_finding(
         else {}
     )
     db_evidence = dict(trace.get("db_evidence") or {}) if isinstance(trace.get("db_evidence"), dict) else {}
-    # Only a successfully captured before/after snapshot counts as real DB
-    # evidence; an "unavailable" marker must not inflate the evidence strength.
-    db_captured = db_evidence.get("status") == "captured"
+    # Only real DB evidence counts; an "unavailable" marker must not inflate the
+    # evidence strength. Accept both canonical shapes: the runtime verifier shape
+    # (status == "captured") and an explicit before/after snapshot pair.
+    db_status = str(db_evidence.get("status") or "").strip().lower()
+    _has_before_after_db = isinstance(db_evidence.get("before_db_snapshot"), dict) and isinstance(
+        db_evidence.get("after_db_snapshot"), dict
+    )
+    db_captured = db_status == "captured" or (_has_before_after_db and db_status != "unavailable")
     evidence_strength = "runtime"
     if before_after_snapshot and db_captured:
         evidence_strength = "runtime_and_db"
@@ -1819,9 +2143,19 @@ def _confirmed_oracle_finding(
         # satisfied at runtime means the tested transition was never actually
         # exercised from the claimed state — do not confirm on fabricated state.
         and not (trace.get("precondition_not_met") if isinstance(trace, dict) else None)
+        # 主链 6 × 主链 1/5: a step blocked by the production-data safety
+        # boundary was never executed, so any "violation" derived from its
+        # absent response is not a confirmed target defect. Force candidate.
+        and not safety_boundary_blocked
     )
     confirmation_status = "confirmed" if runtime_confirmable else "candidate"
     gate_passed = bool(runtime_confirmable)
+    if safety_boundary_blocked:
+        # Defense in depth: even if a future change drops the implicit errors
+        # marker, a blocked step can never become a confirmed defect.
+        confirmation_status = "candidate"
+        gate_passed = False
+    bug_status = "reproduced" if gate_passed else "suspected"
     raw_request = {"method": method, "path": path}
     if actor_label:
         raw_request["actor"] = actor_label
@@ -1841,8 +2175,10 @@ def _confirmed_oracle_finding(
         "execution_status": "executed",
         "confirmation_status": confirmation_status,
         "gate_passed": gate_passed,
-        "bug_status": "reproduced" if gate_passed else "suspected",
-        "customer_delivery_status": "defect",
+        "bug_status": bug_status,
+        "customer_delivery_status": "blocked_safety_boundary" if safety_boundary_blocked else "defect",
+        "blocked_by_safety_boundary": safety_boundary_blocked,
+        "blocked_reason": safety_boundary_reason if safety_boundary_blocked else "",
         "expected": assertion,
         "actual": actual,
         "timestamp": timestamp,

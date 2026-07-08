@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { EvidenceTimeline } from '../components/EvidenceTimeline';
-import { getKnowledgeAsset, getKnowledgePreview } from '../api/client';
+import { getKnowledgeAsset, getKnowledgePreview, evidenceArtifactUrl } from '../api/client';
 import { hasCustomerFacingHardEvidence, hasRealReplayAsset, isCustomerReadyFinding, useFindingsData } from '../api/data';
 import { formatActorName, formatDurationMs } from '../lib/display';
 import { usePageTitle } from '../lib/page-title';
@@ -83,6 +83,25 @@ function regressionLifecycle(finding: Finding): string {
   return asString(finding.regression?.lifecycle_label) || (finding.regression?.included_in_suite ? '待回归' : '待纳入回归');
 }
 
+function artifactTypeMeta(type: string): { icon: string; label: string } {
+  const t = (type || '').toLowerCase();
+  if (t.includes('screenshot') || t.includes('png') || t.includes('image') || t.includes('jpg')) return { icon: '🖼', label: '页面截图' };
+  if (t.includes('har')) return { icon: '🌐', label: 'HAR 网络记录' };
+  if (t.includes('trace')) return { icon: '🎬', label: '执行追踪' };
+  if (t.includes('video') || t.includes('webm') || t.includes('mp4')) return { icon: '🎥', label: '执行录屏' };
+  return { icon: '📎', label: type || '证据文件' };
+}
+
+function artifactName(ref: string): string {
+  const parts = String(ref || '').split(/[\\/]/);
+  return parts[parts.length - 1] || String(ref || '');
+}
+
+function isImageArtifact(type: string, ref: string): boolean {
+  const t = `${type || ''} ${ref || ''}`.toLowerCase();
+  return /screenshot|image|\.png|\.jpe?g|\.gif|\.webp|\.svg/.test(t);
+}
+
 export function EvidenceChain() {
   usePageTitle('证据链');
   const [params] = useSearchParams(); const project = params.get('project')?.trim() || '';
@@ -147,7 +166,7 @@ export function EvidenceChain() {
         <div className="persona-tabs">{([{ key: 'business', label: '业务视角' }, { key: 'test', label: '测试视角' }, { key: 'dev', label: '研发视角' }] as Array<{ key: PersonaView; label: string }>).map((tab) => <button key={tab.key} onClick={(event) => { event.stopPropagation(); setPersonaByFinding((previous) => ({ ...previous, [finding.id]: tab.key })); }} className={`persona-tab${persona === tab.key ? ' active' : ''}`}>{tab.label}</button>)}</div>
         {persona === 'business' && <div className="persona-panel"><div className="persona-section hero"><div className="persona-kicker">业务影响</div><p className="persona-summary">{business.summary || finding.actual}</p><div className="persona-inline-meta"><span><em>影响模块</em><strong>{business.module || moduleName(finding)}</strong></span><span><em>紧急程度</em><strong>{business.urgency || finding.severity}</strong></span></div></div><div className="persona-section warning"><div className="persona-kicker">需求来源</div>{finding.doc_refs.length ? finding.doc_refs.slice(0, 3).map((document, index) => <div key={`${document.source_id || document.display_name || 'document'}-${index}`} className="persona-doc-card"><span>{document.display_name || '文档'}</span>{document.excerpt && <div className="persona-doc-excerpt">{document.excerpt}</div>}</div>) : <p>尚未关联资料出处。</p>}</div></div>}
         {persona === 'test' && <div className="persona-panel"><div className="persona-section success"><div className="persona-kicker">复现状态</div><div className="repro-status-bar"><span className={`repro-status-badge ${finding.is_reproducible ? 'reproducible' : 'not-reproducible'}`}>{finding.is_reproducible ? '✓ 可稳定复现' : '✗ 未通过复现门控'}</span><span className="repro-confidence">复现置信度: {Math.round(finding.confidence * 100)}%</span></div>{reproduction.steps.length ? <ol className="persona-step-list">{reproduction.steps.map((step, index) => <li key={`${step}-${index}`}><code>{step}</code></li>)}</ol> : <p>当前没有真实复现步骤。</p>}</div>{replayable && <button className="btn btn-primary btn-sm" onClick={() => setReplayFinding(finding)}>点击复现</button>}</div>}
-        {persona === 'dev' && <div className="persona-panel"><div className="persona-section neutral"><div className="persona-kicker">技术定位</div><div className="dev-technical-details"><div className="dev-tech-row"><span><em>涉及接口</em><code>{finding.technical_details.api_endpoint.method} {finding.technical_details.api_endpoint.path}</code></span>{finding.technical_details.api_endpoint.actor && <span><em>操作者</em><code>{formatActorName(finding.technical_details.api_endpoint.actor)}</code></span>}</div>{finding.technical_details.response_status > 0 && <div className="dev-tech-row"><span><em>响应状态码</em><code>{finding.technical_details.response_status}</code></span><span><em>耗时</em><code>{formatDurationMs(finding.expected_actual_comparison.api_comparison?.duration_ms)}</code></span></div>}</div></div><div className="dev-debug-panel"><div className="persona-kicker dark">调试信息</div>{[{ label: '定位线索', value: investigation.primary_area || finding.source_entity || finding.title }, { label: '复现命令', value: command || '缺少真实复现资产，不能生成命令。' }, { label: '日志排查建议', value: investigation.log_search }, { label: '数据核验建议', value: investigation.sql_verify }].filter((item) => item.value).map((item) => <div key={item.label} className="dev-debug-item"><span>{item.label}</span><code>{item.value}</code></div>)}</div>{finding.raw_evidence.has_real_evidence && <div className="raw-evidence-panel"><div className="raw-evidence-item"><span className="raw-evidence-label">请求</span><code>{finding.raw_evidence.request_raw.method} {finding.raw_evidence.request_raw.path}</code></div><div className="raw-evidence-item"><span className="raw-evidence-label">响应</span><code>HTTP {finding.raw_evidence.response_raw.status_code} · {formatDurationMs(finding.raw_evidence.response_raw.duration_ms)}</code></div></div>}</div>}
+        {persona === 'dev' && <div className="persona-panel"><div className="persona-section neutral"><div className="persona-kicker">技术定位</div><div className="dev-technical-details"><div className="dev-tech-row"><span><em>涉及接口</em><code>{finding.technical_details.api_endpoint.method} {finding.technical_details.api_endpoint.path}</code></span>{finding.technical_details.api_endpoint.actor && <span><em>操作者</em><code>{formatActorName(finding.technical_details.api_endpoint.actor)}</code></span>}</div>{finding.technical_details.response_status > 0 && <div className="dev-tech-row"><span><em>响应状态码</em><code>{finding.technical_details.response_status}</code></span><span><em>耗时</em><code>{formatDurationMs(finding.expected_actual_comparison.api_comparison?.duration_ms)}</code></span></div>}</div></div><div className="dev-debug-panel"><div className="persona-kicker dark">调试信息</div>{[{ label: '定位线索', value: investigation.primary_area || finding.source_entity || finding.title }, { label: '复现命令', value: command || '缺少真实复现资产，不能生成命令。' }, { label: '日志排查建议', value: investigation.log_search }, { label: '数据核验建议', value: investigation.sql_verify }].filter((item) => item.value).map((item) => <div key={item.label} className="dev-debug-item"><span>{item.label}</span><code>{item.value}</code></div>)}</div>{finding.raw_evidence.has_real_evidence && <div className="raw-evidence-panel"><div className="raw-evidence-item"><span className="raw-evidence-label">请求</span><code>{finding.raw_evidence.request_raw.method} {finding.raw_evidence.request_raw.path}</code></div><div className="raw-evidence-item"><span className="raw-evidence-label">响应</span><code>HTTP {finding.raw_evidence.response_raw.status_code} · {formatDurationMs(finding.raw_evidence.response_raw.duration_ms)}</code></div></div>}{(finding.raw_evidence.ui_artifacts?.length ?? 0) > 0 && <div className="raw-evidence-panel ui-artifacts-panel"><div className="raw-evidence-item"><span className="raw-evidence-label">视觉证据 ({finding.raw_evidence.ui_artifacts!.length})</span><div className="ui-artifact-grid">{finding.raw_evidence.ui_artifacts!.map((artifact, index) => { const meta = artifactTypeMeta(artifact.type); const url = evidenceArtifactUrl(project, artifact.ref); const isImage = isImageArtifact(artifact.type, artifact.ref); return <div key={`${artifact.ref}-${index}`} className={`ui-artifact-card ui-artifact-${(artifact.type || 'file').toLowerCase()}${isImage ? ' has-thumb' : ''}`}>{isImage ? <a href={url} target="_blank" rel="noopener noreferrer" className="ui-artifact-thumb"><img src={url} alt={meta.label} loading="lazy" /></a> : <span className="ui-artifact-icon" aria-hidden="true">{meta.icon}</span>}<div className="ui-artifact-info"><strong>{meta.label}</strong><a href={url} target="_blank" rel="noopener noreferrer" title={artifact.ref} className="ui-artifact-link">{artifactName(artifact.ref)}</a></div></div>; })}</div></div></div>}</div>}
         </>}</div>
       </article>;
     })}

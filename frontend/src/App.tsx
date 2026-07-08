@@ -8,6 +8,7 @@ import { Findings } from './pages/Findings';
 import { InternalClues } from './pages/InternalClues';
 import { EvidenceChain } from './pages/EvidenceChain';
 import { BehaviorSpace } from './pages/BehaviorSpace';
+import { TestTasks } from './pages/TestTasks';
 import { EnterpriseMaterials } from './pages/EnterpriseMaterials';
 import { EnterpriseSourceAssets } from './pages/EnterpriseSourceAssets';
 import { EnterpriseCampaigns } from './pages/EnterpriseCampaigns';
@@ -40,6 +41,7 @@ export default function App() {
               <Route path="/clues" element={<InternalClues />} />
               <Route path="/evidence" element={<EvidenceChain />} />
               <Route path="/behavior-space" element={<BehaviorSpace />} />
+              <Route path="/test-tasks" element={<TestTasks />} />
               <Route path="/materials" element={<EnterpriseMaterials />} />
               <Route path="/source-assets" element={<EnterpriseSourceAssets />} />
               <Route path="/campaigns" element={<EnterpriseCampaigns />} />

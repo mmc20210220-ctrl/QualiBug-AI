@@ -163,7 +163,12 @@ class SemanticScenarioGenerator:
         for slice_id, slice_meta in active_slice_map.items():
             if slice_id in emitted_slice_ids:
                 continue
-            item = self._fallback_active_slice(slice_meta, round_number, api_doc if allow_source_runtime else "")
+            item = self._fallback_active_slice(
+                slice_meta,
+                round_number,
+                api_doc if allow_source_runtime else "",
+                allow_source_runtime=allow_source_runtime,
+            )
             if item is None:
                 continue
             if active_slice_ids is None or item.behavior_slice_id in active_slice_ids:
@@ -217,21 +222,36 @@ class SemanticScenarioGenerator:
         slice_meta: dict[str, Any],
         discovery_round: int,
         api_doc: str,
+        allow_source_runtime: bool = True,
     ) -> ExecutableScenario | None:
         kind = str(slice_meta.get("kind") or "").strip().lower()
         if kind == "source_observation":
-            return self._source_observation_from_meta(slice_meta, discovery_round)
-        if kind == "invariant":
-            return self._invariant_from_meta(slice_meta, discovery_round, api_doc)
-        if kind == "permission":
-            return self._permission_slice(slice_meta, discovery_round)
-        if kind == "isolation":
-            return self._isolation_slice(slice_meta, discovery_round, api_doc)
-        if kind == "concurrency":
-            return self._concurrency_slice(slice_meta, discovery_round)
-        if kind == "money":
-            return self._money_slice(slice_meta, discovery_round)
-        return None
+            item = self._source_observation_from_meta(slice_meta, discovery_round)
+        elif kind == "invariant":
+            item = self._invariant_from_meta(slice_meta, discovery_round, api_doc)
+        elif kind == "permission":
+            item = self._permission_slice(slice_meta, discovery_round)
+        elif kind == "isolation":
+            item = self._isolation_slice(slice_meta, discovery_round, api_doc)
+        elif kind == "concurrency":
+            item = self._concurrency_slice(slice_meta, discovery_round)
+        elif kind == "money":
+            item = self._money_slice(slice_meta, discovery_round)
+        else:
+            return None
+        if item is None or allow_source_runtime:
+            return item
+        # Plan-only intent: the runtime contract is not approved, so the
+        # source-grounded coverage metadata is preserved but the executable
+        # steps are stripped — otherwise the scenario would be miscounted as an
+        # executed probe. This keeps the planning/execution boundary honest.
+        item.steps = []
+        item.cleanup_steps = []
+        item.execution_policy = "plan_only_requires_fixture"
+        item.actor_token = ""
+        if "RUNTIME_CONTRACT_NOT_APPROVED" not in item.evidence_gaps:
+            item.evidence_gaps = list(item.evidence_gaps) + ["RUNTIME_CONTRACT_NOT_APPROVED"]
+        return item
 
     def _source_observation_from_meta(
         self,
@@ -750,13 +770,19 @@ class SemanticScenarioGenerator:
         observation_path: str,
         api_doc: str,
     ) -> ExecutableScenario | None:
-        if not observation_path or not str(api_doc or "").strip():
+        if not str(api_doc or "").strip():
             return None
         action_plan = self._match_invariant_action(api_doc, entity, invariant, refs, state=state)
         if not action_plan:
             return None
         extract_fields = ["id", "status", "state", "amount", "totalAmount", "total_amount", "payableAmount", "payable_amount"]
         validation_only = bool(action_plan.get("validation_only"))
+        # A validation-only route (e.g. POST /validate) is itself the probe and
+        # needs no separate read endpoint to bind a state prerequisite. Only
+        # state-precondition drivers (forbidden/duplicate writes) require a
+        # source-bound observation path, so only block those when it is missing.
+        if not validation_only and not observation_path:
+            return None
         write_step = ScenarioStep(
             order=1 if validation_only else 2,
             action=str(action_plan.get("scenario_action") or "execute_invariant_write"),
@@ -870,9 +896,19 @@ class SemanticScenarioGenerator:
 
     def _match_invariant_action(self, api_doc: str, entity: str, invariant: str, refs: list[dict[str, str]] | None = None, state: str = "") -> dict[str, Any]:
         contexts = self._invariant_action_contexts(invariant, refs)
+        # Action-verb detection must not be driven by database schema DDL. A CHECK
+        # enum such as status IN ('ACTIVE', 'DISABLED') is a structural declaration,
+        # not an action instruction; letting "DISABLED" substring-match the
+        # "disable" action profile hijacks the classification and drops the real
+        # source-bound validation route. So detect the action from non-DDL context.
+        action_refs = [
+            ref for ref in (refs or [])
+            if isinstance(ref, dict) and str(ref.get("source_type") or "") != "database_schema"
+        ]
+        action_contexts = self._invariant_action_contexts(invariant, action_refs)
         mode = ""
         forbidden = False
-        for text in contexts:
+        for text in action_contexts:
             lowered = text.lower()
             if any(token in text for token in ("不能", "禁止", "不应", "不可", "不得")) or any(token in lowered for token in ("must not", "forbidden", "cannot", "should not")):
                 mode, forbidden = "forbidden_write", True
@@ -896,13 +932,47 @@ class SemanticScenarioGenerator:
             {"tokens": ["校验", "验证", "validate", "apply", "redeem"], "endpoint_tokens": ["validate", "apply", "redeem"]},
         ]
         profile = None
-        for text in contexts:
+        for text in action_contexts:
             lowered = text.lower()
             profile = next((item for item in action_profiles if any(token.lower() in lowered for token in item["tokens"])), None)
             if profile:
                 break
         if not profile:
-            return {}
+            # Endpoint-grounded fallback: the invariant text may only assert a
+            # state constraint (e.g. "必须处于 ACTIVE 状态") without an explicit
+            # action verb, while the source API exposes a validation-style route
+            # (validate/apply/redeem). When the invariant is an affirmative
+            # constraint and such a source-bound route exists, treat it as a
+            # validation-only assertion. This stays industry-agnostic: the verbs
+            # come from the real API doc, not hardcoded business rules.
+            validate_profile = next(
+                (item for item in action_profiles if "validate" in item["endpoint_tokens"]),
+                None,
+            )
+            affirmative_tokens = (
+                "必须", "应当", "应", "需要", "must", "should", "required",
+                "within", "active", "有效期", "类目", "状态",
+            )
+            invariant_is_affirmative = any(
+                any(token.lower() in str(text or "").lower() for token in affirmative_tokens)
+                for text in contexts
+            )
+            _, _, _fallback_endpoints = _api_facts(api_doc, re.compile(r"", re.I))
+            has_validation_route = any(
+                str(ep.get("method") or "").upper() in {"POST", "PUT", "PATCH"}
+                and any(
+                    tok in " ".join(
+                        str(part or "").lower()
+                        for part in (ep.get("path"), ep.get("action"), ep.get("summary"))
+                    )
+                    for tok in ("validate", "apply", "redeem")
+                )
+                for ep in (_fallback_endpoints or [])
+            )
+            if validate_profile and invariant_is_affirmative and has_validation_route:
+                profile = validate_profile
+            else:
+                return {}
         if not mode and any(token in profile["endpoint_tokens"] for token in ("validate", "apply", "redeem")):
             affirmative_tokens = ("必须", "应当", "应", "需要", "must", "should", "required", "within", "active", "有效期", "类目")
             if any(any(token.lower() in str(text or "").lower() for token in affirmative_tokens) for text in contexts):

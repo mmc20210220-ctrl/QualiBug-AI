@@ -479,6 +479,25 @@ def match_production_data_exclusion(config: dict[str, Any], path: str,
     return None
 
 
+def _load_execution_safety_boundary(project: str, root: Path) -> dict[str, Any]:
+    """主链 5/9 × 主链 1: load the customer-defined production-data exclusion
+    list into the shape ``match_production_data_exclusion`` expects, so BOTH the
+    real execution path (v12 pipeline) and the regression-runner HTTP probes
+    honor the "生产数据禁触" hard requirement from a single source of truth.
+
+    Returns {} when no boundary is configured (the matcher is then a no-op).
+    The boundary is the single source of truth shared with
+    grounded_probe_executor and regression_runner.
+    """
+    try:
+        exclusions = MultiServiceProject(project, root).get_execution_safety_boundary()
+    except Exception:
+        exclusions = []
+    if not exclusions:
+        return {}
+    return {"production_data_exclusion": exclusions}
+
+
 # ---------------------------------------------------------------------------
 # Cross-service bug detection hints
 # ---------------------------------------------------------------------------

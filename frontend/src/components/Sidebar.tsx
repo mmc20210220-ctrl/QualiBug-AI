@@ -9,6 +9,7 @@ const navItems = [
   { to: 'clues', icon: 'runtime', label: '待验证线索', section: null, badgeKey: 'clues' },
   { to: 'evidence', icon: 'shield', label: '证据链', section: null },
   { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
+  { to: 'test-tasks', icon: 'campaign', label: '测试任务看板', section: null },
   { to: 'settings', icon: 'settings', label: '项目设置', section: '产品主线' },
   { to: 'materials', icon: 'knowledge', label: '企业资料', section: null },
   { to: 'source-assets', icon: 'source', label: '来源资产', section: null },

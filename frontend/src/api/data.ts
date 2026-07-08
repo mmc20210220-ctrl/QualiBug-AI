@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getFindings, getKnowledgeAsset, getProjects, type CustomerWorkspace } from './client';
-import type { CommercialAssets, Finding, KnowledgeSource, ReleaseCheck } from '../types';
+import type { CommercialAssets, Finding, KnowledgeSource, ReleaseCheck, TestTaskBoard, TestTaskSlice } from '../types';
 import { toWorkspaceOptions } from '../lib/customer';
 
 const SCAN_COMPLETED_EVENT = 'qualibug:scan-completed';
@@ -152,14 +152,14 @@ function campaignBlocksRelease(raw: unknown): { blocked: boolean; status: string
 function buildProjectSummary(raw: unknown, project: string): ProjectSummary {
   const normalized = normalizeCampaignSnapshot(raw);
   const record = asRecord(normalized);
-  const findings = getReportFindings(normalized);
+  const findings = getReportFindings(raw);
   const scanMeta = asRecord(field(normalized, 'scan_meta'));
   return {
     resolvedProjectId: getResolvedProjectId(normalized),
     projectName: (asString(record.project_name) || asString(record.projectName) || project).trim() || '未选择客户',
     findingsCount: findings.length,
     currentDefectCount: firstFiniteNumber(scanMeta.current_report_customer_ready_defect_count, scanMeta.customer_ready_defects),
-    clueCount: getReportClues(normalized).length,
+    clueCount: getReportClues(raw).length,
     p0Count: findings.filter((finding) => finding.severity === 'P0').length,
   };
 }
@@ -287,6 +287,41 @@ export function useReleaseData(project: string) {
   const load = useCallback(() => { if (!project) { setData(null); setLoading(false); return; } setLoading(true); getFindings(project).then((raw) => { const status = asString(field(raw, 'status')) || asString(field(field(raw, 'live_map'), 'status')); setData(getResolvedProjectId(raw) && status && status !== 'idle' ? parseReleaseChecks(raw) : null); }).catch(() => setData(null)).finally(() => setLoading(false)); }, [project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
   return { data, loading, refetch: load };
+}
+
+export function useTestTaskBoard(project: string) {
+  const [board, setBoard] = useState<TestTaskBoard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    if (!project) { setBoard(null); setLoading(false); return; }
+    setLoading(true); setError('');
+    getFindings(project).then((raw) => {
+      const record = asRecord(raw);
+      const boardRaw = asRecord(record.test_task_board);
+      if (!boardRaw || (Object.keys(boardRaw).length === 0)) { setBoard(null); setLoading(false); return; }
+      const ledger = asRecord(boardRaw.ledger);
+      const slices = asArray(boardRaw.slices).map((value) => asRecord(value) as unknown as TestTaskSlice);
+      const execution = asRecord(boardRaw.execution);
+      setBoard({
+        ledger: {
+          campaign_id: asString(ledger.campaign_id),
+          campaign_status: asString(ledger.campaign_status),
+          attempted_slice_ids: asArray(ledger.attempted_slice_ids).map(asString),
+          confirmed_slice_ids: asArray(ledger.confirmed_slice_ids).map(asString),
+          slice_status: asRecord(ledger.slice_status) as Record<string, TestTaskSlice['status'] & string>,
+          source_snapshot_hash: asString(ledger.source_snapshot_hash),
+        },
+        slices,
+        execution: { production_data_blocked: asFiniteNumber(execution.production_data_blocked) },
+        evidence_chains_saved: asFiniteNumber(boardRaw.evidence_chains_saved),
+      });
+    }).catch((caught: unknown) => {
+      setBoard(null); setError(caught instanceof Error ? caught.message : '加载失败');
+    }).finally(() => setLoading(false));
+  }, [project]);
+  useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
+  return { board, loading, error, refetch: load };
 }
 
 export function useLiveStatus(project: string, intervalMs = 30000) {

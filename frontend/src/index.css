@@ -3286,6 +3286,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .status-info { background: var(--primary-muted); color: var(--primary) }
 .status-neutral { background: #f1f5f9; color: var(--muted) }
 
+/* 主链 8: 测试任务看板生命周期状态徽标 + 端点 chip */
+.task-status-pending { background: #f1f5f9; color: var(--muted) }
+.task-status-running { background: var(--warning-muted); color: var(--warning) }
+.task-status-passed { background: var(--success-muted); color: var(--success) }
+.task-status-failed { background: var(--danger-muted); color: var(--danger) }
+.task-status-blocked { background: #fae8ff; color: #a21caf }
+.behavior-endpoint-chip { display: inline-block; margin: 0 4px 4px 0; padding: 2px 8px; border-radius: 4px; font-size: 11px;
+  background: var(--primary-muted); color: var(--primary); font-family: var(--font-mono, monospace); white-space: nowrap }
+
 /* Table */
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px }
 .data-table th { text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 700; color: var(--muted);
@@ -3945,6 +3954,19 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .settings-inline-feedback {
   margin-top: 8px;
+}
+.settings-textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  font-family: inherit;
+}
+.settings-hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .settings-system-list {
   display: grid;
@@ -6764,6 +6786,67 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-size: 11px;
   color: #0f172a;
   word-break: break-all;
+}
+.ui-artifacts-panel .ui-artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+.ui-artifact-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+.ui-artifact-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.ui-artifact-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ui-artifact-info strong {
+  font-size: 12px;
+  color: #0f172a;
+}
+.ui-artifact-info code {
+  font-size: 10px;
+  color: #64748b;
+  word-break: break-all;
+}
+.ui-artifact-link {
+  font-size: 10px;
+  color: #2563eb;
+  text-decoration: none;
+  word-break: break-all;
+}
+.ui-artifact-link:hover {
+  text-decoration: underline;
+}
+.ui-artifact-card.has-thumb {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px;
+}
+.ui-artifact-thumb {
+  display: block;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f1f5f9;
+}
+.ui-artifact-thumb img {
+  display: block;
+  width: 100%;
+  height: 110px;
+  object-fit: cover;
+  object-position: top center;
 }
 .raw-evidence-body {
   margin-top: 6px;

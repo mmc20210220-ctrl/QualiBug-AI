@@ -348,6 +348,7 @@ export interface RawEvidence {
     source_file?: string;
     evidence_hash?: string;
   };
+  ui_artifacts?: { type: string; ref: string }[];
   timestamp: string;
   has_real_evidence: boolean;
 }
@@ -366,6 +367,35 @@ export interface TechnicalDetails {
   recommended_fix: string;
   regression_suggestions: string[];
   code_module_hint: string;
+}
+
+// ── 主链 8: 测试任务看板（后端单一真相源，前端零变换渲染）──
+export interface TestTaskSlice {
+  slice_id: string;
+  entity: string;
+  kind: string;
+  states?: string[];
+  endpoints?: string[];
+  priority?: string;
+  source_refs?: Array<{ kind?: string; ref?: string }>;
+  evidence_gaps?: string[];
+  status?: 'pending' | 'running' | 'passed' | 'failed' | 'blocked';
+}
+
+export interface TestTaskLedger {
+  campaign_id?: string;
+  campaign_status?: string;
+  attempted_slice_ids?: string[];
+  confirmed_slice_ids?: string[];
+  slice_status?: Record<string, 'pending' | 'running' | 'passed' | 'failed' | 'blocked'>;
+  source_snapshot_hash?: string;
+}
+
+export interface TestTaskBoard {
+  ledger: TestTaskLedger;
+  slices: TestTaskSlice[];
+  execution: { production_data_blocked: number };
+  evidence_chains_saved: number;
 }
 
 export interface ProjectOverview {

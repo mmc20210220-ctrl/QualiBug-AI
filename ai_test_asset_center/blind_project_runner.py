@@ -29,6 +29,7 @@ from .enterprise_knowledge_center import (
     load_enterprise_business_knowledge_asset,
 )
 from .input_grounded_candidate_compiler import write_grounded_candidate_outputs
+from .enterprise_project_config import MultiServiceProject
 from .grounded_probe_executor import run_grounded_probe_executor
 from .project_context_compiler import ProjectContextCompiler
 from .real_project_defect_discovery import run_real_project_discovery
@@ -316,8 +317,16 @@ def _merge_openapi_with_knowledge_asset(openapi: dict[str, Any], asset: dict[str
 
 def _sync_input_only_knowledge_asset(project_id: str, root: Path) -> dict[str, Any]:
     project = _safe_project_id(project_id)
-    input_dir = root / "platform_inputs" / project
-    files = [path for path in sorted(input_dir.rglob("*")) if path.is_file()]
+    # Enterprise docs are uploaded to platform_workspace/{project}/input (see
+    # private_pilot_service._handle_ingest) and registered in the knowledge
+    # center, but the legacy input-only scan used to read ONLY platform_inputs/.
+    # Without both dirs, uploaded docs never reached the probe plan — the exact
+    # 主链 2 断点 ("资料上传了但没进主链"). Read both source dirs.
+    input_dirs = [root / "platform_inputs" / project, root / "platform_workspace" / project / "input"]
+    files: list[Path] = []
+    for _d in input_dirs:
+        if _d.exists():
+            files.extend(p for p in sorted(_d.rglob("*")) if p.is_file())
     result = {
         "enabled": False,
         "source_file_count": len(files),
@@ -326,24 +335,38 @@ def _sync_input_only_knowledge_asset(project_id: str, root: Path) -> dict[str, A
         "error": "",
         "asset": None,
     }
-    if not files:
-        return result
     actor = {"name": "blind_project_runner", "role": "project_owner"}
     try:
-        ingest = ingest_enterprise_knowledge_files(project, files, root=root, actor=actor)
+        if files:
+            ingest = ingest_enterprise_knowledge_files(project, files, root=root, actor=actor)
+            asset = load_enterprise_business_knowledge_asset(project, root)
+            if not asset or ingest.get("rebuild_recommended"):
+                asset = build_enterprise_business_knowledge_asset(project, root)
+            result.update({
+                "enabled": bool(asset),
+                "summary": (asset or {}).get("summary") or {},
+                "ingest": {
+                    "created_count": len(ingest.get("created") or []),
+                    "duplicate_count": len(ingest.get("duplicates") or []),
+                    "error_count": len(ingest.get("errors") or []),
+                },
+                "asset": asset,
+            })
+            return result
+        # No raw files on disk, but docs may already be registered via the API
+        # upload flow (registry populated, asset not yet materialized). Load (or
+        # rebuild from the registry) so uploaded knowledge still drives the test
+        # plan instead of being silently dropped.
         asset = load_enterprise_business_knowledge_asset(project, root)
-        if not asset or ingest.get("rebuild_recommended"):
+        if not asset:
             asset = build_enterprise_business_knowledge_asset(project, root)
-        result.update({
-            "enabled": bool(asset),
-            "summary": (asset or {}).get("summary") or {},
-            "ingest": {
-                "created_count": len(ingest.get("created") or []),
-                "duplicate_count": len(ingest.get("duplicates") or []),
-                "error_count": len(ingest.get("errors") or []),
-            },
-            "asset": asset,
-        })
+        # Only enable when the asset actually carries parsed knowledge, so an
+        # empty project (no docs) is not mistaken for a configured one.
+        if asset and (asset.get("rule_library") or asset.get("interfaces") or asset.get("data_tables") or asset.get("permission_matrix")):
+            result["enabled"] = True
+            result["summary"] = asset.get("summary") or {}
+            result["ingest"] = {"note": "loaded from registered sources (uploaded via API)"}
+            result["asset"] = asset
     except Exception as exc:
         result["error"] = str(exc)[:500]
     return result
@@ -531,6 +554,15 @@ def run_input_only_project(
     root_path = Path(root or ROOT).resolve()
     input_dir = Path(project_input_dir).resolve()
     project = _safe_project_id(project_id or input_dir.parent.name)
+
+    # 主链 1 断点修复：执行器必须读取客户真实项目配置（含 production_data_exclusion
+    # 安全边界）。此前 probe_config 始终为 None，执行器拿到空 config，安全边界在真实
+    # 扫描中形同虚设。这里在调用方未显式传入时，默认喂入项目 canonical 配置；若配置
+    # 文件不存在（纯 blind benchmark 无 workspace 配置）则保持 None，行为不变。
+    if probe_config is None:
+        _cfg_path = MultiServiceProject(project, root_path)._config_path()
+        if _cfg_path.exists():
+            probe_config = _cfg_path
     manifest = _normalize_platform_inputs(project, input_dir, root_path)
     knowledge_sync = _sync_input_only_knowledge_asset(project, root_path)
     knowledge_asset = knowledge_sync.get("asset") if isinstance(knowledge_sync.get("asset"), dict) else None

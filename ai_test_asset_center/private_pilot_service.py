@@ -1783,7 +1783,7 @@ def _load_real_project_discovery_payload(root: Path, project_id: str) -> dict[st
         except Exception:
             continue
         if isinstance(payload, dict):
-            payload.setdefault("report_source_path", str(candidate.relative_to(root)) if candidate.is_relative_to(root) else str(candidate))
+            payload.setdefault("report_source_path", candidate.relative_to(root).as_posix() if candidate.is_relative_to(root) else str(candidate))
             return payload
     return None
 
@@ -3091,6 +3091,8 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "knowledge_asset": asset})
         if parsed.path == "/api/knowledge/preview":
             return self._handle_preview(project, {"source_id": parse_qs(parsed.query).get("source_id", [""])[0]}, root)
+        if parsed.path == "/api/evidence/artifact":
+            return self._handle_evidence_artifact(project, parse_qs(parsed.query).get("ref", [""])[0], root)
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
 
@@ -3453,8 +3455,38 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                             save_report=True,
                         )
                         _update_continuous_state(_scan_root, _scan_project, _scan_result)
-                    except Exception:
-                        pass
+                    except Exception as _auto_exc:
+                        # Fail loud & observable: never let an auto-scan die silently.
+                        # A swallowed failure makes ingest look successful while the
+                        # main chain produced no scan side-effects.
+                        import sys as _sys
+                        _tb_text = traceback.format_exc()
+                        try:
+                            _sys.stderr.write(
+                                f"[auto_scan] project={_scan_project} failed: {_auto_exc}\n{_tb_text}\n"
+                            )
+                            _sys.stderr.flush()
+                        except Exception:
+                            pass
+                        try:
+                            _marker_dir = _scan_root / "platform_outputs" / _scan_project
+                            _marker_dir.mkdir(parents=True, exist_ok=True)
+                            (_marker_dir / "auto_scan_last_error.json").write_text(
+                                json.dumps(
+                                    {
+                                        "project": _scan_project,
+                                        "doc_type": doc_type,
+                                        "error": str(_auto_exc),
+                                        "traceback": _tb_text,
+                                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    },
+                                    ensure_ascii=False,
+                                    indent=2,
+                                ),
+                                encoding="utf-8",
+                            )
+                        except Exception:
+                            pass
                 _threading.Thread(target=_auto_scan, daemon=True).start()
                 ingest_status = f"{ingest_status}_auto_scanning"
             elif auto_scan_reason:
@@ -4063,7 +4095,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             payload = self._read_json_dict(path)
             if not payload:
                 continue
-            payload.setdefault("report_source_path", str(path.relative_to(root)) if path.is_relative_to(root) else str(path))
+            payload.setdefault("report_source_path", path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
             candidate_payloads.append((self._report_signal_count(payload), path.stat().st_mtime, payload))
 
         workspace_report = self._load_workspace_report(project, root)
@@ -4131,7 +4163,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             payload = self._read_json_dict(path)
             if not payload:
                 continue
-            payload.setdefault("report_source_path", str(path.relative_to(root)) if path.is_relative_to(root) else str(path))
+            payload.setdefault("report_source_path", path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
             score = path.stat().st_mtime
             signal_count = self._report_signal_count(payload)
             if chosen is None or (score, signal_count) > (chosen[0], chosen[1]):
@@ -4208,7 +4240,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "real_findings": findings,
                 "bug_scores": findings,
                 "summary": f"从 evidence bundle 回填 {len(findings)} 条历史确认结果。",
-                "report_source_path": str(findings_path.relative_to(root)) if findings_path.is_relative_to(root) else str(findings_path),
+                "report_source_path": findings_path.relative_to(root).as_posix() if findings_path.is_relative_to(root) else str(findings_path),
                 "campaign": campaign,
                 "evidence_bundle": {
                     "bundle_id": self._first_text(manifest.get("bundle_id"), manifest_path.parent.name),
@@ -4877,6 +4909,30 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 matched.append({**doc, "relevance": score})
         return sorted(matched, key=lambda m: -m.get("relevance", 0))[:3]
 
+    @staticmethod
+    def _build_test_task_board(report: dict) -> dict | None:
+        """主链 8: 从 v12 报告抽取测试任务看板数据，供前端零变换渲染。
+
+        返回 {ledger, slices, execution, evidence_chains_saved}；当报告缺少任务
+        数据（尚未生成行为路径计划）时返回 None，前端据此显示空态。纯函数、单
+        一真相源，便于单测。
+        """
+        if not isinstance(report, dict):
+            return None
+        ledger = report.get("behavior_slice_ledger") if isinstance(report.get("behavior_slice_ledger"), dict) else {}
+        slices = report.get("behavior_slices") if isinstance(report.get("behavior_slices"), list) else []
+        if not ledger and not slices:
+            return None
+        phases = report.get("phases") if isinstance(report.get("phases"), dict) else {}
+        exec_phase = phases.get("execution") if isinstance(phases.get("execution"), dict) else {}
+        oracle_phase = phases.get("oracle") if isinstance(phases.get("oracle"), dict) else {}
+        return {
+            "ledger": ledger,
+            "slices": slices,
+            "execution": {"production_data_blocked": int(exec_phase.get("production_data_blocked") or 0)},
+            "evidence_chains_saved": int(oracle_phase.get("evidence_chains_saved") or 0),
+        }
+
     def _build_command_center(self, project_id: str, root: Path) -> dict:
         report = self._load_v12_report(project_id, root)
         current_scan_report = self._load_current_scan_report(project_id, root)
@@ -5171,24 +5227,40 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             current_scope_total_findings,
             int(current_report_source.get("raw_total") or current_report_source.get("total_findings") or current_scope_total_findings or 0),
         )
-        current_scope_customer_ready_defect_count = max(
-            0,
-            int(self._report_summary_number(
-                current_report_source,
-                "customer_ready_defects",
-                "ready_bug_count",
-                "total_bugs_found",
-                fallback=current_scope_total_findings,
-            ) or current_scope_total_findings),
+        has_campaign_scope = bool(discovery_current_scope) or bool(
+            int(current_campaign_bundle_stats.get("deduped") or 0)
+            or int(current_campaign_bundle_stats.get("raw") or 0)
         )
-        current_scope_customer_ready_defect_count = max(
-            current_scope_customer_ready_defect_count,
-            int(discovery_current_scope.get("customer_ready_defects") or 0),
-        )
-        current_scope_customer_ready_defect_count = min(
-            current_scope_customer_ready_defect_count or current_scope_total_findings,
-            current_scope_total_findings or len(delivery_defects),
-        )
+        if has_campaign_scope:
+            # Real campaign scope present: customer-ready defects is the deduped /
+            # validated campaign count, NEVER the raw bundle total. Using the raw
+            # total (current_scope_total_findings) here conflated "本轮候选总数"
+            # with "本轮 customer-ready 缺陷数".
+            current_scope_customer_ready_defect_count = max(
+                0,
+                int(discovery_current_scope.get("customer_ready_defects") or 0),
+                int(current_campaign_bundle_stats.get("deduped") or 0),
+            )
+            if current_scope_total_findings:
+                current_scope_customer_ready_defect_count = min(
+                    current_scope_customer_ready_defect_count,
+                    current_scope_total_findings,
+                )
+        else:
+            current_scope_customer_ready_defect_count = max(
+                0,
+                int(self._report_summary_number(
+                    current_report_source,
+                    "customer_ready_defects",
+                    "ready_bug_count",
+                    "total_bugs_found",
+                    fallback=current_scope_total_findings,
+                ) or current_scope_total_findings),
+            )
+            current_scope_customer_ready_defect_count = min(
+                current_scope_customer_ready_defect_count or current_scope_total_findings,
+                current_scope_total_findings or len(delivery_defects),
+            )
         current_scope_materialized_findings = max(
             current_scope_customer_ready_defect_count,
             current_scope_total_findings,
@@ -5457,6 +5529,14 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["value_metrics"]["commercial_delivery_package_created"] = 1 if _first_text((commercial_assets.get("delivery_package") or {}).get("status")) == "created" else 0
             data["executive_summary"]["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
             data["executive_summary"]["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
+        # ── 主链 8: 测试任务看板 ──
+        # Surface the per-task lifecycle status board (主链 4), the production-data
+        # safety-boundary block count (主链 5/6), and the persisted evidence-chain
+        # count (主链 7) so the frontend can render the full main-chain closure.
+        # All fields come straight from the v12 report; no transformation.
+        _test_task_board = self._build_test_task_board(report)
+        if _test_task_board:
+            data["test_task_board"] = _test_task_board
         try:
             data["continuous_state"] = _get_continuous_state(root, project_id)
         except Exception:
@@ -5464,6 +5544,42 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         return {
             "ok": True,
             "data": data,
+        }
+
+    @staticmethod
+    def _build_test_task_board(report: Any) -> dict | None:
+        """主链 8: 测试任务看板 — 从 v12 报告原样透传任务生命周期看板。
+
+        数据全部来自 v12 report，前端零变换渲染：
+        - ledger: 行为切片账本（含主链 4 的 slice_status 任务状态）
+        - slices: 行为切片列表（含每个任务的 status）
+        - execution.production_data_blocked: 主链 5/6 生产数据安全边界拦截计数
+        - evidence_chains_saved: 主链 7 已落地证据链计数
+        无任务数据（既无 ledger 也无 slices）时返回 None，前端显示空态。
+        """
+        if not isinstance(report, dict):
+            return None
+        ledger = report.get("behavior_slice_ledger")
+        ledger = ledger if isinstance(ledger, dict) else {}
+        slices = report.get("behavior_slices")
+        slices = slices if isinstance(slices, list) else []
+        if not ledger and not slices:
+            return None
+        phases = report.get("phases") if isinstance(report.get("phases"), dict) else {}
+        execution = phases.get("execution") if isinstance(phases.get("execution"), dict) else {}
+        oracle = phases.get("oracle") if isinstance(phases.get("oracle"), dict) else {}
+
+        def _int(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "ledger": dict(ledger),
+            "slices": [dict(item) for item in slices if isinstance(item, dict)],
+            "execution": {"production_data_blocked": _int(execution.get("production_data_blocked"))},
+            "evidence_chains_saved": _int(oracle.get("evidence_chains_saved")),
         }
 
     @staticmethod
@@ -6068,6 +6184,77 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             return self._json({"ok": False, "error": "NOT_FOUND", "message": "File not found."}, 404)
         except Exception as e:
             return self._json({"ok": False, "error": "PREVIEW_FAILED", "message": str(e)[:300]}, 500)
+
+    def _handle_evidence_artifact(self, project: str, ref: str, root: Path) -> None:
+        """Serve a browser/UI evidence artifact (screenshot, HAR, trace zip, video).
+
+        Security: path-traversal hardened — only files under
+        ``platform_workspace/<project>/browser_runs/`` are served,
+        extensions are whitelisted, and the resolved path must stay inside root.
+
+        GET /api/evidence/artifact?project=<project>&ref=<relative-path>
+        """
+        ref = str(ref or "").strip().lstrip("/").lstrip("\\")
+        if not ref:
+            return self._json({"ok": False, "error": "MISSING_ARTIFACT_REF"}, 400)
+        # Only serve from the browser_runs subtree for this project.
+        allowed_prefix = Path("platform_workspace") / _safe_project_id(project) / "browser_runs"
+        candidate = (root / ref)
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            return self._json({"ok": False, "error": "INVALID_ARTIFACT_PATH"}, 400)
+        root_resolved = root.resolve()
+        allowed_resolved = (root / allowed_prefix).resolve()
+        if (
+            root_resolved != allowed_resolved
+            and root_resolved not in resolved.parents
+            and root_resolved not in allowed_resolved.parents
+        ):
+            return self._json({"ok": False, "error": "INVALID_STORED_PATH"}, 400)
+        # Resolved must start with the allowed prefix.
+        try:
+            resolved.relative_to(allowed_resolved)
+        except ValueError:
+            return self._json({"ok": False, "error": "ARTIFACT_OUTSIDE_ALLOWED_SUBTREE"}, 403)
+        if not candidate.exists() or not resolved.is_file():
+            return self._json({"ok": False, "error": "ARTIFACT_NOT_FOUND"}, 404)
+        # Extension whitelist — serve only evidence assets, never scripts or binaries.
+        suffix = resolved.suffix.lower()
+        ALLOWED = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".har", ".json", ".zip", ".mp4", ".webm", ".txt", ".html", ".css"}
+        if suffix not in ALLOWED:
+            return self._json({"ok": False, "error": "ARTIFACT_TYPE_BLOCKED"}, 415)
+        # MIME map (data-driven, not blind best-guess).
+        MIME: dict[str, str] = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+            ".har": "application/json", ".json": "application/json",
+            ".zip": "application/zip", ".mp4": "video/mp4", ".webm": "video/webm",
+            ".txt": "text/plain; charset=utf-8", ".html": "text/html; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+        }
+        mime = MIME.get(suffix, "application/octet-stream")
+        max_bytes = 50_000_000
+        try:
+            file_size = resolved.stat().st_size
+        except OSError:
+            return self._json({"ok": False, "error": "ARTIFACT_READ_FAILED"}, 500)
+        if file_size > max_bytes:
+            return self._json({"ok": False, "error": "ARTIFACT_TOO_LARGE"}, 413)
+        try:
+            data = resolved.read_bytes()[:max_bytes]
+        except OSError:
+            return self._json({"ok": False, "error": "ARTIFACT_READ_FAILED"}, 500)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(data)
+        except (ConnectionAbortedError, ConnectionResetError, OSError):
+            pass
 
     def _handle_settings_save(self, body: dict[str, Any]) -> None:
         """Apply LLM settings for a customer-local private service."""

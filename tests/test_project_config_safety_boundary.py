@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -122,3 +124,49 @@ def test_executor_block_is_additive_only(monkeypatch):
     )
     assert d.decision == "blocked"
     assert d.reason.startswith("production_data_exclusion_matched:")
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator feeds the project config (with the safety boundary) to the executor
+# ---------------------------------------------------------------------------
+
+def test_runner_defaults_probe_config_to_project(tmp_path, monkeypatch):
+    """run_input_only_project must hand the executor the project's
+    multi_service_config.json when the caller didn't pass one."""
+    from ai_test_asset_center.blind_project_runner import run_input_only_project
+
+    proj = MultiServiceProject("cfgflow", tmp_path)
+    proj.init_from_example()
+    proj.set_project_metadata(production_data_exclusion=["/api/admin/users"])
+
+    captured = {}
+
+    def _spy(*, probe_plan_path, out_dir, base_url="", probe_config=None, **kw):
+        captured["probe_config"] = probe_config
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        return {"probes": [], "decisions": [], "findings": [], "status": "ok"}
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.blind_project_runner.run_grounded_probe_executor", _spy
+    )
+    # Keep the rest of the runner lightweight for the unit check.
+    monkeypatch.setattr(
+        "ai_test_asset_center.blind_project_runner.run_real_project_discovery",
+        lambda *a, **k: {"metrics": {"issue_count": 0}, "items": []},
+    )
+
+    input_dir = tmp_path / "platform_inputs" / "cfgflow" / "input"
+    input_dir.mkdir(parents=True)
+    (input_dir / "prd.md").write_text("# PRD\n用户可下单。\n")
+
+    run_input_only_project(
+        project_input_dir=input_dir,
+        project_id="cfgflow",
+        root=tmp_path,
+        base_url="http://test.local",
+    )
+
+    assert captured.get("probe_config") is not None, "executor received empty config"
+    loaded = json.loads(Path(captured["probe_config"]).read_text(encoding="utf-8"))
+    assert PROJECT_PRODUCTION_DATA_EXCLUSION_KEY in loaded
+    assert loaded[PROJECT_PRODUCTION_DATA_EXCLUSION_KEY] == ["/api/admin/users"]

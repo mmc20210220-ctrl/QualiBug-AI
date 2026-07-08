@@ -14,7 +14,7 @@ Architecture: OracleRegistry (extensible plugin) → auto-detect from PRD keywor
 
 from __future__ import annotations
 
-import json, re, time, uuid
+import hashlib, json, re, time, uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -1185,6 +1185,23 @@ class EvidenceGraphBuilder:
         agg_confidence = (sum(failed_confidences) / len(failed_confidences)) if failed_confidences else worst.confidence
 
         layers = list(set(r.layer for r in oracle_results if not r.passed))
+        # 主链 7: a reproducible evidence chain needs a STABLE id. Derive it from
+        # the defect signature (scenario id + behavior slice + sorted violated
+        # rules) so the SAME defect yields the SAME evidence_id across reruns —
+        # enabling dedup and reproducible retrieval (主链 9 regression / 主链 8
+        # frontend). Fall back to a random id only when no stable signature exists.
+        violated_rules = sorted(
+            str(r.violated_rule) for r in oracle_results if not r.passed and str(r.violated_rule).strip()
+        )
+        _sig = "|".join([
+            str(scenario.get("id") or ""),
+            str(scenario.get("behavior_slice_id") or ""),
+            *violated_rules,
+        ])
+        evidence_id = (
+            "EVID_" + hashlib.sha1(_sig.encode("utf-8")).hexdigest()[:16]
+            if _sig.strip("|") else "EVID_" + uuid.uuid4().hex[:16]
+        )
         return BugEvidenceGraph(
             bug_id=bug_id, title=scenario.get("title", ""), scenario=scenario,
             execution_trace=trace,
@@ -1193,7 +1210,7 @@ class EvidenceGraphBuilder:
             oracle_results=oracle_results,
             reproduction_steps="\n".join(repro),
             severity=worst.severity, confidence=round(agg_confidence, 2),
-            evidence_id=str(uuid.uuid4()), layers_triggered=layers,
+            evidence_id=evidence_id, layers_triggered=layers,
             vote_summary={
                 "total_votes": len(oracle_results),
                 "failed_votes": sum(1 for r in oracle_results if not r.passed),

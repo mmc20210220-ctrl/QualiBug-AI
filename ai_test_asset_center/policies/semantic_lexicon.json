@@ -22,6 +22,26 @@
     "sensitive_data": ["medical", "patient", "pii", "personal", "\u654f\u611f", "\u75c5\u5386", "\u9690\u79c1", "\u8eab\u4efd\u8bc1"],
     "historical_regression": ["bug", "defect", "incident", "issue", "\u7f3a\u9677", "\u6545\u969c", "\u5de5\u5355", "\u4e8b\u6545"]
   },
+  "risk_hints": {
+    "comment": "Data-driven risk-signal keywords for enterprise_test_knowledge risk inference. Merged (union) over the built-in fallback in code; replace or extend per-industry deployment WITHOUT touching parser code.",
+    "permission_bypass": ["admin", "manage", "manager", "\u540e\u53f0", "\u7ba1\u7406\u5458", "\u6743\u9650", "role", "rbac", "approve"],
+    "idor": ["{id}", "order", "profile", "address", "user", "customer", "\u8be6\u60c5", "\u4ed6\u4eba", "\u5f52\u5c5e"],
+    "tenant_isolation": ["tenant", "org", "organization", "\u79df\u6237", "\u7ec4\u7ec7"],
+    "money_consistency": ["amount", "balance", "ledger", "price", "wallet", "\u91d1\u989d", "\u4f59\u989d", "\u6d41\u6c34", "\u4ef7\u683c"],
+    "payment": ["payment", "pay", "callback", "transaction", "\u652f\u4ed8", "\u56de\u8c03", "\u5165\u8d26"],
+    "refund": ["refund", "return", "\u9000\u6b3e", "\u9000\u8d27"],
+    "coupon_abuse": ["coupon", "voucher", "discount", "\u4f18\u60e0", "\u6298\u6263"],
+    "stock_consistency": ["stock", "inventory", "sku", "\u5e93\u5b58", "\u6263\u51cf"],
+    "idempotency": ["create", "submit", "pay", "callback", "approve", "book", "publish", "\u521b\u5efa", "\u63d0\u4ea4", "\u652f\u4ed8", "\u5ba1\u6279", "\u9884\u7ea6"],
+    "approval_bypass": ["approval", "approve", "workflow", "review", "expense", "\u5ba1\u6279", "\u5ba1\u6838", "\u62a5\u9500"],
+    "privacy_leak": ["patient", "medical", "record", "customer", "student", "\u60a3\u8005", "\u75c5\u5386", "\u5ba2\u6237", "\u5b66\u751f"],
+    "state_transition": ["status", "state", "cancel", "close", "publish", "\u72b6\u6001", "\u6d41\u8f6c", "\u53d6\u6d88", "\u53d1\u5e03"]
+  },
+  "probe_gating_keywords": {
+    "comment": "Data-driven probe-type gating for phase103 test-plan generation. Which business flows earn a state-consistency or report-accuracy probe is decided by these customer-declared vocab terms, replaceable per-industry deployment WITHOUT touching plan code.",
+    "state_consistency": ["\u652f\u4ed8", "\u4ea4\u6613", "\u5e93\u5b58", "\u5de5\u5355", "\u7ed3\u7b97", "\u8ba1\u8d39", "\u8ba2\u5355"],
+    "report_accuracy": ["\u62a5\u8868", "\u8d22\u52a1", "\u5bf9\u8d26", "\u5ba1\u8ba1"]
+  },
   "state_aliases": {
     "DRAFT": ["draft", "\u8349\u7a3f", "\u672a\u53d1\u5e03"],
     "OFF_SALE": ["off_sale", "offsale", "\u4e0b\u67b6", "\u505c\u552e", "\u9690\u85cf"],

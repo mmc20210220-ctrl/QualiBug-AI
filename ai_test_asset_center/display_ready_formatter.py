@@ -2219,7 +2219,23 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
     if evidence.get("hash"):
         execution_trace["evidence_hash"] = _clean(evidence.get("hash"))
 
-    return {
+    # UI/browser visual evidence: surface screenshot/trace/HAR artifact refs that
+    # the UI execution captured, so the customer evidence chain can show real
+    # visual proof — not only HTTP request/response. Data-driven and additive:
+    # non-UI findings carry no artifacts and the key is omitted entirely.
+    ui_artifacts: list[dict[str, Any]] = []
+    ui_result = _deep_get(finding, "raw_evidence", "ui_execution_result")
+    if isinstance(ui_result, dict):
+        refs = ui_result.get("artifact_refs") if isinstance(ui_result.get("artifact_refs"), list) else []
+        types = ui_result.get("artifact_types") if isinstance(ui_result.get("artifact_types"), list) else []
+        for index, ref in enumerate(refs):
+            ref_text = _clean(ref)
+            if not ref_text:
+                continue
+            type_text = _clean(types[index]) if index < len(types) else ""
+            ui_artifacts.append({"type": type_text or "artifact", "ref": ref_text})
+
+    raw_evidence = {
         "request_raw": request_raw,
         "response_raw": response_raw,
         "db_snapshot": db_snapshot,
@@ -2233,6 +2249,9 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
         ),
         "has_real_evidence": bool(response_raw or db_snapshot or trace_id or (request_raw.get("path") and _has_runtime_response(finding))),
     }
+    if ui_artifacts:
+        raw_evidence["ui_artifacts"] = ui_artifacts
+    return raw_evidence
 
 
 def _build_technical_details(finding: dict, investigation: dict, reproduction: dict) -> dict:
