@@ -33,6 +33,10 @@ from ai_test_asset_center.private_pilot_scan_context_patch import (
     install_scan_campaign_context_patch,
     restore_scan_campaign_context_patch,
 )
+from ai_test_asset_center.private_pilot_scan_result_repair_patch import (
+    install_scan_result_repair_patch,
+    restore_scan_result_repair_patch,
+)
 from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_entrypoint"
@@ -80,6 +84,7 @@ def install_extracted_credential_safety_patch() -> None:
 
 def restore_deployment_contract_patch() -> None:
     _restore_deployment_contract_patch()
+    restore_scan_result_repair_patch()
     restore_scan_campaign_context_patch()
     restore_browser_ui_smoke_patch()
     restore_customer_report_patch()
@@ -90,6 +95,7 @@ def install_runtime_patches() -> None:
     install_customer_delivery_gate_patch()
     install_extracted_scan_campaign_context_patch()
     install_extracted_credential_safety_patch()
+    install_scan_result_repair_patch(patch_source=PATCH_SOURCE)
     install_browser_ui_smoke_patch()
     install_customer_report_patch()
     install_deployment_contract_patch()
