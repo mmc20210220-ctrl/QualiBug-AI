@@ -232,3 +232,50 @@ def execute_browser_plan(
     }
     (artifact_dir / "browser_execution.json").write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return result
+
+
+def _local_playwright_available() -> bool:
+    """Check whether a local Playwright + Chromium installation is available."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception:
+        return False
+
+
+def capture_page_screenshot_locally(
+    url: str,
+    screenshot_path: str | Path,
+    *,
+    wait_until: str = "networkidle",
+    timeout_ms: int = 30000,
+) -> dict[str, Any]:
+    """Capture a single page screenshot using local Playwright.
+
+    Returns a dict with keys: ok, screenshot_path, title, status_code, error.
+    """
+    import json as _json
+    try:
+        from playwright.sync_api import sync_playwright
+        output = Path(screenshot_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            try:
+                response = page.goto(url, wait_until=wait_until, timeout=timeout_ms)
+                status_code = response.status if response else 0
+                title = page.title()
+                page.screenshot(path=str(output), full_page=True)
+                return {
+                    "ok": True, "screenshot_path": str(output),
+                    "title": title, "status_code": status_code, "error": "",
+                }
+            finally:
+                context.close(); browser.close()
+    except Exception as exc:
+        return {"ok": False, "screenshot_path": "", "title": "", "status_code": 0, "error": str(exc)}

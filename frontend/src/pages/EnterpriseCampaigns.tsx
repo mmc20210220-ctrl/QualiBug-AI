@@ -109,6 +109,7 @@ export function EnterpriseCampaigns() {
   const [scopeId, setScopeId] = useState('');
   const [environmentRef, setEnvironmentRef] = useState('');
   const [strategy, setStrategy] = useState<DataStrategy>('safe_read_only');
+  const [selectedSourceId, setSelectedSourceId] = useState('');
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<V12ScanResult | null>(null);
@@ -157,6 +158,19 @@ export function EnterpriseCampaigns() {
     if (!targetBaseUrl.trim() && enabledServices.length === 1) setTargetBaseUrl(asText(enabledServices[0].base_url));
   }, [enabledServices, targetBaseUrl]);
 
+  // Filter registered sources to only show OpenAPI-type (executable) sources
+  const apiSources = useMemo(() => {
+    const apiTypes = new Set(['openapi', 'openapi3', 'swagger', 'postman', 'api_spec']);
+    return sources.filter((s) => apiTypes.has((s.source_type || '').toLowerCase()));
+  }, [sources]);
+
+  // Auto-select first OpenAPI source when sources load and none is selected
+  useEffect(() => {
+    if (!selectedSourceId && apiSources.length > 0) {
+      setSelectedSourceId(apiSources[0].source_id);
+    }
+  }, [apiSources, selectedSourceId]);
+
   const blockers = preflight?.reasons || [];
   const preflightReady = Boolean(preflight?.ready);
 
@@ -184,6 +198,7 @@ export function EnterpriseCampaigns() {
         base_url: resolvedTargetBaseUrl || undefined,
         scope_id: scopeId.trim() || undefined,
         environment_ref: environmentRef.trim() || undefined,
+        source_id: selectedSourceId || undefined,
         test_data_contract: buildTestDataContract(),
       });
       setResult(response);
@@ -282,6 +297,18 @@ export function EnterpriseCampaigns() {
               <option value="create_disposable">隔离一次性数据（需审批回执）</option>
               <option value="approved_fixture_setup">已批准 Fixture（需审批回执）</option>
             </select>
+          </label>
+          <label className="form-field">
+            <span>API 接口文档源（可选，默认自动选择最新 OpenAPI 源）</span>
+            <select value={selectedSourceId} onChange={(e) => setSelectedSourceId(e.target.value)}>
+              <option value="">自动推断（从已注册源中选择）</option>
+              {apiSources.map((s) => (
+                <option key={s.source_id} value={s.source_id}>{s.filename || s.source_id} · {s.source_type}</option>
+              ))}
+            </select>
+            {apiSources.length === 0 && sources.length > 0 && (
+              <small className="muted" style={{color: 'var(--warning-color, #d97706)'}}>⚠ 已入库资料中未检测到 API 接口规范（OpenAPI / Swagger / Postman），扫描可能无法生成可执行探针。请上传接口文档后再运行。</small>
+            )}
           </label>
         </div>
         <div className="settings-grid">

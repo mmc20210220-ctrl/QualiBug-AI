@@ -44,6 +44,10 @@ def test_run_center_invokes_real_scan_endpoint_and_refreshes_downstream() -> Non
     assert "scope_id" in run_center
     assert "environment_ref" in run_center
     assert "test_data_contract" in run_center
+    # Explicit OpenAPI source selector — customer can pick which registered API spec to use.
+    assert "selectedSourceId" in run_center
+    assert "apiSources" in run_center
+    assert "source_id" in run_center
     # On completion, downstream Dashboard / Findings / EvidenceChain auto-refresh.
     assert "emitScanCompleted(project)" in run_center
     assert "navigateToProjectPath('/dashboard', project)" in run_center
