@@ -66,6 +66,14 @@
   - [x] SubTask 12.3: 过度清理型测试——个别测试驱动生产式 cleanup 删掉 `tmp_path.parent`(即共享 basetemp),后续所有 `tmp_path` 用户 `FileNotFoundError`。新增 function-scoped autouse fixture `_heal_basetemp`,每测试前若 basetemp 被删则重建(空根重建无害,各测试仍获独立 `tmp_path` 子目录),阻断单测试污染整会话。
   - [x] SubTask 12.4: 全量验证——`pytest tests/ -q --tb=line` 复跑:**1038 passed, 13 skipped, 0 failed, 0 error**(301s)。对比修复前(713 passed / 318 errors)净增 ~325 通过项,历史级联红测已全部消除;13 skipped 为环境门控(前端构建等)非失败。
 
+# Task 13: 客户"给项目即一键跑通"产品级闭环(L4 接线层,ChatGPT 审计 P0)
+- [x] Task 13: 修复"客户自助接入->一键跑通->真实缺陷->可交付证据"产品闭环的 4 个真实接线断点(后端数据管道 L0-L3 已通,但产品接线层 B1-B4 存在真实缺口)。全部 curl 实证 + 97 项相关测试零回归。
+  - [x] SubTask 13.1(B1): 设置页 GET 路由死代码——`private_pilot_service.do_GET` 缺 `/api/v1/services/credentials` 与 `/api/v1/project/metadata` 分支,GET 处理误写在 `do_POST` 的 `if self.command=="GET"`(永远 False)→ 真实 GET 落 404,设置页保存成功但刷新回显失败。修复:两个 GET 分支注入 `do_GET`(最终 404 兜底前),复用已存在的 `_handle_get_service_credentials`/`_handle_get_project_metadata`。实证:curl(localhost dev actor)GET 均 200 返回真实 JSON。
+  - [x] SubTask 13.2(B4): 缺客户可见阻断原因——扫描失败仅有 400/500,UI 无法解释 WHY。新增 `_handle_scan_preflight` + `GET/POST /api/v1/scan/preflight`,返回可行动阻断项(`NO_CREDENTIALS`/`NO_SOURCE`/`NO_TARGET`,含中文提示)。实证:空项目返回 3 条 reasons、`ready=false`。
+  - [x] SubTask 13.3(B3): 扫描无源绑定——`runV12Scan` 不传 `source_id/source_hash` 时 `source_manifest=undefined`,`_handle_v12_scan` 不回退。修复:扫描入口若 body 无可用 manifest,则从 `list_source_assets` 自动绑定项目最新入库源(仅绑定已注册源,绝不伪造 manifest)。
+  - [x] SubTask 13.4(B2): 部署无客户 UI——`Dockerfile`/`docker-compose` 只起后端 8088、不含 `frontend/dist`。修复:新增 `_serve_frontend`(路径穿越加固,`QUALIBUG_FRONTEND_DIST` 可覆盖),`do_GET` 对非 `/api` 且非 legacy 页路由托管预构建 SPA(公开、在认证门前,登录页可达);根 `Dockerfile` + `deploy/Dockerfile` COPY `frontend/dist` 并设 `QUALIBUG_FRONTEND_DIST`,实现单端口 API+UI 自包含。实证:GET `/`/`/login` 返回 SPA html;`/assets/*.js|.css` 字节与磁盘一致(486653/142558);`%2e%2e` 编码穿越返 404,`../conftest.py` 回落 index.html(无源码泄漏)。
+  - [x] SubTask 13.5: 回归验证——`test_backend_main_enterprise_api` + `test_private_pilot_*` + `test_command_center_*` + `test_mainchain8/9` + `test_enterprise_ingest_execute_e2e` 等共 97 项全绿,零回归;两文件 `ast.parse` OK。架构取舍:采用单自包含 pilot 服务(8088 同托管 API+SPA);`/enterprise-api`->8000 的 aitestops 工具链保持独立、非客户路径,不动。
+
 # Task Dependencies
 - Task 2 depends on Task 1
 - Task 3 depends on Task 1

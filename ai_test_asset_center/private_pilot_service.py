@@ -2905,6 +2905,13 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         project = self._project()
         root = self._root()
+        # Serve the prebuilt customer pilot SPA for any non-API path (public, before the
+        # auth gate so the login page itself is reachable). Known legacy server-rendered
+        # pages are excluded so they keep working behind auth.
+        if not parsed.path.startswith("/api"):
+            _legacy_served = {"/onboard", "/dashboard", "/knowledge", "/benchmark", "/release"}
+            if parsed.path not in _legacy_served:
+                return self._serve_frontend(parsed, root)
         if parsed.path in {"/health", "/api/health"}:
             import platform, sys
             llm_health = self._llm_health()
@@ -3093,6 +3100,16 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
             return self._handle_preview(project, {"source_id": parse_qs(parsed.query).get("source_id", [""])[0]}, root)
         if parsed.path == "/api/evidence/artifact":
             return self._handle_evidence_artifact(project, parse_qs(parsed.query).get("ref", [""])[0], root)
+        # Settings-page read-back routes (P0-1 fix): these were previously only
+        # declared inside do_POST behind a `if self.command == "GET"` guard that can
+        # never be true there, so real GET requests fell through to 404. Wire them
+        # into do_GET so the customer settings page can load saved config.
+        if parsed.path == "/api/v1/services/credentials":
+            return self._handle_get_service_credentials(project, root)
+        if parsed.path == "/api/v1/project/metadata":
+            return self._handle_get_project_metadata(project, root)
+        if parsed.path == "/api/v1/scan/preflight":
+            return self._handle_scan_preflight(project, root)
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
 
@@ -3274,6 +3291,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 )
                 # #endregion
                 return self._handle_v12_scan(project, root, actor, body)
+            elif parsed.path == "/api/v1/scan/preflight":
+                return self._handle_scan_preflight(project, root)
             elif parsed.path == "/api/v1/continuous/status":
                 return self._json(_get_continuous_state(root, project))
             elif parsed.path == "/api/v1/continuous/start":
@@ -3610,11 +3629,100 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             return self._json({"ok": True, "message": "持续检测已手动停止。"})
         return self._json({"ok": True, "message": "持续检测未在运行。"})
 
+    def _handle_scan_preflight(self, project: str, root: Path) -> None:
+        """Customer-facing readiness check: surface actionable blockers BEFORE a scan
+        is launched, instead of failing late with a 400/500 the UI can't explain."""
+        reasons: list[dict[str, str]] = []
+        # 1) service credentials configured?
+        _cfg = root / "platform_workspace" / project / "multi_service_config.json"
+        _services: list = []
+        if _cfg.exists():
+            try:
+                _services = json.loads(_cfg.read_text(encoding="utf-8")).get("services", [])
+            except Exception:
+                pass
+        if not _services:
+            reasons.append({"code": "NO_CREDENTIALS", "message": "尚未配置任何服务凭证，请先在「设置」页保存。"})
+        # 2) source ingested?
+        try:
+            from .enterprise_source_registry import list_source_assets
+            _assets = list_source_assets(project, root=root)
+        except Exception:
+            _assets = []
+        if not _assets:
+            reasons.append({"code": "NO_SOURCE", "message": "尚未入库任何资料（PRD / OpenAPI 等），请先上传。"})
+        # 3) target base_url / connector endpoint?
+        _base_url = ""
+        try:
+            from .enterprise_pilot_runtime import load_connector_registry
+            for _c in load_connector_registry(project, root).get("connectors", []):
+                if _c.get("enabled"):
+                    _ep = str(_c.get("endpoint_ref") or "")
+                    if _ep.startswith(("http://", "https://")):
+                        _base_url = _ep
+                        break
+        except Exception:
+            pass
+        if not _base_url:
+            reasons.append({"code": "NO_TARGET", "message": "未配置被测目标 base_url 或启用连接器端点。"})
+        return self._json({"ok": True, "ready": len(reasons) == 0, "reasons": reasons})
+
+    def _serve_frontend(self, parsed: "urllib.parse.ParseResult", root: Path) -> None:
+        """Serve the prebuilt customer pilot SPA (frontend/dist). Public — called before
+        the auth gate so the login page itself is reachable. Path-traversal hardened."""
+        import mimetypes
+        _dist_env = os.environ.get("QUALIBUG_FRONTEND_DIST")
+        _dist = Path(_dist_env) if _dist_env else (Path(__file__).resolve().parent.parent / "frontend" / "dist")
+        _dist_resolved = _dist.resolve()
+        _rel = parsed.path.lstrip("/")
+        if _rel in ("", "index.html"):
+            _target = _dist_resolved / "index.html"
+        elif _rel.startswith("assets/"):
+            _target = (_dist_resolved / _rel).resolve()
+        else:
+            # SPA client-side route (e.g. /login, /settings, /scan) -> shell
+            _target = _dist_resolved / "index.html"
+        if _target != _dist_resolved and _dist_resolved not in _target.parents:
+            return self._json({"ok": False, "error": "FORBIDDEN"}, 403)
+        if not _target.exists() or not _target.is_file():
+            return self._json({"ok": False, "error": "UI_NOT_BUILT",
+                               "message": "frontend/dist 未构建，请先构建前端或设置 QUALIBUG_FRONTEND_DIST。"}, 404)
+        try:
+            _data = _target.read_bytes()
+        except Exception:
+            return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
+        _ctype = mimetypes.guess_type(str(_target))[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", _ctype)
+        self.send_header("Content-Length", str(len(_data)))
+        self.end_headers()
+        self.wfile.write(_data)
+
     def _handle_v12_scan(self, project: str, root: Path, actor: dict[str, str], body: dict[str, Any]) -> None:
         try:
             from .__main__ import scan
             from .private_pilot_scan_context_contract import build_campaign_context_from_scan_body
             trace_id = str(uuid.uuid4())
+
+            # B3 (customer one-click run): when the scan body does not already carry a
+            # usable source_manifest, auto-bind the project's most recently ingested
+            # source so the scan has real scope instead of running source-less. Never
+            # fabricate a manifest — only bind an existing registered source.
+            _manifest = body.get("source_manifest") if isinstance(body.get("source_manifest"), dict) else {}
+            _manifest_ok = bool(str(_manifest.get("source_id") or "").strip()) and len(str(_manifest.get("source_hash") or "").strip()) == 64
+            if not _manifest_ok:
+                try:
+                    from .enterprise_source_registry import list_source_assets
+                    for _asset in list_source_assets(project, root=root):
+                        _sid = str(_asset.get("source_id") or "").strip()
+                        _sh = str(_asset.get("latest_source_hash") or "").strip().lower()
+                        if _sid and len(_sh) == 64:
+                            body = dict(body)
+                            body["source_manifest"] = {"source_id": _sid, "source_hash": _sh}
+                            break
+                except Exception as _bind_exc:
+                    _dbg_report(hypothesis_id="B3", msg="[WARN] auto source bind skipped",
+                                data={"error": str(_bind_exc)}, trace_id=trace_id)
 
             prepared_body = _prepare_v12_scan_body(
                 project,

@@ -8,6 +8,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV QUALIBUG_PRODUCTION=1
 ENV QUALIBUG_PORT=8088
+ENV QUALIBUG_FRONTEND_DIST=/app/frontend_dist
 
 # Set working directory
 WORKDIR /app
@@ -27,6 +28,8 @@ COPY aitestops/ ./aitestops/
 COPY mes_target/ ./mes_target/
 COPY pyproject.toml .
 COPY README.md .
+# Copy prebuilt customer pilot SPA so the backend serves UI + API on one port
+COPY frontend/dist ./frontend_dist/
 
 # Create necessary directories
 RUN mkdir -p /app/platform_outputs /app/platform_workspace /app/logs

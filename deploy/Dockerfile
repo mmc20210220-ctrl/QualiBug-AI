@@ -11,7 +11,8 @@ COPY enterprise_bug_factory/ ./enterprise_bug_factory/
 COPY tests/ ./tests/
 COPY platform_workspace/ ./platform_workspace/
 COPY platform_outputs/ ./platform_outputs/
-ENV PYTHONUNBUFFERED=1 QUALIBUG_PRIVATE_ROOT=/var/lib/qualibug QUALIBUG_BIND_HOST=127.0.0.1 QUALIBUG_BIND_PORT=8088
+COPY frontend/dist ./frontend_dist/
+ENV PYTHONUNBUFFERED=1 QUALIBUG_PRIVATE_ROOT=/var/lib/qualibug QUALIBUG_BIND_HOST=127.0.0.1 QUALIBUG_BIND_PORT=8088 QUALIBUG_FRONTEND_DIST=/app/frontend_dist
 USER qualibug
 EXPOSE 8088
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8088/health')" || exit 1
