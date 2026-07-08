@@ -5645,6 +5645,14 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         _test_task_board = self._build_test_task_board(report)
         if _test_task_board:
             data["test_task_board"] = _test_task_board
+        # ── 主链 4/5 覆盖诚实性: surface unexecuted high-value slices + any grade
+        # downgrade so the frontend never shows a clean completion while
+        # authorization/isolation/money/concurrency checks were silently skipped. ──
+        _coverage_honesty = current_scan_report.get("coverage_honesty") if isinstance(current_scan_report, dict) else None
+        if isinstance(_coverage_honesty, dict):
+            data["coverage_honesty"] = _coverage_honesty
+            if _test_task_board:
+                data["test_task_board"]["coverage_honesty"] = _coverage_honesty
         try:
             data["continuous_state"] = _get_continuous_state(root, project_id)
         except Exception:

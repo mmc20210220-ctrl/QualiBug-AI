@@ -3719,6 +3719,77 @@ def _compute_scan_score(confirmed: list[dict[str, Any]], candidates: list[dict[s
     return score, coverage
 
 
+# High-risk slice kinds a customer cares most about: authorization / tenant
+# isolation / money conservation / concurrency. Silently skipping any of these
+# while reporting a clean completion is a delivery-credibility hazard.
+_HIGH_VALUE_SLICE_KINDS = ("permission", "isolation", "money", "concurrency")
+
+
+def _apply_coverage_honesty_guard(
+    v12: dict[str, Any], grade: str, execution_status: str
+) -> tuple[dict[str, Any], str]:
+    """主链 4/5 覆盖诚实性守卫 (coverage honesty guard).
+
+    The behavior model routinely plans more slices than a single campaign can
+    execute — permission / isolation / money / concurrency slices often need a
+    multi-actor runtime contract (multiple logged-in principals + state
+    preconditions). When those high-value slices are never executed but the
+    campaign still reports a clean 'inconclusive'/'evidence_ready' completion, a
+    customer could read "completed / 0 findings" while EVERY authorization check
+    was silently skipped.
+
+    This guard makes that non-silent: it lists the unexecuted high-value slices
+    and downgrades a *completed* clean grade to 'partial_coverage'. It only ever
+    ADDS signal and only downgrades — it never upgrades a grade nor fabricates
+    coverage. Single source of truth: the v12 ``behavior_slices`` contract +
+    ``behavior_slice_ledger`` execution status (same producers as 主链 4).
+    """
+    slices = v12.get("behavior_slices") if isinstance(v12.get("behavior_slices"), list) else []
+    ledger = v12.get("behavior_slice_ledger") if isinstance(v12.get("behavior_slice_ledger"), dict) else {}
+    slice_status = ledger.get("slice_status") if isinstance(ledger.get("slice_status"), dict) else {}
+    attempted_ids = {str(x) for x in (ledger.get("attempted_slice_ids") or []) if x}
+    _attempted_states = {"running", "passed", "failed", "confirmed", "blocked"}
+
+    high_value_total = 0
+    unexecuted: list[dict[str, Any]] = []
+    for s in slices:
+        if not isinstance(s, dict):
+            continue
+        kind = str(s.get("kind") or "").strip().lower()
+        if kind not in _HIGH_VALUE_SLICE_KINDS:
+            continue
+        high_value_total += 1
+        sid = str(s.get("slice_id") or s.get("id") or "")
+        state = str(slice_status.get(sid) or "").strip().lower()
+        executed = (state in _attempted_states) or (bool(sid) and sid in attempted_ids)
+        if not executed:
+            unexecuted.append({
+                "slice_id": sid,
+                "kind": kind,
+                "entity": s.get("entity"),
+                "endpoints": list(s.get("endpoints") or [])[:6],
+                "status": state or "not_executed",
+            })
+
+    honesty: dict[str, Any] = {
+        "high_value_kinds": list(_HIGH_VALUE_SLICE_KINDS),
+        "total_slices": len(slices),
+        "high_value_total": high_value_total,
+        "high_value_unexecuted": len(unexecuted),
+        "unexecuted_high_value_slices": unexecuted[:50],
+        "honest": len(unexecuted) == 0,
+        "downgraded": False,
+    }
+    # Only act on a *completed* campaign: a blocked / not-executed scan already
+    # signals incompleteness through its own grade, and the phase-110 contract
+    # tests rely on those staying 'blocked'/'inconclusive'.
+    if execution_status == "completed" and unexecuted and grade in {"inconclusive", "evidence_ready"}:
+        honesty["grade_before_guard"] = grade
+        honesty["downgraded"] = True
+        grade = "partial_coverage"
+    return honesty, grade
+
+
 def _discovery_verdict(confirmed: list[dict[str, Any]], db_verification: dict[str, Any]) -> dict[str, Any]:
     """Product-facing verdict: did QualiBug deliver reproducible defects?
 
@@ -4016,6 +4087,9 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         runtime_observed=str(_as_dict(v12.get("auto_har")).get("status") or "") == "captured",
     )
     grade = "blocked" if str(runtime_contract.get("status") or "") == "blocked" or execution_status == "blocked" else ("inconclusive" if not confirmed else "evidence_ready")
+    # ── 主链 4/5 覆盖诚实性守卫: never report a clean completion while high-value
+    # (permission/isolation/money/concurrency) slices were silently unexecuted. ──
+    coverage_honesty, grade = _apply_coverage_honesty_guard(v12, grade, execution_status)
     duration_ms = int((time.time() - started) * 1000)
     # ── Honest data-layer verification summary aggregated from real findings ──
     _db_backed = [f for f in confirmed if isinstance(f, dict) and isinstance(f.get("db_evidence"), dict) and f["db_evidence"].get("status") == "captured"]
@@ -4094,6 +4168,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         "ui_test_data_bootstrap": ui_test_data_bootstrap,
         "behavior_slice_ledger": v12.get("behavior_slice_ledger", {}), "incremental_discovery": incremental,
         "execution_status": execution_status,
+        "coverage_honesty": coverage_honesty,
         "db_verification": db_verification,
         "dedupe_report": dedupe_report,
         "discovery_verdict": _discovery_verdict(confirmed, db_verification),
@@ -4103,7 +4178,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "risk_clues": candidates, "campaign": campaign, "coverage_gaps": coverage_gaps, "scan_preflight_guide": preflight_guide, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "test_data_bootstrap": test_data_bootstrap, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status, "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "ui_followup_assets": ui_followup_assets, "external_reproduction_assets": external_reproduction_assets, "external_commercial_assets": external_commercial_assets})
+        _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "risk_clues": candidates, "campaign": campaign, "coverage_gaps": coverage_gaps, "scan_preflight_guide": preflight_guide, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "test_data_bootstrap": test_data_bootstrap, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status, "coverage_honesty": coverage_honesty, "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "ui_followup_assets": ui_followup_assets, "external_reproduction_assets": external_reproduction_assets, "external_commercial_assets": external_commercial_assets})
         result["report_path"] = str(report_path)
     output_root = root / "platform_outputs" / _safe_project(project)
     _write_json(output_root / "scan_result.json", result)
