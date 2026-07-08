@@ -2156,7 +2156,13 @@ def _decide_probe(probe: dict[str, Any], *, base_url: str, config: dict[str, Any
         approval_id = str(options.get("approval_id") or "")
         allow_write = bool(options.get("allow_write_sandbox") or config.get("allow_write_probes") or ((config.get("test_environment") or {}).get("allow_write_probes") if isinstance(config.get("test_environment"), dict) else False))
         if not allow_write:
-            return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", "write_probe_requires_test_environment_execution_enabled", req)
+            # safe_read_only POSTs (validate / search / query) are semantically
+            # read-only — they do not modify customer data, so write-sandbox
+            # approval is not required. Let them through the write gate.
+            if execution_policy == "safe_read_only":
+                pass
+            else:
+                return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", "write_probe_requires_test_environment_execution_enabled", req)
         if execution_policy != "disposable_sandbox_required":
             return ProbeDecision(candidate_id, risk_type, method, path, execution_policy, "blocked", f"write_probe_policy_not_disposable_sandbox_required:{execution_policy}", req)
         if not base_url:
