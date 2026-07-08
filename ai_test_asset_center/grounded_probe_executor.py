@@ -5796,7 +5796,7 @@ def run_grounded_probe_executor(
                     "candidate_id": f"CUP-{label}",
                     "risk_type": "business_rule_probe",
                     "endpoint": {"method": "POST", "path": "/api/coupons/validate"},
-                    "execution_policy": "safe_read_only",
+                    "execution_policy": "runtime_approved",
                     "actors": ["buyer"],
                     "probe_plan": {
                         "steps": [f"Submit known-{label.replace('_',' ')} coupon {coupon_code} for validation"],
@@ -5804,8 +5804,11 @@ def run_grounded_probe_executor(
                         "focus_rule": label,
                     },
                     "required_evidence": ["request_response_pair", "status_code"],
-                    "source_refs": [{"file": "coupon_validation_samples", "section": label}],
-                    "grounding_basis": {"source": "db_sampled_coupon", "label": label},
+                    "source_refs": [
+                        {"file": "coupon_validation_samples", "section": label, "kind": "db_sampled_test_case"},
+                        {"file": "api.md", "section": "POST /api/coupons/validate", "kind": "endpoint_contract"},
+                    ],
+                    "grounding_basis": {"source": "db_sampled_coupon", "label": label, "api_path": "/api/coupons/validate"},
                     "validation_priority": 0,
                 }
                 # Attach the concrete request body so the probe has real data.
