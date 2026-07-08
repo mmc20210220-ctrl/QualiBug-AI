@@ -71,6 +71,103 @@ def _coverage_summary(matrix: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _legacy_family_coverage(matrix: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return the older Dashboard-friendly risk_family_coverage map.
+
+    The newer matrix stores rows as a list.  Some frontend code already expects a
+    keyed map with coverage_rate / covered_items / total_items, so keep that
+    compatibility while preserving the richer list form.
+    """
+    families = matrix.get("families") if isinstance(matrix.get("families"), list) else []
+    result: dict[str, dict[str, Any]] = {}
+    for row in families:
+        if not isinstance(row, dict):
+            continue
+        family = str(row.get("family") or "").strip()
+        if not family:
+            continue
+        status = str(row.get("coverage_status") or "gap")
+        target = int(row.get("target_invariant_count") or row.get("ground_truth_total") or 1)
+        touched = int(row.get("touched_invariant_count") or len(row.get("touched_invariants") or []) or 0)
+        confirmed = int(row.get("confirmed_count") or 0)
+        candidates = int(row.get("candidate_count") or 0)
+        covered = max(confirmed + candidates, touched, 1 if status != "gap" else 0)
+        total = max(target, covered, 1)
+        result[family] = {
+            "display_name": str(row.get("display_name") or family),
+            "coverage_status": status,
+            "coverage_rate": round(covered / total, 4) if total else 0.0,
+            "execution_rate": round(confirmed / total, 4) if total else 0.0,
+            "covered_items": covered,
+            "total_items": total,
+            "confirmed_count": confirmed,
+            "candidate_count": candidates,
+            "evidence_complete_count": int(row.get("evidence_complete_count") or 0),
+        }
+    return result
+
+
+def _legacy_invariant_coverage(matrix: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    invariants = matrix.get("invariants") if isinstance(matrix.get("invariants"), list) else []
+    result: dict[str, dict[str, Any]] = {}
+    for row in invariants:
+        if not isinstance(row, dict):
+            continue
+        invariant = str(row.get("invariant") or "").strip()
+        if not invariant:
+            continue
+        status = str(row.get("coverage_status") or "gap")
+        confirmed = int(row.get("confirmed_count") or 0)
+        candidates = int(row.get("candidate_count") or 0)
+        covered = max(confirmed + candidates, 1 if status != "gap" else 0)
+        result[invariant] = {
+            "family": str(row.get("family") or ""),
+            "coverage_status": status,
+            "coverage_rate": 1.0 if covered else 0.0,
+            "covered_items": covered,
+            "total_items": 1,
+            "confirmed_count": confirmed,
+            "candidate_count": candidates,
+            "evidence_complete_count": int(row.get("evidence_complete_count") or 0),
+        }
+    return result
+
+
+def _coverage_gap_items(matrix: dict[str, Any]) -> list[dict[str, Any]]:
+    gaps: list[dict[str, Any]] = []
+    families = matrix.get("families") if isinstance(matrix.get("families"), list) else []
+    for row in families:
+        if not isinstance(row, dict) or row.get("coverage_status") != "gap":
+            continue
+        family = str(row.get("family") or "").strip()
+        if not family:
+            continue
+        gaps.append({
+            "kind": "RISK_FAMILY_COVERAGE_GAP",
+            "code": family.upper(),
+            "family": family,
+            "title": str(row.get("display_name") or family),
+            "reason": "该风险家族当前没有真实 confirmed 或 candidate 覆盖，不代表系统无风险。",
+            "next_action": "补充对应业务资料、接口、角色账号、测试数据或执行授权后重新运行 Campaign。",
+        })
+    return gaps
+
+
+def _normalize_matrix_for_dashboard(matrix: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(matrix)
+    normalized.setdefault("summary", {
+        "risk_family_count": summary.get("ontology_family_count", 0),
+        "invariant_count": summary.get("ontology_invariant_count", 0),
+        "covered_family_count": summary.get("covered_family_count", 0),
+        "confirmed_family_count": summary.get("confirmed_family_count", 0),
+        "family_coverage_rate": summary.get("family_coverage_rate", 0.0),
+        "confirmed_family_rate": summary.get("confirmed_family_rate", 0.0),
+    })
+    normalized.setdefault("risk_family_coverage", _legacy_family_coverage(normalized))
+    normalized.setdefault("invariant_coverage", _legacy_invariant_coverage(normalized))
+    return normalized
+
+
 def _evidence_classification(data: dict[str, Any]) -> dict[str, int]:
     defects = data.get("defects") if isinstance(data.get("defects"), list) else []
     clues = data.get("clues") if isinstance(data.get("clues"), list) else []
@@ -113,14 +210,23 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
         return payload
 
     summary = _coverage_summary(matrix)
-    data["coverage_matrix"] = matrix
+    dashboard_matrix = _normalize_matrix_for_dashboard(matrix, summary)
+    data["coverage_matrix"] = dashboard_matrix
     data["coverage_matrix_summary"] = summary
     data["evidence_classification"] = _evidence_classification(data)
+
+    # Surface matrix gaps through the existing Dashboard coverage-gap UI.  Do not
+    # overwrite backend execution gaps; only append missing risk-family gaps.
+    existing_gaps = data.get("coverage_gaps") if isinstance(data.get("coverage_gaps"), list) else []
+    existing_codes = {str(item.get("code") or item.get("family") or "") for item in existing_gaps if isinstance(item, dict)}
+    appended_gaps = [item for item in _coverage_gap_items(dashboard_matrix) if str(item.get("code") or item.get("family") or "") not in existing_codes]
+    data["coverage_gaps"] = list(existing_gaps) + appended_gaps
 
     value_metrics = _as_dict(data.get("value_metrics"))
     value_metrics["coverage_matrix_summary"] = summary
     value_metrics["risk_invariant_coverage_rate"] = summary.get("family_coverage_rate", 0.0)
     value_metrics["risk_invariant_confirmed_rate"] = summary.get("confirmed_family_rate", 0.0)
+    value_metrics["risk_family_gap_count"] = summary.get("gap_family_count", 0)
     data["value_metrics"] = value_metrics
 
     executive = _as_dict(data.get("executive_summary"))
@@ -129,6 +235,7 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
         f"风险家族覆盖 {round(float(summary.get('family_coverage_rate') or 0) * 100)}%，"
         f"确认覆盖 {round(float(summary.get('confirmed_family_rate') or 0) * 100)}%"
     )
+    executive["risk_family_gap_count"] = summary.get("gap_family_count", 0)
     data["executive_summary"] = executive
 
     contract = _as_dict(data.get("data_contract"))
@@ -136,6 +243,7 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
         "display_key": "coverage_matrix",
         "summary_key": "coverage_matrix_summary",
         "source": "platform_outputs/<project>/benchmark/benchmark_metrics.json:coverage_matrix",
+        "frontend_compatibility_keys": ["risk_family_coverage", "invariant_coverage", "summary"],
         "honesty_rule": "Coverage matrix is risk/invariant coverage from scan outputs; it is not recall unless benchmark_active and ground_truth_available are true.",
     }
     data["data_contract"] = contract
