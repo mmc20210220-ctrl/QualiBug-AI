@@ -8,6 +8,7 @@ const navItems = [
   { to: 'findings', icon: 'bug', label: '行为验证', section: null, badgeKey: 'findings' },
   { to: 'clues', icon: 'runtime', label: '待验证线索', section: null, badgeKey: 'clues' },
   { to: 'evidence', icon: 'shield', label: '证据链', section: null },
+  { to: 'coverage', icon: 'matrix', label: '风险覆盖矩阵', section: null },
   { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
   { to: 'test-tasks', icon: 'campaign', label: '测试任务看板', section: null },
   { to: 'settings', icon: 'settings', label: '项目设置', section: '产品主线' },
@@ -35,6 +36,7 @@ const icons: Record<string, string> = {
   release: 'M6 4h12v16H6z M9 8h6M9 12h6M9 16h3',
   product: 'M4 6h7v5H4V6Zm9 0h7v5h-7V6ZM4 13h7v5H4v-5Zm9 2h7v3h-7v-3Z',
   settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2-3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
+  matrix: 'M4 4h16v16H4V4Zm4 0v16M4 9h16M4 14h16M12 4v16',
 };
 
 function SvgIcon({ name }: { name: string }) {
