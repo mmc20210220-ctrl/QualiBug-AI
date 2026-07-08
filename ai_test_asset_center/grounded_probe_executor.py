@@ -2751,6 +2751,28 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
     if code >= 500:
         return _server_error_finding(code, probe=probe, summary=summary, sensitive_keys=sensitive_keys, extra={"business_invariant_evaluation": invariant_eval, "db_evidence": db_evidence})
 
+    # Universal resource-conservation oracle (all write risk types, not just
+    # conservation_probe): if an accepted write (2xx) echoes a resource value that
+    # is impossibly negative — quantity/stock/amount/price/balance/points below
+    # zero — a correct system should have rejected the input. This is a domain-
+    # agnostic integrity invariant (counts and monies never go negative), driven by
+    # the observed response, so it generalizes to any transactional project.
+    if 200 <= code < 300 and negative_values:
+        return {
+            "verdict": "validated_candidate",
+            "reason": (
+                f"write accepted with HTTP {code} but the response exposed negative resource value(s) "
+                f"{[str(h.get('path')) + '=' + str(h.get('value')) for h in negative_values[:3]]}; a correct "
+                f"system must reject inputs that drive quantity/stock/amount/balance below zero"
+            ),
+            "confidence": 0.85,
+            "payload_summary": summary,
+            "sensitive_keys": sensitive_keys,
+            "negative_values": negative_values,
+            "business_invariant_evaluation": invariant_eval,
+            "db_evidence": db_evidence,
+        }
+
     if 200 <= code < 300 and _negative_probe_payload_was_accepted(probe, payload):
         method = str(first.get("method") or "").upper()
         fallback_note = " via safe GET fallback" if method == "GET" and str(first.get("fallback_from_method") or "").upper() == "POST" else ""
