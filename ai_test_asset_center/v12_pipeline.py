@@ -247,30 +247,6 @@ def _coupon_validation_request(code: str, *, sku: str, price: float, qty: int) -
 
 
 def _db_dialect_from_dsn(dsn: str) -> str:
-    """Infer the SQL dialect from a DSN prefix.  Returns ``"postgresql"``,
-    ``"mysql"``, ``"sqlite"``, ``"mssql"``, ``"oracle"``, ``"other"``, or
-    ``""`` for unrecognized / NoSQL schemes."""
-    _dsn = str(dsn or "").strip().lower()
-    if not _dsn:
-        return ""
-    if _dsn.startswith(("postgresql://", "postgres://")):
-        return "postgresql"
-    if _dsn.startswith(("mysql://", "mariadb://")):
-        return "mysql"
-    if _dsn.startswith(("sqlite:///", "sqlite:")):
-        return "sqlite"
-    if _dsn.startswith(("mssql://", "sqlserver://")):
-        return "mssql"
-    if _dsn.startswith("oracle://"):
-        return "oracle"
-    # NoSQL / unsupported schemes: mongodb://, redis://, elasticsearch://, etc.
-    if "://" in _dsn:
-        return ""
-    # Bare DSN without a known prefix — try it as generic ODBC
-    return "other"
-
-
-def _db_dialect_from_dsn(dsn: str) -> str:
     """Infer the SQL dialect from a DSN prefix.  Returns "" for NoSQL schemes."""
     _dsn = str(dsn or "").strip().lower()
     if not _dsn:

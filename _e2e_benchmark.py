@@ -11,6 +11,7 @@ from pathlib import Path
 
 os.environ.setdefault("QUALIBUG_JWT_SECRET", "dev-mode-only")
 os.environ["QUALIBUG_TARGET_BASE_URL"] = "http://localhost:8080"
+os.environ["QUALIBUG_DB_DSN"] = "postgresql://benchmark_user:benchmark_pass@localhost:5432/benchmark_mall"
 os.environ["ENABLE_V12_STATE_GRAPH_ENGINE"] = "true"
 
 from ai_test_asset_center.blind_project_runner import run_input_only_project  # noqa: E402
