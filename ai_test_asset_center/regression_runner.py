@@ -444,7 +444,22 @@ def _append_regression_history(project: str, root: Path, result: dict[str, Any])
                 "severity": item.get("severity"),
                 "status": item.get("status"),
                 "reason": item.get("reason"),
-                "lifecycle": _lifecycle_for_status(str(item.get("status") or "")),
+                "lifecycle": (
+                    "regression_passed" if item.get("status") == "passed"
+                    else "regression_failed" if item.get("status") == "failed"
+                    else "pending_review" if item.get("status") == "needs_review"
+                    else "skipped" if item.get("status") == "skipped"
+                    else item.get("status", "unknown")
+                ),
+                "lifecycle_label": (
+                    "回归通过" if item.get("status") == "passed"
+                    else "回归失败" if item.get("status") == "failed"
+                    else "待人工复核" if item.get("status") == "needs_review"
+                    else "已跳过" if item.get("status") == "skipped"
+                    else str(item.get("status", "未知"))
+                ),
+                "expected_status_code": item.get("expected_status_code"),
+                "actual_status_code": item.get("actual_status_code"),
             }
             for item in items
             if isinstance(item, dict)
