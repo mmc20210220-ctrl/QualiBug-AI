@@ -246,41 +246,123 @@ def _coupon_validation_request(code: str, *, sku: str, price: float, qty: int) -
     }
 
 
+def _db_dialect_from_dsn(dsn: str) -> str:
+    """Infer the SQL dialect from a DSN prefix.  Returns ``"postgresql"``,
+    ``"mysql"``, ``"sqlite"``, ``"mssql"``, ``"oracle"``, ``"other"``, or
+    ``""`` for unrecognized / NoSQL schemes."""
+    _dsn = str(dsn or "").strip().lower()
+    if not _dsn:
+        return ""
+    if _dsn.startswith(("postgresql://", "postgres://")):
+        return "postgresql"
+    if _dsn.startswith(("mysql://", "mariadb://")):
+        return "mysql"
+    if _dsn.startswith(("sqlite:///", "sqlite:")):
+        return "sqlite"
+    if _dsn.startswith(("mssql://", "sqlserver://")):
+        return "mssql"
+    if _dsn.startswith("oracle://"):
+        return "oracle"
+    # NoSQL / unsupported schemes: mongodb://, redis://, elasticsearch://, etc.
+    if "://" in _dsn:
+        return ""
+    # Bare DSN without a known prefix — try it as generic ODBC
+    return "other"
+
+
 def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
+    """Return DB-discovered coupon samples for validation scenarios.
+
+    Supports PostgreSQL (psycopg2), SQLite (stdlib sqlite3), and MySQL /
+    MariaDB / SQL Server / Oracle via pyodbc.  NoSQL databases and
+    unsupported schemes return an empty dict gracefully so the scan
+    continues with a DB_SAMPLE_DISCOVERY_MISSING gap instead of crashing.
+    """
     if not str(dsn or "").strip():
         return {}
-    try:
-        import psycopg2
-    except Exception:
+
+    _dsn = str(dsn).strip()
+    _dialect = _db_dialect_from_dsn(_dsn)
+    if not _dialect:
+        return {}  # NoSQL or unrecognized — nothing to query
+
+    conn = None
+    _placeholder = "%s"
+    _is_sqlite = _dialect == "sqlite"
+
+    # ── Open connection ──────────────────────────────────────────
+    if _dialect == "sqlite":
+        import sqlite3
+        _db_path = _dsn
+        for _pfx in ("sqlite:///", "sqlite:"):
+            if _db_path.lower().startswith(_pfx):
+                _db_path = _db_path[len(_pfx):]
+                break
+        if not Path(_db_path).exists():
+            return {}
+        conn = sqlite3.connect(_db_path)
+        conn.row_factory = sqlite3.Row
+        _placeholder = "?"
+    elif _dialect == "postgresql":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(_dsn)
+        except Exception:
+            return {}
+    else:
+        # MySQL / MariaDB / MSSQL / Oracle / generic — pyodbc
+        try:
+            import pyodbc
+            conn = pyodbc.connect(_dsn)
+            _placeholder = "?"
+        except Exception:
+            return {}
+
+    if conn is None:
         return {}
-    conn = psycopg2.connect(dsn)
+
+    # ── Dialect helpers ──────────────────────────────────────────
+    def _now() -> str:
+        if _is_sqlite:
+            return "datetime('now')"
+        return "NOW()"
+
+    def _nulls_last(order_col: str) -> str:
+        if _is_sqlite:
+            return f"CASE WHEN {order_col} IS NULL THEN 1 ELSE 0 END, {order_col}"
+        return f"{order_col} NULLS LAST"
+
     try:
         cur = conn.cursor()
 
         def one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
+            if _placeholder == "?":
+                sql = sql.replace("%s", "?")
             cur.execute(sql, params)
             row = cur.fetchone()
             if row is None:
                 return {}
+            if _is_sqlite:
+                return dict(row)
             cols = [str(item[0]) for item in cur.description]
             return dict(zip(cols, row))
 
         def saleable_product(*, excluded_category: str = "") -> dict[str, Any]:
             if excluded_category:
                 return one(
-                    """
+                    f"""
                     SELECT sku, category, price, status
                     FROM products
                     WHERE COALESCE(status, '') IN ('ON_SALE', 'ACTIVE')
                       AND COALESCE(price, 0) > 0
-                      AND COALESCE(category, '') <> %s
+                      AND COALESCE(category, '') <> {_placeholder}
                     ORDER BY price DESC, sku ASC
                     LIMIT 1
                     """,
                     (excluded_category,),
                 )
             return one(
-                """
+                f"""
                 SELECT sku, category, price, status
                 FROM products
                 WHERE COALESCE(status, '') IN ('ON_SALE', 'ACTIVE')
@@ -297,10 +379,10 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
 
         samples: dict[str, dict[str, Any]] = {}
         expired = one(
-            """
+            f"""
             SELECT code, min_order_amount, category_scope, status, expires_at
             FROM coupons
-            WHERE expires_at IS NOT NULL AND expires_at < NOW()
+            WHERE expires_at IS NOT NULL AND expires_at < {_now()}
             ORDER BY expires_at ASC, code ASC
             LIMIT 1
             """
@@ -324,11 +406,11 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
                 }
 
         inactive = one(
-            """
+            f"""
             SELECT code, min_order_amount, category_scope, status, expires_at
             FROM coupons
             WHERE COALESCE(status, '') <> 'ACTIVE'
-            ORDER BY expires_at ASC NULLS LAST, code ASC
+            ORDER BY {_nulls_last("expires_at")} ASC, code ASC
             LIMIT 1
             """
         )
@@ -351,13 +433,13 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
                 }
 
         mismatched_category = one(
-            """
+            f"""
             SELECT code, min_order_amount, category_scope, status, expires_at
             FROM coupons
             WHERE COALESCE(status, '') = 'ACTIVE'
               AND category_scope IS NOT NULL
-              AND (expires_at IS NULL OR expires_at >= NOW())
-            ORDER BY min_order_amount DESC NULLS LAST, code ASC
+              AND (expires_at IS NULL OR expires_at >= {_now()})
+            ORDER BY {_nulls_last("min_order_amount")} DESC, code ASC
             LIMIT 10
             """
         )

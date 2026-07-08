@@ -2666,19 +2666,33 @@ def _registry_manifest(root: Path, project: str, api_doc_text: str) -> dict[str,
 
 
 def _load_registered_source(project: str, root: Path, context: dict[str, Any]) -> str:
+    """Load the best available registered source as API doc text.
+
+    Prefers OpenAPI / Swagger / Postman type sources.  Falls back to any
+    registered source when no API spec is available — the caller can still
+    extract partial endpoint hints from PRDs and DB schemas.
+    """
     manifest = _as_dict(context.get("source_manifest"))
     source_hash = str(manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:")
     try:
         from .enterprise_source_registry import SourceRegistryError, list_source_assets, load_source_content
         if not _SHA256_RE.fullmatch(source_hash):
             assets = list_source_assets(project, root=root)
+            _api_spec_types = {"openapi", "openapi3", "swagger", "postman", "api_spec"}
+
+            def _sort_key(item: dict[str, Any]) -> tuple[int, str, str]:
+                """Weight: API-spec sources first, then by recency."""
+                _type = str(item.get("source_type") or "").strip().lower()
+                _is_api = 0 if _type in _api_spec_types else 1
+                return (_is_api, str(item.get("updated_at_utc") or ""), str(item.get("source_id") or ""))
+
             latest = max(
                 (
                     item
                     for item in assets
                     if isinstance(item, dict) and _SHA256_RE.fullmatch(str(item.get("latest_source_hash") or "").strip().lower())
                 ),
-                key=lambda item: (str(item.get("updated_at_utc") or ""), str(item.get("source_id") or "")),
+                key=_sort_key,
                 default={},
             )
             source_hash = str(latest.get("latest_source_hash") or "").strip().lower()

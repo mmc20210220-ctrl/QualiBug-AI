@@ -3643,7 +3643,9 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 pass
         if not _services:
             reasons.append({"code": "NO_CREDENTIALS", "message": "尚未配置任何服务凭证，请先在「设置」页保存。"})
-        # 2) source ingested?
+        # 2) source ingested — with type-awareness so the UI can tell the
+        #    customer WHY the scan might still fail even with sources present.
+        _assets: list[dict[str, Any]] = []
         try:
             from .enterprise_source_registry import list_source_assets
             _assets = list_source_assets(project, root=root)
@@ -3651,7 +3653,24 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             _assets = []
         if not _assets:
             reasons.append({"code": "NO_SOURCE", "message": "尚未入库任何资料（PRD / OpenAPI 等），请先上传。"})
-        # 3) target base_url / connector endpoint?
+        else:
+            # Classify source types so the Run Center can surface actionable hints:
+            #   - has_api_spec: the scan CAN produce executable probes
+            #   - has_prd_only: the scan will run but may produce zero API probes
+            _source_types = {str(a.get("source_type") or "").strip().lower() for a in _assets}
+            _has_openapi = bool(_source_types & {"openapi", "openapi3", "swagger", "postman", "api_spec"})
+            _has_db = bool(_source_types & {"db_design", "database_schema", "sql", "db_schema"})
+            _has_prd = bool(_source_types & {"prd", "requirement", "business_rules", "collaboration_document", "other_document"})
+            if not _has_openapi:
+                reasons.append({
+                    "code": "NO_API_SPEC",
+                    "message": (
+                        "已入库 {} 份资料，但缺少 API 接口规范（OpenAPI / Swagger / Postman）。"
+                        "扫描将无法生成可执行的 API 探针，只能产出基于 PRD 的候选线索。"
+                        "请上传被测系统的接口文档后再运行。"
+                    ).format(len(_assets)),
+                })
+            # 3) target base_url / connector endpoint?
         _base_url = ""
         try:
             from .enterprise_pilot_runtime import load_connector_registry

@@ -5735,8 +5735,59 @@ def run_grounded_probe_executor(
     _db_dsn = os.environ.get("QUALIBUG_DB_DSN", "")
     if _db_dsn:
         try:
-            from .v12_pipeline import _coupon_validation_samples
-            coupon_cases = _coupon_validation_samples(_db_dsn)
+            import math
+            try:
+                import psycopg2
+                conn = psycopg2.connect(_db_dsn)
+                cur = conn.cursor()
+
+                def _row(sql: str, params: tuple = ()) -> dict[str, Any]:
+                    cur.execute(sql, params)
+                    r = cur.fetchone()
+                    if r is None:
+                        return {}
+                    return dict(zip([d[0] for d in cur.description], r))
+
+                def _product(*, skip_category: str = "") -> dict[str, Any]:
+                    if skip_category:
+                        return _row("SELECT sku, category, price, status FROM products WHERE COALESCE(status,'') IN ('ON_SALE','ACTIVE') AND COALESCE(price,0)>0 AND COALESCE(category,'')<>%s ORDER BY price DESC, sku ASC LIMIT 1", (skip_category,))
+                    return _row("SELECT sku, category, price, status FROM products WHERE COALESCE(status,'') IN ('ON_SALE','ACTIVE') AND COALESCE(price,0)>0 ORDER BY price DESC, sku ASC LIMIT 1")
+
+                def _qty(min_order: float, price_val: float) -> int:
+                    return max(1, int(math.ceil(max(float(min_order or 0), float(price_val or 0.01)) / max(float(price_val or 0.01), 0.01))))
+
+                coupon_cases: dict[str, dict[str, Any]] = {}
+                # expired
+                expired = _row("SELECT code, min_order_amount, category_scope, status, expires_at FROM coupons WHERE expires_at IS NOT NULL AND expires_at<NOW() ORDER BY expires_at ASC, code ASC LIMIT 1")
+                if expired:
+                    prod = _product()
+                    if prod:
+                        coupon_cases["expired_coupon_must_be_invalid"] = {
+                            "body": {"code": str(expired.get("code") or ""), "items": [{"sku": str(prod.get("sku") or ""), "qty": _qty(float(expired.get("min_order_amount") or 0), float(prod.get("price") or 0)), "price": float(prod.get("price") or 0)}], "totalAmount": round(_qty(float(expired.get("min_order_amount") or 0), float(prod.get("price") or 0)) * float(prod.get("price") or 0), 2)},
+                            "coupon_code": str(expired.get("code") or ""),
+                        }
+                # inactive
+                inactive = _row("SELECT code, min_order_amount, category_scope, status, expires_at FROM coupons WHERE COALESCE(status,'')<>'ACTIVE' ORDER BY expires_at ASC NULLS LAST, code ASC LIMIT 1")
+                if inactive:
+                    prod = _product()
+                    if prod:
+                        coupon_cases["inactive_coupon_must_be_invalid"] = {
+                            "body": {"code": str(inactive.get("code") or ""), "items": [{"sku": str(prod.get("sku") or ""), "qty": _qty(float(inactive.get("min_order_amount") or 0), float(prod.get("price") or 0)), "price": float(prod.get("price") or 0)}], "totalAmount": round(_qty(float(inactive.get("min_order_amount") or 0), float(prod.get("price") or 0)) * float(prod.get("price") or 0), 2)},
+                            "coupon_code": str(inactive.get("code") or ""),
+                        }
+                # category mismatch
+                mismatched = _row("SELECT code, min_order_amount, category_scope, status, expires_at FROM coupons WHERE COALESCE(status,'')='ACTIVE' AND category_scope IS NOT NULL AND (expires_at IS NULL OR expires_at>=NOW()) ORDER BY min_order_amount DESC NULLS LAST, code ASC LIMIT 10")
+                if mismatched:
+                    prod = _product(skip_category=str(mismatched.get("category_scope") or ""))
+                    if prod:
+                        coupon_cases["coupon_category_scope_must_match"] = {
+                            "body": {"code": str(mismatched.get("code") or ""), "items": [{"sku": str(prod.get("sku") or ""), "qty": _qty(float(mismatched.get("min_order_amount") or 0), float(prod.get("price") or 0)), "price": float(prod.get("price") or 0)}], "totalAmount": round(_qty(float(mismatched.get("min_order_amount") or 0), float(prod.get("price") or 0)) * float(prod.get("price") or 0), 2)},
+                            "coupon_code": str(mismatched.get("code") or ""),
+                        }
+                try: conn.close()
+                except Exception: pass
+            except Exception:
+                coupon_cases = {}
             for label, case in coupon_cases.items():
                 if not isinstance(case, dict) or not case.get("body"):
                     continue
