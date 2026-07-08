@@ -32,6 +32,7 @@ FIXTURE_BACKED_READ_RISKS = {
     "anonymous_auth_boundary_probe",
     "cross_tenant_auth_boundary_probe",
     "role_downgrade_auth_boundary_probe",
+    "ownership_scope_probe",
 }
 MUTATION_FIELD_RE = {
     "resource": re.compile(r"(?:amount|price|balance|quota|point|credit|quantity|qty|limit|total|count|sum|金额|数量|总量|限额)", re.I),
@@ -542,10 +543,15 @@ def _find_cleanup_endpoint(spec: dict[str, Any], target_path: str) -> tuple[str,
 def _fixture_backed_read_probe(probe: dict[str, Any], method: str, path: str) -> bool:
     if str(method or "").upper() not in READ_METHODS:
         return False
-    if not path_has_placeholders(str(path or "")):
-        return False
     risk = str(probe.get("risk_type") or "")
     plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
+    # ownership_scope reads need fixture seeding even on flat-list endpoints
+    # (e.g. GET /api/orders) so the identity oracle has data to correlate.
+    if risk == "ownership_scope_probe":
+        return True
+    # All other risks: keep the original gate requiring path placeholders.
+    if not path_has_placeholders(str(path or "")):
+        return False
     return risk in FIXTURE_BACKED_READ_RISKS or isinstance(plan.get("auth_boundary"), dict)
 
 def _bind_path_params(path: str, generated_id: str) -> dict[str, str]:
@@ -631,13 +637,20 @@ def _markdown_request_example(api_doc_text: str, method: str, path: str) -> dict
         stripped = line.strip()
         if stripped.startswith("响应"):
             in_request_block = False
-        if stripped.startswith("请求"):
+        if stripped.startswith("请求") or stripped.lower().startswith("request body"):
             in_request_block = True
             continue
         if in_request_block and stripped.startswith("```json"):
             in_json = True
             buffer = []
             continue
+        if in_request_block and not in_json and stripped.startswith("{"):
+            # Bare JSON without code fences — common in doc stubs / test mocks.
+            try:
+                parsed = json.loads(stripped)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                pass
         if in_json and stripped.startswith("```"):
             try:
                 parsed = json.loads("\n".join(buffer))
@@ -699,16 +712,17 @@ def _make_setup_body(
     example = _request_example_body(api_doc_text, "POST", create_path, seed, generated_id)
     if example:
         body = _deep_merge_dict(body, example)
-    # Give the target every common ID/name field it might accept.  Test targets
-    # commonly accept client-generated IDs in disposable fixtures; if they ignore
-    # these fields, response IDs are still captured in receipts.
-    body.update({
-        "id": generated_id,
-        "object_id": generated_id,
-        "entity_id": generated_id,
-        "name": f"qb_auto_fixture_{seed}",
-        "qualibug_test_run_id": f"qb_auto_run_{seed}",
-    })
+    # Layer auto-generated identity/inventory defaults UNDER the API doc example.
+    # Use setdefault so the example's domain-specific fields (sku, qty, etc.)
+    # survive — the generic IDs should never override what the customer spec says.
+    for key in ("id", "object_id", "entity_id", "name", "qualibug_test_run_id"):
+        body.setdefault(key, generated_id)
+    body.setdefault("name", f"qb_auto_fixture_{seed}")
+    body.setdefault("qualibug_test_run_id", f"qb_auto_run_{seed}")
+    for field in ("quantity", "qty"):
+        body.setdefault(field, 1)
+    for field in ("price", "amount"):
+        body.setdefault(field, 99.0)
     if str(probe.get("risk_type")) == "state_transition_probe":
         body["status"] = "cancelled"
     for field, value in _resource_identity_defaults(target_path or create_path, seed, generated_id).items():
@@ -1045,13 +1059,22 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     cid = str(probe.get("candidate_id") or "probe")
     seed = re.sub(r"[^A-Za-z0-9_]+", "_", f"{cid}_{_now_seed()}")
     spec = load_openapi_from_input(input_dir or cfg.get("input_dir") or cfg.get("project_input_dir"))
-    if not spec:
-        api_doc_text = str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or "").strip()
-        if api_doc_text:
+    # Load raw API doc text for example extraction.  Check the config first,
+    # then fall back to `api.md` on disk so md-only projects (benchmark) work.
+    _api_doc_text = str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or "").strip()
+    _idr = str(input_dir or cfg.get("input_dir") or cfg.get("project_input_dir") or "").strip()
+    if not _api_doc_text and _idr:
+        _api_path = Path(_idr) / "api.md"
+        if _api_path.exists():
+            try:
+                _api_doc_text = _api_path.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                _api_doc_text = ""
+    if not spec and _api_doc_text:
             try:
                 from .universal_api_parser import parse_to_openapi
 
-                spec = parse_to_openapi(api_doc_text)
+                spec = parse_to_openapi(_api_doc_text)
             except Exception:
                 spec = {}
     spec = _normalize_openapi_spec(spec)
@@ -1062,7 +1085,7 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     body = _schema_value("request_body", schema, seed) if schema else {}
     if not isinstance(body, dict):
         body = {"value": body}
-    example_body = _request_example_body(str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or ""), method, path, seed, generated_id)
+    example_body = _request_example_body(_api_doc_text, method, path, seed, generated_id)
     if example_body:
         body = _deep_merge_dict(body, example_body)
     body.update(_risk_augmented_body(probe, seed, path_params))
@@ -1093,7 +1116,7 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
                 seed,
                 generated_id,
                 probe,
-                str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or ""),
+                _api_doc_text,
                 target_path=path,
             )
             primary_setup_body, body, dependency_setup_requests, dependency_cleanup_requests = _plan_fk_dependency_fixtures(

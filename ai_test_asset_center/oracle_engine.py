@@ -76,6 +76,10 @@ class HttpStatusOracle(BaseOracle):
             if status == 204 and s.get("method") in ("POST", "PUT") and s.get("expected_status") == 201:
                 return OracleResult(False, "HttpStatusOracle", "L1", "wrong_create_status",
                     "创建成功应返回201", "HTTP 204", "P1", 0.80)
+            expected = s.get("expected_status") or 0
+            if expected and int(expected) and status != expected:
+                return OracleResult(False, "HttpStatusOracle", "L1", "expected_status_mismatch",
+                    f"应返回 HTTP {expected}", f"实际返回 HTTP {status}", "P1", 0.90)
         return OracleResult(True, "HttpStatusOracle", "L1")
 
 
