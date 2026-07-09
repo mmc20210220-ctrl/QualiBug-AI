@@ -283,4 +283,3 @@ def test_release_gate_merges_existing_checks_without_overwrite() -> None:
     assert delivery_tracks["release_gate_pending_check_count"] == 1
     assert commercial_assets["release_gate_overall_status"] == "fail"
     assert commercial_assets["delivery_package"]["release_verdict"] == "fail"
-}
