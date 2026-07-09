@@ -7,6 +7,7 @@ from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
 from ai_test_asset_center.customer_delivery_guard import persist_customer_delivery_guard
+from ai_test_asset_center.customer_report_boundary import sanitize_customer_report_html
 from ai_test_asset_center.customer_safe_report import render_customer_safe_report_html
 
 
@@ -17,7 +18,7 @@ def install_customer_report_patch(*, patch_source: str) -> None:
     original_renderer = getattr(_service.PrivatePilotHandler, "_render_report_html")
 
     def _render_report_html_clean(self: Any, project: str, root: Path) -> Any:
-        html = render_customer_safe_report_html(project, root)
+        html = sanitize_customer_report_html(render_customer_safe_report_html(project, root))
         try:
             persist_customer_delivery_guard(project, root)
         except Exception:
