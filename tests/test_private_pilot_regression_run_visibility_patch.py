@@ -80,6 +80,9 @@ def test_inject_regression_run_lifts_latest_run_to_command_center(tmp_path: Path
     assert data["value_metrics"]["regression_last_failed_count"] == 0
     assert data["executive_summary"]["regression_run_label"] == "最近回归通过：2 个探针通过"
     assert data["data_contract"]["regression_run"]["display_key"] == "regression_run"
+    assert data["release_gate"]["overall_status"] == "pass"
+    assert data["release_gate"]["release_recommendation"] == "candidate_release"
+    assert data["data_contract"]["release_gate"]["display_key"] == "release_gate"
 
     dashboard_summary = data["regression_summary"]
     assert dashboard_summary["suite_exists"] is True
@@ -121,8 +124,9 @@ def test_failed_regression_run_blocks_dashboard_release_recommendation(tmp_path:
         encoding="utf-8",
     )
 
-    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}}}, root=tmp_path)
-    dashboard_summary = injected["data"]["regression_summary"]
+    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}}}, root=tmp_path)
+    data = injected["data"]
+    dashboard_summary = data["regression_summary"]
 
     assert dashboard_summary["latest_run"]["gate_status"] == "failed"
     assert dashboard_summary["failed_defect_count"] == 1
@@ -132,6 +136,10 @@ def test_failed_regression_run_blocks_dashboard_release_recommendation(tmp_path:
     assert dashboard_summary["release_recommendation_label"] == "建议阻断发布"
     assert dashboard_summary["validation_summary"]["double_run_verified"] is True
     assert dashboard_summary["validation_summary"]["repeated_failure_defect_count"] == 1
+    assert data["release_gate"]["overall_status"] == "fail"
+    assert data["release_gate"]["blocking_check_count"] == 1
+    assert data["value_metrics"]["release_gate_overall_status"] == "fail"
+    assert data["executive_summary"]["release_gate_label"] == "发布门禁阻塞：最近回归失败"
 
 
 def test_manual_review_regression_run_holds_dashboard_release_recommendation(tmp_path: Path) -> None:
@@ -159,8 +167,9 @@ def test_manual_review_regression_run_holds_dashboard_release_recommendation(tmp
         encoding="utf-8",
     )
 
-    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}}}, root=tmp_path)
-    dashboard_summary = injected["data"]["regression_summary"]
+    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}}}, root=tmp_path)
+    data = injected["data"]
+    dashboard_summary = data["regression_summary"]
 
     assert dashboard_summary["latest_run"]["gate_status"] == "manual_approval_required"
     assert dashboard_summary["failed_defect_count"] == 0
@@ -169,3 +178,30 @@ def test_manual_review_regression_run_holds_dashboard_release_recommendation(tmp
     assert dashboard_summary["release_recommendation_label"] == "建议先完成剩余回归"
     assert dashboard_summary["customer_delivery_readiness_label"] == "需要人工复核"
     assert dashboard_summary["validation_summary"]["double_run_verified"] is False
+    assert data["release_gate"]["overall_status"] == "pending"
+    assert data["release_gate"]["pending_check_count"] == 1
+
+
+def test_pending_release_gate_when_suite_refreshed_but_regression_not_run() -> None:
+    injected = inject_regression_run({
+        "data": {
+            "project_id": "pending_project",
+            "regression_suite_refresh": {
+                "status": "refreshed",
+                "summary": {"total_probe_count": 5, "confirmed_ledger_probe_count": 2},
+            },
+            "regression_suite": {"total_probe_count": 5, "confirmed_ledger_probe_count": 2},
+            "value_metrics": {},
+            "executive_summary": {},
+            "data_contract": {},
+        }
+    })
+    data = injected["data"]
+
+    assert "regression_run" not in data
+    assert data["release_gate"]["overall_status"] == "pending"
+    assert data["release_gate"]["release_recommendation"] == "hold_for_validation"
+    assert data["release_gate"]["checks"][0]["status"] == "pending"
+    assert "5 个回归探针" in data["release_gate"]["checks"][0]["detail"]
+    assert data["value_metrics"]["release_gate_pending_check_count"] == 1
+    assert data["data_contract"]["release_gate"]["display_key"] == "release_gate"
