@@ -6,17 +6,26 @@ from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
+from ai_test_asset_center.customer_delivery_guard import persist_customer_delivery_guard
 from ai_test_asset_center.customer_safe_report import render_customer_safe_report_html
 
 
 def install_customer_report_patch(*, patch_source: str) -> None:
-    """Replace legacy customer report HTML that contained mojibake strings."""
+    """Replace legacy customer report HTML and persist a machine-readable delivery guard."""
     if getattr(_service, "_CUSTOMER_REPORT_PATCHED", False):
         return
     original_renderer = getattr(_service.PrivatePilotHandler, "_render_report_html")
 
     def _render_report_html_clean(self: Any, project: str, root: Path) -> Any:
-        return self._html(render_customer_safe_report_html(project, root))
+        html = render_customer_safe_report_html(project, root)
+        try:
+            persist_customer_delivery_guard(project, root)
+        except Exception:
+            # Report rendering must remain available; the HTML still shows the
+            # human-readable release gate and handoff boundary if guard persistence
+            # fails due to filesystem permissions or a transient write error.
+            pass
+        return self._html(html)
 
     _service.PrivatePilotHandler._render_report_html = _render_report_html_clean
     _service._ORIGINAL_RENDER_REPORT_HTML = original_renderer  # type: ignore[attr-defined]
