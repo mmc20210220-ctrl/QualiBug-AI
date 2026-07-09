@@ -36,7 +36,19 @@ def test_inject_coverage_matrix_lifts_benchmark_matrix_to_command_center(tmp_pat
                 "steered_slice_count": 2,
                 "gap_family_weights": {"tenant_isolation": 50},
                 "top_steered_slice_ids": ["s_isolation"],
-            }
+            },
+            "regression_suite_refresh": {
+                "status": "refreshed",
+                "suite_ref": "platform_outputs/demo_project/regression_suite/regression_suite.json",
+                "summary": {
+                    "total_probe_count": 4,
+                    "smoke_count": 2,
+                    "release_count": 4,
+                    "full_count": 4,
+                    "confirmed_ledger_probe_count": 1,
+                    "ci_gate_recommendation": "block_on_p0_p1_regression_failure",
+                },
+            },
         }),
         encoding="utf-8",
     )
@@ -68,15 +80,21 @@ def test_inject_coverage_matrix_lifts_benchmark_matrix_to_command_center(tmp_pat
     assert data["coverage_gaps"][0]["family"] == "tenant_isolation"
     assert data["coverage_steering"]["status"] == "applied"
     assert data["scan_meta"]["coverage_steering"]["top_steered_slice_ids"] == ["s_isolation"]
+    assert data["regression_suite_refresh"]["status"] == "refreshed"
+    assert data["regression_suite"]["release_count"] == 4
     assert data["value_metrics"]["risk_invariant_coverage_rate"] == 0.1875
     assert data["value_metrics"]["risk_family_gap_count"] == 1
     assert data["value_metrics"]["coverage_steered_slice_count"] == 2
+    assert data["value_metrics"]["regression_suite_probe_count"] == 4
+    assert data["value_metrics"]["confirmed_ledger_regression_probe_count"] == 1
     assert data["executive_summary"]["risk_invariant_coverage_label"] == "风险家族覆盖 19%，确认覆盖 6%"
     assert data["executive_summary"]["coverage_steering_label"] == "已按覆盖缺口优先调度 2 个行为 slice"
+    assert data["executive_summary"]["regression_suite_refresh_label"] == "已自动刷新 4 个回归探针"
     assert data["evidence_classification"] == {"confirmed": 1, "candidate": 2, "clue": 1}
     assert "not recall" in data["data_contract"]["coverage_matrix"]["honesty_rule"].lower()
     assert "risk_family_coverage" in data["data_contract"]["coverage_matrix"]["frontend_compatibility_keys"]
     assert data["data_contract"]["coverage_steering"]["display_key"] == "coverage_steering"
+    assert data["data_contract"]["regression_suite_refresh"]["display_key"] == "regression_suite_refresh"
 
 
 def test_inject_coverage_steering_without_matrix(tmp_path: Path) -> None:
@@ -91,7 +109,12 @@ def test_inject_coverage_steering_without_matrix(tmp_path: Path) -> None:
                     "reason": "coverage_matrix_without_actionable_gaps",
                     "steered_slice_count": 0,
                 }
-            }
+            },
+            "regression_suite_refresh": {
+                "status": "skipped",
+                "reason": "no_confirmed_findings_or_confirmed_ledger",
+                "summary": {"total_probe_count": 0, "confirmed_ledger_probe_count": 0},
+            },
         }),
         encoding="utf-8",
     )
@@ -103,5 +126,8 @@ def test_inject_coverage_steering_without_matrix(tmp_path: Path) -> None:
 
     assert data["coverage_steering"]["status"] == "not_applied"
     assert data["value_metrics"]["coverage_steering_status"] == "not_applied"
+    assert data["regression_suite_refresh"]["status"] == "skipped"
+    assert data["value_metrics"]["regression_suite_refresh_status"] == "skipped"
     assert "coverage_matrix" not in data
     assert data["data_contract"]["coverage_steering"]["display_key"] == "coverage_steering"
+    assert data["data_contract"]["regression_suite_refresh"]["display_key"] == "regression_suite_refresh"
