@@ -1377,9 +1377,17 @@ def _knowledge_asset_planning_text(asset: dict[str, Any]) -> str:
         for p in perms[:300]:
             if not isinstance(p, dict):
                 continue
-            stmt = str(p.get("statement") or p.get("expression") or p.get("rule") or "").strip()
-            if stmt:
-                lines.append(f"- {stmt}")
+            # Permission entries use role/resource/actions/scope, not statement.
+            role = str(p.get("role") or "").strip()
+            resource = str(p.get("resource") or "").strip()
+            actions = p.get("actions") or []
+            scope = str(p.get("scope") or "").strip()
+            if role and resource:
+                action_text = ", ".join(str(a) for a in actions) if isinstance(actions, list) else str(actions)
+                line = f"- {role} 对 {resource} 具有 {action_text or 'access'} 权限"
+                if scope and scope not in ("unspecified", ""):
+                    line += f" (scope: {scope})"
+                lines.append(line)
         if lines:
             parts.append("## 企业资料解析出的权限矩阵（驱动越权/未授权访问测试）\n" + "\n".join(lines))
 
@@ -1389,7 +1397,11 @@ def _knowledge_asset_planning_text(asset: dict[str, Any]) -> str:
         for r in risks[:300]:
             if not isinstance(r, dict):
                 continue
-            stmt = str(r.get("statement") or r.get("description") or r.get("risk_type") or "").strip()
+            # Risk domain entries use title/expected/risk_type, not statement.
+            title = str(r.get("title") or "").strip()
+            expected = str(r.get("expected") or "").strip()
+            risk_type = str(r.get("risk_type") or "").strip()
+            stmt = title or expected or risk_type
             if stmt:
                 lines.append(f"- {stmt}")
         if lines:
