@@ -13,6 +13,11 @@ scheduler and SemanticScenarioGenerator instead of introducing a second executor
 The generator is patched only to preserve the system-promise metadata in runtime
 hints and oracle rules; execution still uses the existing scenario contract.
 
+Oracle integration is also additive: the existing OracleEngine remains the only
+engine.  This patch wraps it so oracle failures can be attributed back to the
+specific System Behavior Space promise and so direct promise contradictions can
+emit a SystemPromiseOracle result.
+
 Learning feedback remains handled by existing modules:
 
 * risk_clue_pool.py persists project/private and platform/SaaS learning weights;
@@ -192,6 +197,17 @@ def _system_behavior_hints(slice_meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _scenario_system_behavior_hints(scenario: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(scenario, dict):
+        return {}
+    runtime_hints = scenario.get("runtime_hints") if isinstance(scenario.get("runtime_hints"), dict) else {}
+    hints = runtime_hints.get("system_behavior_space") if isinstance(runtime_hints.get("system_behavior_space"), dict) else {}
+    if hints:
+        return hints
+    fallback = scenario.get("system_behavior_space_evidence")
+    return fallback if isinstance(fallback, dict) else {}
+
+
 def _slice_invariant_text(slice_meta: dict[str, Any]) -> str:
     for ref in slice_meta.get("source_refs") or []:
         if isinstance(ref, dict) and str(ref.get("quote") or "").strip():
@@ -255,6 +271,103 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     return item
 
 
+def _response_bodies(trace: dict[str, Any]) -> list[Any]:
+    bodies: list[Any] = []
+    for step in trace.get("steps") if isinstance(trace, dict) and isinstance(trace.get("steps"), list) else []:
+        if not isinstance(step, dict):
+            continue
+        response = step.get("response") if isinstance(step.get("response"), dict) else {}
+        if isinstance(response, dict) and "body" in response:
+            bodies.append(response.get("body"))
+    return bodies
+
+
+def _walk_values(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        out: list[tuple[str, Any]] = []
+        for key, child in value.items():
+            child_key = f"{prefix}.{key}" if prefix else str(key)
+            out.extend(_walk_values(child, child_key))
+        return out
+    if isinstance(value, list):
+        out = []
+        for index, child in enumerate(value[:50]):
+            out.extend(_walk_values(child, f"{prefix}[{index}]"))
+        return out
+    return [(prefix, value)]
+
+
+def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[str, Any], hints: dict[str, Any]) -> Any:
+    try:
+        from ai_test_asset_center.oracle_engine import OracleResult
+    except Exception:
+        return None
+    dims = {str(item).lower() for item in hints.get("dimensions") or [] if str(item)}
+    promise_id = str(hints.get("promise_id") or "")
+    invariant = str((scenario.get("runtime_hints") or {}).get("system_promise_invariant") or "system promise")[:500]
+    money_like = {"money", "amount", "price", "balance", "refund", "payment", "fee", "total", "quantity", "stock", "inventory", "conservation"}
+    if dims.intersection({"money", "quantity", "conservation", "data_consistency"}):
+        for body in _response_bodies(trace):
+            for key, value in _walk_values(body):
+                lowered = key.lower()
+                if not any(token in lowered for token in money_like):
+                    continue
+                if isinstance(value, (int, float)) and value < 0:
+                    return OracleResult(
+                        False,
+                        "SystemPromiseOracle",
+                        "L7",
+                        f"system_promise_dimension_violation:{promise_id}",
+                        f"系统承诺必须保持金额/数量/守恒类维度有效：{invariant}",
+                        f"{key}={value}",
+                        "P0",
+                        0.88,
+                        f"System Behavior Space promise {promise_id} 被运行时响应直接反证。",
+                    )
+    steps = trace.get("steps") if isinstance(trace, dict) and isinstance(trace.get("steps"), list) else []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        response = step.get("response") if isinstance(step.get("response"), dict) else {}
+        status = int(response.get("status_code") or step.get("status") or 0) if isinstance(response, dict) else int(step.get("status") or 0)
+        expected = int(step.get("expected_status") or 0)
+        if expected in {401, 403} and status == 200:
+            return OracleResult(
+                False,
+                "SystemPromiseOracle",
+                "L7",
+                f"system_promise_authorization_violation:{promise_id}",
+                f"系统承诺必须保持权限/角色类维度有效：{invariant}",
+                "期望拒绝但实际 HTTP 200",
+                "P0",
+                0.9,
+                f"System Behavior Space promise {promise_id} 的授权维度被运行时结果反证。",
+            )
+    return OracleResult(
+        True,
+        "SystemPromiseOracle",
+        "L7",
+        explanation=f"System Behavior Space promise {promise_id} 已进入 oracle 评估；当前可观测响应未直接反证。",
+    )
+
+
+def _annotate_oracle_failures_with_system_promise(results: list[Any], scenario: dict[str, Any], hints: dict[str, Any]) -> None:
+    promise_id = str(hints.get("promise_id") or "")
+    if not promise_id:
+        return
+    invariant = str((scenario.get("runtime_hints") or {}).get("system_promise_invariant") or "")[:300]
+    dims = ",".join(str(item) for item in hints.get("dimensions") or [] if str(item))
+    for result in results:
+        if bool(getattr(result, "passed", True)):
+            continue
+        if str(getattr(result, "oracle_name", "")) == "SystemPromiseOracle":
+            continue
+        explanation = str(getattr(result, "explanation", "") or "")
+        marker = f"SystemPromise={promise_id}"
+        if marker not in explanation:
+            setattr(result, "explanation", (explanation + f" | {marker}; dimensions={dims}; invariant={invariant}").strip(" |")[:1200])
+
+
 def _install_system_behavior_scenario_patch() -> None:
     try:
         from ai_test_asset_center import semantic_scenario_generator as _ssg
@@ -273,6 +386,46 @@ def _install_system_behavior_scenario_patch() -> None:
     _ssg.SemanticScenarioGenerator._ORIGINAL_INVARIANT_FROM_META_SYSTEM_BEHAVIOR = original  # type: ignore[attr-defined]
     _ssg.SemanticScenarioGenerator._invariant_from_meta = _invariant_from_meta_with_system_behavior  # type: ignore[method-assign]
     _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED = True  # type: ignore[attr-defined]
+
+
+def _install_system_behavior_oracle_patch() -> None:
+    try:
+        from ai_test_asset_center import oracle_engine as _oe
+    except Exception:
+        return
+    if getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", False):
+        return
+    original_evaluate = getattr(_oe.OracleEngine, "evaluate", None)
+    original_build = getattr(_oe.EvidenceGraphBuilder, "build", None)
+    if not callable(original_evaluate) or not callable(original_build):
+        return
+
+    def _evaluate_with_system_behavior(self: Any, scenario: dict[str, Any], trace: dict[str, Any], snapshots: Any = None) -> list[Any]:
+        results = list(original_evaluate(self, scenario, trace, snapshots) or [])
+        hints = _scenario_system_behavior_hints(scenario)
+        if not hints:
+            return results
+        _annotate_oracle_failures_with_system_promise(results, scenario, hints)
+        direct = _direct_system_promise_oracle_result(scenario, trace, hints)
+        if direct is not None:
+            if not bool(getattr(direct, "passed", True)) or not any(str(getattr(item, "oracle_name", "")) == "SystemPromiseOracle" for item in results):
+                results.append(direct)
+        return results
+
+    def _build_with_system_behavior_evidence(self: Any, scenario: dict[str, Any], trace: dict[str, Any], snapshots: Any, oracle_results: list[Any]) -> Any:
+        hints = _scenario_system_behavior_hints(scenario)
+        if hints:
+            enriched = dict(scenario)
+            enriched["system_behavior_space_evidence"] = hints
+            enriched["system_promise_id"] = str(hints.get("promise_id") or "")
+            scenario = enriched
+        return original_build(self, scenario, trace, snapshots, oracle_results)
+
+    _oe.OracleEngine._ORIGINAL_EVALUATE_SYSTEM_BEHAVIOR = original_evaluate  # type: ignore[attr-defined]
+    _oe.EvidenceGraphBuilder._ORIGINAL_BUILD_SYSTEM_BEHAVIOR = original_build  # type: ignore[attr-defined]
+    _oe.OracleEngine.evaluate = _evaluate_with_system_behavior  # type: ignore[method-assign]
+    _oe.EvidenceGraphBuilder.build = _build_with_system_behavior_evidence  # type: ignore[method-assign]
+    _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED = True  # type: ignore[attr-defined]
 
 
 def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> None:
@@ -333,6 +486,7 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
     _bsg.BusinessStateGraphBuilder.behavior_contract = _behavior_contract_with_system_behavior_space  # type: ignore[method-assign]
     _install_v12_behavior_space_context_patch()
     _install_system_behavior_scenario_patch()
+    _install_system_behavior_oracle_patch()
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
 
@@ -397,6 +551,17 @@ def restore_system_behavior_space_patch() -> None:
         if callable(original_scenario):
             _ssg.SemanticScenarioGenerator._invariant_from_meta = original_scenario  # type: ignore[method-assign]
         _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED = False  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        from ai_test_asset_center import oracle_engine as _oe
+        original_eval = getattr(_oe.OracleEngine, "_ORIGINAL_EVALUATE_SYSTEM_BEHAVIOR", None)
+        original_build = getattr(_oe.EvidenceGraphBuilder, "_ORIGINAL_BUILD_SYSTEM_BEHAVIOR", None)
+        if callable(original_eval):
+            _oe.OracleEngine.evaluate = original_eval  # type: ignore[method-assign]
+        if callable(original_build):
+            _oe.EvidenceGraphBuilder.build = original_build  # type: ignore[method-assign]
+        _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED = False  # type: ignore[attr-defined]
     except Exception:
         pass
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = False  # type: ignore[attr-defined]
