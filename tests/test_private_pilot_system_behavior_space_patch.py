@@ -90,3 +90,48 @@ def test_system_behavior_slice_metadata_reaches_scenario_runtime_hints() -> None
         assert scenario["runtime_hints"]["system_behavior_space"]["surface_plan"]
     finally:
         restore_system_behavior_space_patch()
+
+
+def test_system_promise_oracle_links_dimension_violation_to_evidence() -> None:
+    restore_system_behavior_space_patch()
+    install_system_behavior_space_patch()
+    try:
+        from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleEngine
+
+        builder = BusinessStateGraphBuilder()
+        graphs = builder.build("金额必须一致。", API_SPEC, DB_SCHEMA)
+        contract = builder.behavior_contract()
+        money_slices = [
+            item for item in contract["slices"]
+            if item.get("_selection_origin") == "system_behavior_space"
+            and "money" in set(item.get("_system_behavior_dimensions") or [])
+        ]
+        assert money_slices
+        scenarios = SemanticScenarioGenerator().generate(
+            graphs,
+            API_SPEC,
+            active_slices=money_slices[:1],
+            allow_source_runtime=True,
+        )
+        scenario = next(item for item in scenarios if item.selection_origin == "system_behavior_space").to_dict()
+        trace = {
+            "steps": [
+                {
+                    "method": "GET",
+                    "path": "/api/orders",
+                    "expected_status": 200,
+                    "response": {"status_code": 200, "body": {"items": [{"id": 1, "total_amount": -1}]}},
+                }
+            ]
+        }
+
+        results = OracleEngine().evaluate(scenario, trace, None)
+        system_result = next(item for item in results if item.oracle_name == "SystemPromiseOracle")
+        assert not system_result.passed
+        assert system_result.violated_rule.startswith("system_promise_dimension_violation:")
+
+        evidence = EvidenceGraphBuilder().build(scenario, trace, None, [system_result]).to_dict()
+        assert evidence["scenario"]["system_promise_id"] == scenario["runtime_hints"]["system_behavior_space"]["promise_id"]
+        assert evidence["scenario"]["system_behavior_space_evidence"]["dimensions"]
+    finally:
+        restore_system_behavior_space_patch()
