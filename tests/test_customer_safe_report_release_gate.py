@@ -81,3 +81,32 @@ def test_customer_report_merges_existing_gate_with_latest_regression_run(tmp_pat
     assert "report_gate+regression_run_result" in html
     assert "Existing report release gate rule" in html
     assert not contains_mojibake(html)
+
+
+def test_latest_regression_run_overrides_stale_report_regression_gate(tmp_path: Path) -> None:
+    project = "stale_project"
+    _write_report(tmp_path, project, {
+        "release_gate": {
+            "overall_status": "pass",
+            "checks": [
+                {"name": "修复后回归 Gate", "status": "pass", "detail": "旧报告记录：回归通过。", "source": "report_gate"},
+                {"name": "P0 缺陷阻塞", "status": "pass", "detail": "无 P0 缺陷", "source": "report_gate"},
+            ],
+            "source": "report_gate",
+        },
+    })
+    run_dir = tmp_path / "platform_outputs" / project / "regression_run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "regression_run_result.json").write_text(json.dumps({
+        "summary": {"passed_count": 3, "failed_count": 1, "needs_review_count": 0},
+        "ci_feedback": {"gate_status": "failed", "ci_message": "最新回归失败"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    html = render_customer_safe_report_html(project, tmp_path)
+
+    assert "当前发布结论：阻塞" in html
+    assert "最近一次回归失败" in html
+    assert "旧报告记录：回归通过" not in html
+    assert "regression_run_result" in html
+    assert "P0 缺陷阻塞" in html
+    assert not contains_mojibake(html)
