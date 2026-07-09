@@ -62,6 +62,22 @@ function regressionRefreshTone(status: string): string {
   return 'neutral';
 }
 
+function regressionRunLabel(gateStatus: string, fallbackStatus: string): string {
+  const status = gateStatus || fallbackStatus;
+  if (status === 'passed') return '最近回归通过';
+  if (status === 'failed') return '最近回归失败';
+  if (status === 'manual_approval_required') return '最近回归需复核';
+  if (status === 'available') return '最近回归已执行';
+  return status || '暂无回归执行';
+}
+
+function regressionRunTone(gateStatus: string): string {
+  if (gateStatus === 'passed') return 'success';
+  if (gateStatus === 'failed') return 'danger';
+  if (gateStatus === 'manual_approval_required') return 'warning';
+  return 'neutral';
+}
+
 function normalizeFamilyEntries(matrix: JsonRecord): Array<[string, JsonRecord]> {
   const mapped = asRecord(matrix.risk_family_coverage);
   if (Object.keys(mapped).length > 0) {
@@ -147,6 +163,7 @@ export function CoverageMatrix() {
   const contract = asRecord(dataContract.coverage_matrix);
   const steeringContract = asRecord(dataContract.coverage_steering);
   const regressionContract = asRecord(dataContract.regression_suite_refresh);
+  const regressionRunContract = asRecord(dataContract.regression_run);
   const steering = asRecord(record.coverage_steering || scanMeta.coverage_steering);
   const steeringStatus = asText(steering.status);
   const steeringReason = asText(steering.reason);
@@ -156,13 +173,19 @@ export function CoverageMatrix() {
   const regressionSummary = asRecord(regressionRefresh.summary || record.regression_suite);
   const regressionStatus = asText(regressionRefresh.status);
   const regressionReason = asText(regressionRefresh.reason);
+  const regressionRun = asRecord(record.regression_run || scanMeta.regression_run);
+  const regressionRunStatus = asText(regressionRun.status);
+  const regressionGateStatus = asText(regressionRun.gate_status);
+  const regressionFailures = Array.isArray(regressionRun.failures) ? regressionRun.failures.map(asRecord) : [];
+  const regressionNeedsReview = Array.isArray(regressionRun.needs_review) ? regressionRun.needs_review.map(asRecord) : [];
+  const hasRegressionRun = Boolean(regressionRunStatus || regressionGateStatus);
   const families = normalizeFamilyEntries(matrix).sort(([, a], [, b]) => asNum(a.coverage_rate) - asNum(b.coverage_rate));
   const invariants = normalizeInvariantEntries(matrix).sort(([, a], [, b]) => asNum(a.coverage_rate) - asNum(b.coverage_rate));
   const gaps = Array.isArray(record.coverage_gaps) ? record.coverage_gaps.map(asRecord).filter((item) => asText(item.kind) === 'RISK_FAMILY_COVERAGE_GAP') : [];
   const benchmark = asRecord(scanMeta.benchmark_metrics);
   const benchmarkActive = Boolean(benchmark.benchmark_active && benchmark.ground_truth_available);
 
-  if (families.length === 0 && invariants.length === 0 && !steeringStatus && !regressionStatus) {
+  if (families.length === 0 && invariants.length === 0 && !steeringStatus && !regressionStatus && !hasRegressionRun) {
     return <section className="state-panel"><div className="state-panel-badge">覆盖矩阵</div><h2>当前尚未生成风险覆盖矩阵</h2><p>运行一次标准扫描后，系统会根据真实 findings/candidates 生成风险家族与业务不变量覆盖矩阵。</p></section>;
   }
 
@@ -182,6 +205,7 @@ export function CoverageMatrix() {
         <article className="customer-summary-card tone-danger"><span>覆盖缺口</span><strong>{asNum(summary.gap_family_count, gaps.length)}</strong><small>缺口不等于无风险，需要补资料/账号/环境/测试数据</small></article>
         <article className={`customer-summary-card tone-${steeringTone(steeringStatus)}`}><span>缺口调度</span><strong>{steeringStatus === 'applied' ? '已启用' : '待启用'}</strong><small>{steeringStatus ? steeringStatusLabel(steeringStatus, steeringReason) : '暂无调度诊断'}</small></article>
         <article className={`customer-summary-card tone-${regressionRefreshTone(regressionStatus)}`}><span>回归义务</span><strong>{regressionStatus === 'refreshed' ? asNum(regressionSummary.total_probe_count) : '待生成'}</strong><small>{regressionStatus ? regressionRefreshLabel(regressionStatus, regressionReason) : '暂无回归刷新诊断'}</small></article>
+        <article className={`customer-summary-card tone-${regressionRunTone(regressionGateStatus)}`}><span>最近回归</span><strong>{hasRegressionRun ? regressionRunLabel(regressionGateStatus, regressionRunStatus) : '未执行'}</strong><small>{hasRegressionRun ? `通过 ${asNum(regressionRun.passed_count)} · 失败 ${asNum(regressionRun.failed_count)} · 复核 ${asNum(regressionRun.needs_review_count)}` : '客户运行回归后显示结果'}</small></article>
         <article className={`customer-summary-card ${benchmarkActive ? 'tone-success' : 'tone-warning'}`}><span>Benchmark 状态</span><strong>{benchmarkActive ? '已启用' : '未启用'}</strong><small>{benchmarkActive ? `召回率 ${pct(benchmark.recall)} · 精度 ${pct(benchmark.precision)}` : '当前矩阵不能当作召回率或 99% 能力证明'}</small></article>
       </div>
 
@@ -190,10 +214,11 @@ export function CoverageMatrix() {
         <article className="customer-value-card"><span className="customer-value-kicker">客户下一步</span><h2>{gaps.length > 0 ? `优先关闭 ${gaps.length} 个风险家族缺口` : '当前风险家族已有覆盖信号'}</h2><p>{gaps.length > 0 ? '优先补齐对应业务资料、接口规范、多角色账号、租户数据、测试数据和执行授权，再运行下一轮 Campaign。' : '继续查看 confirmed 缺陷和回归状态，确认是否可以进入整改和验收闭环。'}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">调度反馈</span><h2>{steeringStatus === 'applied' ? `已优先调度 ${asNum(steering.steered_slice_count)} 个 slice` : steeringStatus ? steeringStatusLabel(steeringStatus, steeringReason) : '等待下一轮调度诊断'}</h2><p>{asText(steering.honesty_rule) || asText(steeringContract.honesty_rule) || '调度反馈只说明系统如何重排行为 slice，不代表发现了新 bug，也不会生成 synthetic coverage。'}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">修复后回归</span><h2>{regressionStatus === 'refreshed' ? `已沉淀 ${asNum(regressionSummary.total_probe_count)} 个探针` : regressionStatus ? regressionRefreshLabel(regressionStatus, regressionReason) : '等待回归套件刷新'}</h2><p>{asText(regressionRefresh.honesty_rule) || asText(regressionContract.honesty_rule) || '回归套件刷新只把已有证据支持的 confirmed 缺陷变成后续发布前必须执行的探针，不代表修复已经通过。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">最新回归结果</span><h2>{hasRegressionRun ? regressionRunLabel(regressionGateStatus, regressionRunStatus) : '尚未执行回归'}</h2><p>{hasRegressionRun ? (asText(regressionRun.ci_message) || `最近一次回归：通过 ${asNum(regressionRun.passed_count)}，失败 ${asNum(regressionRun.failed_count)}，需复核 ${asNum(regressionRun.needs_review_count)}。`) : (asText(regressionRunContract.honesty_rule) || '客户点击运行回归后，这里会显示最新 persisted regression run verdict。')}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">度量口径</span><h2>{asNum(summary.ontology_invariant_count, invariants.length)} 个不变量基线</h2><p>系统按业务不变量而不是固定 20 种 bug type 观察覆盖面。confirmed 需要真实请求、响应、断言和证据链支撑。</p></article>
       </section>
 
-      {(steeringStatus || regressionStatus) && (
+      {(steeringStatus || regressionStatus || hasRegressionRun) && (
         <section className="customer-secondary-grid mb-4">
           {steeringStatus && (
             <article className="customer-secondary-card">
@@ -231,6 +256,42 @@ export function CoverageMatrix() {
                 <span><em>release</em><b>{asNum(regressionSummary.release_count)}</b></span>
                 <span><em>CI gate</em><b>{asText(regressionSummary.ci_gate_recommendation) || '未上报'}</b></span>
               </div>
+            </article>
+          )}
+
+          {hasRegressionRun && (
+            <article className="customer-secondary-card">
+              <span className="customer-value-kicker">最近一次回归执行</span>
+              <h3>{regressionRunLabel(regressionGateStatus, regressionRunStatus)}</h3>
+              <p>{asText(regressionRun.honesty_rule) || '这里展示的是最新持久化的 regression_run_result，不会重新执行探针，也不会改写 verdict。'}</p>
+              <div className="customer-secondary-meta">
+                <span><em>mode</em><b>{asText(regressionRun.suite_mode_label) || asText(regressionRun.suite_mode) || '未上报'}</b></span>
+                <span><em>passed</em><b>{asNum(regressionRun.passed_count)}</b></span>
+                <span><em>failed</em><b>{asNum(regressionRun.failed_count)}</b></span>
+                <span><em>needs review</em><b>{asNum(regressionRun.needs_review_count)}</b></span>
+                <span><em>history</em><b>{asNum(regressionRun.history_size)}</b></span>
+              </div>
+              {regressionFailures.length > 0 && (
+                <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+                  {regressionFailures.slice(0, 5).map((failure, index) => (
+                    <div key={`${asText(failure.regression_probe_id)}-${index}`} style={{ padding: '10px 12px', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 10, background: '#fff7ed' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                        <strong>{asText(failure.title) || asText(failure.regression_probe_id) || '失败探针'}</strong>
+                        <span className="summary-pill tone-danger">failed</span>
+                      </div>
+                      <p style={{ margin: 0 }}>{asText(failure.reason) || '回归失败，需查看证据。'}</p>
+                      <div className="customer-secondary-meta" style={{ marginTop: 8 }}><span><em>接口</em><b>{asText(failure.method)} {asText(failure.path)}</b></span><span><em>HTTP</em><b>{String(failure.status_code || '未上报')}</b></span></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {regressionFailures.length === 0 && regressionNeedsReview.length > 0 && (
+                <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+                  {regressionNeedsReview.slice(0, 5).map((item, index) => (
+                    <span key={`${asText(item.regression_probe_id)}-${index}`} className="summary-pill tone-warning">{asText(item.title) || asText(item.regression_probe_id) || '需复核探针'}</span>
+                  ))}
+                </div>
+              )}
             </article>
           )}
         </section>
