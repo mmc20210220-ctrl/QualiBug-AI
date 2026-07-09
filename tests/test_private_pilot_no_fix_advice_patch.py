@@ -30,6 +30,8 @@ def test_sanitize_customer_payload_strips_fix_advice_from_defects() -> None:
     sanitized = sanitize_customer_payload(payload)
     defect = sanitized["data"]["defects"][0]
     clue = sanitized["data"]["clues"][0]
+    boundary = sanitized["data"]["product_responsibility_boundary"]
+    contract = sanitized["data"]["data_contract"]["product_responsibility_boundary"]
 
     assert "recommended_fix" not in defect
     assert "recommended_fix" not in defect["technical_details"]
@@ -37,9 +39,13 @@ def test_sanitize_customer_payload_strips_fix_advice_from_defects() -> None:
     assert "remediation" not in clue
     assert defect["evidence_chain"][0]["detail"] == "HTTP 200"
     assert defect["regression"]["latest_status"] == "failed"
+    assert defect["product_responsibility_boundary"]["contract_version"] == "product_responsibility_boundary.v1"
     assert defect["product_responsibility_boundary"]["no_fix_advice"] is True
-    assert sanitized["data"]["product_responsibility_boundary"]["no_fix_advice"] is True
-    assert sanitized["data"]["data_contract"]["product_responsibility_boundary"]["display_key"] == "product_responsibility_boundary"
+    assert boundary["contract_version"] == "product_responsibility_boundary.v1"
+    assert boundary["customer_owns"]
+    assert contract["display_key"] == "product_responsibility_boundary"
+    assert contract["contract_version"] == "product_responsibility_boundary.v1"
+    assert "fix advice" in contract["honesty_rule"]
 
 
 def test_sanitize_customer_payload_strips_nested_repair_fields_without_losing_release_status() -> None:
@@ -68,3 +74,4 @@ def test_sanitize_customer_payload_strips_nested_repair_fields_without_losing_re
     assert data["customer_delivery_guard"]["status"] == "blocked_by_release_gate"
     assert data["customer_delivery_guard"]["customer_deliverable"] is False
     assert "code_fix" not in data["customer_delivery_guard"]
+    assert data["product_responsibility_boundary"]["contract_version"] == "product_responsibility_boundary.v1"
