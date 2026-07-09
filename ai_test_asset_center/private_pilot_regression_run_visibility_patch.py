@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ai_test_asset_center.system_behavior_graph import inject_system_behavior_graph
+
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_regression_run_visibility_patch"
 
 
@@ -142,12 +144,12 @@ def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, A
         "ci_message": compact.get("ci_message"),
     }
     if gate == "failed":
-        headline = f"最近回归失败：{failed} 个探针失败，需要继续修复或复核。"
+        headline = f"最近回归失败：{failed} 个探针失败，需要客户内部处理或复核。"
         trend_direction = "regressing"
         release_recommendation = "block_release"
-        release_label = "建议阻断发布"
-        release_reason = "最新回归仍存在失败项，不能声明缺陷已修复。"
-        readiness = "回归失败，暂不建议交付"
+        release_label = "发布阻断"
+        release_reason = "最新回归仍存在失败项，不能声明缺陷已闭环。"
+        readiness = "回归失败，暂不交付"
     elif gate == "passed":
         headline = f"最近回归通过：{passed} 个探针通过。"
         trend_direction = "stable"
@@ -159,7 +161,7 @@ def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, A
         headline = f"最近回归需要复核：{needs_review} 个探针缺少强自动判定。"
         trend_direction = "stable"
         release_recommendation = "hold_for_validation"
-        release_label = "建议先完成剩余回归"
+        release_label = "待完成剩余回归"
         release_reason = "最新回归仍有需人工确认项，不能直接声明通过。"
         readiness = "需要人工复核"
     merged = dict(existing)
@@ -200,10 +202,14 @@ def _normalized_release_check(value: Any) -> dict[str, Any] | None:
     status = str(row.get("status") or "").strip()
     if not name or status not in {"pass", "fail", "pending"}:
         return None
+    if name == "修复后回归 Gate":
+        name = "客户处理后回归 Gate"
+    detail = str(row.get("detail") or row.get("reason") or "后端发布门禁未提供详情。")
+    detail = detail.replace("发布前必须先修复或复核失败项", "客户内部处理或复核后必须再次执行回归验证")
     return {
         "name": name,
         "status": status,
-        "detail": str(row.get("detail") or row.get("reason") or "后端发布门禁未提供详情。"),
+        "detail": detail,
         "source": str(row.get("source") or "existing_release_gate"),
     }
 
@@ -227,21 +233,21 @@ def _regression_release_check(data: dict[str, Any], compact: dict[str, Any]) -> 
     gate = str(compact.get("gate_status") or "") if compact else ""
     if gate == "failed":
         return {
-            "name": "修复后回归 Gate",
+            "name": "客户处理后回归 Gate",
             "status": "fail",
-            "detail": f"最近一次回归失败：{int(compact.get('failed_count') or 0)} 个探针失败，{int(compact.get('needs_review_count') or 0)} 个需复核。发布前必须先修复或复核失败项。",
+            "detail": f"最近一次回归失败：{int(compact.get('failed_count') or 0)} 个探针失败，{int(compact.get('needs_review_count') or 0)} 个需复核。客户内部处理或复核后必须再次执行回归验证。",
             "source": "regression_run",
         }
     if gate == "manual_approval_required":
         return {
-            "name": "修复后回归 Gate",
+            "name": "客户处理后回归 Gate",
             "status": "pending",
             "detail": f"最近一次回归仍需人工复核：{int(compact.get('needs_review_count') or 0)} 个探针缺少强自动判定，不能直接放行发布。",
             "source": "regression_run",
         }
     if gate == "passed":
         return {
-            "name": "修复后回归 Gate",
+            "name": "客户处理后回归 Gate",
             "status": "pass",
             "detail": f"最近一次回归通过：{int(compact.get('passed_count') or 0)} 个探针通过。该结论仅代表最近一次持久化回归结果，不扩大到未覆盖范围。",
             "source": "regression_run",
@@ -253,7 +259,7 @@ def _regression_release_check(data: dict[str, Any], compact: dict[str, Any]) -> 
     confirmed = int(suite.get("confirmed_ledger_probe_count") or summary.get("confirmed_ledger_probe_count") or 0)
     if str(refresh.get("status") or "") == "refreshed" and total > 0:
         return {
-            "name": "修复后回归 Gate",
+            "name": "客户处理后回归 Gate",
             "status": "pending",
             "detail": f"已自动生成 {total} 个回归探针，其中 {confirmed} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。",
             "source": "regression_suite_refresh",
@@ -476,7 +482,10 @@ def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) 
     _inject_release_gate(data, compact)
     _inject_customer_delivery_guard(data, _load_customer_delivery_guard(project, root_path))
     payload["data"] = data
-    return payload
+    try:
+        return inject_system_behavior_graph(payload)
+    except Exception:
+        return payload
 
 
 def install_regression_run_visibility_patch(*, patch_source: str = PATCH_SOURCE, root: Path | None = None) -> None:
