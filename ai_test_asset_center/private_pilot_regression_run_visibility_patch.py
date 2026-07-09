@@ -287,6 +287,77 @@ def _blocked_commercial_status(overall: str) -> str:
     return "blocked_by_release_gate" if overall == "fail" else "hold_for_validation" if overall == "pending" else "release_gate_passed"
 
 
+def _load_customer_delivery_guard(project: str, root: Path) -> dict[str, Any]:
+    if not project:
+        return {}
+    base = root / "platform_outputs" / _safe_project(project)
+    for path in (
+        base / "customer_delivery_guard.json",
+        base / "pipeline_reports" / "customer_delivery_guard.json",
+    ):
+        guard = _read_json(path)
+        if guard:
+            return guard
+    return {}
+
+
+def _inject_customer_delivery_guard(data: dict[str, Any], guard: dict[str, Any]) -> None:
+    if not guard:
+        return
+    data["customer_delivery_guard"] = guard
+
+    commercial_assets = _as_dict(data.get("commercial_assets"))
+    guard_assets = _as_dict(guard.get("commercial_assets"))
+    if guard_assets:
+        commercial_assets.update(guard_assets)
+    commercial_assets["customer_delivery_guard"] = {
+        "status": guard.get("status"),
+        "customer_deliverable": bool(guard.get("customer_deliverable")),
+        "safe_for_customer": bool(guard.get("safe_for_customer")),
+        "block_reasons": guard.get("block_reasons") if isinstance(guard.get("block_reasons"), list) else [],
+        "honesty_rule": guard.get("honesty_rule"),
+    }
+    commercial_assets["customer_deliverable"] = bool(guard.get("customer_deliverable"))
+    commercial_assets["customer_delivery_status"] = str(guard.get("status") or "")
+    commercial_assets["safe_for_customer"] = bool(guard.get("safe_for_customer"))
+    data["commercial_assets"] = commercial_assets
+
+    delivery_tracks = _as_dict(data.get("delivery_tracks"))
+    delivery_tracks["customer_delivery_guard"] = {
+        "status": guard.get("status"),
+        "customer_deliverable": bool(guard.get("customer_deliverable")),
+        "tracker_payload_status": guard.get("tracker_payload_status"),
+        "release_gate_overall_status": guard.get("release_gate_overall_status"),
+        "guard_ref": "platform_outputs/<project>/customer_delivery_guard.json",
+    }
+    delivery_tracks["customer_delivery_status"] = str(guard.get("status") or "")
+    delivery_tracks["customer_deliverable"] = bool(guard.get("customer_deliverable"))
+    delivery_tracks["tracker_payload_status"] = str(guard.get("tracker_payload_status") or "")
+    data["delivery_tracks"] = delivery_tracks
+
+    value_metrics = _as_dict(data.get("value_metrics"))
+    value_metrics["customer_delivery_guard_status"] = str(guard.get("status") or "")
+    value_metrics["customer_deliverable"] = bool(guard.get("customer_deliverable"))
+    value_metrics["safe_for_customer"] = bool(guard.get("safe_for_customer"))
+    data["value_metrics"] = value_metrics
+
+    executive = _as_dict(data.get("executive_summary"))
+    if guard.get("customer_deliverable") is True:
+        executive["customer_delivery_guard_label"] = "客户交付已放行：门禁通过且 Handoff 明确安全"
+    else:
+        executive["customer_delivery_guard_label"] = f"客户交付未放行：{str(guard.get('status') or 'guard_blocked')}"
+    data["executive_summary"] = executive
+
+    contract = _as_dict(data.get("data_contract"))
+    contract["customer_delivery_guard"] = {
+        "display_key": "customer_delivery_guard",
+        "source": "platform_outputs/<project>/customer_delivery_guard.json",
+        "honesty_rule": str(guard.get("honesty_rule") or "Customer delivery guard is the source of truth for tracker payload and delivery package status."),
+        "customer_meaning": "Machine-readable delivery decision. External tracker payload and delivery package status should not bypass this guard.",
+    }
+    data["data_contract"] = contract
+
+
 def _inject_release_gate(data: dict[str, Any], compact: dict[str, Any]) -> None:
     release_gate = _release_gate_from(data, compact)
     if not release_gate:
@@ -359,7 +430,8 @@ def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) 
     if data is None:
         return payload
     project = _project_from_payload(payload) or _project_from_payload({"data": data})
-    result = _load_regression_run(project, Path(root or Path.cwd()))
+    root_path = Path(root or Path.cwd())
+    result = _load_regression_run(project, root_path)
     compact = compact_regression_run(result)
 
     if compact:
@@ -402,6 +474,7 @@ def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) 
         data["data_contract"] = contract
 
     _inject_release_gate(data, compact)
+    _inject_customer_delivery_guard(data, _load_customer_delivery_guard(project, root_path))
     payload["data"] = data
     return payload
 
