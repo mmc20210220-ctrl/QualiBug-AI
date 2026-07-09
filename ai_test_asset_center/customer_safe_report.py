@@ -95,6 +95,18 @@ def normalize_release_gate(value: Any) -> dict[str, Any]:
     }
 
 
+def _should_replace_release_check(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+    if incoming.get("name") != "修复后回归 Gate":
+        return False
+    incoming_source = str(incoming.get("source") or "")
+    existing_source = str(existing.get("source") or "")
+    if incoming_source == "regression_run_result":
+        return True
+    if incoming_source == "regression_suite_refresh" and existing_source != "regression_run_result":
+        return True
+    return False
+
+
 def merge_release_gates(*gates: dict[str, Any]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     sources: list[str] = []
@@ -113,13 +125,19 @@ def merge_release_gates(*gates: dict[str, Any]) -> dict[str, Any]:
     if not checks:
         return {}
     unique: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    index_by_name: dict[str, int] = {}
     for item in checks:
         check = normalize_release_check(item)
-        if not check or check["name"] in seen:
+        if not check:
             continue
-        seen.add(check["name"])
-        unique.append(check)
+        key = check["name"]
+        existing_index = index_by_name.get(key)
+        if existing_index is None:
+            index_by_name[key] = len(unique)
+            unique.append(check)
+            continue
+        if _should_replace_release_check(unique[existing_index], check):
+            unique[existing_index] = check
     overall = "fail" if any(item["status"] == "fail" for item in unique) else "pending" if any(item["status"] == "pending" for item in unique) else "pass"
     return {
         "overall_status": overall,
@@ -255,7 +273,6 @@ def render_customer_safe_report_html(project: str, root: Path) -> str:
     findings = report_findings(report)
     release_gate = load_customer_release_gate(project, root, report)
     stage1 = report.get("stage1_industry") if isinstance(report.get("stage1_industry"), dict) else {}
-    stage3 = report.get("stage3_impact_analysis") if isinstance(report.get("stage3_impact_analysis"), dict) else {}
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
     rows = []
