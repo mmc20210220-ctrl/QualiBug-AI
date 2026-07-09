@@ -27,7 +27,24 @@ function asBoolean(value: unknown): boolean {
 function asFiniteNumber(value: unknown, fallback = 0): number { const parsed = typeof value === 'number' ? value : Number(value); return Number.isFinite(parsed) ? parsed : fallback; }
 function firstFiniteNumber(...values: unknown[]): number { for (const value of values) { if (value === null || value === undefined || value === '') continue; const parsed = Number(value); if (Number.isFinite(parsed)) return parsed; } return 0; }
 function field(value: unknown, name: string): unknown { return asRecord(value)[name]; }
-function findingFrom(value: unknown): Finding | null { const record = asRecord(value); return asString(record.id) || asString(record.title) ? record as unknown as Finding : null; }
+function stripFixAdviceForCustomer(value: Finding): Finding {
+  const sanitized = { ...(value as unknown as JsonRecord) };
+  delete sanitized.recommended_fix;
+  const technical = asRecord(sanitized.technical_details);
+  if (Object.keys(technical).length > 0) {
+    const sanitizedTechnical = { ...technical };
+    delete sanitizedTechnical.recommended_fix;
+    delete sanitizedTechnical.possible_root_cause;
+    sanitized.technical_details = sanitizedTechnical;
+  }
+  sanitized.product_responsibility_boundary = {
+    scope: 'defect_discovery_evidence_regression_release_status',
+    no_fix_advice: true,
+    customer_meaning: 'QualiBug-AI 只提供缺陷事实、证据链、修复后回归验证和发布状态，不提供修复建议、修复方案或修复代码。',
+  };
+  return sanitized as unknown as Finding;
+}
+function findingFrom(value: unknown): Finding | null { const record = asRecord(value); return asString(record.id) || asString(record.title) ? stripFixAdviceForCustomer(record as unknown as Finding) : null; }
 
 export function emitScanCompleted(project: string): void { if (!project || typeof window === 'undefined') return; window.dispatchEvent(new CustomEvent<ScanCompletedDetail>(SCAN_COMPLETED_EVENT, { detail: { project } })); }
 
