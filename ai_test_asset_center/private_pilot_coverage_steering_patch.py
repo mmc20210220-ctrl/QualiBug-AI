@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-"""Coverage-gap steering for existing V12 behavior-slice scheduling.
+"""Coverage-gap and learning steering for existing V12 behavior scheduling.
 
-This patch does not create a new scanner.  It wraps the existing
-``v12_pipeline._schedule_behavior_slices`` function and reorders the already
-materialized behavior slices so uncovered risk families are attempted earlier in
-later rounds.
+This patch intentionally reuses the existing V12 scheduler and the existing
+RiskCluePool persistence.  It does not create a new scanner or a second learning
+engine.  It simply reorders already-materialized behavior slices using:
 
-Why this exists:
-- the coverage matrix tells the customer which risk families are gaps;
-- without feedback into scheduling, the product only reports gaps after the fact;
-- this patch closes that loop by steering the next slice batch toward the gaps.
-
-It is deliberately conservative:
-- no synthetic findings;
-- no new source documents;
-- no new execution semantics;
-- if no coverage matrix exists, the original scheduler is untouched.
+1. current coverage matrix gaps;
+2. project/private-deployment learning weights from risk_clue_pool;
+3. SaaS/platform sanitized learning weights from risk_clue_pool.
 """
 
 import contextvars
@@ -94,17 +86,28 @@ def _coverage_matrix(root: Path, project: str) -> dict[str, Any]:
     return _as_dict(metrics.get("coverage_matrix"))
 
 
-def _steering_weights(root: Path, project: str) -> dict[str, int]:
+def _coverage_gap_weights(root: Path, project: str) -> dict[str, float]:
     matrix = _coverage_matrix(root, project)
     rows = matrix.get("families") if isinstance(matrix.get("families"), list) else []
-    weights: dict[str, int] = {}
+    weights: dict[str, float] = {}
     for row in rows:
         item = _as_dict(row)
         family = str(item.get("family") or "").strip()
         status = str(item.get("coverage_status") or "").strip()
         if family and status in _FAMILY_WEIGHT:
-            weights[family] = max(weights.get(family, 0), _FAMILY_WEIGHT[status])
+            weights[family] = max(weights.get(family, 0.0), float(_FAMILY_WEIGHT[status]))
     return weights
+
+
+def _learning_weights(root: Path, project: str) -> tuple[dict[str, float], dict[str, float]]:
+    try:
+        from .risk_clue_pool import get_platform_learning_weights, get_project_learning_weights
+
+        project_weights = get_project_learning_weights(project, root)
+        platform_weights = get_platform_learning_weights(root)
+    except Exception:
+        project_weights, platform_weights = {}, {}
+    return project_weights, platform_weights
 
 
 def _slice_text(item: dict[str, Any]) -> str:
@@ -136,33 +139,80 @@ def _slice_risk_family(item: dict[str, Any]) -> str:
     return ""
 
 
-def _steer_slices_by_coverage_gap(slices: list[dict[str, Any]], *, root: Path, project: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    weights = _steering_weights(root, project)
-    if not weights:
-        return slices, {"status": "not_applied", "reason": "coverage_matrix_without_actionable_gaps"}
+def _slice_surfaces(item: dict[str, Any]) -> list[str]:
+    text = _slice_text(item)
+    surfaces: list[str] = []
+    if any(token in text for token in ("api", "endpoint", "http", "/")):
+        surfaces.append("api")
+    if any(token in text for token in ("db", "table", "schema", "sql", "database")):
+        surfaces.append("db")
+    if any(token in text for token in ("ui", "page", "browser", "button", "form", "frontend")):
+        surfaces.append("ui")
+    if any(token in text for token in ("auth", "role", "permission", "tenant")):
+        surfaces.append("auth")
+    return sorted(set(surfaces))
 
-    indexed: list[tuple[int, int, dict[str, Any]]] = []
-    steered_count = 0
+
+def _learning_score(item: dict[str, Any], project_weights: dict[str, float], platform_weights: dict[str, float]) -> tuple[float, dict[str, Any]]:
+    family = _slice_risk_family(item)
+    surfaces = _slice_surfaces(item)
+    project_score = float(project_weights.get(family) or 0.0) * 4.0
+    platform_score = float(platform_weights.get(family) or 0.0) * 2.0
+    for surface in surfaces:
+        project_score += float(project_weights.get(f"surface:{surface}") or 0.0) * 0.8
+        platform_score += float(platform_weights.get(f"surface:{surface}") or 0.0) * 0.4
+    if len(surfaces) >= 2:
+        combo = "+".join(surfaces)
+        project_score += float(project_weights.get(f"surface_combo:{combo}") or 0.0) * 1.2
+        platform_score += float(platform_weights.get(f"surface_combo:{combo}") or 0.0) * 0.6
+    return min(project_score + platform_score, 35.0), {
+        "family": family,
+        "surfaces": surfaces,
+        "project_learning_score": round(project_score, 3),
+        "platform_learning_score": round(platform_score, 3),
+    }
+
+
+def _steer_slices(slices: list[dict[str, Any]], *, root: Path, project: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    coverage_weights = _coverage_gap_weights(root, project)
+    project_weights, platform_weights = _learning_weights(root, project)
+    if not coverage_weights and not project_weights and not platform_weights:
+        return slices, {"status": "not_applied", "reason": "no_coverage_or_learning_weights"}
+
+    indexed: list[tuple[float, int, dict[str, Any]]] = []
+    coverage_count = 0
+    learning_count = 0
     for index, raw in enumerate(slices):
         item = dict(raw) if isinstance(raw, dict) else {}
         family = _slice_risk_family(item)
-        weight = int(weights.get(family, 0))
-        if weight > 0:
-            steered_count += 1
+        coverage_weight = float(coverage_weights.get(family, 0.0))
+        if coverage_weight > 0:
+            coverage_count += 1
             item["_coverage_steering_family"] = family
-            item["_coverage_steering_weight"] = weight
+            item["_coverage_steering_weight"] = coverage_weight
             item["_coverage_steering_reason"] = "prioritize_current_coverage_matrix_gap"
-            item["priority"] = max(float(item.get("priority") or 0.0), 0.95 if weight >= 50 else 0.88)
-        indexed.append((weight, -index, item))
+        learning_weight, learning_detail = _learning_score(item, project_weights, platform_weights)
+        if learning_weight > 0:
+            learning_count += 1
+            item["_learning_steering"] = learning_detail
+            item["_learning_steering_weight"] = learning_weight
+            item["_learning_steering_reason"] = "prioritize_from_project_and_platform_risk_clue_pool"
+        total_weight = coverage_weight + learning_weight
+        if total_weight > 0:
+            item["priority"] = max(float(item.get("priority") or 0.0), 0.95 if coverage_weight >= 50 else 0.9 if learning_weight >= 10 else 0.86)
+        indexed.append((total_weight, -index, item))
 
     indexed.sort(key=lambda row: (row[0], row[2].get("priority") or 0, row[1]), reverse=True)
     ordered = [item for _, _, item in indexed]
     return ordered, {
-        "status": "applied" if steered_count else "not_applied",
-        "reason": "gap_family_slices_prioritized" if steered_count else "no_slice_matched_gap_family",
-        "gap_family_weights": weights,
-        "steered_slice_count": steered_count,
-        "top_steered_slice_ids": [str(item.get("slice_id") or "") for item in ordered if item.get("_coverage_steering_weight")][:12],
+        "status": "applied" if (coverage_count or learning_count) else "not_applied",
+        "reason": "coverage_and_learning_weights_prioritized" if (coverage_count and learning_count) else "coverage_gap_slices_prioritized" if coverage_count else "learning_weights_prioritized" if learning_count else "no_slice_matched_weights",
+        "gap_family_weights": coverage_weights,
+        "project_learning_weight_count": len(project_weights),
+        "platform_learning_weight_count": len(platform_weights),
+        "coverage_steered_slice_count": coverage_count,
+        "learning_steered_slice_count": learning_count,
+        "top_steered_slice_ids": [str(item.get("slice_id") or "") for item in ordered if item.get("_coverage_steering_weight") or item.get("_learning_steering_weight")][:12],
     }
 
 
@@ -172,7 +222,7 @@ def _attach_coverage_steering_result(result: dict[str, Any], diagnostic: dict[st
     payload = {
         **diagnostic,
         "patch_source": PATCH_SOURCE,
-        "honesty_rule": "Coverage steering only reorders existing source-grounded behavior slices; it does not create findings or synthetic coverage.",
+        "honesty_rule": "Coverage and learning steering only reorder existing source-grounded behavior slices; they do not create findings or synthetic coverage.",
     }
     result["coverage_steering"] = payload
     phases = result.get("phases") if isinstance(result.get("phases"), dict) else {}
@@ -211,15 +261,15 @@ def install_coverage_steering_patch(*, patch_source: str = PATCH_SOURCE) -> None
         diagnostic: dict[str, Any] = {"status": "not_applied", "reason": "missing_project_context"}
         steered_slices = slices
         if project:
-            steered_slices, diagnostic = _steer_slices_by_coverage_gap(slices, root=root, project=project)
+            steered_slices, diagnostic = _steer_slices(slices, root=root, project=project)
         context["last_coverage_steering"] = diagnostic
         selection = original_schedule(steered_slices, settings, history)
         if isinstance(selection, dict):
             selection["coverage_steering"] = diagnostic
             if diagnostic.get("status") == "applied":
                 mode = str(selection.get("selection_mode") or "")
-                if "coverage_gap_steered" not in mode:
-                    selection["selection_mode"] = f"{mode}+coverage_gap_steered" if mode else "coverage_gap_steered"
+                if "coverage_learning_steered" not in mode:
+                    selection["selection_mode"] = f"{mode}+coverage_learning_steered" if mode else "coverage_learning_steered"
         return selection
 
     v12_pipeline._ORIGINAL_COVERAGE_STEERING_RUN = original_run  # type: ignore[attr-defined]
