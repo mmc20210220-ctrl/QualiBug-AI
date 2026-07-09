@@ -250,14 +250,28 @@ export interface CommercialAssets {
   status: string;
   finding_count: number;
   customer_ready_reproduction_count: number;
+  release_gate_overall_status?: 'pass' | 'pending' | 'fail' | string;
+  release_recommendation?: string;
+  release_gate_honesty_rule?: string;
+  release_gate?: {
+    overall_status?: 'pass' | 'pending' | 'fail' | string;
+    blocking_check_count?: number;
+    pending_check_count?: number;
+    pass_check_count?: number;
+    release_recommendation?: string;
+    checks?: Array<{ name?: string; status?: string; detail?: string; source?: string }>;
+    honesty_rule?: string;
+  };
   commercial_handoff: {
     status: string;
     acceptance_status: string;
     safe_for_customer: boolean;
+    release_gate_status?: string;
   };
   tracker_sync: {
     payload_status: string;
     payload_gate_status: string;
+    release_gate_overall_status?: string;
   };
   delivery_package: {
     status: string;
@@ -265,6 +279,10 @@ export interface CommercialAssets {
     package_ref: string;
     release_verdict: string;
     evidence_bundle_id: string;
+    release_recommendation?: string;
+    release_gate_overall_status?: string;
+    release_gate_blocked?: boolean;
+    release_gate_block_reason?: string;
   };
   artifact_refs: Record<string, string>;
 }
@@ -359,143 +377,15 @@ export interface TechnicalDetails {
     path: string;
     actor: string;
   };
-  response_status: number;
-  response_body_excerpt: string;
   related_tables: string[];
-  trace_id: string;
-  possible_root_cause: string;
-  recommended_fix: string;
-  regression_suggestions: string[];
-  code_module_hint: string;
+  stack_trace?: string;
+  logs?: string;
 }
 
-// ── 主链 8: 测试任务看板（后端单一真相源，前端零变换渲染）──
-export interface TestTaskSlice {
-  slice_id: string;
-  entity: string;
-  kind: string;
-  states?: string[];
-  endpoints?: string[];
-  priority?: string;
-  source_refs?: Array<{ kind?: string; ref?: string }>;
-  evidence_gaps?: string[];
-  status?: 'pending' | 'running' | 'passed' | 'failed' | 'blocked';
-}
+export interface ReleaseCheck { name: string; status: 'pass' | 'fail' | 'pending'; detail: string }
+export type ReleaseGateStatus = { overall_status: 'pass' | 'fail' | 'pending'; checks: ReleaseCheck[] };
 
-export interface TestTaskLedger {
-  campaign_id?: string;
-  campaign_status?: string;
-  attempted_slice_ids?: string[];
-  confirmed_slice_ids?: string[];
-  slice_status?: Record<string, 'pending' | 'running' | 'passed' | 'failed' | 'blocked'>;
-  source_snapshot_hash?: string;
-}
+export interface KnowledgeSource { source_id: string; filename: string; source_type: string; status: string; size_bytes?: number; uploaded_at?: string }
 
-export interface TestTaskBoard {
-  ledger: TestTaskLedger;
-  slices: TestTaskSlice[];
-  execution: { production_data_blocked: number };
-  evidence_chains_saved: number;
-}
-
-export interface ProjectOverview {
-  project_id: string;
-  bei_score: number;
-  bei_change: number;
-  bei_percentile: number;
-  bds_score: number;
-  bcs_score: number;
-  modeled_paths: number;
-  pending_paths: number;
-  gap_count: number;
-  evidence_completeness: number;
-  high_priority_findings: number;
-  last_scan_minutes_ago: number;
-  scan_active: boolean;
-}
-
-export interface CoverageData {
-  modeled_paths: number;
-  executed_probes: number;
-  confirmed_findings: number;
-  evidence_completeness: number;
-}
-
-export interface KnowledgeSource {
-  source_id: string;
-  filename: string;
-  source_type: string;
-  status: string;
-  size_bytes: number;
-  uploaded_at: string;
-}
-
-export interface EnvConfig {
-  target_environment: string;
-  base_url: string;
-  request_timeout_seconds: number;
-  environments: Array<{
-    name: string;
-    base_url: string;
-    description: string;
-  }>;
-}
-
-export interface ReleaseGateStatus {
-  release_id: string;
-  overall_status: 'pass' | 'fail' | 'pending';
-  checks: ReleaseCheck[];
-}
-
-export interface ReleaseCheck {
-  name: string;
-  status: 'pass' | 'fail' | 'pending';
-  detail: string;
-}
-
-export interface BehaviorSpaceData {
-  total_endpoints: number;
-  covered_endpoints: number;
-  auth_tested: number;
-  data_validation_tested: number;
-  business_logic_tested: number;
-  routes: BehaviorRoute[];
-}
-
-export interface BehaviorRoute {
-  method: string;
-  path: string;
-  tested: boolean;
-  findings: number;
-}
-
-// Replay API 结果类型
-export interface ReplayResult {
-  ok: boolean;
-  finding_id: string;
-  request?: {
-    method: string;
-    url: string;
-    headers: Record<string, string>;
-    body?: string;
-    timestamp: string;
-  };
-  response?: {
-    status_code: number;
-    headers: Record<string, string>;
-    body: string;
-    duration_ms: number;
-  };
-  success?: boolean;
-  error?: string;
-  original_evidence?: {
-    status_code: number;
-    response_body_excerpt: string;
-    har_actor: string;
-  };
-  diff?: {
-    status_match: boolean;
-    body_match: boolean;
-    key_differences: string[];
-  };
-}
+export interface TestTaskSlice { slice_id: string; title: string; status: 'pending' | 'executed' | 'confirmed' | 'blocked' | string; family?: string; severity?: string; source: string; target: string; owner_hint?: string; campaign_id?: string; blocking_reason?: string; production_data_blocked?: boolean }
+export interface TestTaskBoard { ledger: { campaign_id: string; campaign_status: string; attempted_slice_ids: string[]; confirmed_slice_ids: string[]; slice_status: Record<string, TestTaskSlice['status'] & string>; source_snapshot_hash: string }; slices: TestTaskSlice[]; execution: { production_data_blocked: number }; evidence_chains_saved: number }
