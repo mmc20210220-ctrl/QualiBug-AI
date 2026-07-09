@@ -64,7 +64,7 @@ def test_system_behavior_space_does_not_limit_itself_to_bug_families() -> None:
         accounts=[{"role": "user", "email": "u@example.com"}],
     ).to_dict()
 
-    assert "bug" not in space["model_goal"].lower()
+    assert "bug families are labels, not limits" in space["model_goal"].lower()
     objectives = "\n".join(item["objective"] for item in space["probe_candidates"])
     assert "system promise" in objectives
     assert any(set(item["surface_plan"]) >= {"api", "db"} for item in space["probe_candidates"])
@@ -79,3 +79,33 @@ def test_system_behavior_space_surfaces_missing_assets_as_gaps() -> None:
     assert "DB_SURFACE_MISSING" in gaps
     assert "UI_SURFACE_MISSING" in gaps
     assert "ROLE_SURFACE_MISSING" in gaps
+
+
+def test_system_behavior_space_reuses_enterprise_knowledge_asset() -> None:
+    asset = {
+        "summary": {
+            "interface_count": 1,
+            "data_table_count": 1,
+            "ui_design_spec_count": 1,
+            "permission_matrix_count": 1,
+            "risk_domain_count": 1,
+        },
+        "interfaces": [{"method": "POST", "path": "/api/refunds", "operation_id": "create_refund"}],
+        "data_tables": [{"name": "refunds", "columns": ["tenant_id", "refund_amount", "status", "updated_at"]}],
+        "ui_design_specs": [{"route": "/refunds", "title": "Refund Management"}],
+        "permission_matrix": [{"role": "finance", "resource": "refunds", "action": "approve"}],
+        "risk_domains": [{"risk_type": "permission_boundary", "title": "Only finance can approve refunds"}],
+        "oracle_library": [{"family": "data_conservation", "assertion": "refund_amount must reconcile with ledger balance"}],
+    }
+
+    space = build_system_behavior_space(knowledge_asset=asset).to_dict()
+
+    assert space["summary"]["source_coverage"]["knowledge_asset.interface_count"] == 1
+    assert "API_SURFACE_MISSING" not in {item["kind"] for item in space["coverage_gaps"]}
+    assert "DB_SURFACE_MISSING" not in {item["kind"] for item in space["coverage_gaps"]}
+    assert "UI_SURFACE_MISSING" not in {item["kind"] for item in space["coverage_gaps"]}
+    assert "ROLE_SURFACE_MISSING" not in {item["kind"] for item in space["coverage_gaps"]}
+    dimensions = space["summary"]["promise_by_dimension"]
+    assert dimensions["authorization"] >= 1
+    assert dimensions["money"] >= 1
+    assert dimensions["ui_api_contract"] >= 1
