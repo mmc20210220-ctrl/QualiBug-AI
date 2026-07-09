@@ -48,6 +48,20 @@ def safe_int(value: Any) -> int:
         return 0
 
 
+def safe_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off", ""}:
+            return False
+    return False
+
+
 def report_findings(report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = [
         report.get("real_findings"),
@@ -267,7 +281,7 @@ def commercial_handoff_label(assets: dict[str, Any]) -> str:
     handoff = as_dict(assets.get("commercial_handoff"))
     tracker = as_dict(assets.get("tracker_sync"))
     delivery = as_dict(assets.get("delivery_package"))
-    if bool(handoff.get("safe_for_customer")):
+    if safe_bool(handoff.get("safe_for_customer")):
         return "已放行"
     status = str(handoff.get("acceptance_status") or tracker.get("payload_status") or delivery.get("status") or "").strip()
     if status == "blocked_by_release_gate":
@@ -282,7 +296,7 @@ def commercial_handoff_message(assets: dict[str, Any]) -> str:
         return "暂无商业交付 Handoff 数据；报告不会把发布门禁通过等同为整包可交付。"
     handoff = as_dict(assets.get("commercial_handoff"))
     delivery = as_dict(assets.get("delivery_package"))
-    if bool(handoff.get("safe_for_customer")):
+    if safe_bool(handoff.get("safe_for_customer")):
         return "后端 commercial_handoff.safe_for_customer 已明确放行，可进入客户验收。"
     return str(
         delivery.get("release_gate_block_reason")
@@ -297,12 +311,13 @@ def render_commercial_handoff_section(assets: dict[str, Any]) -> str:
     handoff = as_dict(assets.get("commercial_handoff"))
     tracker = as_dict(assets.get("tracker_sync"))
     delivery = as_dict(assets.get("delivery_package"))
+    safe_for_customer = safe_bool(handoff.get("safe_for_customer"))
     return f"""
 <h2>商业交付 Handoff</h2>
 <div class="release-summary gate-{html_text(tone, 20)}">
   <strong>交付安全状态：{html_text(label, 40)}</strong>
   <p>{html_text(commercial_handoff_message(assets), 360)}</p>
-  <p>safe_for_customer：{html_text(str(bool(handoff.get('safe_for_customer'))).lower(), 20)} · acceptance：{html_text(handoff.get('acceptance_status') or '-', 80)} · tracker：{html_text(tracker.get('payload_status') or '-', 80)} · package：{html_text(delivery.get('release_verdict') or delivery.get('status') or '-', 80)}</p>
+  <p>safe_for_customer：{html_text(str(safe_for_customer).lower(), 20)} · acceptance：{html_text(handoff.get('acceptance_status') or '-', 80)} · tracker：{html_text(tracker.get('payload_status') or '-', 80)} · package：{html_text(delivery.get('release_verdict') or delivery.get('status') or '-', 80)}</p>
 </div>
 <div class="notice warning">报告将“发布门禁结论”和“商业交付安全”分开展示；只有 handoff 明确放行时，才可声明整包进入客户验收。</div>
 """
