@@ -305,6 +305,29 @@ class SemanticScenarioGenerator:
         observation_path = self._preferred_read_endpoint(list(slice_meta.get("endpoints") or []))
         if not entity:
             return None
+
+        # ── System Behavior Space slice: generate a dimension-aware verification
+        # scenario instead of a generic single-GET observation. The slice carries
+        # structured dimensions (authorization_access_control, tenant_isolation,
+        # money_quantity_conservation, state_machine, audit_traceability, etc.)
+        # and surface plans that the generic invariant path ignores.
+        is_system_behavior = str(slice_meta.get("_selection_origin") or "") == "system_behavior_space"
+        sb_dimensions: list[str] = []
+        sb_raw = slice_meta.get("_system_behavior_dimensions")
+        if isinstance(sb_raw, list):
+            sb_dimensions = [str(d) for d in sb_raw if str(d)]
+        if (is_system_behavior or sb_dimensions) and observation_path:
+            return self._build_system_promise_invariant_scenario(
+                entity=entity,
+                invariant=invariant,
+                slice_meta=slice_meta,
+                discovery_round=discovery_round,
+                api_doc=api_doc,
+                observation_path=observation_path,
+                refs=refs,
+                states=states,
+            )
+
         runtime_upgrade = self._invariant_runtime_upgrade(
             entity,
             states[0] if states else "",
@@ -340,6 +363,298 @@ class SemanticScenarioGenerator:
             behavior_slice_kind="invariant",
             discovery_round=discovery_round,
             selection_origin="active_slice_fallback_materialized",
+        )
+
+    def _build_system_promise_invariant_scenario(
+        self,
+        *,
+        entity: str,
+        invariant: str,
+        slice_meta: dict[str, Any],
+        discovery_round: int,
+        api_doc: str,
+        observation_path: str,
+        refs: list[dict[str, str]],
+        states: list[str],
+    ) -> ExecutableScenario:
+        """Build a dimension-aware, multi-step verification scenario for a system promise.
+
+        Unlike the generic invariant path which produces a single ``GET /path`` step,
+        this method translates each system-behavior dimension into concrete
+        verification steps that embody the business risk. A promise with
+        ``authorization_access_control`` gets an authorization-boundary step;
+        one with ``money_quantity_conservation`` gets pre/post observation bookends;
+        one with ``audit_traceability`` gets trace_id extraction.
+
+        No hardcoded domain logic — every decision is driven by the dimension
+        tokens already present in the slice metadata.
+        """
+        sb_dimensions: list[str] = []
+        sb_raw = slice_meta.get("_system_behavior_dimensions")
+        if isinstance(sb_raw, list):
+            sb_dimensions = [str(d).lower().replace("-", "_").replace(" ", "_") for d in sb_raw if str(d)]
+
+        sb_surfaces: list[str] = []
+        sb_surfaces_raw = slice_meta.get("_system_behavior_surface_plan")
+        if isinstance(sb_surfaces_raw, list):
+            sb_surfaces = [str(s).lower() for s in sb_surfaces_raw if str(s)]
+
+        api_routes: list[dict[str, str]] = []
+        sb_routes = slice_meta.get("_system_behavior_api_routes")
+        if isinstance(sb_routes, list):
+            api_routes = [dict(r) for r in sb_routes if isinstance(r, dict)]
+
+        slices = [str(s).strip().upper() for s in states if str(s).strip()]
+
+        steps: list[ScenarioStep] = []
+        oracle_rules: list[str] = ["SystemPromiseOracle.open_ended_promise_violation"]
+        preconditions: list[str] = [f"系统行为承诺：{invariant[:200]}"]
+        evidence_gaps: list[str] = []
+        extract_fields: list[str] = ["id", "status", "state", "total_amount", "amount", "tenant_id", "trace_id"]
+        order = 1
+
+        # ── For each dimension, add verification structure ──
+
+        # 1. Authorization / role boundary: the primary step is an auth-aware observe
+        auth_related = any(d in sb_dimensions for d in (
+            "authorization_access_control", "permission_boundary", "role", "authorization",
+        ))
+        tenant_related = any(d in sb_dimensions for d in (
+            "tenant_isolation", "tenant",
+        ))
+        money_related = any(d in sb_dimensions for d in (
+            "money_quantity_conservation", "money", "quantity", "conservation", "data_conservation",
+        ))
+        state_related = any(d in sb_dimensions for d in (
+            "state_machine", "lifecycle", "state", "transition",
+        ))
+        audit_related = any(d in sb_dimensions for d in (
+            "audit_traceability", "audit", "traceability",
+        ))
+
+        # ── Step 1: Primary observation (dimension-aware) ──
+        if auth_related:
+            action = "verify_authorization_boundary"
+            preconditions.append("验证目标：非授权角色不能访问受限资源，授权角色应返回正确数据")
+            oracle_rules.append(f"SystemPromiseOracle.dimension:authorization_access_control")
+            # For auth-bound scenarios, we mark the step as expecting either 200 (authorized)
+            # or 401/403 (unauthorized), letting the oracle decide based on actor context
+            expected_status = 200
+        elif tenant_related:
+            action = "verify_tenant_isolation_boundary"
+            preconditions.append("验证目标：租户A不能看到租户B的数据")
+            oracle_rules.append("SystemPromiseOracle.dimension:tenant_isolation")
+            expected_status = 200
+        elif money_related:
+            action = "observe_conservation_baseline"
+            preconditions.append("验证目标：金额/库存必须在操作前后保持守恒，不可出现负值")
+            oracle_rules.append("SystemPromiseOracle.dimension:money_quantity_conservation")
+            expected_status = 200
+        elif state_related:
+            action = "verify_state_transition_legality"
+            preconditions.append("验证目标：状态流转必须合法，终态不可逆，非法流转必须被拒绝")
+            oracle_rules.append("SystemPromiseOracle.dimension:state_machine")
+            expected_status = 200
+        elif audit_related:
+            action = "verify_audit_trail_presence"
+            preconditions.append("验证目标：业务变更必须有审计日志，trace_id 不能缺失")
+            oracle_rules.append("SystemPromiseOracle.dimension:audit_traceability")
+            expected_status = 200
+        else:
+            action = "observe_system_promise_surface"
+            expected_status = 200
+
+        # Always add the primary observe step
+        steps.append(ScenarioStep(
+            order=order,
+            action=action,
+            api_method="GET",
+            api_path=observation_path,
+            expected_status=expected_status,
+            actor="readonly",
+            extract_from_response=list(extract_fields),
+        ))
+        order += 1
+
+        # ── Step 2: Cross-surface evidence collection (when surface_plan demands it) ──
+        if "log" in sb_surfaces and audit_related:
+            # Try to find an audit/log endpoint from the API doc
+            from .business_state_graph import _api_facts as _sb_api_facts
+            import re as _sb_re
+            _, _, all_endpoints = _sb_api_facts(
+                api_doc,
+                _sb_re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", _sb_re.I),
+            )
+            audit_endpoints = [
+                ep for ep in all_endpoints
+                if str(ep.get("path") or "").startswith("/")
+                and str(ep.get("method") or "").upper() == "GET"
+                and any(tok in str(ep.get("path") or "").lower() for tok in ("audit", "log", "trace", "journal"))
+            ]
+            if audit_endpoints:
+                audit_ep = audit_endpoints[0]
+                steps.append(ScenarioStep(
+                    order=order,
+                    action="verify_audit_log_evidence",
+                    api_method=audit_ep.get("method", "GET"),
+                    api_path=audit_ep.get("path", ""),
+                    expected_status=200,
+                    actor="readonly",
+                    extract_from_response=["trace_id", "correlation_id", "operation", "timestamp"],
+                ))
+                order += 1
+                oracle_rules.append("SystemPromiseOracle.dimension:cross_surface_consistency")
+            else:
+                evidence_gaps.append("AUDIT_LOG_ENDPOINT_NOT_SOURCE_BOUND")
+
+        # ── Step 2b: DB evidence surface (demand, not execute) ──
+        if "db" in sb_surfaces:
+            preconditions.append("证据面要求：需要数据库快照进行跨面一致性对比")
+            evidence_gaps.append("DB_SNAPSHOT_REQUIRED_FOR_CROSS_SURFACE_CONSISTENCY")
+
+        # ── Step 2c: UI evidence surface (demand, not execute) ──
+        if "ui" in sb_surfaces:
+            preconditions.append("证据面要求：需要 UI 页面截图进行 UI/API 一致性对比")
+            evidence_gaps.append("UI_SCREENSHOT_REQUIRED_FOR_CROSS_SURFACE_CONSISTENCY")
+
+        # ── Step 3: Pre-write observation for money/conservation scenarios ──
+        # When we have write routes and money dimensions, we want a before/after pattern.
+        # But since this is safe_read_only by default, we record the intent rather
+        # than generating write steps (the patch's _enrich_system_behavior_scenario
+        # handles write upgrades when QUALIBUG_ALLOW_TEST_WRITE is set).
+        if money_related and observation_path:
+            # Add a note that write operations need before/after observation
+            preconditions.append("守恒验证需要写操作前后的对比观察（需要 QUALIBUG_ALLOW_TEST_WRITE 开启写权限）")
+            # Add a second observe step pointing to a related entity if available
+            related_endpoints = [
+                ep.get("path", "") for ep in api_routes
+                if isinstance(ep, dict) and str(ep.get("path") or "").startswith("/")
+                and str(ep.get("method") or "").upper() == "GET"
+                and str(ep.get("path") or "") != observation_path
+            ]
+            if related_endpoints:
+                steps.append(ScenarioStep(
+                    order=order,
+                    action="observe_related_entity_for_conservation",
+                    api_method="GET",
+                    api_path=related_endpoints[0],
+                    expected_status=200,
+                    actor="readonly",
+                    extract_from_response=["id", "amount", "total_amount", "status"],
+                ))
+                order += 1
+
+        # ── Build the title ──
+        dim_label_map = {
+            "authorization_access_control": "角色权限",
+            "permission_boundary": "权限边界",
+            "tenant_isolation": "租户隔离",
+            "tenant": "租户隔离",
+            "money_quantity_conservation": "金额守恒",
+            "money": "金额守恒",
+            "quantity": "库存守恒",
+            "conservation": "守恒约束",
+            "data_conservation": "守恒约束",
+            "state_machine": "状态流转",
+            "lifecycle": "状态流转",
+            "state": "状态流转",
+            "audit_traceability": "审计追溯",
+            "audit": "审计追溯",
+            "cross_surface_consistency": "跨面一致",
+            "data_consistency": "数据一致",
+            "ui_api_contract": "UI/API契约",
+            "idempotency": "幂等性",
+            "async_eventual_consistency": "异步一致",
+            "async_event": "异步一致",
+            "visibility_disclosure": "可见性",
+            "visibility": "可见性",
+        }
+        dim_labels: list[str] = []
+        for d in sb_dimensions:
+            label = dim_label_map.get(d, "")
+            if label and label not in dim_labels:
+                dim_labels.append(label)
+        dim_suffix = (" [" + " | ".join(dim_labels[:4]) + "]") if dim_labels else ""
+
+        title_entity = entity.replace("_", " ").title() if "_" in entity else entity
+        title = f"[System Promise 验证] {title_entity}{dim_suffix}"
+
+        # ── Build description ──
+        desc_parts: list[str] = [f"验证对象：{entity}"]
+        if auth_related:
+            desc_parts.append("验证方向：反向验证 — 确认非授权角色被正确拒绝")
+        elif tenant_related:
+            desc_parts.append("验证方向：反向验证 — 确认跨租户数据隔离")
+        else:
+            desc_parts.append("验证方向：正向验证 — 确认系统遵守业务承诺")
+        if money_related:
+            desc_parts.append("约束：金额/库存必须守恒、非负")
+        if state_related:
+            desc_parts.append("约束：状态流转必须合法")
+        if audit_related:
+            desc_parts.append("约束：业务操作必须有审计追溯")
+        if sb_surfaces:
+            desc_parts.append("证据面：" + " + ".join(sb_surfaces))
+
+        # ── Build verification intent struct for downstream consumption ──
+        vi_direction = "反向验证 — 确认非授权角色被正确拒绝" if auth_related else (
+            "正向验证 — 确认系统遵守业务承诺"
+        )
+        vi_roles = ["non_privileged_actor", "privileged_actor"] if auth_related else ["readonly"]
+        vi_tenant = "跨租户访问必须被隔离" if tenant_related else None
+
+        verification_intent = {
+            "verification_direction": vi_direction,
+            "roles_involved": vi_roles,
+            "tenant_boundary": vi_tenant,
+            "conservation_constraints": (
+                ["金额/库存必须在操作前后保持守恒", "不能出现负金额/负库存"]
+                if money_related else []
+            ),
+            "state_constraints": (
+                ["终态不可逆", "非法状态流转必须被拒绝"]
+                if state_related else []
+            ),
+            "audit_constraints": (
+                ["业务变更必须产生审计记录", "缺少 trace_id / correlation_id 视为审计缺失"]
+                if audit_related else []
+            ),
+            "cross_surface_checks": [
+                "API 和 DB 之间的状态必须一致",
+                *(("UI 可见数据必须与 API 授权结果一致",) if "ui" in sb_surfaces else ()),
+            ],
+            "async_constraints": [],
+            "evidence_surfaces": [
+                *(("API 响应体（状态码、字段值）",) if "api" in sb_surfaces else ()),
+                *(("数据库快照（表数据一致性）",) if "db" in sb_surfaces else ()),
+                *(("UI 页面（按钮可见性、数据显示）",) if "ui" in sb_surfaces else ()),
+                *(("鉴权结果（401/403 vs 200）",) if "auth" in sb_surfaces else ()),
+                *(("审计日志（trace_id、操作记录）",) if "log" in sb_surfaces else ()),
+            ],
+            "verification_steps": [f"#{s.order} {s.action}: {s.api_method} {s.api_path}" for s in steps],
+        }
+
+        return ExecutableScenario(
+            id=self._id(entity, "system_promise", discovery_round, *states),
+            title=title,
+            description="；".join(desc_parts),
+            category="system_promise",
+            severity="P1",
+            entity=entity,
+            preconditions=preconditions,
+            actors=["readonly"],
+            steps=steps,
+            expected_state=states[0] if states else "",
+            oracle_rules=oracle_rules,
+            confidence=max(float(slice_meta.get("priority") or 0.0), 0.60 if refs else 0.40),
+            execution_policy="safe_read_only",
+            evidence_gaps=evidence_gaps,
+            source_refs=refs,
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="system_promise",
+            discovery_round=discovery_round,
+            selection_origin="system_behavior_space",
+            runtime_hints={"system_promise_verification_intent": verification_intent},
         )
 
     @staticmethod

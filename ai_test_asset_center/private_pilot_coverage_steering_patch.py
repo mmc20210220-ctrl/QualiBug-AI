@@ -318,18 +318,190 @@ def _learning_score(item: dict[str, Any], project_weights: dict[str, float], pla
     }
 
 
+def _confirmed_finding_boundaries(root: Path, project: str) -> list[dict[str, Any]]:
+    """Extract (entity, dimension, surface) boundary patterns from confirmed findings.
+
+    When a confirmed defect like "跨租户读取订单" exists, this extracts the
+    pattern (entity=order, dimension=tenant_isolation, surface=api) so that
+    similar slices — "跨租户导出订单", "跨租户查看退款" — can be prioritized.
+    """
+    ws = root / "platform_workspace" / _safe_project(project) / "defect_discovery"
+    ledger = _read_json(ws / "confirmed_findings.json")
+    if not isinstance(ledger, dict):
+        return []
+    boundaries: list[dict[str, Any]] = []
+    for evidence_id, defect in ledger.items():
+        if not isinstance(defect, dict):
+            continue
+        # Only confirmed/defect entries carry reliable boundary patterns
+        if str(defect.get("customer_delivery_status") or "") != "defect":
+            continue
+        # Extract entity from reproduction path
+        repro = defect.get("reproduction") if isinstance(defect.get("reproduction"), dict) else {}
+        path = str(repro.get("path") or "")
+        entity = _entity_from_path(path)
+        # Extract dimensions from system behavior contract
+        dims: list[str] = []
+        contract = defect.get("regression_contract") if isinstance(defect.get("regression_contract"), dict) else {}
+        if isinstance(contract.get("dimensions"), list):
+            dims = [_normalize_family(d) for d in contract["dimensions"] if str(d)]
+        if not dims:
+            dims_raw = defect.get("system_behavior_dimensions")
+            if isinstance(dims_raw, list):
+                dims = [_normalize_family(d) for d in dims_raw if str(d)]
+        # Extract surfaces
+        surfaces: list[str] = []
+        if isinstance(contract.get("surface_plan"), list):
+            surfaces = [_normalize_surface(s) for s in contract["surface_plan"] if str(s)]
+        if not surfaces:
+            surfaces_raw = defect.get("system_behavior_surface_plan")
+            if isinstance(surfaces_raw, list):
+                surfaces = [_normalize_surface(s) for s in surfaces_raw if str(s)]
+        if entity and dims:
+            boundaries.append({
+                "entity": entity,
+                "dimensions": dims,
+                "surfaces": surfaces,
+                "evidence_id": str(evidence_id),
+                "source": "confirmed_finding_ledger",
+            })
+    # Also extract from risk_clue_pool project learning
+    pool = _read_json(root / "platform_outputs" / _safe_project(project) / "risk_clue_pool" / "risk_clues.json")
+    if isinstance(pool, dict):
+        learning = pool.get("project_learning") if isinstance(pool.get("project_learning"), dict) else {}
+        for signal in learning.get("signals") or []:
+            if not isinstance(signal, dict):
+                continue
+            if signal.get("signal_kind") != "system_behavior_promise":
+                continue
+            if str(signal.get("regression_status") or "") != "regression_failed":
+                continue
+            entity_hint = str(signal.get("entity_hint") or "")
+            dims = [_normalize_family(d) for d in (signal.get("dimensions") or []) if str(d)]
+            if entity_hint and dims:
+                boundaries.append({
+                    "entity": entity_hint,
+                    "dimensions": dims,
+                    "surfaces": [_normalize_surface(s) for s in (signal.get("surfaces") or []) if str(s)],
+                    "evidence_id": str(signal.get("signal_id") or ""),
+                    "source": "risk_clue_pool_regression_failed",
+                })
+    return boundaries
+
+
+def _entity_from_path(path: str) -> str:
+    """Extract entity name from an API path, structurally (no hardcoded maps)."""
+    parts = [p for p in str(path or "").strip("/").split("/") if p and "{" not in p and ":" not in p]
+    # Skip common API prefixes
+    skip = {"api", "apis", "rest", "v1", "v2", "v3", "v4", "public", "internal"}
+    for part in parts:
+        if part.lower() not in skip:
+            return re.sub(r"[^A-Za-z0-9_]+", "_", part.lower()).strip("_")[:60]
+    return ""
+
+
+def _entity_overlap(a: str, b: str) -> float:
+    """Compute entity similarity as normalized token overlap (0.0-1.0)."""
+    if not a or not b:
+        return 0.0
+    a_tokens = set(re.split(r"[_\-\s]+", a.lower()))
+    b_tokens = set(re.split(r"[_\-\s]+", b.lower()))
+    if not a_tokens or not b_tokens:
+        return 0.0
+    # Exact match gets 1.0
+    if a_tokens == b_tokens:
+        return 1.0
+    # One contains the other
+    if a_tokens.issubset(b_tokens) or b_tokens.issubset(a_tokens):
+        return 0.85
+    intersection = a_tokens & b_tokens
+    union = a_tokens | b_tokens
+    return len(intersection) / len(union) if union else 0.0
+
+
+def _similar_boundary_boost(
+    slices: list[dict[str, Any]],
+    boundaries: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Compute priority boosts for slices that share entity+dimension patterns
+    with confirmed historical defects.
+
+    A slice about "跨租户导出订单" (entity=order, dim=tenant_isolation) gets
+    boosted when a confirmed finding about "跨租户读取订单" (entity=order,
+    dim=tenant_isolation) exists — the boundary is similar, the risk is real.
+    """
+    if not boundaries:
+        return {}
+    boosts: dict[str, float] = {}
+    for idx, raw in enumerate(slices):
+        item = dict(raw) if isinstance(raw, dict) else {}
+        slice_id = str(item.get("slice_id") or "")
+        if not slice_id:
+            continue
+        slice_entity = _normalize_token(item.get("entity") or "")
+        if not slice_entity:
+            continue
+        slice_families = _slice_risk_families(item)
+        slice_surfaces = _slice_surfaces(item)
+        best_boost = 0.0
+        best_match: dict[str, Any] = {}
+        for boundary in boundaries:
+            b_entity = _normalize_token(boundary.get("entity") or "")
+            b_dims = set(boundary.get("dimensions") or [])
+            b_surfaces = set(boundary.get("surfaces") or [])
+
+            # Dimension overlap: how many risk families match?
+            dim_overlap = len(b_dims & set(slice_families))
+            if dim_overlap == 0:
+                continue
+
+            # Entity overlap: same or related entity?
+            entity_score = _entity_overlap(slice_entity, b_entity)
+
+            # Surface overlap
+            surface_score = len(b_surfaces & set(slice_surfaces)) * 0.3 if b_surfaces else 0.0
+
+            # Combined boost: dimension match is primary, entity similarity amplifies
+            boost = dim_overlap * 3.0 + entity_score * 4.0 + surface_score
+            if boost > best_boost:
+                best_boost = boost
+                best_match = {
+                    "matched_dimensions": sorted(b_dims & set(slice_families)),
+                    "matched_entity": b_entity if entity_score > 0.5 else "",
+                    "source": boundary.get("source", ""),
+                    "evidence_id": boundary.get("evidence_id", ""),
+                }
+
+        if best_boost > 0:
+            boosts[slice_id] = best_boost
+            item["_historical_boundary_match"] = best_match
+            item["_historical_boundary_boost"] = best_boost
+
+    return boosts
+
+
 def _steer_slices(slices: list[dict[str, Any]], *, root: Path, project: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     coverage_weights = _coverage_gap_weights(root, project)
     project_weights, platform_weights = _learning_weights(root, project)
-    if not coverage_weights and not project_weights and not platform_weights:
+
+    # ── Historical boundary pattern boost ──
+    # When confirmed defects exist for a specific entity+dimension combination,
+    # similar slices (same dimension, related entity) get priority — this is
+    # how "历史缺陷→相似边界回归风险" works in practice.
+    boundaries = _confirmed_finding_boundaries(root, project)
+    boundary_boosts = _similar_boundary_boost(slices, boundaries)
+
+    if not coverage_weights and not project_weights and not platform_weights and not boundary_boosts:
         return slices, {"status": "not_applied", "reason": "no_coverage_or_learning_weights"}
 
     indexed: list[tuple[float, int, dict[str, Any]]] = []
     coverage_count = 0
     learning_count = 0
+    boundary_count = 0
     system_behavior_learning_count = 0
     for index, raw in enumerate(slices):
         item = dict(raw) if isinstance(raw, dict) else {}
+        slice_id = str(item.get("slice_id") or "")
         families = _slice_risk_families(item)
         coverage_matches = {family: float(coverage_weights.get(family, 0.0)) for family in families if float(coverage_weights.get(family, 0.0)) > 0}
         coverage_weight = max(coverage_matches.values()) if coverage_matches else 0.0
@@ -347,23 +519,40 @@ def _steer_slices(slices: list[dict[str, Any]], *, root: Path, project: str) -> 
             item["_learning_steering"] = learning_detail
             item["_learning_steering_weight"] = learning_weight
             item["_learning_steering_reason"] = "prioritize_from_project_and_platform_risk_clue_pool"
-        total_weight = coverage_weight + learning_weight
+        # ── Historical boundary boost ──
+        boundary_boost = boundary_boosts.get(slice_id, 0.0)
+        if boundary_boost > 0:
+            boundary_count += 1
+            item["_historical_boundary_boost"] = boundary_boost
+            item["_historical_boundary_reason"] = "prioritize_similar_boundary_regression_risk_from_confirmed_findings"
+        total_weight = coverage_weight + learning_weight + boundary_boost
         if total_weight > 0:
-            item["priority"] = max(float(item.get("priority") or 0.0), 0.95 if coverage_weight >= 50 else 0.9 if learning_weight >= 10 else 0.86)
+            # Historical boundary matches are the strongest signal — a real bug
+            # already happened at a similar boundary, so the risk is confirmed.
+            if boundary_boost >= 5:
+                item["priority"] = max(float(item.get("priority") or 0.0), 0.97)
+            elif coverage_weight >= 50:
+                item["priority"] = max(float(item.get("priority") or 0.0), 0.95)
+            elif learning_weight >= 10:
+                item["priority"] = max(float(item.get("priority") or 0.0), 0.90)
+            else:
+                item["priority"] = max(float(item.get("priority") or 0.0), 0.86)
         indexed.append((total_weight, -index, item))
 
     indexed.sort(key=lambda row: (row[0], row[2].get("priority") or 0, row[1]), reverse=True)
     ordered = [item for _, _, item in indexed]
     return ordered, {
-        "status": "applied" if (coverage_count or learning_count) else "not_applied",
-        "reason": "coverage_and_learning_weights_prioritized" if (coverage_count and learning_count) else "coverage_gap_slices_prioritized" if coverage_count else "learning_weights_prioritized" if learning_count else "no_slice_matched_weights",
+        "status": "applied" if (coverage_count or learning_count or boundary_count) else "not_applied",
+        "reason": "coverage_and_learning_weights_prioritized" if (coverage_count and learning_count) else "coverage_gap_slices_prioritized" if coverage_count else "learning_weights_prioritized" if learning_count else "historical_boundary_boost_prioritized" if boundary_count else "no_slice_matched_weights",
         "gap_family_weights": coverage_weights,
         "project_learning_weight_count": len(project_weights),
         "platform_learning_weight_count": len(platform_weights),
         "coverage_steered_slice_count": coverage_count,
         "learning_steered_slice_count": learning_count,
+        "historical_boundary_boosted_slice_count": boundary_count,
+        "historical_boundary_patterns_found": len(boundaries),
         "system_behavior_learning_steered_slice_count": system_behavior_learning_count,
-        "top_steered_slice_ids": [str(item.get("slice_id") or "") for item in ordered if item.get("_coverage_steering_weight") or item.get("_learning_steering_weight")][:12],
+        "top_steered_slice_ids": [str(item.get("slice_id") or "") for item in ordered if item.get("_coverage_steering_weight") or item.get("_learning_steering_weight") or item.get("_historical_boundary_boost")][:12],
     }
 
 

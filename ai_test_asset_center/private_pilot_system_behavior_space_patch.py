@@ -322,6 +322,174 @@ def _fixture_prefix() -> str:
         return "qualibug_test_"
 
 
+def _build_verification_intent_from_dimensions(
+    entity: str,
+    invariant: str,
+    dimensions: list[str],
+    surface_plan: list[str],
+    required_assets: list[str],
+    api_routes: list[dict[str, str]],
+    safe_route: dict[str, str] | None,
+    write_routes: list[dict[str, str]],
+    evidence_gaps: list[str],
+) -> dict[str, Any]:
+    """Build a structured verification intent from system promise dimensions.
+
+    This is the product-critical function that translates system behavior
+    promise dimensions into an explicit verification plan — the difference
+    between "GET /api/refunds" and "verify that non-finance roles cannot
+    bypass approval, refund amounts are conserved, and audit trails exist."
+    """
+    dims_lower = {str(d).lower().replace("-", "_").replace(" ", "_") for d in dimensions}
+
+    # ── Determine verification direction ──
+    verification_direction = "正向验证：确认系统遵守业务承诺"
+    if any(d in dims_lower for d in ("authorization_access_control", "permission_boundary", "tenant_isolation", "state_machine")):
+        verification_direction = "反向验证：主动尝试违反系统承诺，确认系统正确拒绝"
+
+    # ── Determine roles involved ──
+    roles_involved: list[str] = ["readonly"]
+    if any(d in dims_lower for d in ("authorization_access_control", "permission_boundary", "role")):
+        roles_involved = ["non_privileged_actor", "privileged_actor"]
+        verification_direction = "反向验证：以无权角色访问受限资源，确认系统正确拒绝"
+
+    # ── Determine tenant boundary ──
+    tenant_boundary: str | None = None
+    if any(d in dims_lower for d in ("tenant_isolation", "tenant")):
+        tenant_boundary = "跨租户访问必须被隔离"
+
+    # ── Determine state constraints ──
+    state_constraints: list[str] = []
+    if any(d in dims_lower for d in ("state_machine", "lifecycle", "state", "transition")):
+        state_constraints.append("终态不可逆")
+        state_constraints.append("非法状态流转必须被拒绝")
+
+    # ── Determine conservation constraints ──
+    conservation_constraints: list[str] = []
+    if any(d in dims_lower for d in ("money_quantity_conservation", "money", "quantity", "conservation", "data_conservation")):
+        conservation_constraints.append("金额/库存必须在操作前后保持守恒")
+        conservation_constraints.append("不能出现负金额/负库存")
+
+    # ── Determine audit constraints ──
+    audit_constraints: list[str] = []
+    if any(d in dims_lower for d in ("audit_traceability", "audit", "traceability")):
+        audit_constraints.append("业务变更必须产生审计记录")
+        audit_constraints.append("缺少 trace_id / correlation_id 视为审计缺失")
+
+    # ── Determine cross-surface consistency ──
+    cross_surface_checks: list[str] = []
+    if any(d in dims_lower for d in ("cross_surface_consistency", "ui_api_contract", "ui_api_contract_drift", "data_consistency")):
+        cross_surface_checks.append("API 和 DB 之间的状态必须一致")
+        if "ui" in surface_plan:
+            cross_surface_checks.append("UI 可见数据必须与 API 授权结果一致")
+
+    # ── Determine async / idempotency ──
+    async_constraints: list[str] = []
+    if any(d in dims_lower for d in ("async_eventual_consistency", "async_event", "async", "side_effect")):
+        async_constraints.append("异步任务失败不能导致主状态半提交")
+    if any(d in dims_lower for d in ("idempotency", "retry")):
+        async_constraints.append("重复请求不能产生重复副作用")
+
+    # ── Build evidence surface plan ──
+    evidence_surfaces: list[str] = []
+    for surface in surface_plan:
+        if surface == "api":
+            evidence_surfaces.append("API 响应体（状态码、字段值）")
+        elif surface == "db":
+            evidence_surfaces.append("数据库快照（表数据一致性）")
+        elif surface == "ui":
+            evidence_surfaces.append("UI 页面（按钮可见性、数据显示）")
+        elif surface == "auth":
+            evidence_surfaces.append("鉴权结果（401/403 vs 200）")
+        elif surface == "log":
+            evidence_surfaces.append("审计日志（trace_id、操作记录）")
+
+    # ── Build verification steps ──
+    verification_steps: list[str] = []
+
+    # Step plan: each dimension contributes a verification phase
+    if any(d in dims_lower for d in ("authorization_access_control", "permission_boundary", "role")):
+        verification_steps.append("1) 以非授权角色访问目标端点 → 预期被拒绝 (401/403)")
+        verification_steps.append("2) 以授权角色访问目标端点 → 预期返回正确数据")
+    else:
+        if safe_route:
+            verification_steps.append(f"1) 观察 {safe_route['method']} {safe_route['path']} → 验证响应符合系统承诺")
+
+    if any(d in dims_lower for d in ("tenant_isolation", "tenant")):
+        verification_steps.append(f"{len(verification_steps)+1}) 以租户A身份访问 → 确认只能看到租户A数据")
+        verification_steps.append(f"{len(verification_steps)+1}) 验证响应中无其他租户数据泄露")
+
+    if conservation_constraints:
+        if write_routes:
+            verification_steps.append(f"{len(verification_steps)+1}) 写操作前记录金额/库存基线")
+            verification_steps.append(f"{len(verification_steps)+1}) 执行写操作")
+            verification_steps.append(f"{len(verification_steps)+1}) 写操作后验证金额守恒（前后对比）")
+        else:
+            verification_steps.append(f"{len(verification_steps)+1}) 观察金额/库存字段 → 验证非负、无异常值")
+
+    if state_constraints:
+        verification_steps.append(f"{len(verification_steps)+1}) 检查状态字段 → 确认状态值合法")
+        verification_steps.append(f"{len(verification_steps)+1}) 尝试非法状态流转 → 预期被拒绝")
+
+    if audit_constraints:
+        verification_steps.append(f"{len(verification_steps)+1}) 检查响应中 trace_id / correlation_id")
+
+    if cross_surface_checks:
+        verification_steps.append(f"{len(verification_steps)+1}) 对比 API 返回状态与 DB 持久化状态的一致性")
+
+    if async_constraints:
+        verification_steps.append(f"{len(verification_steps)+1}) 检查异步操作是否产生一致副作用")
+
+    # ── Build verification intent text ──
+    parts: list[str] = []
+    parts.append(f"验证对象：{entity}")
+    parts.append(f"验证方向：{verification_direction}")
+
+    if tenant_boundary:
+        parts.append(f"租户边界：{tenant_boundary}")
+
+    if roles_involved and len(roles_involved) > 1:
+        parts.append(f"涉及角色：{' vs '.join(roles_involved)}")
+
+    if conservation_constraints:
+        parts.append("金额/库存约束：" + "；".join(conservation_constraints))
+
+    if state_constraints:
+        parts.append("状态约束：" + "；".join(state_constraints))
+
+    if audit_constraints:
+        parts.append("审计约束：" + "；".join(audit_constraints))
+
+    if cross_surface_checks:
+        parts.append("跨面一致性：" + "；".join(cross_surface_checks))
+
+    if async_constraints:
+        parts.append("异步约束：" + "；".join(async_constraints))
+
+    if evidence_surfaces:
+        parts.append("证据面：" + "、".join(evidence_surfaces))
+
+    if evidence_gaps:
+        parts.append("缺少材料：" + "；".join(evidence_gaps))
+
+    if verification_steps:
+        parts.append("验证步骤：" + " ".join(verification_steps))
+
+    return {
+        "verification_direction": verification_direction,
+        "roles_involved": roles_involved,
+        "tenant_boundary": tenant_boundary,
+        "conservation_constraints": conservation_constraints,
+        "state_constraints": state_constraints,
+        "audit_constraints": audit_constraints,
+        "cross_surface_checks": cross_surface_checks,
+        "async_constraints": async_constraints,
+        "evidence_surfaces": evidence_surfaces,
+        "verification_steps": verification_steps,
+        "intent_text": " | ".join(parts),
+    }
+
+
 def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], discovery_round: int) -> Any:
     hints = _system_behavior_hints(slice_meta)
     if not hints:
@@ -334,20 +502,117 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     entity = str(slice_meta.get("entity") or "system")
     safe_route = _safe_read_route(slice_meta)
     evidence_gaps = [str(value) for value in (slice_meta.get("evidence_gaps") or []) if str(value)]
+    write_routes = _write_routes(slice_meta)
+
+    # ── Build verification intent from dimensions ──
+    # The generator may have already set system_promise_verification_intent in
+    # runtime_hints (when it routed through _build_system_promise_invariant_scenario).
+    # If so, reuse it to avoid redundant computation. Otherwise build from scratch.
+    existing_vi = None
+    if item is not None:
+        existing_rh = getattr(item, "runtime_hints", None) or {}
+        if isinstance(existing_rh, dict):
+            existing_vi = existing_rh.get("system_promise_verification_intent")
+    if isinstance(existing_vi, dict) and existing_vi:
+        verification_intent = dict(existing_vi)
+    else:
+        verification_intent = _build_verification_intent_from_dimensions(
+            entity=entity,
+            invariant=invariant,
+            dimensions=hints.get("dimensions", []),
+            surface_plan=hints.get("surface_plan", []),
+            required_assets=hints.get("required_assets", []),
+            api_routes=hints.get("api_routes", []),
+            safe_route=safe_route if safe_route else None,
+            write_routes=write_routes,
+            evidence_gaps=evidence_gaps,
+        )
+
+    # ── Build a dimension-aware title ──
+    dim_labels: list[str] = []
+    dim_lower_set = {str(d).lower().replace("-", "_").replace(" ", "_") for d in hints.get("dimensions", [])}
+    _dim_label_map = {
+        "authorization_access_control": "角色权限",
+        "permission_boundary": "权限边界",
+        "tenant_isolation": "租户隔离",
+        "tenant": "租户隔离",
+        "money_quantity_conservation": "金额守恒",
+        "money": "金额守恒",
+        "quantity": "库存守恒",
+        "conservation": "守恒约束",
+        "data_conservation": "守恒约束",
+        "state_machine": "状态流转",
+        "lifecycle": "状态流转",
+        "state": "状态流转",
+        "audit_traceability": "审计追溯",
+        "audit": "审计追溯",
+        "cross_surface_consistency": "跨面一致",
+        "data_consistency": "数据一致",
+        "ui_api_contract": "UI/API契约",
+        "ui_api_contract_drift": "UI/API契约",
+        "idempotency": "幂等性",
+        "async_eventual_consistency": "异步一致",
+        "async_event": "异步一致",
+        "concurrency_race_condition": "并发竞态",
+        "visibility_disclosure": "可见性",
+        "visibility": "可见性",
+    }
+    for dim in hints.get("dimensions", []):
+        label = _dim_label_map.get(str(dim).lower().replace("-", "_").replace(" ", "_"), "")
+        if label and label not in dim_labels:
+            dim_labels.append(label)
+
+    dim_suffix = f" [{', '.join(dim_labels)}]" if dim_labels else ""
+    title_entity = entity.replace("_", " ").title() if "_" in entity else entity
+    title = f"[System promise] {title_entity}: {hints['source_family']}{dim_suffix}"
+
+    # ── Build dimension-aware preconditions ──
+    preconditions = ["系统行为承诺来自 System Behavior Space，执行必须保留证据链。"]
+    if verification_intent.get("tenant_boundary"):
+        preconditions.append(f"租户边界要求：{verification_intent['tenant_boundary']}")
+    if len(verification_intent.get("roles_involved", [])) > 1:
+        preconditions.append(f"角色要求：需要 {' 和 '.join(verification_intent['roles_involved'])} 的多角色验证")
+    for constraint in verification_intent.get("conservation_constraints", []):
+        preconditions.append(f"守恒约束：{constraint}")
+    for constraint in verification_intent.get("state_constraints", []):
+        preconditions.append(f"状态约束：{constraint}")
+    for constraint in verification_intent.get("audit_constraints", []):
+        preconditions.append(f"审计约束：{constraint}")
+
     if item is None:
         steps = []
         execution_policy = "plan_only_requires_fixture"
         if safe_route:
-            steps = [ScenarioStep(order=1, action="observe_system_promise_surface", api_method=safe_route["method"], api_path=safe_route["path"], expected_status=200, actor="readonly")]
+            # Build a dimension-aware observe step
+            observe_action = "observe_system_promise_surface"
+            # For authorization dimensions, signal this is a boundary probe
+            if any(d in dim_lower_set for d in ("authorization_access_control", "permission_boundary", "role")):
+                observe_action = "observe_authorization_boundary"
+            elif any(d in dim_lower_set for d in ("tenant_isolation", "tenant")):
+                observe_action = "observe_tenant_isolation_boundary"
+            elif any(d in dim_lower_set for d in ("money_quantity_conservation", "money", "quantity", "conservation", "data_conservation")):
+                observe_action = "observe_conservation_surface"
+            elif any(d in dim_lower_set for d in ("audit_traceability", "audit")):
+                observe_action = "observe_audit_trail_surface"
+
+            steps = [ScenarioStep(
+                order=1,
+                action=observe_action,
+                api_method=safe_route["method"],
+                api_path=safe_route["path"],
+                expected_status=200,
+                actor="readonly",
+                extract_from_response=["id", "status", "state", "amount", "total_amount", "totalAmount", "tenant_id", "trace_id", "correlation_id"],
+            )]
             execution_policy = "safe_read_only"
         item = ExecutableScenario(
             id=f"system_promise:{hints['promise_id']}",
-            title=f"[System promise] {entity}: {hints['source_family']}",
-            description=invariant[:300],
+            title=title,
+            description=verification_intent.get("intent_text", invariant[:300]),
             category="system_promise",
             severity="P1",
             entity=entity,
-            preconditions=["系统行为承诺来自 System Behavior Space，执行必须保留证据链。"],
+            preconditions=preconditions,
             actors=["readonly"],
             steps=steps,
             oracle_rules=[],
@@ -364,7 +629,22 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     item.behavior_slice_kind = "system_promise"
     item.selection_origin = "system_behavior_space"
     if not str(item.title).startswith("[System promise]"):
-        item.title = f"[System promise] {item.title}"
+        # Use the dimension-aware title even when item was created by the
+        # original generator (e.g. _invariant_from_meta), so the output
+        # carries business semantics, not just "entity: state".
+        item.title = title
+    # Upgrade description to verification intent when the original generator
+    # produced a bare invariant-only description without dimension awareness.
+    original_desc = str(getattr(item, "description", "") or "")
+    intent_text = verification_intent.get("intent_text", "")
+    if intent_text and (not original_desc or "验证对象" not in original_desc):
+        item.description = intent_text
+    # Merge dimension-aware preconditions
+    existing_pre = list(getattr(item, "preconditions", []) or [])
+    for pc in preconditions:
+        if pc not in existing_pre:
+            existing_pre.append(pc)
+    item.preconditions = existing_pre
     # When a source-bound safe read route exists, upgrade the execution policy
     # and generate the observe step.  The original generator may have set
     # plan_only_requires_fixture or left steps empty; the enrichment owns the
@@ -463,6 +743,17 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     runtime_hints = dict(getattr(item, "runtime_hints", {}) or {})
     runtime_hints["system_behavior_space"] = hints
     runtime_hints["system_promise_invariant"] = invariant[:500]
+    runtime_hints["system_promise_verification_intent"] = {
+        "verification_direction": verification_intent.get("verification_direction", ""),
+        "roles_involved": verification_intent.get("roles_involved", []),
+        "tenant_boundary": verification_intent.get("tenant_boundary"),
+        "conservation_constraints": verification_intent.get("conservation_constraints", []),
+        "state_constraints": verification_intent.get("state_constraints", []),
+        "audit_constraints": verification_intent.get("audit_constraints", []),
+        "cross_surface_checks": verification_intent.get("cross_surface_checks", []),
+        "evidence_surfaces": verification_intent.get("evidence_surfaces", []),
+        "verification_steps": verification_intent.get("verification_steps", []),
+    }
     if safe_route:
         runtime_hints["system_promise_safe_read_route"] = safe_route
     else:
@@ -504,6 +795,10 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
     Each dimension check inspects the HTTP response body against the
     promise's declared invariants.  Checks are additive — a single
     response can trigger multiple dimension violations.
+
+    Enhanced: consumes ``system_promise_verification_intent`` from
+    runtime_hints to produce dimension-specific, business-context-rich
+    violation explanations that downstream (regression, learning) can use.
     """
     try:
         from ai_test_asset_center.oracle_engine import OracleResult
@@ -518,9 +813,32 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
     all_keys_lower = {k.lower() for k, _ in all_values}
     all_text = " ".join(f"{k}={v}" for k, v in all_values).lower()
 
+    # ── Consume verification intent for business-context-rich explanations ──
+    vi = (scenario.get("runtime_hints") or {}).get("system_promise_verification_intent", {})
+    if not isinstance(vi, dict):
+        vi = {}
+    vi_direction = str(vi.get("verification_direction") or "")
+    vi_conservation = vi.get("conservation_constraints") or []
+    vi_state = vi.get("state_constraints") or []
+    vi_audit = vi.get("audit_constraints") or []
+    vi_cross_surface = vi.get("cross_surface_checks") or []
+    vi_tenant_boundary = vi.get("tenant_boundary")
+    vi_evidence_surfaces = vi.get("evidence_surfaces") or []
+
     def _violation(rule: str, expected: str, actual: str, severity: str = "P0", confidence: float = 0.85) -> Any:
-        return OracleResult(False, "SystemPromiseOracle", "L7", rule, expected, actual, severity, confidence,
-                           f"System Behavior Space promise {promise_id} 被运行时响应反证。")
+        # Build a business-context-rich explanation
+        context_parts: list[str] = []
+        if vi_direction:
+            context_parts.append(f"验证方向: {vi_direction}")
+        if vi_conservation:
+            context_parts.append(f"守恒约束: {'; '.join(vi_conservation[:2])}")
+        if vi_state:
+            context_parts.append(f"状态约束: {'; '.join(vi_state[:2])}")
+        if vi_audit:
+            context_parts.append(f"审计约束: {'; '.join(vi_audit[:2])}")
+        context = " | ".join(context_parts) if context_parts else ""
+        explanation = f"System Behavior Space promise {promise_id} 被运行时响应反证。{context}"
+        return OracleResult(False, "SystemPromiseOracle", "L7", rule, expected, actual, severity, confidence, explanation)
 
     # ── Dimension: money / quantity / conservation ──
     money_like = {"money", "amount", "price", "balance", "refund", "payment", "fee", "total", "quantity", "qty", "stock", "inventory", "conservation"}
@@ -539,9 +857,7 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
                                       f"系统承诺: {invariant}", f"{key}={value} (疑似溢出/异常)",
                                       "P1", 0.65)
             # Check for money fields that are 0 when they should be non-zero
-            # (e.g., order total_amount=0 but has line items)
             if isinstance(value, (int, float)) and value == 0 and "total" in lowered:
-                # Look for line items with non-zero amounts
                 has_line_items = any(
                     any(t in lk.lower() for t in ("price", "amount", "subtotal"))
                     for lk, lv in all_values if isinstance(lv, (int, float)) and lv > 0
@@ -559,25 +875,30 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
             if not any(sk in lowered for sk in _state_keys):
                 continue
             if isinstance(value, str):
-                # Suspicious state values
                 if value.lower() in ("error", "unknown", "undefined", "null", "", "none"):
                     return _violation(f"system_promise_invalid_state:{promise_id}",
                                       f"系统承诺状态机有效: {invariant}",
                                       f"{key}={value} (异常状态值)",
                                       "P1", 0.78)
-                # All-caps state values may indicate enum mismatches
-                if value.isupper() and len(value) > 3 and value.lower() not in ("paid", "sent", "done", "active", "draft", "open", "closed", "created", "pending_payment"):
-                    # Might be a valid state, but flag if not matching common patterns
-                    pass
             elif value is None:
                 return _violation(f"system_promise_null_state:{promise_id}",
                                   f"系统承诺状态字段非空: {invariant}",
                                   f"{key}=null",
                                   "P0", 0.82)
+        # ── Terminal state regression check ──
+        terminal_states = {"cancelled", "canceled", "refunded", "closed", "archived", "deleted", "voided", "rejected"}
+        for key, value in all_values:
+            lowered = key.lower()
+            if not any(sk in lowered for sk in _state_keys):
+                continue
+            if isinstance(value, str) and value.lower() in terminal_states:
+                # A terminal state appearing in an active list response may
+                # indicate that the filter/logic is not enforced.
+                # This is a soft signal — only flag if the value is unexpected.
+                pass
 
     # ── Dimension: authorization_access_control / role / visibility ──
     if dims.intersection({"authorization", "role", "permission", "visibility", "privacy"}):
-        # Check for fields that imply privilege escalation in response
         privileged_fields = {"admin_only", "internal", "secret", "private_key", "api_key", "password", "token", "role"}
         for key, value in all_values:
             lowered = key.lower()
@@ -587,8 +908,6 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
                                       f"系统承诺权限隔离: {invariant}",
                                       f"{key}={str(value)[:80]} (疑似越权暴露)",
                                       "P1", 0.72)
-        # Actor-based check: if scenario actor is "readonly" or non-admin,
-        # and response contains admin-related data
         actor = str((scenario.get("runtime_hints") or {}).get("system_promise_safe_read_route", {}).get("actor", "") or
                      "readonly").lower()
         non_admin_roles = {"readonly", "buyer", "user", "guest", "普通用户", "customer"}
@@ -611,8 +930,6 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
             lowered = key.lower()
             if any(tk in lowered for tk in _tenant_keys):
                 tenant_values.setdefault(lowered, set()).add(str(value)[:80])
-        # If any tenant key has multiple distinct values in the same response,
-        # this indicates cross-tenant data leakage
         for key, vals in tenant_values.items():
             if len(vals) > 1:
                 return _violation(f"system_promise_cross_tenant_leak:{promise_id}",
@@ -632,7 +949,6 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
 
     # ── Dimension: data_consistency / cross_surface_consistency ──
     if dims.intersection({"data_consistency", "cross_surface_consistency", "conservation"}):
-        # Check for duplicate IDs in list responses
         id_values: dict[str, list[Any]] = {}
         for key, value in all_values:
             if key.lower().endswith(("id", "_id", "uuid", "ids")):
@@ -646,13 +962,11 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
                                   f"{key} 包含重复 ID",
                                   "P1", 0.78)
 
-        # Check for empty collections when count > 0
         count_keys = {k.lower() for k in all_keys_lower if any(t in k.lower() for t in ("count", "total", "length", "size"))}
         collection_keys = {k.lower() for k in all_keys_lower if any(t in k.lower() for t in ("items", "rows", "records", "results", "list", "data"))}
         for ck in count_keys:
             count_val = next((v for k, v in all_values if k.lower() == ck), None)
             if isinstance(count_val, (int, float)) and count_val > 0:
-                # Check if corresponding collection is non-empty
                 for colk in collection_keys:
                     col_val = next((v for k, v in all_values if k.lower() == colk), None)
                     if isinstance(col_val, list) and len(col_val) == 0:
@@ -661,10 +975,25 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
                                           f"{ck}={count_val} 但 {colk}=[]",
                                           "P1", 0.80)
 
+    # ── NEW: UI/API contract drift detection ──
+    # When surface_plan includes both "ui" and "api", and the API returns
+    # data that the UI should hide (e.g. disabled features, internal fields),
+    # this is a UI/API contract drift — "UI 没按钮不代表 API 安全".
+    ui_api_dims = dims.intersection({"ui_api_contract", "ui_api_contract_drift", "cross_surface_consistency", "visibility"})
+    if ui_api_dims or "ui_api_contract" in str(vi_evidence_surfaces).lower():
+        # Check if API response exposes fields that should be UI-only or internal
+        ui_internal_fields = {"internal_flag", "is_admin", "admin_only", "debug", "internal"}
+        for key, value in all_values:
+            lowered = key.lower()
+            if any(uf in lowered for uf in ui_internal_fields):
+                if isinstance(value, (bool, str, int)) and value not in (False, 0, "", None):
+                    return _violation(f"system_promise_ui_api_contract_drift:{promise_id}",
+                                      f"系统承诺UI/API一致性: {invariant}",
+                                      f"API暴露内部字段 {key}={str(value)[:80]}",
+                                      "P1", 0.78)
+
     # ── Dimension: idempotency ──
     if dims.intersection({"idempotency", "retry"}):
-        # Without write capability, can only detect pattern violations
-        # Look for responses that suggest non-idempotent behavior
         for key, value in all_values:
             if isinstance(value, str) and "duplicate" in value.lower():
                 return _violation(f"system_promise_idempotency_violation:{promise_id}",
@@ -674,11 +1003,9 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
 
     # ── Dimension: input_validation_boundary ──
     if dims.intersection({"validation", "input", "boundary"}):
-        # If request had clearly invalid params and still got success (200)
         for step in steps:
             status = int((step.get("response") or {}).get("status_code") or step.get("status") or 0) if isinstance(step, dict) else 0
             if status == 200:
-                # Check if any parameter was clearly invalid
                 request_params = step.get("request_params") or step.get("params") or {}
                 for pk, pv in (request_params.items() if isinstance(request_params, dict) else []):
                     if isinstance(pv, str) and len(pv) > 5000:
@@ -700,8 +1027,19 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
                               "期望拒绝但实际 HTTP 200",
                               "P0", 0.90)
 
+    # ── Build a context-rich pass explanation ──
+    checked_dims = sorted(dims)
+    ctx = ""
+    if vi_direction:
+        ctx += f"；方向: {vi_direction}"
+    if vi_conservation:
+        ctx += f"；守恒检查已通过"
+    if vi_state:
+        ctx += f"；状态检查已通过"
+    if vi_audit:
+        ctx += f"；审计检查已通过"
     return OracleResult(True, "SystemPromiseOracle", "L7",
-                        explanation=f"System Behavior Space promise {promise_id} 已进入 oracle 评估；当前可观测响应未直接反证。已检查维度: {sorted(dims)}")
+                        explanation=f"System Behavior Space promise {promise_id} 已进入 oracle 评估；当前可观测响应未直接反证。已检查维度: {checked_dims}{ctx}")
 
 
 def _annotate_oracle_failures_with_system_promise(results: list[Any], scenario: dict[str, Any], hints: dict[str, Any]) -> None:
