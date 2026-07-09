@@ -194,48 +194,84 @@ def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, A
     return merged
 
 
-def _release_gate_from(data: dict[str, Any], compact: dict[str, Any]) -> dict[str, Any]:
-    """Build an API-visible release gate from regression run/suite state."""
-    checks: list[dict[str, Any]] = []
+def _normalized_release_check(value: Any) -> dict[str, Any] | None:
+    row = _as_dict(value)
+    name = str(row.get("name") or "").strip()
+    status = str(row.get("status") or "").strip()
+    if not name or status not in {"pass", "fail", "pending"}:
+        return None
+    return {
+        "name": name,
+        "status": status,
+        "detail": str(row.get("detail") or row.get("reason") or "后端发布门禁未提供详情。"),
+        "source": str(row.get("source") or "existing_release_gate"),
+    }
+
+
+def _dedupe_checks(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for item in checks:
+        normalized = _normalized_release_check(item)
+        if not normalized:
+            continue
+        key = normalized["name"]
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(normalized)
+    return unique
+
+
+def _regression_release_check(data: dict[str, Any], compact: dict[str, Any]) -> dict[str, Any] | None:
     gate = str(compact.get("gate_status") or "") if compact else ""
     if gate == "failed":
-        checks.append({
+        return {
             "name": "修复后回归 Gate",
             "status": "fail",
             "detail": f"最近一次回归失败：{int(compact.get('failed_count') or 0)} 个探针失败，{int(compact.get('needs_review_count') or 0)} 个需复核。发布前必须先修复或复核失败项。",
             "source": "regression_run",
-        })
-    elif gate == "manual_approval_required":
-        checks.append({
+        }
+    if gate == "manual_approval_required":
+        return {
             "name": "修复后回归 Gate",
             "status": "pending",
             "detail": f"最近一次回归仍需人工复核：{int(compact.get('needs_review_count') or 0)} 个探针缺少强自动判定，不能直接放行发布。",
             "source": "regression_run",
-        })
-    elif gate == "passed":
-        checks.append({
+        }
+    if gate == "passed":
+        return {
             "name": "修复后回归 Gate",
             "status": "pass",
             "detail": f"最近一次回归通过：{int(compact.get('passed_count') or 0)} 个探针通过。该结论仅代表最近一次持久化回归结果，不扩大到未覆盖范围。",
             "source": "regression_run",
-        })
-    else:
-        refresh = _as_dict(data.get("regression_suite_refresh"))
-        suite = _as_dict(data.get("regression_suite"))
-        summary = _as_dict(refresh.get("summary"))
-        total = int(suite.get("total_probe_count") or summary.get("total_probe_count") or 0)
-        confirmed = int(suite.get("confirmed_ledger_probe_count") or summary.get("confirmed_ledger_probe_count") or 0)
-        if str(refresh.get("status") or "") == "refreshed" and total > 0:
-            checks.append({
-                "name": "修复后回归 Gate",
-                "status": "pending",
-                "detail": f"已自动生成 {total} 个回归探针，其中 {confirmed} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。",
-                "source": "regression_suite_refresh",
-            })
+        }
+    refresh = _as_dict(data.get("regression_suite_refresh"))
+    suite = _as_dict(data.get("regression_suite"))
+    summary = _as_dict(refresh.get("summary"))
+    total = int(suite.get("total_probe_count") or summary.get("total_probe_count") or 0)
+    confirmed = int(suite.get("confirmed_ledger_probe_count") or summary.get("confirmed_ledger_probe_count") or 0)
+    if str(refresh.get("status") or "") == "refreshed" and total > 0:
+        return {
+            "name": "修复后回归 Gate",
+            "status": "pending",
+            "detail": f"已自动生成 {total} 个回归探针，其中 {confirmed} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。",
+            "source": "regression_suite_refresh",
+        }
+    return None
+
+
+def _release_gate_from(data: dict[str, Any], compact: dict[str, Any]) -> dict[str, Any]:
+    """Build an API-visible release gate without overwriting existing checks."""
+    existing = _as_dict(data.get("release_gate"))
+    existing_checks = [item for item in (existing.get("checks") or []) if isinstance(item, dict)]
+    regression_check = _regression_release_check(data, compact)
+    checks = _dedupe_checks(([regression_check] if regression_check else []) + existing_checks)
     if not checks:
         return {}
     overall = "fail" if any(item.get("status") == "fail" for item in checks) else "pending" if any(item.get("status") == "pending" for item in checks) else "pass"
     return {
+        **existing,
         "overall_status": overall,
         "checks": checks,
         "blocking_check_count": sum(1 for item in checks if item.get("status") == "fail"),
@@ -243,7 +279,7 @@ def _release_gate_from(data: dict[str, Any], compact: dict[str, Any]) -> dict[st
         "pass_check_count": sum(1 for item in checks if item.get("status") == "pass"),
         "release_recommendation": "block_release" if overall == "fail" else "hold_for_validation" if overall == "pending" else "candidate_release",
         "source": PATCH_SOURCE,
-        "honesty_rule": "Release gate reports the latest persisted regression state; it does not execute regression or prove untested scope is safe.",
+        "honesty_rule": "Release gate reports existing release checks plus the latest persisted regression state; it does not execute regression or prove untested scope is safe.",
     }
 
 
@@ -261,7 +297,7 @@ def _inject_release_gate(data: dict[str, Any], compact: dict[str, Any]) -> None:
     executive = _as_dict(data.get("executive_summary"))
     overall = str(release_gate.get("overall_status") or "")
     if overall == "fail":
-        executive["release_gate_label"] = "发布门禁阻塞：最近回归失败"
+        executive["release_gate_label"] = "发布门禁阻塞：存在失败门禁项"
     elif overall == "pending":
         executive["release_gate_label"] = "发布门禁待处理：回归未执行或需复核"
     elif overall == "pass":
@@ -271,9 +307,9 @@ def _inject_release_gate(data: dict[str, Any], compact: dict[str, Any]) -> None:
     contract = _as_dict(data.get("data_contract"))
     contract["release_gate"] = {
         "display_key": "release_gate",
-        "source": "regression_run/regression_suite_refresh command-center contract",
+        "source": "existing release_gate plus regression_run/regression_suite_refresh command-center contract",
         "honesty_rule": release_gate["honesty_rule"],
-        "customer_meaning": "API-visible release verdict derived from the latest regression run or pending regression obligations.",
+        "customer_meaning": "API-visible release verdict derived from existing release checks and the latest regression run or pending regression obligations.",
     }
     data["data_contract"] = contract
 
