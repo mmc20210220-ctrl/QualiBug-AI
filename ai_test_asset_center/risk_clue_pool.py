@@ -9,6 +9,7 @@ Project/private deployment scope:
 - accumulate project-local learning weights from clues, confirmed findings and
   regression history;
 - learn directly from system-promise regression contracts when present;
+- refresh project learning on demand before scheduling consumes weights;
 - never requires customer data to leave the deployment.
 
 SaaS/platform scope:
@@ -174,18 +175,7 @@ def save_risk_clues(
     )[:max_clues]
     clues_dict = {_clue_key(str(c.get("title") or "")): c for c in sorted_clues if str(c.get("title") or "")}
 
-    project_learning = build_project_learning(project, root, clues_dict=clues_dict, current_findings=findings or [])
-    pool_data = {
-        "phase": "risk_clue_pool_v3_project_learning",
-        "project": project,
-        "updated_at_utc": now,
-        "total_clues": len(clues_dict),
-        "new_this_scan": new_count,
-        "clues": clues_dict,
-        "project_learning": project_learning,
-    }
-    _write_json(pool_file, pool_data)
-
+    project_learning = _write_project_learning(project, root, clues_dict, now=now, new_count=new_count)
     platform_learning = refresh_platform_learning(root)
     return {
         "total_clues": len(clues_dict),
@@ -202,10 +192,22 @@ def get_risk_clues(project: str, root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {"total_clues": 0, "clues": {}}
 
 
-def get_project_learning(project: str, root: Path) -> dict[str, Any]:
+def refresh_project_learning(project: str, root: Path) -> dict[str, Any]:
+    """Refresh project learning from current clues, confirmed findings and regression history.
+
+    Coverage steering consumes project weights through ``get_project_learning_weights``.
+    Refreshing here closes the loop after regression runs: newly written
+    regression history, including system-promise regression contracts, is visible
+    to the next scheduler call without waiting for another ``save_risk_clues``.
+    """
     data = get_risk_clues(project, root)
-    learning = data.get("project_learning") if isinstance(data.get("project_learning"), dict) else {}
-    return learning
+    clues = data.get("clues") if isinstance(data.get("clues"), dict) else {}
+    new_count = int(data.get("new_this_scan") or 0) if isinstance(data, dict) else 0
+    return _write_project_learning(project, root, clues, now=_now(), new_count=new_count)
+
+
+def get_project_learning(project: str, root: Path) -> dict[str, Any]:
+    return refresh_project_learning(project, root)
 
 
 def get_project_learning_weights(project: str, root: Path) -> dict[str, float]:
@@ -278,6 +280,22 @@ def refresh_platform_learning(root: Path) -> dict[str, Any]:
     payload["contributing_project_count"] = len({str(s.get("source_project_hash") or "") for s in signals if str(s.get("source_project_hash") or "")})
     _write_json(_platform_pool_file(root), payload)
     return payload
+
+
+def _write_project_learning(project: str, root: Path, clues_dict: dict[str, dict[str, Any]], *, now: str, new_count: int) -> dict[str, Any]:
+    clues = clues_dict if isinstance(clues_dict, dict) else {}
+    project_learning = build_project_learning(project, root, clues_dict=clues, current_findings=[])
+    pool_data = {
+        "phase": "risk_clue_pool_v3_project_learning",
+        "project": project,
+        "updated_at_utc": now,
+        "total_clues": len(clues),
+        "new_this_scan": max(0, int(new_count or 0)),
+        "clues": clues,
+        "project_learning": project_learning,
+    }
+    _write_json(_project_pool_dir(project, root) / "risk_clues.json", pool_data)
+    return project_learning
 
 
 def _learning_payload(version: str, scope: str, signals: list[dict[str, Any]]) -> dict[str, Any]:
