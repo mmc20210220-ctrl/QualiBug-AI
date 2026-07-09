@@ -203,16 +203,21 @@ def test_system_promise_contract_reaches_regression_suite_runner_and_history(tmp
         assert verdict["system_promise_id"] == finding["system_promise_id"]
         assert reverification["system_promise_reverification_count"] >= 1
 
-        history = regression_runner._append_regression_history(
-            "proj",
-            tmp_path,
-            {
-                "summary": {"generated_at": "now", "suite_mode": "release", "suite_mode_label": "Release"},
-                "ci_feedback": {"gate_status": "manual_approval_required", "ci_message": "review"},
-                "items": [item],
-            },
-        )
+        result_payload = {
+            "summary": {"generated_at": "now", "suite_mode": "release", "suite_mode_label": "Release"},
+            "ci_feedback": {"gate_status": "manual_approval_required", "ci_message": "review"},
+            "items": [item],
+        }
+        history = regression_runner._append_regression_history("proj", tmp_path, result_payload)
         history_item = next(row for row in history[-1]["items"] if row.get("system_promise_id") == finding["system_promise_id"])
+
         assert history_item["regression_contract_type"] == "system_behavior_promise_regression"
+        assert result_payload["risk_clue_pool_learning_refresh"]["status"] == "refreshed"
+        assert history[-1]["risk_clue_pool_learning_refresh"]["project_system_promise_signal_count"] >= 1
+
+        pool_path = tmp_path / "platform_outputs" / "proj" / "risk_clue_pool" / "risk_clues.json"
+        pool = json.loads(pool_path.read_text(encoding="utf-8"))
+        assert pool["project_learning"]["system_promise_signal_count"] >= 1
+        assert pool["project_learning"]["priority_weights"]["money_quantity_conservation"] > 0
     finally:
         restore_system_behavior_space_patch()
