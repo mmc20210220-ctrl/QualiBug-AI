@@ -242,6 +242,65 @@ def _inject_coverage_steering(data: dict[str, Any], steering: dict[str, Any]) ->
     data["data_contract"] = contract
 
 
+def _regression_suite_refresh_from(data: dict[str, Any], scan_result: dict[str, Any]) -> dict[str, Any]:
+    candidates = [
+        _as_dict(data.get("regression_suite_refresh")),
+        _as_dict(_as_dict(data.get("scan_meta")).get("regression_suite_refresh")),
+        _as_dict(scan_result.get("regression_suite_refresh")),
+    ]
+    for item in candidates:
+        if item and str(item.get("status") or item.get("reason") or "").strip():
+            return item
+    return {}
+
+
+def _inject_regression_suite_refresh(data: dict[str, Any], refresh: dict[str, Any]) -> None:
+    if not refresh:
+        return
+    payload = dict(refresh)
+    payload.setdefault("honesty_rule", "Regression suite refresh only materializes probes from existing evidence-backed sources; it does not execute regression or claim the fix passed.")
+    summary = _as_dict(payload.get("summary"))
+    data["regression_suite_refresh"] = payload
+    data["regression_suite"] = _as_dict(data.get("regression_suite")) or {
+        "ref": str(payload.get("suite_ref") or ""),
+        "total_probe_count": int(summary.get("total_probe_count") or 0),
+        "smoke_count": int(summary.get("smoke_count") or 0),
+        "release_count": int(summary.get("release_count") or 0),
+        "full_count": int(summary.get("full_count") or 0),
+        "confirmed_ledger_probe_count": int(summary.get("confirmed_ledger_probe_count") or 0),
+        "ci_gate_recommendation": str(summary.get("ci_gate_recommendation") or ""),
+    }
+
+    scan_meta = _as_dict(data.get("scan_meta"))
+    scan_meta["regression_suite_refresh"] = payload
+    scan_meta["regression_suite_probe_count"] = int(summary.get("total_probe_count") or 0)
+    scan_meta["confirmed_ledger_regression_probe_count"] = int(summary.get("confirmed_ledger_probe_count") or 0)
+    data["scan_meta"] = scan_meta
+
+    value_metrics = _as_dict(data.get("value_metrics"))
+    value_metrics["regression_suite_refresh_status"] = str(payload.get("status") or "")
+    value_metrics["regression_suite_probe_count"] = int(summary.get("total_probe_count") or 0)
+    value_metrics["confirmed_ledger_regression_probe_count"] = int(summary.get("confirmed_ledger_probe_count") or 0)
+    data["value_metrics"] = value_metrics
+
+    executive = _as_dict(data.get("executive_summary"))
+    status = str(payload.get("status") or "")
+    if status == "refreshed":
+        executive["regression_suite_refresh_label"] = f"已自动刷新 {int(summary.get('total_probe_count') or 0)} 个回归探针"
+    elif status:
+        executive["regression_suite_refresh_label"] = f"回归套件未刷新：{payload.get('reason') or status}"
+    data["executive_summary"] = executive
+
+    contract = _as_dict(data.get("data_contract"))
+    contract["regression_suite_refresh"] = {
+        "display_key": "regression_suite_refresh",
+        "source": "platform_outputs/<project>/scan_result.json:regression_suite_refresh",
+        "honesty_rule": payload["honesty_rule"],
+        "customer_meaning": "Explains whether confirmed findings were materialized into the smoke/release/full regression suite after the scan.",
+    }
+    data["data_contract"] = contract
+
+
 def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
@@ -256,6 +315,8 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
     scan_result = _load_scan_result(project, resolved_root)
     steering = _coverage_steering_from(data, scan_result)
     _inject_coverage_steering(data, steering)
+    refresh = _regression_suite_refresh_from(data, scan_result)
+    _inject_regression_suite_refresh(data, refresh)
 
     scan_meta = _as_dict(data.get("scan_meta"))
     benchmark_metrics = _as_dict(scan_meta.get("benchmark_metrics"))
