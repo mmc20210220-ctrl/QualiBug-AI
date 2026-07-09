@@ -20,6 +20,10 @@ from ai_test_asset_center.private_pilot_coverage_matrix_patch import (
     install_coverage_matrix_patch,
     restore_coverage_matrix_patch,
 )
+from ai_test_asset_center.private_pilot_coverage_steering_patch import (
+    install_coverage_steering_patch,
+    restore_coverage_steering_patch,
+)
 from ai_test_asset_center.private_pilot_credentials_patch import (
     install_service_credentials_patch,
     restore_service_credentials_patch,
@@ -88,6 +92,7 @@ def install_extracted_credential_safety_patch() -> None:
 
 def restore_deployment_contract_patch() -> None:
     _restore_deployment_contract_patch()
+    restore_coverage_steering_patch()
     restore_coverage_matrix_patch()
     restore_scan_result_repair_patch()
     restore_scan_campaign_context_patch()
@@ -102,6 +107,7 @@ def install_runtime_patches() -> None:
     install_extracted_credential_safety_patch()
     install_scan_result_repair_patch(patch_source=PATCH_SOURCE)
     install_coverage_matrix_patch(patch_source=PATCH_SOURCE, root=_service._root())
+    install_coverage_steering_patch(patch_source=PATCH_SOURCE)
     install_browser_ui_smoke_patch()
     install_customer_report_patch()
     install_deployment_contract_patch()
