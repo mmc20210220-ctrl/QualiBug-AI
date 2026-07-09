@@ -41,6 +41,10 @@ from ai_test_asset_center.private_pilot_regression_oracle_patch import (
     install_regression_oracle_patch,
     restore_regression_oracle_patch,
 )
+from ai_test_asset_center.private_pilot_regression_run_visibility_patch import (
+    install_regression_run_visibility_patch,
+    restore_regression_run_visibility_patch,
+)
 from ai_test_asset_center.private_pilot_regression_suite_refresh_patch import (
     install_regression_suite_refresh_patch,
     restore_regression_suite_refresh_patch,
@@ -100,6 +104,7 @@ def install_extracted_credential_safety_patch() -> None:
 
 def restore_deployment_contract_patch() -> None:
     _restore_deployment_contract_patch()
+    restore_regression_run_visibility_patch()
     restore_regression_suite_refresh_patch()
     restore_regression_oracle_patch()
     restore_coverage_steering_patch()
@@ -119,6 +124,7 @@ def install_runtime_patches() -> None:
     install_regression_oracle_patch(patch_source=PATCH_SOURCE)
     install_regression_suite_refresh_patch(patch_source=PATCH_SOURCE)
     install_coverage_matrix_patch(patch_source=PATCH_SOURCE, root=_service._root())
+    install_regression_run_visibility_patch(patch_source=PATCH_SOURCE, root=_service._root())
     install_coverage_steering_patch(patch_source=PATCH_SOURCE)
     install_browser_ui_smoke_patch()
     install_customer_report_patch()
