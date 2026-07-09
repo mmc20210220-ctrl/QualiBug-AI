@@ -4,7 +4,7 @@ from __future__ import annotations
 
 The legacy formatter still knows how to build diagnostic/root-cause/fix fields.
 The product boundary is now stricter: QualiBug-AI reports defect facts,
-evidence, regression verification, and release status only.  This patch strips
+evidence, regression verification, and release status only. This patch strips
 repair advice at the display-ready generation source before frontend/API guards
 need to catch it.
 """
@@ -12,43 +12,16 @@ need to catch it.
 from typing import Any, Callable
 
 from ai_test_asset_center import display_ready_formatter as _formatter
+from ai_test_asset_center.customer_report_boundary import (
+    product_responsibility_boundary,
+    strip_fix_advice_fields,
+)
 
 PATCH_SOURCE = "ai_test_asset_center.display_ready_no_fix_advice_patch"
 
-_STRIPPED_KEYS = {
-    "recommended_fix",
-    "fix_advice",
-    "fix_suggestion",
-    "repair_suggestion",
-    "repair_plan",
-    "remediation",
-    "remediation_advice",
-    "remediation_plan",
-    "patch_suggestion",
-    "code_fix",
-    "possible_root_cause",
-    "root_cause_hypothesis",
-}
 
-_BOUNDARY = {
-    "scope": "defect_discovery_evidence_post_fix_regression_release_status",
-    "no_fix_advice": True,
-    "source": PATCH_SOURCE,
-    "customer_meaning": "QualiBug-AI only reports defect facts, evidence chains, post-fix regression verification, and release status. It does not provide fix advice, repair plans, root-cause commitments, or code changes.",
-}
-
-
-def _strip_advice(value: Any) -> Any:
-    if isinstance(value, list):
-        return [_strip_advice(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    cleaned: dict[str, Any] = {}
-    for key, item in value.items():
-        if str(key) in _STRIPPED_KEYS:
-            continue
-        cleaned[key] = _strip_advice(item)
-    return cleaned
+def _boundary() -> dict[str, Any]:
+    return product_responsibility_boundary(PATCH_SOURCE)
 
 
 def _normalize_regression_obligations(details: dict[str, Any], finding: dict[str, Any]) -> dict[str, Any]:
@@ -67,15 +40,15 @@ def _normalize_regression_obligations(details: dict[str, Any], finding: dict[str
 
 def _safe_details_from_original(original: Callable[..., dict[str, Any]], finding: dict[str, Any], investigation: dict[str, Any], reproduction: dict[str, Any]) -> dict[str, Any]:
     details = original(finding, investigation, reproduction)
-    details = _strip_advice(details) if isinstance(details, dict) else {}
+    details = strip_fix_advice_fields(details) if isinstance(details, dict) else {}
     details = _normalize_regression_obligations(details, finding)
-    details["product_responsibility_boundary"] = dict(_BOUNDARY)
+    details["product_responsibility_boundary"] = _boundary()
     return details
 
 
 def _safe_finding_from_original(original_finding: Callable[..., dict[str, Any]], original_details: Callable[..., dict[str, Any]], finding: dict[str, Any], enterprise_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
     # The legacy _format_single_finding expects the legacy technical-details
-    # object to contain recommended_fix.  Keep the original details builder only
+    # object to contain recommended_fix. Keep the original details builder only
     # for the duration of the legacy call, then strip the resulting payload.
     active_details = getattr(_formatter, "_build_technical_details")
     try:
@@ -83,15 +56,15 @@ def _safe_finding_from_original(original_finding: Callable[..., dict[str, Any]],
         formatted = original_finding(finding, enterprise_ctx)
     finally:
         _formatter._build_technical_details = active_details  # type: ignore[attr-defined]
-    formatted = _strip_advice(formatted) if isinstance(formatted, dict) else {}
+    formatted = strip_fix_advice_fields(formatted) if isinstance(formatted, dict) else {}
     technical = formatted.get("technical_details") if isinstance(formatted.get("technical_details"), dict) else {}
-    formatted["technical_details"] = _normalize_regression_obligations(_strip_advice(technical), finding if isinstance(finding, dict) else {})
-    formatted["technical_details"]["product_responsibility_boundary"] = dict(_BOUNDARY)
+    formatted["technical_details"] = _normalize_regression_obligations(strip_fix_advice_fields(technical), finding if isinstance(finding, dict) else {})
+    formatted["technical_details"]["product_responsibility_boundary"] = _boundary()
     regression = formatted.get("regression_suggestions")
     if isinstance(regression, list):
         formatted["regression_verification_obligations"] = [str(item) for item in regression if str(item).strip()]
     formatted.pop("regression_suggestions", None)
-    formatted["product_responsibility_boundary"] = dict(_BOUNDARY)
+    formatted["product_responsibility_boundary"] = _boundary()
     return formatted
 
 
