@@ -80,6 +80,42 @@ def test_risk_clue_pool_builds_project_and_platform_learning(tmp_path: Path) -> 
     assert platform_learning["contributing_project_count"] == 1
 
 
+def test_save_risk_clues_keeps_current_confirmed_findings_in_learning(tmp_path: Path) -> None:
+    result = save_risk_clues(
+        "customer_a",
+        tmp_path,
+        [
+            {
+                "title": "订单金额系统承诺被当前扫描反证",
+                "severity": "P0",
+                "verdict": "confirmed",
+                "validation_status": "confirmed",
+                "gate_passed": True,
+                "system_promise_id": "promise_current_scan_only",
+                "regression_contract": {
+                    "contract_type": "system_behavior_promise_regression",
+                    "system_behavior_space": {
+                        "promise_id": "promise_current_scan_only",
+                        "dimensions": ["money"],
+                        "surface_plan": ["api", "db"],
+                    },
+                    "promise_id": "promise_current_scan_only",
+                    "dimensions": ["money"],
+                    "surface_plan": ["api", "db"],
+                },
+            }
+        ],
+    )
+
+    platform_learning = get_platform_learning(tmp_path)
+    platform_text = json.dumps(platform_learning, ensure_ascii=False)
+
+    assert result["project_learning_signal_count"] == 1
+    assert result["platform_learning_signal_count"] == 1
+    assert "promise_current_scan_only" not in platform_text
+    assert "money_quantity_conservation" in platform_text
+
+
 def test_platform_learning_does_not_store_customer_raw_paths_or_titles(tmp_path: Path) -> None:
     save_risk_clues(
         "customer_secret_project",
