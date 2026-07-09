@@ -33,6 +33,21 @@ def read_json_file(path: Path, fallback: Any) -> Any:
     return fallback
 
 
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
 def report_findings(report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = [
         report.get("real_findings"),
@@ -46,6 +61,153 @@ def report_findings(report: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def normalize_release_check(value: Any) -> dict[str, Any] | None:
+    row = as_dict(value)
+    name = str(row.get("name") or "").strip()
+    status = str(row.get("status") or "").strip()
+    if not name or status not in {"pass", "pending", "fail"}:
+        return None
+    return {
+        "name": name,
+        "status": status,
+        "detail": str(row.get("detail") or row.get("reason") or "未提供门禁详情。"),
+        "source": str(row.get("source") or "release_gate"),
+    }
+
+
+def normalize_release_gate(value: Any) -> dict[str, Any]:
+    gate = as_dict(value)
+    checks = [check for check in (normalize_release_check(item) for item in as_list(gate.get("checks"))) if check]
+    if not checks:
+        return {}
+    overall = str(gate.get("overall_status") or "").strip()
+    if overall not in {"pass", "pending", "fail"}:
+        overall = "fail" if any(item["status"] == "fail" for item in checks) else "pending" if any(item["status"] == "pending" for item in checks) else "pass"
+    return {
+        "overall_status": overall,
+        "checks": checks,
+        "blocking_check_count": sum(1 for item in checks if item["status"] == "fail"),
+        "pending_check_count": sum(1 for item in checks if item["status"] == "pending"),
+        "pass_check_count": sum(1 for item in checks if item["status"] == "pass"),
+        "release_recommendation": str(gate.get("release_recommendation") or ("block_release" if overall == "fail" else "hold_for_validation" if overall == "pending" else "candidate_release")),
+        "honesty_rule": str(gate.get("honesty_rule") or "发布门禁基于已持久化的扫描、回归和人工复核状态；未覆盖范围不能被声明为安全。"),
+        "source": str(gate.get("source") or "release_gate"),
+    }
+
+
+def release_gate_from_regression_run(value: Any) -> dict[str, Any]:
+    result = as_dict(value)
+    if not result:
+        return {}
+    summary = as_dict(result.get("summary"))
+    ci = as_dict(result.get("ci_feedback"))
+    gate_status = str(ci.get("gate_status") or summary.get("gate_status") or "").strip()
+    failed = safe_int(summary.get("failed_count"))
+    needs_review = safe_int(summary.get("needs_review_count"))
+    passed = safe_int(summary.get("passed_count"))
+    if gate_status == "failed":
+        status = "fail"
+        detail = f"最近一次回归失败：{failed} 个探针失败，{needs_review} 个需复核。发布前必须继续修复或复核失败项。"
+    elif gate_status == "manual_approval_required":
+        status = "pending"
+        detail = f"最近一次回归仍需人工复核：{needs_review} 个探针缺少强自动判定，不能直接放行发布。"
+    elif gate_status == "passed":
+        status = "pass"
+        detail = f"最近一次回归通过：{passed} 个探针通过。该结论不扩大到未覆盖范围。"
+    else:
+        return {}
+    return normalize_release_gate({
+        "checks": [{"name": "修复后回归 Gate", "status": status, "detail": detail, "source": "regression_run_result"}],
+        "source": "regression_run_result",
+    })
+
+
+def release_gate_from_suite_refresh(report: dict[str, Any], scan_result: dict[str, Any]) -> dict[str, Any]:
+    refresh = as_dict(report.get("regression_suite_refresh")) or as_dict(scan_result.get("regression_suite_refresh"))
+    suite = as_dict(report.get("regression_suite")) or as_dict(scan_result.get("regression_suite"))
+    summary = as_dict(refresh.get("summary"))
+    total = safe_int(suite.get("total_probe_count") or summary.get("total_probe_count"))
+    confirmed = safe_int(suite.get("confirmed_ledger_probe_count") or summary.get("confirmed_ledger_probe_count"))
+    if str(refresh.get("status") or "") != "refreshed" or total <= 0:
+        return {}
+    return normalize_release_gate({
+        "checks": [{
+            "name": "修复后回归 Gate",
+            "status": "pending",
+            "detail": f"已自动生成 {total} 个回归探针，其中 {confirmed} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。",
+            "source": "regression_suite_refresh",
+        }],
+        "source": "regression_suite_refresh",
+    })
+
+
+def load_customer_release_gate(project: str, root: Path, report: dict[str, Any]) -> dict[str, Any]:
+    scan_result = read_json_file(root / "platform_outputs" / project / "scan_result.json", {})
+    scan_result = scan_result if isinstance(scan_result, dict) else {}
+    for candidate in (report.get("release_gate"), scan_result.get("release_gate")):
+        gate = normalize_release_gate(candidate)
+        if gate:
+            return gate
+    regression_result = read_json_file(root / "platform_outputs" / project / "regression_run" / "regression_run_result.json", {})
+    gate = release_gate_from_regression_run(regression_result)
+    if gate:
+        return gate
+    return release_gate_from_suite_refresh(report, scan_result)
+
+
+def release_status_label(status: str) -> str:
+    if status == "fail":
+        return "阻塞"
+    if status == "pending":
+        return "待处理"
+    if status == "pass":
+        return "通过"
+    return "暂无结论"
+
+
+def release_status_message(gate: dict[str, Any]) -> str:
+    status = str(gate.get("overall_status") or "")
+    if status == "fail":
+        return "当前存在发布阻断项，不建议进入正式发布。"
+    if status == "pending":
+        return "当前仍有待处理门禁项，发布前需要完成回归执行或人工复核。"
+    if status == "pass":
+        return "当前门禁未发现阻断或待处理项，可进入正式发布评审。"
+    return "暂无发布门禁结论，请先完成一次真实扫描和必要回归。"
+
+
+def render_release_gate_section(gate: dict[str, Any]) -> str:
+    if not gate:
+        return """
+<h2>发布门禁与修复后回归</h2>
+<div class="notice warning">暂无发布门禁结论。请先完成真实扫描；如已形成 confirmed bug 回归义务，发布前必须执行回归。</div>
+"""
+    status = str(gate.get("overall_status") or "")
+    rows = []
+    for check in as_list(gate.get("checks")):
+        item = as_dict(check)
+        rows.append(
+            "<tr>"
+            f"<td>{html_text(item.get('name') or '发布门禁', 120)}</td>"
+            f"<td><span class='gate gate-{html_text(item.get('status') or 'pending', 20)}'>{html_text(release_status_label(str(item.get('status') or 'pending')), 20)}</span></td>"
+            f"<td>{html_text(item.get('detail') or '-', 320)}</td>"
+            f"<td>{html_text(item.get('source') or '-', 80)}</td>"
+            "</tr>"
+        )
+    if not rows:
+        rows.append("<tr><td colspan='4'>暂无门禁检查明细。</td></tr>")
+    return f"""
+<h2>发布门禁与修复后回归</h2>
+<div class="release-summary gate-{html_text(status or 'pending', 20)}">
+  <strong>当前发布结论：{html_text(release_status_label(status), 40)}</strong>
+  <p>{html_text(release_status_message(gate), 220)}</p>
+  <p>阻塞项：{html_text(gate.get('blocking_check_count') or 0, 20)} · 待处理：{html_text(gate.get('pending_check_count') or 0, 20)} · 通过：{html_text(gate.get('pass_check_count') or 0, 20)}</p>
+</div>
+<table><tr><th>门禁项</th><th>状态</th><th>说明</th><th>来源</th></tr>{''.join(rows)}</table>
+<div class="notice warning">{html_text(gate.get('honesty_rule') or '门禁结论仅代表已执行和已持久化的证据，不证明未覆盖范围安全。', 500)}</div>
+"""
+
+
 def render_customer_safe_report_html(project: str, root: Path) -> str:
     """Render customer-facing report HTML without mojibake or internal placeholders."""
     report_path = root / "platform_outputs" / project / "pipeline_reports" / "latest_pipeline_report.json"
@@ -55,6 +217,7 @@ def render_customer_safe_report_html(project: str, root: Path) -> str:
     history = read_json_file(history_path, [])
     history = history if isinstance(history, list) else []
     findings = report_findings(report)
+    release_gate = load_customer_release_gate(project, root, report)
     stage1 = report.get("stage1_industry") if isinstance(report.get("stage1_industry"), dict) else {}
     stage3 = report.get("stage3_impact_analysis") if isinstance(report.get("stage3_impact_analysis"), dict) else {}
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -98,6 +261,8 @@ def render_customer_safe_report_html(project: str, root: Path) -> str:
     p0p1 = sum(1 for finding in findings if str(finding.get("severity") or "") in {"P0", "P1"})
     llm_count = stage3.get("llm_powered", 0) if isinstance(stage3, dict) else 0
     object_count = stage1.get("object_count", 0) if isinstance(stage1, dict) else 0
+    release_label = release_status_label(str(release_gate.get("overall_status") or "")) if release_gate else "暂无结论"
+    release_section = render_release_gate_section(release_gate)
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -116,6 +281,15 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 .metric strong{{display:block;font-size:28px;color:#3b82f6}}
 .metric span{{font-size:12px;color:#64748b}}
 .notice{{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;margin:16px 0;color:#1e40af}}
+.notice.warning{{background:#fffbeb;border-color:#fde68a;color:#92400e}}
+.release-summary{{border-radius:10px;padding:14px 16px;margin:16px 0;background:#fff;border:1px solid #e2e8f0}}
+.release-summary.gate-fail{{border-color:#fecaca;background:#fef2f2;color:#991b1b}}
+.release-summary.gate-pending{{border-color:#fde68a;background:#fffbeb;color:#92400e}}
+.release-summary.gate-pass{{border-color:#bbf7d0;background:#f0fdf4;color:#166534}}
+.gate{{display:inline-block;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:700}}
+.gate-fail{{background:#fee2e2;color:#991b1b}}
+.gate-pending{{background:#fef3c7;color:#92400e}}
+.gate-pass{{background:#dcfce7;color:#166534}}
 .footer{{margin-top:32px;font-size:12px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:12px}}
 </style>
 </head>
@@ -126,9 +300,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 <div>
   <div class="metric"><span>发现总数</span><strong>{total}</strong></div>
   <div class="metric"><span>P0/P1</span><strong>{p0p1}</strong></div>
-  <div class="metric"><span>LLM 分析</span><strong>{html_text(llm_count, 20)}</strong></div>
+  <div class="metric"><span>发布门禁</span><strong>{html_text(release_label, 20)}</strong></div>
   <div class="metric"><span>对象/接口</span><strong>{html_text(object_count, 20)}</strong></div>
 </div>
+{release_section}
 <h2>缺陷发现列表</h2>
 <table><tr><th>严重度</th><th>标题</th><th>类别</th><th>置信度</th><th>证据摘要</th></tr>{''.join(rows)}</table>
 <h2>扫描历史（最近 10 次）</h2>
