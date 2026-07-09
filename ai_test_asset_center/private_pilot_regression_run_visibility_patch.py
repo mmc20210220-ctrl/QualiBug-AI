@@ -119,6 +119,86 @@ def compact_regression_run(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    """Mirror latest regression_run into the legacy Dashboard regression_summary.
+
+    The existing Dashboard already renders regression_summary cards and buttons.
+    Keeping this compatibility avoids a risky Dashboard rewrite while making the
+    new latest-run verdict visible on the primary customer landing page.
+    """
+    if not compact:
+        return existing
+    gate = str(compact.get("gate_status") or "")
+    failed = int(compact.get("failed_count") or 0)
+    passed = int(compact.get("passed_count") or 0)
+    needs_review = int(compact.get("needs_review_count") or 0)
+    skipped = int(compact.get("skipped_count") or 0)
+    total = int(compact.get("total_probe_count") or passed + failed + needs_review + skipped)
+    pending = needs_review + skipped
+    latest_run = {
+        "generated_at": compact.get("generated_at"),
+        "suite_mode": compact.get("suite_mode"),
+        "suite_mode_label": compact.get("suite_mode_label"),
+        "gate_status": gate,
+        "failed_count": failed,
+        "passed_count": passed,
+        "needs_review_count": needs_review,
+        "skipped_count": skipped,
+        "ci_message": compact.get("ci_message"),
+    }
+    if gate == "failed":
+        headline = f"最近回归失败：{failed} 个探针失败，需要继续修复或复核。"
+        trend_direction = "regressing"
+        release_recommendation = "block_release"
+        release_label = "建议阻断发布"
+        release_reason = "最新回归仍存在失败项，不能声明缺陷已修复。"
+        readiness = "回归失败，暂不建议交付"
+    elif gate == "passed":
+        headline = f"最近回归通过：{passed} 个探针通过。"
+        trend_direction = "stable"
+        release_recommendation = "candidate_release"
+        release_label = "可进入候选发布"
+        release_reason = "最新回归没有失败项，但仍需结合覆盖范围和验收要求。"
+        readiness = "最新回归通过"
+    else:
+        headline = f"最近回归需要复核：{needs_review} 个探针缺少强自动判定。"
+        trend_direction = "stable"
+        release_recommendation = "hold_for_validation"
+        release_label = "建议先完成剩余回归"
+        release_reason = "最新回归仍有需人工确认项，不能直接声明通过。"
+        readiness = "需要人工复核"
+    merged = dict(existing)
+    merged.update({
+        "suite_exists": True,
+        "covered_defect_count": total,
+        "passed_defect_count": passed,
+        "failed_defect_count": failed,
+        "pending_defect_count": pending,
+        "latest_run": latest_run,
+        "headline": headline,
+        "trend_direction": trend_direction,
+        "trend_summary": str(compact.get("ci_message") or headline),
+        "history_run_count": int(compact.get("history_size") or existing.get("history_run_count") or 0),
+        "recent_runs": [latest_run],
+        "release_recommendation": release_recommendation,
+        "release_recommendation_label": release_label,
+        "release_recommendation_reason": release_reason,
+        "customer_delivery_readiness": readiness,
+        "customer_delivery_readiness_label": readiness,
+        "lifecycle_counts": _as_dict(compact.get("lifecycle_summary")) or _as_dict(existing.get("lifecycle_counts")),
+        "validation_summary": {
+            **_as_dict(existing.get("validation_summary")),
+            "double_run_verified": int(compact.get("history_size") or 0) >= 2,
+            "minimum_required_runs": 2,
+            "repeated_failure_defect_count": failed if int(compact.get("history_size") or 0) >= 2 else 0,
+            "headline": headline,
+        },
+        "latest_regression_run_source": "regression_run_visibility_patch",
+        "honesty_rule": "Dashboard regression_summary is a compatibility mirror of latest regression_run_result; it does not re-run probes or change verdicts.",
+    })
+    return merged
+
+
 def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
@@ -132,6 +212,7 @@ def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) 
         return payload
 
     data["regression_run"] = compact
+    data["regression_summary"] = _dashboard_regression_summary(compact, _as_dict(data.get("regression_summary")))
     scan_meta = _as_dict(data.get("scan_meta"))
     scan_meta["regression_run"] = compact
     data["scan_meta"] = scan_meta
@@ -159,6 +240,12 @@ def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) 
         "source": "platform_outputs/<project>/regression_run/regression_run_result.json",
         "honesty_rule": compact["honesty_rule"],
         "customer_meaning": "Shows the latest persisted regression execution verdict after the customer runs regression.",
+    }
+    contract["regression_summary"] = {
+        "display_key": "regression_summary",
+        "source": "regression_run compatibility mirror",
+        "honesty_rule": data["regression_summary"]["honesty_rule"],
+        "customer_meaning": "Dashboard-compatible mirror so the primary customer overview can render the latest regression verdict.",
     }
     data["data_contract"] = contract
     payload["data"] = data
