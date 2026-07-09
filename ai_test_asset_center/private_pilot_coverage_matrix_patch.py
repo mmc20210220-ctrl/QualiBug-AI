@@ -185,6 +185,63 @@ def _load_benchmark_metrics(project: str, root: Path) -> dict[str, Any]:
     return _read_json(root / "platform_outputs" / _safe_project(project) / "benchmark" / "benchmark_metrics.json")
 
 
+def _load_scan_result(project: str, root: Path) -> dict[str, Any]:
+    if not project:
+        return {}
+    return _read_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json")
+
+
+def _coverage_steering_from(data: dict[str, Any], scan_result: dict[str, Any]) -> dict[str, Any]:
+    candidates = [
+        _as_dict(data.get("coverage_steering")),
+        _as_dict(_as_dict(data.get("scan_meta")).get("coverage_steering")),
+        _as_dict(scan_result.get("coverage_steering")),
+        _as_dict(_as_dict(scan_result.get("behavior_slice_ledger")).get("coverage_steering")),
+        _as_dict(_as_dict(_as_dict(scan_result.get("phases")).get("incremental_discovery")).get("coverage_steering")),
+        _as_dict(_as_dict(scan_result.get("v12")).get("coverage_steering")),
+        _as_dict(_as_dict(_as_dict(scan_result.get("v12")).get("behavior_slice_ledger")).get("coverage_steering")),
+    ]
+    for item in candidates:
+        if item and str(item.get("status") or item.get("reason") or "").strip():
+            return item
+    return {}
+
+
+def _inject_coverage_steering(data: dict[str, Any], steering: dict[str, Any]) -> None:
+    if not steering:
+        return
+    payload = dict(steering)
+    payload.setdefault("honesty_rule", "Coverage steering only reorders existing source-grounded behavior slices; it does not create findings or synthetic coverage.")
+    data["coverage_steering"] = payload
+
+    scan_meta = _as_dict(data.get("scan_meta"))
+    scan_meta["coverage_steering"] = payload
+    data["scan_meta"] = scan_meta
+
+    value_metrics = _as_dict(data.get("value_metrics"))
+    value_metrics["coverage_steering_status"] = str(payload.get("status") or "")
+    value_metrics["coverage_steered_slice_count"] = int(payload.get("steered_slice_count") or 0)
+    data["value_metrics"] = value_metrics
+
+    executive = _as_dict(data.get("executive_summary"))
+    status = str(payload.get("status") or "")
+    steered = int(payload.get("steered_slice_count") or 0)
+    if status == "applied":
+        executive["coverage_steering_label"] = f"已按覆盖缺口优先调度 {steered} 个行为 slice"
+    elif status:
+        executive["coverage_steering_label"] = f"覆盖调度未启用：{payload.get('reason') or status}"
+    data["executive_summary"] = executive
+
+    contract = _as_dict(data.get("data_contract"))
+    contract["coverage_steering"] = {
+        "display_key": "coverage_steering",
+        "source": "platform_outputs/<project>/scan_result.json:coverage_steering",
+        "honesty_rule": payload["honesty_rule"],
+        "customer_meaning": "Explains whether the next behavior-slice batch was reordered to close current risk-family coverage gaps.",
+    }
+    data["data_contract"] = contract
+
+
 def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
@@ -196,6 +253,9 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
     if not project:
         project = _project_from_payload({"data": data})
     resolved_root = Path(root or Path.cwd())
+    scan_result = _load_scan_result(project, resolved_root)
+    steering = _coverage_steering_from(data, scan_result)
+    _inject_coverage_steering(data, steering)
 
     scan_meta = _as_dict(data.get("scan_meta"))
     benchmark_metrics = _as_dict(scan_meta.get("benchmark_metrics"))
@@ -207,6 +267,7 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
 
     matrix = _as_dict(data.get("coverage_matrix")) or _as_dict(benchmark_metrics.get("coverage_matrix"))
     if not matrix:
+        payload["data"] = data
         return payload
 
     summary = _coverage_summary(matrix)
