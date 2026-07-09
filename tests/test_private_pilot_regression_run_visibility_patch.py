@@ -139,7 +139,7 @@ def test_failed_regression_run_blocks_dashboard_release_recommendation(tmp_path:
     assert data["release_gate"]["overall_status"] == "fail"
     assert data["release_gate"]["blocking_check_count"] == 1
     assert data["value_metrics"]["release_gate_overall_status"] == "fail"
-    assert data["executive_summary"]["release_gate_label"] == "发布门禁阻塞：最近回归失败"
+    assert data["executive_summary"]["release_gate_label"] == "发布门禁阻塞：存在失败门禁项"
 
 
 def test_manual_review_regression_run_holds_dashboard_release_recommendation(tmp_path: Path) -> None:
@@ -205,3 +205,36 @@ def test_pending_release_gate_when_suite_refreshed_but_regression_not_run() -> N
     assert "5 个回归探针" in data["release_gate"]["checks"][0]["detail"]
     assert data["value_metrics"]["release_gate_pending_check_count"] == 1
     assert data["data_contract"]["release_gate"]["display_key"] == "release_gate"
+
+
+def test_release_gate_merges_existing_checks_without_overwrite() -> None:
+    injected = inject_regression_run({
+        "data": {
+            "project_id": "merge_project",
+            "release_gate": {
+                "overall_status": "fail",
+                "checks": [
+                    {"name": "P0 缺陷阻塞", "status": "fail", "detail": "存在 P0 缺陷", "source": "scan_result"},
+                    {"name": "修复后回归 Gate", "status": "pass", "detail": "旧回归结论", "source": "stale"},
+                ],
+            },
+            "regression_suite_refresh": {
+                "status": "refreshed",
+                "summary": {"total_probe_count": 4, "confirmed_ledger_probe_count": 1},
+            },
+            "regression_suite": {"total_probe_count": 4, "confirmed_ledger_probe_count": 1},
+            "value_metrics": {},
+            "executive_summary": {},
+            "data_contract": {},
+        }
+    })
+    gate = injected["data"]["release_gate"]
+
+    assert gate["overall_status"] == "fail"
+    assert gate["blocking_check_count"] == 1
+    assert gate["pending_check_count"] == 1
+    assert [item["name"] for item in gate["checks"]] == ["修复后回归 Gate", "P0 缺陷阻塞"]
+    assert gate["checks"][0]["status"] == "pending"
+    assert gate["checks"][0]["source"] == "regression_suite_refresh"
+    assert gate["checks"][1]["source"] == "scan_result"
+    assert gate["honesty_rule"].startswith("Release gate reports existing release checks plus")
