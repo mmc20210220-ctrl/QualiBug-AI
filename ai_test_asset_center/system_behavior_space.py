@@ -5,6 +5,12 @@ from __future__ import annotations
 Core product goal: given any enterprise system, model its promised behavior
 across all observable surfaces, then generate probe candidates for evidence-
 backed deviations. Bug families are labels after evidence, not the model's limit.
+
+This module is deliberately fed by existing core assets.  When an enterprise
+business knowledge asset is available, it reuses the parsed interfaces, data
+fields, UI specs, permission matrix, rules, risks, tickets and oracle library
+from ``enterprise_knowledge_center.py`` instead of inventing another ingestion
+pipeline.
 """
 
 import hashlib
@@ -27,6 +33,24 @@ _MONEY_HINTS = ("amount", "price", "balance", "fee", "pay", "refund", "total")
 _QUANTITY_HINTS = ("quantity", "qty", "stock", "inventory", "remaining", "available")
 _STATE_HINTS = ("status", "state", "phase", "stage", "lifecycle")
 _TIME_HINTS = ("expires", "expired", "valid_from", "valid_until", "deadline", "effective")
+
+_RISK_DIMENSIONS = {
+    "permission_boundary": ["authorization", "role", "visibility"],
+    "authorization_access_control": ["authorization", "role", "visibility"],
+    "tenant_isolation": ["tenant", "authorization", "visibility"],
+    "state_machine": ["state", "lifecycle", "cross_surface_consistency"],
+    "data_conservation": ["conservation", "data_consistency"],
+    "money_quantity_conservation": ["money", "quantity", "conservation"],
+    "data_reconciliation": ["data_consistency", "cross_surface_consistency"],
+    "idempotency": ["idempotency", "retry"],
+    "concurrency_race_condition": ["concurrency", "data_consistency"],
+    "async_event": ["async", "side_effect", "eventual_consistency"],
+    "async_eventual_consistency": ["async", "side_effect", "eventual_consistency"],
+    "sensitive_data": ["privacy", "visibility", "authorization"],
+    "historical_regression": ["regression", "historical_bug"],
+    "ui_api_contract_drift": ["ui_api_contract", "validation", "authorization"],
+    "audit_traceability": ["audit", "traceability"],
+}
 
 
 @dataclass
@@ -105,6 +129,7 @@ class SystemBehaviorSpace:
     promises: list[BehaviorPromise] = field(default_factory=list)
     probe_candidates: list[ProbeCandidate] = field(default_factory=list)
     coverage_gaps: list[dict[str, Any]] = field(default_factory=list)
+    source_coverage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         by_surface: dict[str, int] = {}
@@ -128,6 +153,7 @@ class SystemBehaviorSpace:
                 "coverage_gap_count": len(self.coverage_gaps),
                 "promise_by_surface": dict(sorted(by_surface.items())),
                 "promise_by_dimension": dict(sorted(by_dimension.items())),
+                "source_coverage": dict(sorted(self.source_coverage.items())),
             },
         }
 
@@ -151,7 +177,7 @@ def _obj(space: SystemBehaviorSpace, entity: Any) -> BehaviorObject:
 
 def _add_field(obj: BehaviorObject, group: str, name: str) -> None:
     if name:
-        obj.fields.setdefault(group, set()).add(name)
+        obj.fields.setdefault(group, set()).add(str(name))
 
 
 def _add_promise(space: SystemBehaviorSpace, entity: Any, invariant: str, surfaces: list[str], dimensions: list[str], source: str, confidence: float) -> None:
@@ -257,6 +283,146 @@ def _materialize_probe(space: SystemBehaviorSpace, promise: BehaviorPromise) -> 
     ))
 
 
+def _asset_rows(asset: Any, key: str) -> list[dict[str, Any]]:
+    if not isinstance(asset, dict):
+        return []
+    rows = asset.get(key)
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _first_text(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _risk_dimensions(risk_type: str, text: str = "") -> list[str]:
+    key = str(risk_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    dimensions = list(_RISK_DIMENSIONS.get(key, []))
+    low = str(text or "").lower()
+    for token, dim in (("tenant", "tenant"), ("租户", "tenant"), ("权限", "authorization"), ("auth", "authorization"), ("amount", "money"), ("金额", "money"), ("stock", "quantity"), ("库存", "quantity"), ("state", "state"), ("状态", "state"), ("ui", "ui_api_contract"), ("页面", "ui_api_contract"), ("log", "audit"), ("审计", "audit")):
+        if token in low and dim not in dimensions:
+            dimensions.append(dim)
+    return dimensions or [key or "business_rule"]
+
+
+def _table_from_asset(space: SystemBehaviorSpace, row: dict[str, Any]) -> None:
+    table = _first_text(row, "name", "table", "table_id")
+    if not table:
+        return
+    entity = _entity(table.replace("table:", ""))
+    obj = _obj(space, entity)
+    obj.surfaces.add("db")
+    obj.db_tables.add(table)
+    columns = [str(col) for col in row.get("columns") or row.get("fields") or [] if str(col)]
+    for group, hints in (("tenant", _TENANT_HINTS), ("soft_delete", _SOFT_DELETE_HINTS), ("audit", _AUDIT_HINTS), ("money", _MONEY_HINTS), ("quantity", _QUANTITY_HINTS), ("state", _STATE_HINTS), ("time", _TIME_HINTS)):
+        for col in _columns_for_group(columns, hints):
+            _add_field(obj, group, col)
+
+
+def _apply_enterprise_knowledge_asset(space: SystemBehaviorSpace, asset: Any) -> None:
+    if not isinstance(asset, dict):
+        return
+    summary = asset.get("summary") if isinstance(asset.get("summary"), dict) else {}
+    for key in ("business_object_count", "role_count", "state_machine_count", "interface_count", "data_table_count", "ui_design_spec_count", "rule_count", "permission_matrix_count", "risk_domain_count", "oracle_count"):
+        value = summary.get(key)
+        if isinstance(value, int):
+            space.source_coverage[f"knowledge_asset.{key}"] = value
+
+    for row in _asset_rows(asset, "business_objects"):
+        name = _first_text(row, "object", "name", "business_object", "entity")
+        if name:
+            _obj(space, name)
+
+    for row in _asset_rows(asset, "interfaces"):
+        method = _first_text(row, "method").upper()
+        path = _first_text(row, "path")
+        operation = _first_text(row, "operation_id", "summary", "interface_id")
+        entity = _entity((path.strip("/").split("/")[0] if path else "") or operation or "api")
+        obj = _obj(space, entity)
+        obj.surfaces.add("api")
+        if path:
+            obj.api_paths.add(f"{method} {path}" if method else path)
+        if method in _READ_METHODS:
+            _add_promise(space, entity, f"Knowledge interface {method} {path} must respect actor, tenant and lifecycle visibility.", ["api"], ["visibility", "tenant", "role"], "enterprise_knowledge_asset.interface", 0.62)
+        if method in _WRITE_METHODS:
+            _add_promise(space, entity, f"Knowledge interface {method} {path} must preserve business rules, side effects and data consistency.", ["api", "db"], ["data_consistency", "authorization", "side_effect", "idempotency"], "enterprise_knowledge_asset.interface", 0.66)
+
+    for row in _asset_rows(asset, "data_tables"):
+        _table_from_asset(space, row)
+    for row in _asset_rows(asset, "data_fields"):
+        _table_from_asset(space, row)
+    for row in _asset_rows(asset, "field_dictionary"):
+        table = _first_text(row, "table", "table_id") or "default"
+        field_name = _first_text(row, "field", "field_path", "name")
+        obj = _obj(space, table.replace("table:", ""))
+        obj.surfaces.add("db")
+        obj.db_tables.add(table)
+        if field_name:
+            _add_field(obj, "documented", field_name)
+
+    for row in _asset_rows(asset, "ui_design_specs"):
+        route = _first_text(row, "route", "path", "url", "screen_path")
+        title = _first_text(row, "title", "name", "screen", "ui_spec_id")
+        entity = _entity(route.strip("/").split("/")[-1] if route else title or "ui")
+        obj = _obj(space, entity)
+        obj.surfaces.add("ui")
+        if route:
+            obj.ui_routes.add(route)
+        _add_promise(space, entity, f"UI design spec {title or route or entity} must match backend authorization, validation and visible data.", ["ui", "api"], ["ui_api_contract", "authorization", "validation", "visibility"], "enterprise_knowledge_asset.ui_design_spec", 0.64)
+
+    for row in _asset_rows(asset, "roles"):
+        role = _first_text(row, "role", "name", "actor", "role_id")
+        if role:
+            actor = _obj(space, "actor")
+            actor.surfaces.add("auth")
+            actor.roles.add(role)
+    for row in _asset_rows(asset, "permission_matrix"):
+        role = _first_text(row, "role", "actor", "subject", "source_role")
+        resource = _first_text(row, "resource", "object", "module", "entity", "target") or "system"
+        action = _first_text(row, "action", "operation", "permission") or "access"
+        if role:
+            actor = _obj(space, "actor")
+            actor.surfaces.add("auth")
+            actor.roles.add(role)
+        _add_promise(space, resource, f"Permission matrix rule must enforce {role or 'actor'} {action} on {resource} consistently across UI, API and data access.", ["auth", "api", "ui", "db"], ["authorization", "role", "visibility"], "enterprise_knowledge_asset.permission_matrix", 0.78)
+
+    for row in _asset_rows(asset, "state_machines"):
+        entity = _first_text(row, "entity", "object", "name", "state_machine_id") or "system"
+        obj = _obj(space, entity)
+        obj.surfaces.add("business_state")
+        text = json.dumps(row, ensure_ascii=False, default=str)
+        for state in re.findall(r"\b[A-Z][A-Z0-9_]{1,32}\b|[\u4e00-\u9fff]{2,12}", text):
+            if len(state) <= 32:
+                obj.states.add(state)
+        _add_promise(space, entity, "Documented state machine transitions must be enforced consistently across API, DB and UI.", ["api", "db", "ui"], ["state", "lifecycle", "cross_surface_consistency"], "enterprise_knowledge_asset.state_machine", 0.74)
+
+    for row in [*_asset_rows(asset, "rule_library"), *_asset_rows(asset, "risk_domains")]:
+        risk_type = _first_text(row, "risk_type", "family", "oracle_family")
+        title = _first_text(row, "title", "statement", "expected", "assertion") or "enterprise knowledge rule"
+        entity = _first_text(row, "entity", "object", "module") or _entity(title.split()[0] if title.split() else "system")
+        dims = _risk_dimensions(risk_type, title)
+        surfaces = ["api", "db"]
+        if any(dim in dims for dim in ("authorization", "role", "visibility", "ui_api_contract")):
+            surfaces.append("ui")
+        if any(dim in dims for dim in ("authorization", "role", "tenant", "privacy")):
+            surfaces.append("auth")
+        if any(dim in dims for dim in ("audit", "traceability", "async", "side_effect")):
+            surfaces.append("log")
+        source = "enterprise_knowledge_asset.risk_domain" if row in _asset_rows(asset, "risk_domains") else "enterprise_knowledge_asset.rule_library"
+        _add_promise(space, entity, f"Enterprise knowledge rule must hold: {title[:240]}", surfaces, dims, source, 0.76)
+
+    for row in _asset_rows(asset, "oracle_library"):
+        assertion = _first_text(row, "assertion", "expected", "title")
+        family = _first_text(row, "family", "oracle_family")
+        if assertion:
+            dims = _risk_dimensions(family, assertion)
+            surfaces = ["api", "db"] + (["ui"] if "ui_api_contract" in dims or "visibility" in dims else [])
+            _add_promise(space, "system", f"Oracle assertion from enterprise knowledge must be verifiable: {assertion[:240]}", surfaces, dims, "enterprise_knowledge_asset.oracle_library", 0.7)
+
+
 def build_system_behavior_space(
     prd_text: str = "",
     api_spec_text: str = "",
@@ -264,8 +430,12 @@ def build_system_behavior_space(
     *,
     ui_materials: Any = None,
     accounts: Any = None,
+    knowledge_asset: Any = None,
 ) -> SystemBehaviorSpace:
     space = SystemBehaviorSpace()
+
+    if isinstance(knowledge_asset, dict):
+        _apply_enterprise_knowledge_asset(space, knowledge_asset)
 
     roles = _roles(accounts, prd_text)
     if roles:
@@ -361,12 +531,12 @@ def build_system_behavior_space(
     for promise in list(space.promises):
         _materialize_probe(space, promise)
 
-    if not endpoints:
+    if not endpoints and not _asset_rows(knowledge_asset, "interfaces"):
         space.coverage_gaps.append({"kind": "API_SURFACE_MISSING", "required_asset": "openapi_postman_har_or_gateway_route_log", "reason": "No source-bound API catalog; API/API-DB probes cannot execute."})
-    if not tables:
+    if not tables and not (_asset_rows(knowledge_asset, "data_tables") or _asset_rows(knowledge_asset, "data_fields")):
         space.coverage_gaps.append({"kind": "DB_SURFACE_MISSING", "required_asset": "database_schema_or_readonly_connection", "reason": "No schema/table map; DB-only and API-DB consistency probes are limited."})
-    if not routes:
+    if not routes and not _asset_rows(knowledge_asset, "ui_design_specs"):
         space.coverage_gaps.append({"kind": "UI_SURFACE_MISSING", "required_asset": "ui_route_map_dom_snapshot_design_or_browser_entry", "reason": "No UI route/DOM material; UI behavior promises cannot be explored automatically."})
-    if not roles:
+    if not roles and not (_asset_rows(knowledge_asset, "roles") or _asset_rows(knowledge_asset, "permission_matrix")):
         space.coverage_gaps.append({"kind": "ROLE_SURFACE_MISSING", "required_asset": "role_account_matrix_or_permission_matrix", "reason": "No role/actor catalog; authorization and tenant probes are incomplete."})
     return space
