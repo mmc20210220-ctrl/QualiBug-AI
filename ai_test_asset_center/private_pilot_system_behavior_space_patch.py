@@ -3,35 +3,17 @@ from __future__ import annotations
 """Runtime wiring for the System Behavior Space Model.
 
 This patch attaches the broader system-behavior-space model to the existing
-BusinessStateGraphBuilder contract.  It does not create a new ingestion system:
+BusinessStateGraphBuilder contract. It does not create a new ingestion system:
 when V12 runs inside a project, it loads the existing enterprise knowledge asset
 and passes that parsed asset into the behavior-space builder.
 
-The model is also materialized into existing ``behavior_contract['slices']`` as
-source-grounded invariant slices.  That keeps execution inside the current V12
-scheduler and SemanticScenarioGenerator instead of introducing a second executor.
-The generator is patched only to preserve the system-promise metadata in runtime
-hints and oracle rules; execution still uses the existing scenario contract.
+The model is materialized into existing ``behavior_contract['slices']`` as
+source-grounded invariant slices. Execution stays inside the current V12
+scheduler and SemanticScenarioGenerator.
 
-Oracle integration is also additive: the existing OracleEngine remains the only
-engine.  This patch wraps it so oracle failures can be attributed back to the
-specific System Behavior Space promise and so direct promise contradictions can
-emit a SystemPromiseOracle result.
-
-Confirmed finding integration is additive too: V12's existing confirmed-finding
-and regression-ledger writers are wrapped so a system-promise defect keeps its
-promise id, dimensions, surfaces and required assets through later regression.
-
-Regression integration is additive: existing regression_suite_builder and
-regression_runner keep running unchanged, but confirmed-finding probes, runner
-items, re-verification verdicts and regression history carry the same system
-promise regression contract.
-
-Learning feedback remains handled by existing modules:
-
-* risk_clue_pool.py persists project/private and platform/SaaS learning weights;
-* private_pilot_coverage_steering_patch.py feeds those weights into the existing
-  V12 behavior-slice scheduler.
+Oracle, confirmed-finding, regression and learning integrations are additive:
+existing engines/writers/runners remain the execution paths, while this patch
+preserves System Behavior Space promise metadata across them.
 """
 
 import contextvars
@@ -93,13 +75,6 @@ def _promise_index(space: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
-    """Convert system promises into existing behavior-slice contract rows.
-
-    We intentionally use kind='invariant' because SemanticScenarioGenerator
-    already knows how to turn invariant slices into read-only/runtime-upgraded
-    source-bound scenarios.  Extra metadata is additive and ignored by older
-    consumers.
-    """
     if not isinstance(space, dict):
         return []
     objects = _object_index(space)
@@ -115,7 +90,7 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         entity = str(probe.get("entity") or promise.get("entity") or "system")
         obj = objects.get(entity, {})
-        endpoints = []
+        endpoints: list[str] = []
         for raw in obj.get("api_paths") if isinstance(obj.get("api_paths"), list) else []:
             path = _path_only(str(raw))
             if path and path not in endpoints:
@@ -123,7 +98,7 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
         invariant = str(promise.get("invariant") or probe.get("objective") or "system promise")
         dimensions = [str(item) for item in (promise.get("dimensions") or probe.get("oracle_intent") or []) if str(item)]
         surface_plan = [str(item) for item in (probe.get("surface_plan") or promise.get("surfaces") or []) if str(item)]
-        evidence_gaps = []
+        evidence_gaps: list[str] = []
         if "api" in surface_plan and not endpoints:
             evidence_gaps.append("SYSTEM_PROMISE_API_ROUTE_NOT_SOURCE_BOUND")
         if "db" in surface_plan and not (obj.get("db_tables") if isinstance(obj.get("db_tables"), list) else []):
@@ -138,11 +113,7 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
             "states": [f"system_promise:{dimension}" for dimension in dimensions[:6]],
             "endpoints": endpoints,
             "priority": max(float(probe.get("priority") or 0.0), float(promise.get("confidence") or 0.0)),
-            "source_refs": [{
-                "source_type": "system_behavior_space",
-                "locator": promise_id,
-                "quote": invariant[:500],
-            }],
+            "source_refs": [{"source_type": "system_behavior_space", "locator": promise_id, "quote": invariant[:500]}],
             "evidence_gaps": evidence_gaps,
             "status": "pending",
             "_selection_family": dimensions[0] if dimensions else "system_promise",
@@ -174,8 +145,7 @@ def _attach_system_behavior_slices(contract: dict[str, Any], space: dict[str, An
         if sid and sid not in by_id:
             by_id[sid] = item
             added += 1
-    merged = list(by_id.values())
-    contract["slices"] = sorted(merged, key=lambda item: (-float(item.get("priority") or 0.0), str(item.get("entity") or ""), str(item.get("slice_id") or "")))
+    contract["slices"] = sorted(by_id.values(), key=lambda item: (-float(item.get("priority") or 0.0), str(item.get("entity") or ""), str(item.get("slice_id") or "")))
     summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
     by_kind: dict[str, int] = {}
     for item in contract["slices"]:
@@ -343,42 +313,16 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
                 if not any(token in lowered for token in money_like):
                     continue
                 if isinstance(value, (int, float)) and value < 0:
-                    return OracleResult(
-                        False,
-                        "SystemPromiseOracle",
-                        "L7",
-                        f"system_promise_dimension_violation:{promise_id}",
-                        f"系统承诺必须保持金额/数量/守恒类维度有效：{invariant}",
-                        f"{key}={value}",
-                        "P0",
-                        0.88,
-                        f"System Behavior Space promise {promise_id} 被运行时响应直接反证。",
-                    )
-    steps = trace.get("steps") if isinstance(trace, dict) and isinstance(trace.get("steps"), list) else []
-    for step in steps:
+                    return OracleResult(False, "SystemPromiseOracle", "L7", f"system_promise_dimension_violation:{promise_id}", f"系统承诺必须保持金额/数量/守恒类维度有效：{invariant}", f"{key}={value}", "P0", 0.88, f"System Behavior Space promise {promise_id} 被运行时响应直接反证。")
+    for step in trace.get("steps") if isinstance(trace, dict) and isinstance(trace.get("steps"), list) else []:
         if not isinstance(step, dict):
             continue
         response = step.get("response") if isinstance(step.get("response"), dict) else {}
         status = int(response.get("status_code") or step.get("status") or 0) if isinstance(response, dict) else int(step.get("status") or 0)
         expected = int(step.get("expected_status") or 0)
         if expected in {401, 403} and status == 200:
-            return OracleResult(
-                False,
-                "SystemPromiseOracle",
-                "L7",
-                f"system_promise_authorization_violation:{promise_id}",
-                f"系统承诺必须保持权限/角色类维度有效：{invariant}",
-                "期望拒绝但实际 HTTP 200",
-                "P0",
-                0.9,
-                f"System Behavior Space promise {promise_id} 的授权维度被运行时结果反证。",
-            )
-    return OracleResult(
-        True,
-        "SystemPromiseOracle",
-        "L7",
-        explanation=f"System Behavior Space promise {promise_id} 已进入 oracle 评估；当前可观测响应未直接反证。",
-    )
+            return OracleResult(False, "SystemPromiseOracle", "L7", f"system_promise_authorization_violation:{promise_id}", f"系统承诺必须保持权限/角色类维度有效：{invariant}", "期望拒绝但实际 HTTP 200", "P0", 0.9, f"System Behavior Space promise {promise_id} 的授权维度被运行时结果反证。")
+    return OracleResult(True, "SystemPromiseOracle", "L7", explanation=f"System Behavior Space promise {promise_id} 已进入 oracle 评估；当前可观测响应未直接反证。")
 
 
 def _annotate_oracle_failures_with_system_promise(results: list[Any], scenario: dict[str, Any], hints: dict[str, Any]) -> None:
@@ -388,9 +332,7 @@ def _annotate_oracle_failures_with_system_promise(results: list[Any], scenario: 
     invariant = str((scenario.get("runtime_hints") or {}).get("system_promise_invariant") or "")[:300]
     dims = ",".join(str(item) for item in hints.get("dimensions") or [] if str(item))
     for result in results:
-        if bool(getattr(result, "passed", True)):
-            continue
-        if str(getattr(result, "oracle_name", "")) == "SystemPromiseOracle":
+        if bool(getattr(result, "passed", True)) or str(getattr(result, "oracle_name", "")) == "SystemPromiseOracle":
             continue
         explanation = str(getattr(result, "explanation", "") or "")
         marker = f"SystemPromise={promise_id}"
@@ -451,13 +393,7 @@ def _attach_system_behavior_to_finding(finding: dict[str, Any], hints: dict[str,
         return finding
     regression_contract = _system_behavior_regression_contract(hints)
     _attach_regression_contract_fields(finding, regression_contract)
-    finding["learning_signal"] = {
-        "source": "system_behavior_space",
-        "promise_id": promise_id,
-        "dimensions": regression_contract.get("dimensions", []),
-        "surfaces": regression_contract.get("surface_plan", []),
-        "entity": str(finding.get("category") or scenario.get("entity") or "system"),
-    }
+    finding["learning_signal"] = {"source": "system_behavior_space", "promise_id": promise_id, "dimensions": regression_contract.get("dimensions", []), "surfaces": regression_contract.get("surface_plan", []), "entity": str(finding.get("category") or scenario.get("entity") or "system")}
     evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
     evidence["system_promise_id"] = promise_id
     evidence["system_behavior_space"] = hints
@@ -467,12 +403,26 @@ def _attach_system_behavior_to_finding(finding: dict[str, Any], hints: dict[str,
     raw["regression_contract"] = regression_contract
     finding["raw_evidence"] = raw
     status = finding.get("evidence_status") if isinstance(finding.get("evidence_status"), dict) else {}
-    if finding.get("gate_passed") is True:
-        status["system_promise_verdict"] = "SYSTEM_PROMISE_CONFIRMED"
-    else:
-        status["system_promise_verdict"] = "SYSTEM_PROMISE_CANDIDATE"
+    status["system_promise_verdict"] = "SYSTEM_PROMISE_CONFIRMED" if finding.get("gate_passed") is True else "SYSTEM_PROMISE_CANDIDATE"
     finding["evidence_status"] = status
     return finding
+
+
+def _system_behavior_learning_refresh_summary(project: str, root: Path) -> dict[str, Any]:
+    try:
+        from ai_test_asset_center.risk_clue_pool import get_platform_learning, refresh_project_learning
+        project_learning = refresh_project_learning(project, root)
+        platform_learning = get_platform_learning(root)
+        return {
+            "status": "refreshed",
+            "project_learning_version": str(project_learning.get("version") or ""),
+            "project_signal_count": int(project_learning.get("signal_count") or 0),
+            "project_system_promise_signal_count": int(project_learning.get("system_promise_signal_count") or 0),
+            "platform_learning_version": str(platform_learning.get("version") or ""),
+            "platform_signal_count": int(platform_learning.get("signal_count") or 0),
+        }
+    except Exception as exc:
+        return {"status": "refresh_failed", "reason": type(exc).__name__}
 
 
 def _install_system_behavior_scenario_patch() -> None:
@@ -514,18 +464,14 @@ def _install_system_behavior_oracle_patch() -> None:
             return results
         _annotate_oracle_failures_with_system_promise(results, scenario, hints)
         direct = _direct_system_promise_oracle_result(scenario, trace, hints)
-        if direct is not None:
-            if not bool(getattr(direct, "passed", True)) or not any(str(getattr(item, "oracle_name", "")) == "SystemPromiseOracle" for item in results):
-                results.append(direct)
+        if direct is not None and (not bool(getattr(direct, "passed", True)) or not any(str(getattr(item, "oracle_name", "")) == "SystemPromiseOracle" for item in results)):
+            results.append(direct)
         return results
 
     def _build_with_system_behavior_evidence(self: Any, scenario: dict[str, Any], trace: dict[str, Any], snapshots: Any, oracle_results: list[Any]) -> Any:
         hints = _scenario_system_behavior_hints(scenario)
         if hints:
-            enriched = dict(scenario)
-            enriched["system_behavior_space_evidence"] = hints
-            enriched["system_promise_id"] = str(hints.get("promise_id") or "")
-            scenario = enriched
+            scenario = {**scenario, "system_behavior_space_evidence": hints, "system_promise_id": str(hints.get("promise_id") or "")}
         return original_build(self, scenario, trace, snapshots, oracle_results)
 
     _oe.OracleEngine._ORIGINAL_EVALUATE_SYSTEM_BEHAVIOR = original_evaluate  # type: ignore[attr-defined]
@@ -547,25 +493,8 @@ def _install_system_behavior_finding_patch() -> None:
     if not callable(original_confirmed) or not callable(original_persist):
         return
 
-    def _confirmed_oracle_finding_with_system_behavior(
-        scenario: Any,
-        trace: dict[str, Any],
-        oracle_result: Any,
-        evidence: Any,
-        *,
-        campaign_id: str,
-        discovery_round: int,
-        base_url: str,
-    ) -> dict[str, Any]:
-        finding = original_confirmed(
-            scenario,
-            trace,
-            oracle_result,
-            evidence,
-            campaign_id=campaign_id,
-            discovery_round=discovery_round,
-            base_url=base_url,
-        )
+    def _confirmed_oracle_finding_with_system_behavior(scenario: Any, trace: dict[str, Any], oracle_result: Any, evidence: Any, *, campaign_id: str, discovery_round: int, base_url: str) -> dict[str, Any]:
+        finding = original_confirmed(scenario, trace, oracle_result, evidence, campaign_id=campaign_id, discovery_round=discovery_round, base_url=base_url)
         scenario_payload = _scenario_payload(scenario)
         hints = _scenario_system_behavior_hints(scenario_payload)
         if not hints and hasattr(evidence, "to_dict"):
@@ -579,13 +508,7 @@ def _install_system_behavior_finding_patch() -> None:
 
     def _persist_confirmed_findings_with_system_behavior(root: Path, project: str, findings: list[dict[str, Any]]) -> int:
         saved = int(original_persist(root, project, findings) or 0)
-        system_findings = {
-            str(item.get("evidence_id") or ""): item
-            for item in findings or []
-            if isinstance(item, dict)
-            and str(item.get("evidence_id") or "")
-            and isinstance(item.get("system_behavior_space_evidence"), dict)
-        }
+        system_findings = {str(item.get("evidence_id") or ""): item for item in findings or [] if isinstance(item, dict) and str(item.get("evidence_id") or "") and isinstance(item.get("system_behavior_space_evidence"), dict)}
         if not system_findings:
             return saved
         try:
@@ -617,8 +540,8 @@ def _install_system_behavior_finding_patch() -> None:
 
 def _install_system_behavior_regression_patch() -> None:
     try:
-        from ai_test_asset_center import regression_suite_builder as _rsb
         from ai_test_asset_center import regression_runner as _rr
+        from ai_test_asset_center import regression_suite_builder as _rsb
     except Exception:
         return
     if getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", False):
@@ -640,9 +563,8 @@ def _install_system_behavior_regression_patch() -> None:
                 return probes
             by_evidence = {str(k): v for k, v in ledger.items() if isinstance(v, dict)}
             for probe in probes:
-                evidence_id = str(probe.get("confirmed_evidence_id") or probe.get("issue_id") or "")
-                defect = by_evidence.get(evidence_id)
-                if not defect:
+                defect = by_evidence.get(str(probe.get("confirmed_evidence_id") or probe.get("issue_id") or ""))
+                if not isinstance(defect, dict):
                     continue
                 contract = _contract_from_row(defect)
                 if contract:
@@ -681,9 +603,7 @@ def _install_system_behavior_regression_patch() -> None:
                 if contract:
                     _attach_regression_contract_fields(verdict, contract)
                     verdict["reverification_contract_type"] = "system_behavior_promise_regression"
-            result["system_promise_reverification_count"] = sum(
-                1 for item in result.get("verdicts", []) if isinstance(item, dict) and item.get("system_promise_id")
-            )
+            result["system_promise_reverification_count"] = sum(1 for item in result.get("verdicts", []) if isinstance(item, dict) and item.get("system_promise_id"))
         except Exception:
             return result
         return result
@@ -716,6 +636,12 @@ def _install_system_behavior_regression_patch() -> None:
             history[-1] = last
             _rr._write_json(root / "platform_outputs" / project / "regression_run" / "regression_run_history.json", history)
             _rr._write_json(root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json", history)
+            refresh = _system_behavior_learning_refresh_summary(project, root)
+            result["risk_clue_pool_learning_refresh"] = refresh
+            last["risk_clue_pool_learning_refresh"] = refresh
+            history[-1] = last
+            _rr._write_json(root / "platform_outputs" / project / "regression_run" / "regression_run_history.json", history)
+            _rr._write_json(root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json", history)
         except Exception:
             return history
         return history
@@ -734,7 +660,6 @@ def _install_system_behavior_regression_patch() -> None:
 def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> None:
     if getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", False):
         return
-
     original_build = getattr(_bsg.BusinessStateGraphBuilder, "build")
     original_contract = getattr(_bsg.BusinessStateGraphBuilder, "behavior_contract")
 
@@ -744,20 +669,9 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
             asset = getattr(self, "system_behavior_space_knowledge_asset", None)
             if not isinstance(asset, dict) or not asset:
                 asset = _load_existing_enterprise_asset()
-            space = build_system_behavior_space(prd_text, api_spec_text, db_schema_text, knowledge_asset=asset)
-            self.system_behavior_space = space.to_dict()
+            self.system_behavior_space = build_system_behavior_space(prd_text, api_spec_text, db_schema_text, knowledge_asset=asset).to_dict()
         except Exception as exc:
-            self.system_behavior_space = {
-                "version": SYSTEM_BEHAVIOR_SPACE_VERSION,
-                "status": "unavailable",
-                "reason": f"system_behavior_space_build_failed:{type(exc).__name__}",
-                "summary": {
-                    "object_count": 0,
-                    "promise_count": 0,
-                    "probe_candidate_count": 0,
-                    "coverage_gap_count": 1,
-                },
-            }
+            self.system_behavior_space = {"version": SYSTEM_BEHAVIOR_SPACE_VERSION, "status": "unavailable", "reason": f"system_behavior_space_build_failed:{type(exc).__name__}", "summary": {"object_count": 0, "promise_count": 0, "probe_candidate_count": 0, "coverage_gap_count": 1}}
         return graphs
 
     def _behavior_contract_with_system_behavior_space(self: Any) -> dict[str, Any]:
@@ -776,8 +690,7 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
             summary["system_behavior_goal"] = "open_ended_system_promise_discovery_across_all_surfaces"
             contract["summary"] = summary
             gaps = contract.get("coverage_gaps") if isinstance(contract.get("coverage_gaps"), list) else []
-            system_gaps = space.get("coverage_gaps") if isinstance(space.get("coverage_gaps"), list) else []
-            for gap in system_gaps:
+            for gap in space.get("coverage_gaps") if isinstance(space.get("coverage_gaps"), list) else []:
                 if isinstance(gap, dict):
                     gaps.append({**gap, "source": "system_behavior_space"})
             contract["coverage_gaps"] = gaps
@@ -820,11 +733,6 @@ def _install_v12_behavior_space_context_patch() -> None:
 
 
 def prepare_system_behavior_space_learning_context(builder: Any, *, project: str, root: Any) -> Any:
-    """Compatibility helper retained for older tests/callers.
-
-    It now attaches the existing enterprise knowledge asset when possible.  The
-    name is kept stable because earlier code/tests may still import it.
-    """
     try:
         from ai_test_asset_center.enterprise_knowledge_center import load_enterprise_business_knowledge_asset
         asset = load_enterprise_business_knowledge_asset(project, Path(root))
@@ -881,8 +789,8 @@ def restore_system_behavior_space_patch() -> None:
     except Exception:
         pass
     try:
-        from ai_test_asset_center import regression_suite_builder as _rsb
         from ai_test_asset_center import regression_runner as _rr
+        from ai_test_asset_center import regression_suite_builder as _rsb
         original_load_confirmed = getattr(_rsb, "_ORIGINAL_LOAD_CONFIRMED_FINDINGS_REGRESSION_PROBES_SYSTEM_BEHAVIOR", None)
         original_judge = getattr(_rr, "_ORIGINAL_JUDGE_PROBE_SYSTEM_BEHAVIOR", None)
         original_reverify = getattr(_rr, "_ORIGINAL_REVERIFY_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR", None)
