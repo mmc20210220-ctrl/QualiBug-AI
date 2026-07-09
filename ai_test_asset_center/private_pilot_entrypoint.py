@@ -66,6 +66,10 @@ from ai_test_asset_center.private_pilot_scan_result_repair_patch import (
     restore_scan_result_repair_patch,
 )
 from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
+from ai_test_asset_center.private_pilot_system_behavior_space_patch import (
+    install_system_behavior_space_patch,
+    restore_system_behavior_space_patch,
+)
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_entrypoint"
 
@@ -117,6 +121,7 @@ def restore_deployment_contract_patch() -> None:
     restore_regression_oracle_patch()
     restore_no_fix_advice_patch()
     restore_display_ready_no_fix_advice_patch()
+    restore_system_behavior_space_patch()
     restore_coverage_steering_patch()
     restore_coverage_matrix_patch()
     restore_scan_result_repair_patch()
@@ -133,6 +138,7 @@ def install_runtime_patches() -> None:
     install_scan_result_repair_patch(patch_source=PATCH_SOURCE)
     install_regression_oracle_patch(patch_source=PATCH_SOURCE)
     install_regression_suite_refresh_patch(patch_source=PATCH_SOURCE)
+    install_system_behavior_space_patch(patch_source=PATCH_SOURCE)
     install_coverage_matrix_patch(patch_source=PATCH_SOURCE, root=_service._root())
     install_regression_run_visibility_patch(patch_source=PATCH_SOURCE, root=_service._root())
     install_display_ready_no_fix_advice_patch(patch_source=PATCH_SOURCE)
