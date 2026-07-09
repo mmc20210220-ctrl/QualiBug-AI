@@ -1,3 +1,5 @@
+import json
+
 from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
 from ai_test_asset_center.private_pilot_system_behavior_space_patch import (
     install_system_behavior_space_patch,
@@ -29,6 +31,20 @@ CREATE TABLE orders (
   updated_at TIMESTAMP
 );
 """
+
+
+def _first_system_promise_scenario():
+    builder = BusinessStateGraphBuilder()
+    graphs = builder.build("普通用户只能看自己的订单。金额必须一致。", API_SPEC, DB_SCHEMA)
+    contract = builder.behavior_contract()
+    system_slices = [item for item in contract["slices"] if item.get("_selection_origin") == "system_behavior_space"]
+    scenarios = SemanticScenarioGenerator().generate(
+        graphs,
+        API_SPEC,
+        active_slices=system_slices,
+        allow_source_runtime=True,
+    )
+    return next(item for item in scenarios if item.selection_origin == "system_behavior_space")
 
 
 def test_private_pilot_builder_contract_carries_system_behavior_space() -> None:
@@ -63,26 +79,8 @@ def test_system_behavior_slice_metadata_reaches_scenario_runtime_hints() -> None
     restore_system_behavior_space_patch()
     install_system_behavior_space_patch()
     try:
-        builder = BusinessStateGraphBuilder()
-        graphs = builder.build(
-            "普通用户只能看自己的订单。金额必须一致。",
-            API_SPEC,
-            DB_SCHEMA,
-        )
-        contract = builder.behavior_contract()
-        system_slices = [item for item in contract["slices"] if item.get("_selection_origin") == "system_behavior_space"]
-        assert system_slices
+        scenario = _first_system_promise_scenario().to_dict()
 
-        scenarios = SemanticScenarioGenerator().generate(
-            graphs,
-            API_SPEC,
-            active_slices=system_slices,
-            allow_source_runtime=True,
-        )
-        system_scenarios = [item for item in scenarios if item.selection_origin == "system_behavior_space"]
-
-        assert system_scenarios
-        scenario = system_scenarios[0].to_dict()
         assert scenario["category"] == "system_promise"
         assert scenario["behavior_slice_kind"] == "system_promise"
         assert "SystemPromiseOracle.open_ended_promise_violation" in scenario["oracle_rules"]
@@ -98,22 +96,7 @@ def test_system_promise_oracle_links_dimension_violation_to_evidence() -> None:
     try:
         from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleEngine
 
-        builder = BusinessStateGraphBuilder()
-        graphs = builder.build("金额必须一致。", API_SPEC, DB_SCHEMA)
-        contract = builder.behavior_contract()
-        money_slices = [
-            item for item in contract["slices"]
-            if item.get("_selection_origin") == "system_behavior_space"
-            and "money" in set(item.get("_system_behavior_dimensions") or [])
-        ]
-        assert money_slices
-        scenarios = SemanticScenarioGenerator().generate(
-            graphs,
-            API_SPEC,
-            active_slices=money_slices[:1],
-            allow_source_runtime=True,
-        )
-        scenario = next(item for item in scenarios if item.selection_origin == "system_behavior_space").to_dict()
+        scenario = _first_system_promise_scenario().to_dict()
         trace = {
             "steps": [
                 {
@@ -133,5 +116,54 @@ def test_system_promise_oracle_links_dimension_violation_to_evidence() -> None:
         evidence = EvidenceGraphBuilder().build(scenario, trace, None, [system_result]).to_dict()
         assert evidence["scenario"]["system_promise_id"] == scenario["runtime_hints"]["system_behavior_space"]["promise_id"]
         assert evidence["scenario"]["system_behavior_space_evidence"]["dimensions"]
+    finally:
+        restore_system_behavior_space_patch()
+
+
+def test_system_promise_finding_and_regression_ledger_keep_contract(tmp_path) -> None:
+    restore_system_behavior_space_patch()
+    install_system_behavior_space_patch()
+    try:
+        from ai_test_asset_center import v12_pipeline
+        from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleEngine
+
+        scenario_obj = _first_system_promise_scenario()
+        scenario = scenario_obj.to_dict()
+        trace = {
+            "steps": [
+                {
+                    "action": "observe_system_promise_surface",
+                    "method": "GET",
+                    "path": "/api/orders",
+                    "status": 200,
+                    "expected_status": 200,
+                    "response": {"status_code": 200, "body": {"items": [{"id": 1, "total_amount": -1}]}},
+                }
+            ]
+        }
+        system_result = next(item for item in OracleEngine().evaluate(scenario, trace, None) if item.oracle_name == "SystemPromiseOracle")
+        evidence = EvidenceGraphBuilder().build(scenario, trace, None, [system_result])
+        finding = v12_pipeline._confirmed_oracle_finding(
+            scenario_obj,
+            trace,
+            system_result,
+            evidence,
+            campaign_id="campaign-1",
+            discovery_round=1,
+            base_url="http://example.test",
+        )
+
+        assert finding["system_promise_id"] == scenario["runtime_hints"]["system_behavior_space"]["promise_id"]
+        assert finding["regression_contract"]["contract_type"] == "system_behavior_promise_regression"
+        assert finding["raw_evidence"]["system_behavior_space"]["dimensions"]
+
+        saved = v12_pipeline._persist_confirmed_findings(tmp_path, "proj", [finding])
+        assert saved == 1
+        ledger_path = tmp_path / "platform_workspace" / "proj" / "defect_discovery" / "confirmed_findings.json"
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        row = ledger[finding["evidence_id"]]
+        assert row["system_promise_id"] == finding["system_promise_id"]
+        assert row["regression_contract"]["system_behavior_space"]["promise_id"] == finding["system_promise_id"]
+        assert row["system_behavior_dimensions"]
     finally:
         restore_system_behavior_space_patch()
