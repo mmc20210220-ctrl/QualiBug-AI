@@ -132,3 +132,40 @@ def test_failed_regression_run_blocks_dashboard_release_recommendation(tmp_path:
     assert dashboard_summary["release_recommendation_label"] == "建议阻断发布"
     assert dashboard_summary["validation_summary"]["double_run_verified"] is True
     assert dashboard_summary["validation_summary"]["repeated_failure_defect_count"] == 1
+
+
+def test_manual_review_regression_run_holds_dashboard_release_recommendation(tmp_path: Path) -> None:
+    project = "review_project"
+    out_dir = tmp_path / "platform_outputs" / project / "regression_run"
+    out_dir.mkdir(parents=True)
+    (out_dir / "regression_run_result.json").write_text(
+        json.dumps({
+            "summary": {
+                "generated_at": "2026-07-09 10:00:00",
+                "suite_mode": "smoke",
+                "total_probe_count": 2,
+                "executed_count": 2,
+                "passed_count": 1,
+                "failed_count": 0,
+                "needs_review_count": 1,
+            },
+            "ci_feedback": {"gate_status": "manual_approval_required", "ci_message": "存在需复核探针", "exit_code": 1},
+            "items": [
+                {"regression_probe_id": "p1", "status": "passed", "passed": True},
+                {"regression_probe_id": "p2", "status": "needs_review", "passed": False},
+            ],
+            "history_size": 1,
+        }),
+        encoding="utf-8",
+    )
+
+    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}}}, root=tmp_path)
+    dashboard_summary = injected["data"]["regression_summary"]
+
+    assert dashboard_summary["latest_run"]["gate_status"] == "manual_approval_required"
+    assert dashboard_summary["failed_defect_count"] == 0
+    assert dashboard_summary["pending_defect_count"] == 1
+    assert dashboard_summary["release_recommendation"] == "hold_for_validation"
+    assert dashboard_summary["release_recommendation_label"] == "建议先完成剩余回归"
+    assert dashboard_summary["customer_delivery_readiness_label"] == "需要人工复核"
+    assert dashboard_summary["validation_summary"]["double_run_verified"] is False
