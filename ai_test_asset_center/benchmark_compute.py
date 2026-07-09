@@ -531,13 +531,29 @@ def compute_benchmark(
         if profile["has_request"] and profile["has_response"] and profile["has_assertion"]:
             evidence_complete += 1
 
-    # Reproduction success rate
+    # Reproduction success rate: confirmed findings that are NOT synthetic and passed gates
     repro_total = len(confirmed)
-    repro_success = len([f for f in confirmed if (f.get("reproduction") or {}).get("is_synthetic") is not True and f.get("gate_passed")])
+    repro_success = 0
+    for f in confirmed:
+        repro = f.get("reproduction")
+        if not isinstance(repro, dict):
+            repro = {}
+        is_synthetic = repro.get("is_synthetic", False)
+        gate_passed = bool(f.get("gate_passed"))
+        if not is_synthetic and gate_passed:
+            repro_success += 1
 
     # Regression success rate (from findings that have regression data)
-    reg_total = len([f for f in findings if (f.get("regression") or {}).get("included_in_suite")])
-    reg_passed = len([f for f in findings if (f.get("regression") or {}).get("latest_status") == "passed"])
+    reg_total = 0
+    reg_passed = 0
+    for f in findings:
+        reg = f.get("regression")
+        if not isinstance(reg, dict):
+            continue
+        if reg.get("included_in_suite"):
+            reg_total += 1
+            if reg.get("latest_status") == "passed":
+                reg_passed += 1
 
     metrics = {
         "benchmark_active": True,

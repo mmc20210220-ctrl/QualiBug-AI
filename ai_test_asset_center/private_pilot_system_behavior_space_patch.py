@@ -114,10 +114,15 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
         entity = str(probe.get("entity") or promise.get("entity") or "system")
         obj = objects.get(entity, {})
         routes = _dedupe_routes([_api_route(raw) for raw in (obj.get("api_paths") if isinstance(obj.get("api_paths"), list) else [])])
+        # ── Endpoints for observe steps must be safe-read (GET/HEAD/OPTIONS) ──
+        # POST/PUT/DELETE paths generate write steps only; including them in
+        # `endpoints` causes the scenario generator to create invalid GET-on-POST
+        # observe steps → 404 noise.
         endpoints: list[str] = []
         for route in routes:
-            path = route.get("path", "")
-            if path and path not in endpoints:
+            method = str(route.get("method") or "").upper()
+            path = str(route.get("path") or "")
+            if method in _SAFE_READ_METHODS and path and path not in endpoints:
                 endpoints.append(path)
         invariant = str(promise.get("invariant") or probe.get("objective") or "system promise")
         dimensions = [str(item) for item in (promise.get("dimensions") or probe.get("oracle_intent") or []) if str(item)]

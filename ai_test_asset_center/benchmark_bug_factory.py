@@ -595,7 +595,15 @@ class BenchmarkBugFactory:
                 if len(bugs) >= count:
                     break
 
-        self._log.append(f"generate: requested={count}, produced={len(bugs)}, seed={seed}")
+        self._log.append(
+            f"generate: requested={count}, produced={len(bugs)}, seed={seed}"
+        )
+        if len(bugs) < count:
+            self._log.append(
+                f"WARNING: generate() produced only {len(bugs)}/{count} bugs "
+                f"(max_attempts exhausted). Consider increasing template variety "
+                f"or lowering min_severity filter."
+            )
         return bugs
 
     def _instantiate(
@@ -1044,6 +1052,25 @@ def validate_ground_truth_integrity(ground_truth_path: Path) -> dict[str, Any]:
         bugs = data.get("bugs", [])
         if not bugs:
             return {"valid": False, "reason": "Ground truth file contains no bugs"}
+        if not isinstance(bugs, list):
+            return {"valid": False, "reason": f"Expected 'bugs' to be a list, got {type(bugs).__name__}"}
+
+        # Validate individual bug structures
+        required_bug_fields = {"bug_id", "template_id", "risk_type", "severity", "oracle"}
+        invalid_bugs = []
+        for i, bug in enumerate(bugs):
+            if not isinstance(bug, dict):
+                invalid_bugs.append(f"bug[{i}]: not a dict")
+                continue
+            missing = required_bug_fields - set(bug.keys())
+            if missing:
+                invalid_bugs.append(f"bug[{i}] {bug.get('bug_id', '?')}: missing {missing}")
+        if invalid_bugs:
+            return {
+                "valid": False,
+                "reason": f"{len(invalid_bugs)} bugs have invalid structure: {'; '.join(invalid_bugs[:5])}",
+            }
+
         return {"valid": True, "bug_count": len(bugs), "industry": data.get("industry", "unknown")}
     except json.JSONDecodeError as e:
         return {"valid": False, "reason": f"Invalid JSON: {e}"}

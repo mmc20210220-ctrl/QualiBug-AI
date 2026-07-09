@@ -737,18 +737,33 @@ class FixtureGenerator:
         setup_requests: list[dict[str, Any]] = []
 
         # If write method, we need a resource to operate on
+        # For DELETE, the resource must already exist — create it first
         if method in WRITE_METHODS:
-            # Create a disposable test resource
-            setup_requests.append({
-                "purpose": "create_test_resource",
-                "method": "POST",
-                "path": path,
-                "body": {
-                    "name": f"qb_learning_test_{bug_id[:8]}",
-                    "source": "learning_generator",
-                    "disposable": True,
-                },
-            })
+            # Determine the creation endpoint (strip the ID for DELETE paths)
+            if method == "DELETE":
+                # DELETE /api/orders/123 → create via POST /api/orders
+                create_path = "/".join(path.strip("/").split("/")[:-1]) if "/" in path else path
+                setup_requests.append({
+                    "purpose": "create_resource_for_delete_test",
+                    "method": "POST",
+                    "path": create_path,
+                    "body": {
+                        "name": f"qb_learning_test_{bug_id[:8]}",
+                        "source": "learning_generator",
+                        "disposable": True,
+                    },
+                })
+            else:
+                setup_requests.append({
+                    "purpose": "create_test_resource",
+                    "method": "POST",
+                    "path": path,
+                    "body": {
+                        "name": f"qb_learning_test_{bug_id[:8]}",
+                        "source": "learning_generator",
+                        "disposable": True,
+                    },
+                })
 
         # Build required fields from variant dimensions
         required_fields: dict[str, Any] = {

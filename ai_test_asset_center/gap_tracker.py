@@ -403,10 +403,14 @@ class GapTracker:
                 for cause, g in self._gaps.items()
             },
         }
-        self._state_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        try:
+            self._state_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except (OSError, IOError):
+            # Non-fatal: state will be persisted on next successful write
+            pass
 
     def _append_ledger(self, event: str, cause: str, extra: dict[str, Any]) -> None:
         entry = {
