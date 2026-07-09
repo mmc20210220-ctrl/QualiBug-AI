@@ -70,7 +70,7 @@ def test_inject_regression_run_lifts_latest_run_to_command_center(tmp_path: Path
         encoding="utf-8",
     )
 
-    payload = {"data": {"project_id": project, "scan_meta": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}, "delivery_tracks": {}}}
+    payload = {"data": {"project_id": project, "scan_meta": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}, "delivery_tracks": {}, "commercial_assets": {}}}
     injected = inject_regression_run(payload, root=tmp_path)
     data = injected["data"]
 
@@ -84,6 +84,9 @@ def test_inject_regression_run_lifts_latest_run_to_command_center(tmp_path: Path
     assert data["release_gate"]["release_recommendation"] == "candidate_release"
     assert data["delivery_tracks"]["release_gate"]["overall_status"] == "pass"
     assert data["delivery_tracks"]["release_recommendation"] == "candidate_release"
+    assert data["commercial_assets"]["release_gate_overall_status"] == "pass"
+    assert data["commercial_assets"]["tracker_sync"]["payload_gate_status"] == "pass"
+    assert data["commercial_assets"]["delivery_package"]["release_verdict"] == "pass"
     assert data["data_contract"]["release_gate"]["display_key"] == "release_gate"
 
     dashboard_summary = data["regression_summary"]
@@ -126,7 +129,19 @@ def test_failed_regression_run_blocks_dashboard_release_recommendation(tmp_path:
         encoding="utf-8",
     )
 
-    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}, "delivery_tracks": {}}}, root=tmp_path)
+    injected = inject_regression_run({"data": {
+        "project_id": project,
+        "regression_summary": {},
+        "value_metrics": {},
+        "executive_summary": {},
+        "data_contract": {},
+        "delivery_tracks": {},
+        "commercial_assets": {
+            "commercial_handoff": {"safe_for_customer": True, "acceptance_status": "accepted"},
+            "tracker_sync": {"payload_status": "ready", "payload_gate_status": "pass"},
+            "delivery_package": {"release_verdict": "pass"},
+        },
+    }}, root=tmp_path)
     data = injected["data"]
     dashboard_summary = data["regression_summary"]
 
@@ -143,6 +158,12 @@ def test_failed_regression_run_blocks_dashboard_release_recommendation(tmp_path:
     assert data["value_metrics"]["release_gate_overall_status"] == "fail"
     assert data["delivery_tracks"]["release_gate_overall_status"] == "fail"
     assert data["delivery_tracks"]["release_gate_blocking_check_count"] == 1
+    assert data["commercial_assets"]["commercial_handoff"]["safe_for_customer"] is False
+    assert data["commercial_assets"]["commercial_handoff"]["acceptance_status"] == "blocked_by_release_gate"
+    assert data["commercial_assets"]["tracker_sync"]["payload_status"] == "blocked_by_release_gate"
+    assert data["commercial_assets"]["tracker_sync"]["payload_gate_status"] == "fail"
+    assert data["commercial_assets"]["delivery_package"]["release_verdict"] == "fail"
+    assert data["commercial_assets"]["delivery_package"]["release_gate_blocked"] is True
     assert data["executive_summary"]["release_gate_label"] == "发布门禁阻塞：存在失败门禁项"
 
 
@@ -171,7 +192,7 @@ def test_manual_review_regression_run_holds_dashboard_release_recommendation(tmp
         encoding="utf-8",
     )
 
-    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}, "delivery_tracks": {}}}, root=tmp_path)
+    injected = inject_regression_run({"data": {"project_id": project, "regression_summary": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}, "delivery_tracks": {}, "commercial_assets": {"commercial_handoff": {"safe_for_customer": True}}}}, root=tmp_path)
     data = injected["data"]
     dashboard_summary = data["regression_summary"]
 
@@ -186,6 +207,9 @@ def test_manual_review_regression_run_holds_dashboard_release_recommendation(tmp
     assert data["release_gate"]["pending_check_count"] == 1
     assert data["delivery_tracks"]["release_gate_overall_status"] == "pending"
     assert data["delivery_tracks"]["release_gate_pending_check_count"] == 1
+    assert data["commercial_assets"]["commercial_handoff"]["safe_for_customer"] is False
+    assert data["commercial_assets"]["commercial_handoff"]["acceptance_status"] == "hold_for_validation"
+    assert data["commercial_assets"]["delivery_package"]["release_verdict"] == "pending"
 
 
 def test_pending_release_gate_when_suite_refreshed_but_regression_not_run() -> None:
@@ -201,6 +225,7 @@ def test_pending_release_gate_when_suite_refreshed_but_regression_not_run() -> N
             "executive_summary": {},
             "data_contract": {},
             "delivery_tracks": {},
+            "commercial_assets": {},
         }
     })
     data = injected["data"]
@@ -213,6 +238,9 @@ def test_pending_release_gate_when_suite_refreshed_but_regression_not_run() -> N
     assert data["value_metrics"]["release_gate_pending_check_count"] == 1
     assert data["delivery_tracks"]["release_gate_overall_status"] == "pending"
     assert data["delivery_tracks"]["release_recommendation"] == "hold_for_validation"
+    assert data["commercial_assets"]["tracker_sync"]["payload_gate_status"] == "pending"
+    assert data["commercial_assets"]["tracker_sync"]["payload_status"] == "hold_for_validation"
+    assert data["commercial_assets"]["delivery_package"]["release_gate_blocked"] is True
     assert data["data_contract"]["release_gate"]["display_key"] == "release_gate"
 
 
@@ -236,10 +264,12 @@ def test_release_gate_merges_existing_checks_without_overwrite() -> None:
             "executive_summary": {},
             "data_contract": {},
             "delivery_tracks": {},
+            "commercial_assets": {},
         }
     })
     gate = injected["data"]["release_gate"]
     delivery_tracks = injected["data"]["delivery_tracks"]
+    commercial_assets = injected["data"]["commercial_assets"]
 
     assert gate["overall_status"] == "fail"
     assert gate["blocking_check_count"] == 1
@@ -251,3 +281,6 @@ def test_release_gate_merges_existing_checks_without_overwrite() -> None:
     assert gate["honesty_rule"].startswith("Release gate reports existing release checks plus")
     assert delivery_tracks["release_gate"]["overall_status"] == "fail"
     assert delivery_tracks["release_gate_pending_check_count"] == 1
+    assert commercial_assets["release_gate_overall_status"] == "fail"
+    assert commercial_assets["delivery_package"]["release_verdict"] == "fail"
+}
