@@ -265,6 +265,29 @@ export function useKnowledgeData(project: string) {
   return { sources, loading, error, refetch: load };
 }
 
+function releaseCheckFrom(value: unknown): ReleaseCheck | null {
+  const row = asRecord(value);
+  const name = asString(row.name);
+  const status = asString(row.status) as ReleaseCheck['status'];
+  if (!name || !['pass', 'fail', 'pending'].includes(status)) return null;
+  return { name, status, detail: asString(row.detail) || '后端发布门禁合同未提供详情。' };
+}
+
+function backendReleaseGateChecks(raw: unknown): ReleaseCheck[] {
+  const gate = asRecord(field(raw, 'release_gate'));
+  return asArray(gate.checks).map(releaseCheckFrom).filter((value): value is ReleaseCheck => value !== null);
+}
+
+function dedupeChecks(checks: ReleaseCheck[]): ReleaseCheck[] {
+  const seen = new Set<string>();
+  return checks.filter((item) => {
+    const key = item.name.trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function regressionReleaseGate(raw: unknown): ReleaseCheck | null {
   const record = asRecord(raw);
   const regressionRun = asRecord(record.regression_run);
@@ -304,15 +327,16 @@ function parseReleaseChecks(raw: unknown): { overall: ReleaseOverall; checks: Re
   const dbConfirmed = asFiniteNumber(field(field(normalized, 'db_verification'), 'confirmed'));
   const campaignGate = campaignBlocksRelease(normalized);
   const campaignDetail = campaignGate.reason || (campaignGate.status === 'blocked' ? 'Campaign 缺少进入执行的必要合同' : campaignGate.status === 'coverage_deferred' ? '自动覆盖已递延到后续 Campaign' : 'Campaign 未报告阻断');
-  const checks: ReleaseCheck[] = [
+  const localChecks: ReleaseCheck[] = [
     { name: 'Campaign 治理状态', status: campaignGate.blocked ? 'fail' : 'pass', detail: campaignGate.blocked ? campaignDetail : 'Campaign 未阻塞或递延覆盖' },
     { name: 'P0 缺陷阻塞', status: p0 === 0 ? 'pass' : 'fail', detail: p0 === 0 ? '无 P0 缺陷' : `${p0} 个 P0 缺陷未修复` },
     { name: '认证授权检测', status: security === 0 ? 'pass' : 'fail', detail: security === 0 ? '未发现认证授权类缺陷' : `${security} 个安全类缺陷待修复` },
     { name: '数据完整性校验', status: integrity === 0 ? 'pass' : 'fail', detail: integrity === 0 ? '未发现数据一致性缺陷' : `${integrity} 个数据完整性缺陷待修复` },
     { name: 'DB 验证', status: dbConfirmed === 0 ? 'pass' : 'fail', detail: dbConfirmed === 0 ? 'DB 一致性检查通过' : `${dbConfirmed} 个 DB 不一致` },
   ];
-  const regressionGate = regressionReleaseGate(normalized);
-  if (regressionGate) checks.unshift(regressionGate);
+  const contractChecks = backendReleaseGateChecks(normalized);
+  const regressionGate = contractChecks.length > 0 ? null : regressionReleaseGate(normalized);
+  const checks = dedupeChecks([...(contractChecks.length > 0 ? contractChecks : []), ...(regressionGate ? [regressionGate] : []), ...localChecks]);
   const overall: ReleaseOverall = checks.some((item) => item.status === 'fail') ? 'fail' : checks.some((item) => item.status === 'pending') ? 'pending' : 'pass';
   return { overall, checks };
 }
