@@ -36,7 +36,7 @@ def test_risk_clue_pool_builds_project_and_platform_learning(tmp_path: Path) -> 
     platform_learning = get_platform_learning(tmp_path)
 
     assert result["project_learning_signal_count"] >= 2
-    assert project_learning["version"] == "risk_clue_pool_project_learning.v2"
+    assert project_learning["version"] == "risk_clue_pool_project_learning.v3"
     assert project_learning["priority_weights"]["tenant_isolation"] > 0
     assert project_learning["priority_weights"]["authorization_access_control"] > 0
     assert platform_learning["version"] == "risk_clue_pool_platform_learning.v1"
@@ -94,3 +94,56 @@ def test_coverage_steering_uses_existing_risk_clue_learning(tmp_path: Path) -> N
     assert diagnostic["learning_steered_slice_count"] >= 1
     assert ordered[0]["slice_id"] == "tenant"
     assert ordered[0]["_learning_steering_reason"] == "prioritize_from_project_and_platform_risk_clue_pool"
+
+
+def test_risk_clue_pool_learns_structured_system_promise_regression_contract(tmp_path: Path) -> None:
+    project = "customer_a"
+    history_path = tmp_path / "platform_outputs" / project / "regression_run" / "regression_run_history.json"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "items": [
+                        {
+                            "issue_id": "E-1",
+                            "regression_probe_id": "REG-1",
+                            "title": "客户原始标题不能进入平台学习",
+                            "status": "failed",
+                            "path": "/api/secret/orders/1",
+                            "regression_contract": {
+                                "contract_type": "system_behavior_promise_regression",
+                                "system_behavior_space": {
+                                    "promise_id": "promise_secret_customer_a",
+                                    "dimensions": ["money", "tenant", "ui_api_contract"],
+                                    "surface_plan": ["api", "db", "ui"],
+                                    "source_family": "money",
+                                },
+                                "promise_id": "promise_secret_customer_a",
+                                "dimensions": ["money", "tenant", "ui_api_contract"],
+                                "surface_plan": ["api", "db", "ui"],
+                            },
+                        }
+                    ]
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    save_risk_clues(project, tmp_path, [])
+    project_learning = get_project_learning(project, tmp_path)
+    platform_learning = get_platform_learning(tmp_path)
+
+    assert project_learning["system_promise_signal_count"] == 1
+    assert project_learning["priority_weights"]["money_quantity_conservation"] > 0
+    assert project_learning["priority_weights"]["tenant_isolation"] > 0
+    assert project_learning["priority_weights"]["ui_api_contract_drift"] > 0
+    assert project_learning["priority_weights"]["surface_combo:api+db+ui"] > 0
+
+    platform_text = json.dumps(platform_learning, ensure_ascii=False)
+    assert "promise_secret_customer_a" not in platform_text
+    assert "/api/secret/orders" not in platform_text
+    assert "客户原始标题" not in platform_text
+    assert "system_promise_signal" in platform_text
