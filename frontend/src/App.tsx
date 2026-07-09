@@ -3,7 +3,7 @@ import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { ScrollToTop } from './components/ScrollToTop';
 import { isAuthenticated } from './api/client';
-import { Dashboard } from './pages/Dashboard';
+import { DashboardRegressionGuard } from './pages/DashboardRegressionGuard';
 import { Findings } from './pages/Findings';
 import { InternalClues } from './pages/InternalClues';
 import { EvidenceChain } from './pages/EvidenceChain';
@@ -36,7 +36,7 @@ export default function App() {
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/dashboard" element={<DashboardRegressionGuard />} />
               <Route path="/findings" element={<Findings />} />
               <Route path="/clues" element={<InternalClues />} />
               <Route path="/evidence" element={<EvidenceChain />} />
