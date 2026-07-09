@@ -153,6 +153,33 @@ def _coverage_gap_items(matrix: dict[str, Any]) -> list[dict[str, Any]]:
     return gaps
 
 
+def _behavior_slice_seed_contract(matrix: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+    families = [row for row in (matrix.get("families") if isinstance(matrix.get("families"), list) else []) if isinstance(row, dict)]
+    invariants = [row for row in (matrix.get("invariants") if isinstance(matrix.get("invariants"), list) else []) if isinstance(row, dict)]
+    actionable_families = [row for row in families if str(row.get("coverage_status") or "") in {"gap", "candidate_only"}]
+    confirmed_families = [row for row in families if str(row.get("coverage_status") or "").startswith("confirmed")]
+    can_seed = bool(families or invariants)
+    missing_inputs: list[str] = []
+    if not families:
+        missing_inputs.append("risk_family_rows")
+    if not invariants:
+        missing_inputs.append("business_invariant_rows")
+    return {
+        "status": "ready" if can_seed else "insufficient_coverage_matrix",
+        "source": "coverage_matrix",
+        "can_seed_behavior_slices": can_seed,
+        "seed_family_count": len(families),
+        "seed_invariant_count": len(invariants),
+        "gap_or_candidate_family_count": len(actionable_families),
+        "confirmed_family_count": len(confirmed_families),
+        "priority_families": [str(row.get("family") or "") for row in actionable_families[:8] if str(row.get("family") or "").strip()],
+        "seed_dimensions": ["risk_family", "business_invariant", "coverage_status", "confirmed_count", "candidate_count", "evidence_complete_count"],
+        "required_missing_inputs": missing_inputs,
+        "next_planner_step": "Use existing coverage_matrix families/invariants to prioritize the next behavior slice batch; do not create synthetic findings or claim recall without ground truth.",
+        "honesty_rule": summary.get("honesty_note") or "Coverage matrix can seed behavior slices, but it is not full system understanding and not benchmark recall without ground truth.",
+    }
+
+
 def _normalize_matrix_for_dashboard(matrix: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(matrix)
     normalized.setdefault("summary", {
@@ -165,6 +192,7 @@ def _normalize_matrix_for_dashboard(matrix: dict[str, Any], summary: dict[str, A
     })
     normalized.setdefault("risk_family_coverage", _legacy_family_coverage(normalized))
     normalized.setdefault("invariant_coverage", _legacy_invariant_coverage(normalized))
+    normalized.setdefault("behavior_slice_seed_contract", _behavior_slice_seed_contract(normalized, summary))
     return normalized
 
 
@@ -333,8 +361,10 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
 
     summary = _coverage_summary(matrix)
     dashboard_matrix = _normalize_matrix_for_dashboard(matrix, summary)
+    behavior_seed = _as_dict(dashboard_matrix.get("behavior_slice_seed_contract"))
     data["coverage_matrix"] = dashboard_matrix
     data["coverage_matrix_summary"] = summary
+    data["behavior_slice_seed_contract"] = behavior_seed
     data["evidence_classification"] = _evidence_classification(data)
 
     # Surface matrix gaps through the existing Dashboard coverage-gap UI.  Do not
@@ -349,6 +379,9 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
     value_metrics["risk_invariant_coverage_rate"] = summary.get("family_coverage_rate", 0.0)
     value_metrics["risk_invariant_confirmed_rate"] = summary.get("confirmed_family_rate", 0.0)
     value_metrics["risk_family_gap_count"] = summary.get("gap_family_count", 0)
+    value_metrics["behavior_slice_seed_status"] = str(behavior_seed.get("status") or "")
+    value_metrics["behavior_slice_seed_family_count"] = int(behavior_seed.get("seed_family_count") or 0)
+    value_metrics["behavior_slice_seed_invariant_count"] = int(behavior_seed.get("seed_invariant_count") or 0)
     data["value_metrics"] = value_metrics
 
     executive = _as_dict(data.get("executive_summary"))
@@ -358,6 +391,8 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
         f"确认覆盖 {round(float(summary.get('confirmed_family_rate') or 0) * 100)}%"
     )
     executive["risk_family_gap_count"] = summary.get("gap_family_count", 0)
+    if behavior_seed:
+        executive["behavior_slice_seed_label"] = f"可用覆盖矩阵种子：{behavior_seed.get('seed_family_count', 0)} 个风险家族 / {behavior_seed.get('seed_invariant_count', 0)} 个业务不变量"
     data["executive_summary"] = executive
 
     contract = _as_dict(data.get("data_contract"))
@@ -365,8 +400,14 @@ def inject_coverage_matrix(payload: dict[str, Any], *, root: Path | None = None)
         "display_key": "coverage_matrix",
         "summary_key": "coverage_matrix_summary",
         "source": "platform_outputs/<project>/benchmark/benchmark_metrics.json:coverage_matrix",
-        "frontend_compatibility_keys": ["risk_family_coverage", "invariant_coverage", "summary"],
+        "frontend_compatibility_keys": ["risk_family_coverage", "invariant_coverage", "summary", "behavior_slice_seed_contract"],
         "honesty_rule": "Coverage matrix is risk/invariant coverage from scan outputs; it is not recall unless benchmark_active and ground_truth_available are true.",
+    }
+    contract["behavior_slice_seed_contract"] = {
+        "display_key": "behavior_slice_seed_contract",
+        "source": "coverage_matrix.families + coverage_matrix.invariants",
+        "honesty_rule": str(behavior_seed.get("honesty_rule") or "Coverage matrix can seed behavior slices, but it is not full system understanding."),
+        "customer_meaning": "Uses the existing risk/invariant coverage matrix to prioritize the next target-driven behavior slice batch.",
     }
     data["data_contract"] = contract
     payload["data"] = data
