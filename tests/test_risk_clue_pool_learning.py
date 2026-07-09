@@ -202,6 +202,21 @@ def test_project_learning_refreshes_from_regression_history_without_save_risk_cl
     assert platform_learning["signal_count"] >= 1
 
 
+def test_platform_learning_rebuilds_project_learning_from_regression_history(tmp_path: Path) -> None:
+    project = "customer_a"
+    _write_system_promise_history(tmp_path, project)
+
+    platform_learning = get_platform_learning(tmp_path)
+    project_pool = tmp_path / "platform_outputs" / project / "risk_clue_pool" / "risk_clues.json"
+    project_learning = json.loads(project_pool.read_text(encoding="utf-8"))["project_learning"]
+    platform_text = json.dumps(platform_learning, ensure_ascii=False)
+
+    assert project_learning["system_promise_signal_count"] == 1
+    assert platform_learning["signal_count"] >= 1
+    assert "money_quantity_conservation" in platform_text
+    assert "promise_secret_customer_a" not in platform_text
+
+
 def test_coverage_steering_uses_structured_system_promise_learning(tmp_path: Path) -> None:
     project = "customer_a"
     _write_system_promise_history(tmp_path, project)
