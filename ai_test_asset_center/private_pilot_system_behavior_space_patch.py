@@ -7,11 +7,20 @@ that behavior intact and attaches the broader behavior-space model to the same
 behavior contract so every private-pilot scan carries the real product goal:
 open-ended system-promise discovery across API, DB, UI, auth and cross-surface
 consistency — not a fixed bug-family list.
+
+When project/root are threaded by the V12 pipeline, this patch also applies the
+project's behavior-learning memory so confirmed defects and regression outcomes
+raise the priority of future probes that target similar promises.
 """
 
+from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center import business_state_graph as _bsg
+from ai_test_asset_center.behavior_learning_memory import (
+    apply_learning_to_probe_candidates,
+    load_behavior_learning_memory,
+)
 from ai_test_asset_center.system_behavior_space import (
     SYSTEM_BEHAVIOR_SPACE_VERSION,
     build_system_behavior_space,
@@ -30,8 +39,15 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
     def _build_with_system_behavior_space(self: Any, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "") -> dict[str, Any]:
         graphs = original_build(self, prd_text, api_spec_text, db_schema_text)
         try:
-            space = build_system_behavior_space(prd_text, api_spec_text, db_schema_text)
-            self.system_behavior_space = space.to_dict()
+            space = build_system_behavior_space(prd_text, api_spec_text, db_schema_text).to_dict()
+            project = str(getattr(self, "system_behavior_space_project", "") or "").strip()
+            root_value = getattr(self, "system_behavior_space_root", None)
+            root = Path(root_value) if root_value else None
+            if project and root:
+                memory = load_behavior_learning_memory(project, root)
+                if memory:
+                    space = apply_learning_to_probe_candidates(space, memory)
+            self.system_behavior_space = space
         except Exception as exc:
             self.system_behavior_space = {
                 "version": SYSTEM_BEHAVIOR_SPACE_VERSION,
@@ -58,6 +74,9 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
             summary["system_probe_candidate_count"] = int(space_summary.get("probe_candidate_count") or 0)
             summary["system_behavior_object_count"] = int(space_summary.get("object_count") or 0)
             summary["system_behavior_goal"] = "open_ended_system_promise_discovery_across_all_surfaces"
+            summary["learning_memory_version"] = str(space_summary.get("learning_memory_version") or "")
+            summary["learning_signal_count"] = int(space_summary.get("learning_signal_count") or 0)
+            summary["learning_boosted_probe_count"] = int(space_summary.get("learning_boosted_probe_count") or 0)
             contract["summary"] = summary
             gaps = contract.get("coverage_gaps") if isinstance(contract.get("coverage_gaps"), list) else []
             system_gaps = space.get("coverage_gaps") if isinstance(space.get("coverage_gaps"), list) else []
@@ -73,6 +92,19 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
     _bsg.BusinessStateGraphBuilder.behavior_contract = _behavior_contract_with_system_behavior_space  # type: ignore[method-assign]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
+
+
+def prepare_system_behavior_space_learning_context(builder: Any, *, project: str, root: Path) -> Any:
+    """Attach project/root learning context before ``builder.build(...)``.
+
+    BusinessStateGraphBuilder intentionally stays generic; the V12 pipeline owns
+    project/root.  This helper is the narrow bridge that lets the system behavior
+    space load project-specific learning memory without changing the builder's
+    public build signature.
+    """
+    setattr(builder, "system_behavior_space_project", str(project or ""))
+    setattr(builder, "system_behavior_space_root", Path(root))
+    return builder
 
 
 def restore_system_behavior_space_patch() -> None:
