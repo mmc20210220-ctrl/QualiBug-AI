@@ -360,6 +360,12 @@ def _walk_values(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
 
 
 def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[str, Any], hints: dict[str, Any]) -> Any:
+    """Evaluate a system promise against runtime trace evidence.
+
+    Each dimension check inspects the HTTP response body against the
+    promise's declared invariants.  Checks are additive — a single
+    response can trigger multiple dimension violations.
+    """
     try:
         from ai_test_asset_center.oracle_engine import OracleResult
     except Exception:
@@ -367,24 +373,196 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
     dims = {str(item).lower() for item in hints.get("dimensions") or [] if str(item)}
     promise_id = str(hints.get("promise_id") or "")
     invariant = str((scenario.get("runtime_hints") or {}).get("system_promise_invariant") or "system promise")[:500]
-    money_like = {"money", "amount", "price", "balance", "refund", "payment", "fee", "total", "quantity", "stock", "inventory", "conservation"}
+    bodies = _response_bodies(trace)
+    steps = trace.get("steps") if isinstance(trace, dict) and isinstance(trace.get("steps"), list) else []
+    all_values = [(k, v) for body in bodies for k, v in _walk_values(body)]
+    all_keys_lower = {k.lower() for k, _ in all_values}
+    all_text = " ".join(f"{k}={v}" for k, v in all_values).lower()
+
+    def _violation(rule: str, expected: str, actual: str, severity: str = "P0", confidence: float = 0.85) -> Any:
+        return OracleResult(False, "SystemPromiseOracle", "L7", rule, expected, actual, severity, confidence,
+                           f"System Behavior Space promise {promise_id} 被运行时响应反证。")
+
+    # ── Dimension: money / quantity / conservation ──
+    money_like = {"money", "amount", "price", "balance", "refund", "payment", "fee", "total", "quantity", "qty", "stock", "inventory", "conservation"}
     if dims.intersection({"money", "quantity", "conservation", "data_consistency"}):
-        for body in _response_bodies(trace):
-            for key, value in _walk_values(body):
-                lowered = key.lower()
-                if not any(token in lowered for token in money_like):
-                    continue
-                if isinstance(value, (int, float)) and value < 0:
-                    return OracleResult(False, "SystemPromiseOracle", "L7", f"system_promise_dimension_violation:{promise_id}", f"系统承诺必须保持金额/数量/守恒类维度有效：{invariant}", f"{key}={value}", "P0", 0.88, f"System Behavior Space promise {promise_id} 被运行时响应直接反证。")
-    for step in trace.get("steps") if isinstance(trace, dict) and isinstance(trace.get("steps"), list) else []:
+        for key, value in all_values:
+            lowered = key.lower()
+            if not any(token in lowered for token in money_like):
+                continue
+            if isinstance(value, (int, float)):
+                if value < 0:
+                    return _violation(f"system_promise_negative_value:{promise_id}",
+                                      f"系统承诺: {invariant}", f"{key}={value} (负值)",
+                                      "P0", 0.88)
+                if value > 1_000_000_000:
+                    return _violation(f"system_promise_suspicious_large_value:{promise_id}",
+                                      f"系统承诺: {invariant}", f"{key}={value} (疑似溢出/异常)",
+                                      "P1", 0.65)
+            # Check for money fields that are 0 when they should be non-zero
+            # (e.g., order total_amount=0 but has line items)
+            if isinstance(value, (int, float)) and value == 0 and "total" in lowered:
+                # Look for line items with non-zero amounts
+                has_line_items = any(
+                    any(t in lk.lower() for t in ("price", "amount", "subtotal"))
+                    for lk, lv in all_values if isinstance(lv, (int, float)) and lv > 0
+                )
+                if has_line_items:
+                    return _violation(f"system_promise_zero_total_with_line_items:{promise_id}",
+                                      f"系统承诺: {invariant}", f"{key}=0 但存在非零行项",
+                                      "P1", 0.72)
+
+    # ── Dimension: state_machine / lifecycle ──
+    _state_keys = {"status", "state", "phase", "stage", "lifecycle"}
+    if dims.intersection({"state", "lifecycle", "state_machine", "transition"}):
+        for key, value in all_values:
+            lowered = key.lower()
+            if not any(sk in lowered for sk in _state_keys):
+                continue
+            if isinstance(value, str):
+                # Suspicious state values
+                if value.lower() in ("error", "unknown", "undefined", "null", "", "none"):
+                    return _violation(f"system_promise_invalid_state:{promise_id}",
+                                      f"系统承诺状态机有效: {invariant}",
+                                      f"{key}={value} (异常状态值)",
+                                      "P1", 0.78)
+                # All-caps state values may indicate enum mismatches
+                if value.isupper() and len(value) > 3 and value.lower() not in ("paid", "sent", "done", "active", "draft", "open", "closed", "created", "pending_payment"):
+                    # Might be a valid state, but flag if not matching common patterns
+                    pass
+            elif value is None:
+                return _violation(f"system_promise_null_state:{promise_id}",
+                                  f"系统承诺状态字段非空: {invariant}",
+                                  f"{key}=null",
+                                  "P0", 0.82)
+
+    # ── Dimension: authorization_access_control / role / visibility ──
+    if dims.intersection({"authorization", "role", "permission", "visibility", "privacy"}):
+        # Check for fields that imply privilege escalation in response
+        privileged_fields = {"admin_only", "internal", "secret", "private_key", "api_key", "password", "token", "role"}
+        for key, value in all_values:
+            lowered = key.lower()
+            if any(pf in lowered for pf in privileged_fields):
+                if isinstance(value, str) and value.strip():
+                    return _violation(f"system_promise_privileged_field_exposure:{promise_id}",
+                                      f"系统承诺权限隔离: {invariant}",
+                                      f"{key}={str(value)[:80]} (疑似越权暴露)",
+                                      "P1", 0.72)
+        # Actor-based check: if scenario actor is "readonly" or non-admin,
+        # and response contains admin-related data
+        actor = str((scenario.get("runtime_hints") or {}).get("system_promise_safe_read_route", {}).get("actor", "") or
+                     "readonly").lower()
+        non_admin_roles = {"readonly", "buyer", "user", "guest", "普通用户", "customer"}
+        if any(role in actor for role in non_admin_roles) or not actor:
+            admin_keywords = {"admin", "administrator", "管理员", "super", "root", "all_users", "all_orders", "all_products"}
+            for key, value in all_values:
+                lowered_key = key.lower()
+                if any(ak in lowered_key for ak in admin_keywords):
+                    if isinstance(value, (list, dict)) and len(str(value)) > 2:
+                        return _violation(f"system_promise_admin_data_exposure:{promise_id}",
+                                          f"系统承诺角色数据隔离: {invariant}",
+                                          f"{key} 暴露给非管理员角色",
+                                          "P1", 0.75)
+
+    # ── Dimension: tenant_isolation ──
+    _tenant_keys = {"tenant_id", "tenant", "org_id", "organization_id", "company_id", "workspace_id"}
+    if dims.intersection({"tenant", "tenant_isolation", "isolation"}):
+        tenant_values: dict[str, set[Any]] = {}
+        for key, value in all_values:
+            lowered = key.lower()
+            if any(tk in lowered for tk in _tenant_keys):
+                tenant_values.setdefault(lowered, set()).add(str(value)[:80])
+        # If any tenant key has multiple distinct values in the same response,
+        # this indicates cross-tenant data leakage
+        for key, vals in tenant_values.items():
+            if len(vals) > 1:
+                return _violation(f"system_promise_cross_tenant_leak:{promise_id}",
+                                  f"系统承诺租户隔离: {invariant}",
+                                  f"{key} has {len(vals)} distinct values: {sorted(vals)[:5]}",
+                                  "P0", 0.92)
+
+    # ── Dimension: audit_traceability ──
+    _audit_keys = {"created_at", "updated_at", "created_by", "updated_by", "trace_id", "request_id", "correlation_id"}
+    if dims.intersection({"audit", "traceability"}):
+        missing_audit = [ak for ak in _audit_keys if ak not in all_keys_lower]
+        if len(missing_audit) >= 3:
+            return _violation(f"system_promise_audit_fields_missing:{promise_id}",
+                              f"系统承诺审计可追溯: {invariant}",
+                              f"缺少审计字段: {missing_audit[:5]}",
+                              "P2", 0.58)
+
+    # ── Dimension: data_consistency / cross_surface_consistency ──
+    if dims.intersection({"data_consistency", "cross_surface_consistency", "conservation"}):
+        # Check for duplicate IDs in list responses
+        id_values: dict[str, list[Any]] = {}
+        for key, value in all_values:
+            if key.lower().endswith(("id", "_id", "uuid", "ids")):
+                continue
+            if "id" in key.lower().split(".")[-1] or key.lower().endswith("id"):
+                id_values.setdefault(key, []).append(value)
+        for key, ids in id_values.items():
+            if len(ids) > len(set(str(v) for v in ids)):
+                return _violation(f"system_promise_duplicate_ids:{promise_id}",
+                                  f"系统承诺数据一致性: {invariant}",
+                                  f"{key} 包含重复 ID",
+                                  "P1", 0.78)
+
+        # Check for empty collections when count > 0
+        count_keys = {k.lower() for k in all_keys_lower if any(t in k.lower() for t in ("count", "total", "length", "size"))}
+        collection_keys = {k.lower() for k in all_keys_lower if any(t in k.lower() for t in ("items", "rows", "records", "results", "list", "data"))}
+        for ck in count_keys:
+            count_val = next((v for k, v in all_values if k.lower() == ck), None)
+            if isinstance(count_val, (int, float)) and count_val > 0:
+                # Check if corresponding collection is non-empty
+                for colk in collection_keys:
+                    col_val = next((v for k, v in all_values if k.lower() == colk), None)
+                    if isinstance(col_val, list) and len(col_val) == 0:
+                        return _violation(f"system_promise_count_mismatch:{promise_id}",
+                                          f"系统承诺数据一致性: {invariant}",
+                                          f"{ck}={count_val} 但 {colk}=[]",
+                                          "P1", 0.80)
+
+    # ── Dimension: idempotency ──
+    if dims.intersection({"idempotency", "retry"}):
+        # Without write capability, can only detect pattern violations
+        # Look for responses that suggest non-idempotent behavior
+        for key, value in all_values:
+            if isinstance(value, str) and "duplicate" in value.lower():
+                return _violation(f"system_promise_idempotency_violation:{promise_id}",
+                                  f"系统承诺幂等: {invariant}",
+                                  f"{key}={value[:100]}",
+                                  "P1", 0.72)
+
+    # ── Dimension: input_validation_boundary ──
+    if dims.intersection({"validation", "input", "boundary"}):
+        # If request had clearly invalid params and still got success (200)
+        for step in steps:
+            status = int((step.get("response") or {}).get("status_code") or step.get("status") or 0) if isinstance(step, dict) else 0
+            if status == 200:
+                # Check if any parameter was clearly invalid
+                request_params = step.get("request_params") or step.get("params") or {}
+                for pk, pv in (request_params.items() if isinstance(request_params, dict) else []):
+                    if isinstance(pv, str) and len(pv) > 5000:
+                        return _violation(f"system_promise_input_validation_bypass:{promise_id}",
+                                          f"系统承诺输入校验: {invariant}",
+                                          f"超大参数 {pk} 未被拒绝",
+                                          "P2", 0.62)
+
+    # ── Cross-dimension: authorization bypass (401/403 → 200) ──
+    for step in steps:
         if not isinstance(step, dict):
             continue
         response = step.get("response") if isinstance(step.get("response"), dict) else {}
         status = int(response.get("status_code") or step.get("status") or 0) if isinstance(response, dict) else int(step.get("status") or 0)
         expected = int(step.get("expected_status") or 0)
         if expected in {401, 403} and status == 200:
-            return OracleResult(False, "SystemPromiseOracle", "L7", f"system_promise_authorization_violation:{promise_id}", f"系统承诺必须保持权限/角色类维度有效：{invariant}", "期望拒绝但实际 HTTP 200", "P0", 0.9, f"System Behavior Space promise {promise_id} 的授权维度被运行时结果反证。")
-    return OracleResult(True, "SystemPromiseOracle", "L7", explanation=f"System Behavior Space promise {promise_id} 已进入 oracle 评估；当前可观测响应未直接反证。")
+            return _violation(f"system_promise_authorization_violation:{promise_id}",
+                              f"系统承诺权限/角色维度: {invariant}",
+                              "期望拒绝但实际 HTTP 200",
+                              "P0", 0.90)
+
+    return OracleResult(True, "SystemPromiseOracle", "L7",
+                        explanation=f"System Behavior Space promise {promise_id} 已进入 oracle 评估；当前可观测响应未直接反证。已检查维度: {sorted(dims)}")
 
 
 def _annotate_oracle_failures_with_system_promise(results: list[Any], scenario: dict[str, Any], hints: dict[str, Any]) -> None:

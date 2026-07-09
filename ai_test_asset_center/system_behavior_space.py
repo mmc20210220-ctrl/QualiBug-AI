@@ -599,6 +599,42 @@ def build_system_behavior_space(
         if "ui" in obj.surfaces and "db" in obj.surfaces:
             _add_promise(space, entity, "UI lists, details and exports must not reveal DB records outside lifecycle, tenant or role constraints.", ["ui", "db", "api"], ["visibility", "tenant", "lifecycle", "cross_surface_consistency"], "surface_join", 0.68)
 
+    # ── Entity merging: DB-only entities inherit API routes from parent entities ──
+    # Many DB tables (cart_items, order_items, inventory_locks, etc.) are sub-entities
+    # that don't have dedicated API routes but CAN be observed through parent entity
+    # GET endpoints.  Without this merge, promises for these entities are stuck in
+    # plan_only mode with no safe_read_only path.
+    _api_entities = {ent: obj for ent, obj in space.objects.items() if "api" in obj.surfaces and obj.api_paths}
+    for entity, obj in list(space.objects.items()):
+        if "api" in obj.surfaces or not _api_entities:
+            continue
+        # Find a parent entity by name similarity: strip common suffixes/prefixes
+        # and match against API-owning entities.
+        clean = re.sub(r"_(items|locks|usage|logs|entries|details|snapshots|history)$", "", entity)
+        clean = re.sub(r"^(tbl_|table_)", "", clean)
+        if clean != entity and clean in _api_entities:
+            parent = _api_entities[clean]
+            obj.surfaces.add("api")
+            for route in parent.api_paths:
+                obj.api_paths.add(route)
+        # Also try singular/plural normalization
+        if not obj.api_paths:
+            singular = re.sub(r"s$", "", entity)
+            if singular != entity and singular in _api_entities:
+                parent = _api_entities[singular]
+                obj.surfaces.add("api")
+                for route in parent.api_paths:
+                    obj.api_paths.add(route)
+            # Try removing known suffixes
+            for suffix in ("_items", "_locks", "_usage", "_logs", "_entries"):
+                stripped = entity.replace(suffix, "")
+                if stripped != entity and stripped in _api_entities:
+                    parent = _api_entities[stripped]
+                    obj.surfaces.add("api")
+                    for route in parent.api_paths:
+                        obj.api_paths.add(route)
+                    break
+
     for promise in list(space.promises):
         _materialize_probe(space, promise)
 

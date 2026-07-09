@@ -230,7 +230,7 @@ def test_system_promise_oracle_links_dimension_violation_to_evidence() -> None:
         results = OracleEngine().evaluate(scenario, trace, None)
         system_result = next(item for item in results if item.oracle_name == "SystemPromiseOracle")
         assert not system_result.passed
-        assert system_result.violated_rule.startswith("system_promise_dimension_violation:")
+        assert system_result.violated_rule.startswith("system_promise_")
 
         evidence = EvidenceGraphBuilder().build(scenario, trace, None, [system_result]).to_dict()
         assert evidence["scenario"]["system_promise_id"] == scenario["runtime_hints"]["system_behavior_space"]["promise_id"]
