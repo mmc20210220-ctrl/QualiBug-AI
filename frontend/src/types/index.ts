@@ -230,6 +230,7 @@ export interface RegressionSummary {
     total_probe_count: number;
     executed_count: number;
     passed_count: number;
+    failed_count: number;
     needs_review_count: number;
     skipped_count: number;
   }>;
@@ -409,5 +410,5 @@ export type ReleaseGateStatus = { overall_status: 'pass' | 'fail' | 'pending'; c
 
 export interface KnowledgeSource { source_id: string; filename: string; source_type: string; status: string; size_bytes?: number; uploaded_at?: string }
 
-export interface TestTaskSlice { slice_id: string; title: string; status: 'pending' | 'executed' | 'confirmed' | 'blocked' | string; family?: string; severity?: string; source: string; target: string; owner_hint?: string; campaign_id?: string; blocking_reason?: boolean | string; production_data_blocked?: boolean }
+export interface TestTaskSlice { slice_id: string; title: string; status: 'pending' | 'executed' | 'confirmed' | 'blocked' | string; family?: string; severity?: string; source: string; target: string; owner_hint?: string; campaign_id?: string; blocking_reason?: string; production_data_blocked?: boolean }
 export interface TestTaskBoard { ledger: { campaign_id: string; campaign_status: string; attempted_slice_ids: string[]; confirmed_slice_ids: string[]; slice_status: Record<string, TestTaskSlice['status'] & string>; source_snapshot_hash: string }; slices: TestTaskSlice[]; execution: { production_data_blocked: number }; evidence_chains_saved: number }
