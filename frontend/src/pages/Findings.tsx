@@ -41,22 +41,30 @@ function lifecycleStatus(finding: Finding): string {
   return String(finding.regression?.lifecycle_label || (finding.regression?.included_in_suite ? '待回归' : '待纳入回归')).trim() || '待纳入回归';
 }
 
+function normalizedCommercialStatus(status: string): string {
+  const value = status.trim();
+  if (['fail', 'failed', 'block_release', 'blocked_by_release_gate'].includes(value)) return 'fail';
+  if (['pending', 'manual_approval_required', 'hold_for_validation'].includes(value)) return 'pending';
+  if (['pass', 'passed', 'candidate_release', 'release_gate_passed'].includes(value)) return 'pass';
+  return value;
+}
+
 function commercialReleaseOverall(assets: CommercialAssets | null): string {
-  return String(
+  return normalizedCommercialStatus(String(
     assets?.release_gate?.overall_status ||
     assets?.release_gate_overall_status ||
     assets?.delivery_package.release_gate_overall_status ||
     assets?.delivery_package.release_verdict ||
     assets?.tracker_sync.payload_gate_status ||
     '',
-  ).trim();
+  ));
 }
 
 function commercialReleaseLabel(status: string): string {
-  if (status === 'fail') return '商业交付阻塞';
-  if (status === 'pending') return '商业交付待处理';
-  if (status === 'pass') return '商业交付门禁通过';
-  return '商业交付门禁待同步';
+  if (status === 'fail') return '发布门禁阻塞';
+  if (status === 'pending') return '发布门禁待处理';
+  if (status === 'pass') return '发布门禁通过';
+  return '发布门禁待同步';
 }
 
 function commercialReleaseTone(status: string): string {
@@ -66,6 +74,16 @@ function commercialReleaseTone(status: string): string {
   return 'neutral';
 }
 
+function handoffReadinessLabel(assets: CommercialAssets | null): string {
+  if (!assets) return '交付状态待同步';
+  if (assets.commercial_handoff.safe_for_customer) return '商业交付可进入验收';
+  const status = assets.commercial_handoff.acceptance_status || assets.tracker_sync.payload_status || assets.delivery_package.status;
+  if (status === 'blocked_by_release_gate') return '商业交付被发布门禁阻塞';
+  if (status === 'hold_for_validation') return '商业交付待复核';
+  if (status) return `商业交付状态：${status}`;
+  return '商业交付尚未确认安全';
+}
+
 function commercialReleaseDetail(assets: CommercialAssets | null): string {
   const primaryCheck = assets?.release_gate?.checks?.[0];
   return String(
@@ -73,7 +91,7 @@ function commercialReleaseDetail(assets: CommercialAssets | null): string {
     assets?.delivery_package.release_gate_block_reason ||
     assets?.release_gate_honesty_rule ||
     assets?.release_gate?.honesty_rule ||
-    '商业交付状态来自后端 commercial_assets.release_gate。',
+    '发布门禁状态来自后端 commercial_assets.release_gate；商业交付是否安全还需同时满足 handoff 状态。',
   ).trim();
 }
 
@@ -117,6 +135,8 @@ export function Findings() {
   const topModules = Array.from(new Set(confirmed.map(moduleName))).slice(0, 3);
   const commercialOverall = commercialReleaseOverall(commercialAssets);
   const commercialGate = commercialAssets?.release_gate;
+  const handoffReady = Boolean(commercialAssets?.commercial_handoff.safe_for_customer);
+  const handoffLabel = handoffReadinessLabel(commercialAssets);
   const runReleaseRegression = async (): Promise<void> => {
     if (!project) return;
     setRegressionRunning(true);
@@ -146,7 +166,7 @@ export function Findings() {
           <span className="panel-kicker">客户整改清单</span>
           <h1>{confirmed.length > 0 ? `当前已确认 ${confirmed.length} 个可交付缺陷，可进入整改闭环。` : '当前没有可交付缺陷。'}</h1>
           <p>{confirmed.length > 0 ? `仅展示已执行、可复现且证据完整的缺陷。当前重点涉及 ${topModules.length ? topModules.join('、') : '多个模块'}。` : clues.length > 0 ? `当前有 ${clues.length} 条内部线索正在补证，它们不会作为已确认缺陷交付。` : '当前项目尚未形成具备真实运行证据的已确认缺陷。'}</p>
-          <div className="page-summary-strip"><span className="summary-pill strong">可交付缺陷 {confirmed.length}</span><span className="summary-pill">立即处理 {bySeverity.P0}</span><span className="summary-pill">优先整改 {bySeverity.P1}</span><span className="summary-pill">待补证线索 {clues.length}</span>{commercialOverall && <span className="summary-pill">商业交付 {commercialReleaseLabel(commercialOverall)}</span>}</div>
+          <div className="page-summary-strip"><span className="summary-pill strong">可交付缺陷 {confirmed.length}</span><span className="summary-pill">立即处理 {bySeverity.P0}</span><span className="summary-pill">优先整改 {bySeverity.P1}</span><span className="summary-pill">待补证线索 {clues.length}</span>{commercialOverall && <span className="summary-pill">发布门禁 {commercialReleaseLabel(commercialOverall)}</span>}<span className="summary-pill">交付安全 {handoffReady ? '是' : '否'}</span></div>
           <div className="customer-showcase-actions"><button className="btn btn-primary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button><button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={regressionRunning}>{regressionRunning ? 'Release 回归中' : '执行 Release 回归'}</button>{clues.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>查看内部线索</button>}{error && <button className="btn btn-secondary" onClick={refetch}>重新加载</button>}</div>
         </div>
         <div className="customer-showcase-side">
@@ -157,6 +177,11 @@ export function Findings() {
               <p>{commercialReleaseDetail(commercialAssets)}</p>
             </div>
           )}
+          <div className={`customer-status-card ${handoffReady ? 'success' : commercialOverall === 'fail' ? 'danger' : 'warning'}`}>
+            <span>商业交付 Handoff</span>
+            <strong>{handoffLabel}</strong>
+            <p>{handoffReady ? '商业交付安全状态由后端 handoff 明确放行。' : '即使发布门禁通过，也必须等待 handoff 明确 safe_for_customer 后才能作为完整商业交付。'}</p>
+          </div>
           <div className={`customer-status-card ${bySeverity.P0 > 0 ? 'danger' : confirmed.length > 0 ? 'warning' : 'success'}`}>
             <span>整改建议</span>
             <strong>{bySeverity.P0 > 0 ? '先处理阻断项' : confirmed.length > 0 ? '带着清单推进整改' : '当前无需客户闭环'}</strong>
@@ -166,7 +191,8 @@ export function Findings() {
             <span><em>重点模块</em><b>{topModules.length ? topModules.join('、') : '暂无'}</b></span>
             <span><em>证据达标</em><b>{validatedCount}/{confirmed.length}</b></span>
             <span><em>覆盖类型</em><b>{familyStats.size}</b></span>
-            {commercialOverall && <span><em>交付 verdict</em><b>{commercialOverall}</b></span>}
+            {commercialOverall && <span><em>发布 verdict</em><b>{commercialOverall}</b></span>}
+            <span><em>handoff</em><b>{handoffReady ? 'safe' : 'not safe'}</b></span>
             {commercialGate && <span><em>门禁项</em><b>{commercialGate.blocking_check_count || 0}/{commercialGate.pending_check_count || 0}</b></span>}
           </div>
         </div>
@@ -176,7 +202,8 @@ export function Findings() {
         { label: '立即处理', value: bySeverity.P0, tone: 'danger', note: bySeverity.P0 ? '优先阻断风险' : '当前无阻断项' },
         { label: '优先整改', value: bySeverity.P1, tone: 'warning', note: bySeverity.P1 ? '建议本轮进入闭环' : '当前无高风险积压' },
         { label: '证据达标', value: validatedCount, tone: 'primary', note: '满足客户复验与验收口径' },
-        { label: '商业门禁', value: commercialOverall ? commercialReleaseLabel(commercialOverall) : '待同步', tone: commercialOverall === 'fail' ? 'danger' : commercialOverall === 'pending' ? 'warning' : commercialOverall === 'pass' ? 'success' : 'neutral', note: commercialAssets?.delivery_package.release_gate_block_reason || commercialAssets?.release_recommendation || '来自 commercial_assets.release_gate' },
+        { label: '发布门禁', value: commercialOverall ? commercialReleaseLabel(commercialOverall) : '待同步', tone: commercialOverall === 'fail' ? 'danger' : commercialOverall === 'pending' ? 'warning' : commercialOverall === 'pass' ? 'success' : 'neutral', note: commercialAssets?.delivery_package.release_gate_block_reason || commercialAssets?.release_recommendation || '来自 commercial_assets.release_gate' },
+        { label: '交付安全', value: handoffReady ? '已放行' : '未放行', tone: handoffReady ? 'success' : 'warning', note: handoffLabel },
         { label: '涉及模块', value: familyStats.size, tone: 'neutral', note: '已形成明确归类与分派方向' },
       ].map((item) => <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.value}</strong><small>{item.note}</small></article>)}</div>
       <div className="page-header findings-page-header"><div><span className="panel-kicker">清单视图</span><h1>行为验证</h1><p>已确认缺陷提供业务影响、修复建议、真实复验入口与回归执行动作。</p></div><div className="findings-toolbar-note">当前展示 {getFilterDisplayName(filter)} 整改项</div></div>
