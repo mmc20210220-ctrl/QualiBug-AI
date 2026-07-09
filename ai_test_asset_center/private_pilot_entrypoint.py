@@ -37,6 +37,10 @@ from ai_test_asset_center.private_pilot_deployment_patch import (
     install_deployment_contract_patch as _install_deployment_contract_patch,
     restore_deployment_contract_patch as _restore_deployment_contract_patch,
 )
+from ai_test_asset_center.private_pilot_no_fix_advice_patch import (
+    install_no_fix_advice_patch,
+    restore_no_fix_advice_patch,
+)
 from ai_test_asset_center.private_pilot_regression_oracle_patch import (
     install_regression_oracle_patch,
     restore_regression_oracle_patch,
@@ -107,6 +111,7 @@ def restore_deployment_contract_patch() -> None:
     restore_regression_run_visibility_patch()
     restore_regression_suite_refresh_patch()
     restore_regression_oracle_patch()
+    restore_no_fix_advice_patch()
     restore_coverage_steering_patch()
     restore_coverage_matrix_patch()
     restore_scan_result_repair_patch()
@@ -125,6 +130,7 @@ def install_runtime_patches() -> None:
     install_regression_suite_refresh_patch(patch_source=PATCH_SOURCE)
     install_coverage_matrix_patch(patch_source=PATCH_SOURCE, root=_service._root())
     install_regression_run_visibility_patch(patch_source=PATCH_SOURCE, root=_service._root())
+    install_no_fix_advice_patch(patch_source=PATCH_SOURCE)
     install_coverage_steering_patch(patch_source=PATCH_SOURCE)
     install_browser_ui_smoke_patch()
     install_customer_report_patch()
