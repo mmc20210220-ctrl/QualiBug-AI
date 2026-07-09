@@ -1,0 +1,56 @@
+flowchart TD
+    subgraph Governance["Campaign Governance"]
+        Scope["Project Scope<br/>+ Environment Ref"]
+        Snapshot["Source Snapshot Hash"]
+        Approval["Time-Bound Execution<br/>Approval Contract"]
+    end
+
+    subgraph Loop["Self-Improving Loop"]
+        StateMachine["Evolution State Machine<br/>PLANNED → ... → PROMOTED"]
+        Champion["Champion Engine"]
+        Challenger["Challenger Engine"]
+        Watchdog["Loop Watchdog<br/>Heartbeat + SQLite Lease"]
+    end
+
+    subgraph Engine["Discovery Engine"]
+        Reader["Reader<br/>Extract entities/APIs/rules<br/>from PRD + OpenAPI"]
+        Reasoner["Reasoner<br/>LLM-powered hypothesis<br/>generation (17 engines)"]
+        Executor["Executor<br/>Grounded Probe Executor<br/>Live HTTP + Browser + DB"]
+        Verifier["Verifier<br/>Confirm / Falsify<br/>Evidence-based verdict"]
+    end
+
+    subgraph Constraints["Guardrails"]
+        Timeout["timeout_seconds ≥ 300"]
+        Tokens["max_tokens ≥ 32768"]
+        Hypotheses["MAX_HYPOTHESES = 15"]
+        Workers["max_workers = 4"]
+    end
+
+    subgraph Output["Discovery Output"]
+        Finding["DiscoveryFinding<br/>+ verdict"]
+        RawEvidence["Raw Evidence<br/>request/response/assertion"]
+        Chain["Evidence Chain<br/>Causality links"]
+    end
+
+    Governance --> Engine
+    Loop --> Engine
+    Engine --> Reader
+    Reader --> Reasoner
+    Reasoner --> Executor
+    Executor --> Verifier
+    Verifier --> Finding
+    Constraints -.->|"enforce"| Engine
+    Finding --> RawEvidence
+    RawEvidence --> Chain
+
+    classDef gov fill:#e1bee7,stroke:#333,color:#000
+    classDef loop fill:#b3e5fc,stroke:#333,color:#000
+    classDef engine fill:#ffcc80,stroke:#333,color:#000
+    classDef guard fill:#ef9a9a,stroke:#333,color:#000
+    classDef output fill:#a5d6a7,stroke:#333,color:#000
+
+    class Scope,Snapshot,Approval gov
+    class StateMachine,Champion,Challenger,Watchdog loop
+    class Reader,Reasoner,Executor,Verifier engine
+    class Timeout,Tokens,Hypotheses,Workers guard
+    class Finding,RawEvidence,Chain output

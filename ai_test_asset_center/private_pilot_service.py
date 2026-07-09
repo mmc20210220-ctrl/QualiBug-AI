@@ -3696,7 +3696,22 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             pass
         if not _base_url:
             reasons.append({"code": "NO_TARGET", "message": "未配置被测目标 base_url 或启用连接器端点。"})
-        return self._json({"ok": True, "ready": len(reasons) == 0, "reasons": reasons})
+
+        # Integrate with CapabilityGapResolver for gap detection and resolution tasks
+        gap_summary = None
+        if reasons:
+            try:
+                from .capability_gap_resolver import CapabilityGapResolver
+                resolver = CapabilityGapResolver(project_id=project)
+                detected_gaps = resolver.detect_from_scan_preflight(reasons)
+                gap_summary = resolver.build_gap_report(detected_gaps)
+            except Exception:
+                pass
+
+        response = {"ok": True, "ready": len(reasons) == 0, "reasons": reasons}
+        if gap_summary:
+            response["gap_summary"] = gap_summary
+        return self._json(response)
 
     def _serve_frontend(self, parsed: "urllib.parse.ParseResult", root: Path) -> None:
         """Serve the prebuilt customer pilot SPA (frontend/dist). Public — called before

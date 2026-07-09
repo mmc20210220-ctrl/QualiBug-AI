@@ -1,0 +1,72 @@
+graph TB
+    subgraph Entry["Entry"]
+        Index["index.html<br/>SPA Shell"]
+        Main["main.tsx<br/>createRoot + StrictMode"]
+    end
+
+    subgraph App["App.tsx"]
+        BrowserRouter["BrowserRouter"]
+        AuthGuard["RequireAuth<br/>JWT localStorage check"]
+        Layout["Layout<br/>Sidebar + Topbar + Outlet"]
+    end
+
+    subgraph Pages["Pages (12 routes)"]
+        Login["/login<br/>Login / Register"]
+        Dashboard["/dashboard<br/>Risk Overview"]
+        Findings["/findings<br/>Defect List"]
+        Clues["/clues<br/>Internal Clues"]
+        Evidence["/evidence<br/>Evidence Chain"]
+        Behavior["/behavior-space<br/>Behavior Viz"]
+        Tasks["/test-tasks<br/>Task Board"]
+        Coverage["/coverage<br/>Coverage Matrix"]
+        Materials["/materials<br/>Knowledge Assets"]
+        Campaigns["/campaigns<br/>Scan Center"]
+        Release["/release<br/>Release Gate"]
+        Settings["/settings<br/>Config"]
+    end
+
+    subgraph Components["Shared Components"]
+        Sidebar["Sidebar<br/>Nav + Project Metrics"]
+        Topbar["Topbar<br/>Breadcrumb + Status"]
+        BEIRing["BEIRing<br/>3D Risk Ring (Three.js)"]
+        EvidenceFeed["EvidenceFeed<br/>Evidence List"]
+        EvidenceTimeline["EvidenceTimeline<br/>Timeline View"]
+        Toast["Toast<br/>Notification System"]
+        CoveragePanel["CoveragePanel"]
+        BugTypeBreakdown["BugTypeBreakdown<br/>Bug Chart"]
+    end
+
+    subgraph Data["Data Layer"]
+        Client["api/client.ts<br/>fetch wrapper + auth"]
+        Hooks["api/data.ts<br/>React hooks (usePipelineData, etc.)"]
+        Types["types/index.ts<br/>TypeScript interfaces"]
+    end
+
+    subgraph Backend["Backend"]
+        API["Port 8088<br/>Private Pilot API"]
+    end
+
+    Index --> Main
+    Main --> App
+    App --> BrowserRouter
+    BrowserRouter --> AuthGuard
+    AuthGuard --> Layout
+    Layout --> Pages
+    Pages --> Components
+    Pages --> Data
+    Data --> Client
+    Client --> API
+
+    classDef entry fill:#61dafb,stroke:#333,color:#000
+    classDef app fill:#764abc,stroke:#333,color:#fff
+    classDef page fill:#e0e0e0,stroke:#333,color:#000
+    classDef comp fill:#ffb74d,stroke:#333,color:#000
+    classDef data fill:#4db6ac,stroke:#333,color:#fff
+    classDef backend fill:#ef5350,stroke:#333,color:#fff
+
+    class Index,Main entry
+    class BrowserRouter,AuthGuard,Layout app
+    class Login,Dashboard,Findings,Clues,Evidence,Behavior,Tasks,Coverage,Materials,Campaigns,Release,Settings page
+    class Sidebar,Topbar,BEIRing,EvidenceFeed,EvidenceTimeline,Toast,CoveragePanel,BugTypeBreakdown comp
+    class Client,Hooks,Types data
+    class API backend

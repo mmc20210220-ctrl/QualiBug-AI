@@ -1,0 +1,74 @@
+graph TB
+    subgraph Entry["Entry Points"]
+        CLI["qualibug-server CLI"]
+        Docker["Docker CMD<br/>private_pilot_entrypoint"]
+    end
+
+    subgraph Patches["Runtime Patches Applied at Startup"]
+        P1["1. Customer Delivery Gate"]
+        P2["2. Scan Campaign Bridge"]
+        P3["3. Credential Safety"]
+        P4["4. Scan Result Repair"]
+        P5["5. Regression Oracle"]
+        P6["6. Regression Suite Refresh"]
+        P7["7. Regression Visibility"]
+        P8["8. Behavior Space"]
+        P9["9. Coverage Matrix"]
+        P10["10. Coverage Steering"]
+        P11["11. No-Fix-Advice"]
+        P12["12. Browser UI Smoke"]
+        P13["13. Scan Runtime Gate"]
+        P14["14. Benchmark Scan"]
+    end
+
+    subgraph Server["Private Pilot HTTP Server (Port 8088)"]
+        Handler["PrivatePilotHandler<br/>do_GET / do_POST"]
+        Auth["Auth Middleware<br/>JWT / Token"]
+        CORS["CORS Headers"]
+    end
+
+    subgraph Routes["API Routes"]
+        direction LR
+        R1["/api/health"]
+        R2["/api/scan/run<br/>(V12 Pipeline)"]
+        R3["/api/knowledge/*"]
+        R4["/api/findings"]
+        R5["/api/regression/*"]
+        R6["/api/evidence/*"]
+        R7["/api/pilot/*"]
+        R8["/api/service/*"]
+        R9["/api/connectors/*"]
+        R10["/api/settings/*"]
+    end
+
+    subgraph Legacy["FastAPI Gateway (Legacy)"]
+        FA["backend/main.py"]
+        FAR["/v1/ source-assets<br/>/v1/ scans<br/>/v1/ evidence-bundles"]
+    end
+
+    subgraph Core["Core Delegates"]
+        V12Scan["__main__.scan()<br/>V12 pipeline"]
+        Discovery["Discovery Engine"]
+        Knowledge["Knowledge Center"]
+    end
+
+    Entry --> Patches
+    Patches --> Server
+    Server --> Routes
+    Routes --> Core
+    FAR --> Core
+    FA --> FAR
+
+    classDef entry fill:#4fc3f7,stroke:#333,color:#000
+    classDef patch fill:#fff176,stroke:#333,color:#000
+    classDef server fill:#81c784,stroke:#333,color:#000
+    classDef route fill:#e0e0e0,stroke:#333,color:#000
+    classDef legacy fill:#ce93d8,stroke:#333,color:#000
+    classDef core fill:#ef5350,stroke:#333,color:#fff
+
+    class CLI,Docker entry
+    class P1,P2,P3,P4,P5,P6,P7,P8,P9,P10,P11,P12,P13,P14 patch
+    class Handler,Auth,CORS server
+    class R1,R2,R3,R4,R5,R6,R7,R8,R9,R10 route
+    class FA,FAR legacy
+    class V12Scan,Discovery,Knowledge core

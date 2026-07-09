@@ -134,6 +134,18 @@ def build_onboarding_remediation_kit(preflight: dict[str, Any], matrix: dict[str
         ))
 
     gap_counts = _capability_gap_counts(matrix)
+
+    # Integrate with CapabilityGapResolver for gap tracking
+    try:
+        from .capability_gap_resolver import CapabilityGapResolver
+        from .gap_tracker import GapTracker
+
+        resolver = CapabilityGapResolver(project_id="")
+        detected_gaps = resolver.detect_from_preflight(preflight, matrix)
+        gap_report = resolver.build_gap_report(detected_gaps)
+    except Exception:
+        gap_report = None
+
     return {
         "engine": "runtime_onboarding_remediation_kit_v1_phase93c",
         "status": "ready" if not actions else ("blocked" if any(a.get("priority") == "P0" for a in actions) else "needs_improvement"),
@@ -144,6 +156,7 @@ def build_onboarding_remediation_kit(preflight: dict[str, Any], matrix: dict[str
         "actions": actions,
         "recommended_probe_config_patch": _recommended_patch(actions),
         "customer_safe_note": "Do not paste production secrets. Use disposable staging accounts and rotate credentials after onboarding if required by customer policy.",
+        "gap_resolution": gap_report,
     }
 
 

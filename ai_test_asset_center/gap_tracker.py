@@ -157,8 +157,8 @@ class GapTracker:
                     })
                     updated_count += 1
                     self._append_ledger("gap_reopened", cause, {"reopen_count": existing.reopened_count})
-                elif existing.state != GapState.OPEN:
-                    # Update existing open gap
+                else:
+                    # Gap still present — update timestamp
                     existing.last_updated_at = timestamp
                     updated_count += 1
             else:

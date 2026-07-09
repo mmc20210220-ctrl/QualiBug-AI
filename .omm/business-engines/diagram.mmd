@@ -1,0 +1,76 @@
+graph TB
+    subgraph LLM["LLM Reasoning Layer"]
+        LLMReasoning["llm_reasoning.py (54KB)<br/>Unified LLM interface<br/>Prompt construction<br/>API calls<br/>Response parsing"]
+    end
+
+    subgraph Financial["Financial & Data Integrity"]
+        Causality["Causality Conservation<br/>Money/quantity bugs"]
+        Recon["Reconciliation<br/>Cross-view drift"]
+        Outcome["Outcome Validation<br/>End-to-end mismatch"]
+        Temporal["Temporal Regression<br/>Historical data drift"]
+    end
+
+    subgraph Structural["Structural & Schema"]
+        Invariant["Invariant Mining<br/>Schema contract violations"]
+        Counter["Counterexample<br/>Semantic contradictions"]
+        Population["Population Constraints<br/>Capacity/limit bugs"]
+    end
+
+    subgraph Behavioral["Behavioral & Lifecycle"]
+        Lifecycle["Lifecycle Reasoning<br/>State machine bugs"]
+        Saga["Saga Compensation<br/>Missing rollback"]
+        EventChain["Event Chain<br/>Ordering/duplication"]
+        Isolation["Consistency Isolation<br/>Tenant isolation drift"]
+    end
+
+    subgraph Specialized["Specialized Engines"]
+        Metamorphic["Metamorphic<br/>Differential behavior"]
+        Assurance["Assurance Coverage<br/>Coverage gap reasoning"]
+        Adaptation["Adaptation Layer<br/>Industry adaptation"]
+        Multisource["Multisource<br/>Cross-source synthesis"]
+        MultiIndustry["Multi-Industry<br/>Industry inference"]
+    end
+
+    subgraph Analyzers["Analyzers (analyzers/)"]
+        BizRules["Business Rules"]
+        StateMachine["State Machine"]
+        MultiTenant["Multi-Tenant"]
+        Conservation["Conservation"]
+        Concurrency["Concurrency"]
+        AsyncTask["Async Task"]
+        CacheCons["Cache Consistency"]
+        Auth["Authorization"]
+        UIAvail["UI/API Availability"]
+    end
+
+    subgraph Models["Domain Models"]
+        BSG["Business State Graph"]
+        BFG["Business Flow Graph"]
+        BFE["Business Flow Execution"]
+        BWM["Business World Model"]
+        BSME["State Machine Explorer"]
+    end
+
+    LLM --> Financial
+    LLM --> Structural
+    LLM --> Behavioral
+    LLM --> Specialized
+    LLM --> Analyzers
+    Financial --> Models
+    Behavioral --> Models
+
+    classDef llm fill:#ff7043,stroke:#333,color:#fff
+    classDef financial fill:#66bb6a,stroke:#333,color:#000
+    classDef structural fill:#42a5f5,stroke:#333,color:#000
+    classDef behavioral fill:#ab47bc,stroke:#333,color:#fff
+    classDef specialized fill:#ffa726,stroke:#333,color:#000
+    classDef analyzer fill:#26c6da,stroke:#333,color:#000
+    classDef models fill:#78909c,stroke:#333,color:#fff
+
+    class LLMReasoning llm
+    class Causality,Recon,Outcome,Temporal financial
+    class Invariant,Counter,Population structural
+    class Lifecycle,Saga,EventChain,Isolation behavioral
+    class Metamorphic,Assurance,Adaptation,Multisource,MultiIndustry specialized
+    class BizRules,StateMachine,MultiTenant,Conservation,Concurrency,AsyncTask,CacheCons,Auth,UIAvail analyzer
+    class BSG,BFG,BFE,BWM,BSME models

@@ -1,0 +1,63 @@
+flowchart LR
+    subgraph Input["Evidence Sources"]
+        HTTP["HTTP Probe<br/>request/response"]
+        Browser["Browser Smoke<br/>screenshots, HAR"]
+        DB["DB Snapshot<br/>before/after"]
+    end
+
+    subgraph Layer1["Layer 1: Raw Evidence"]
+        Raw["Raw Probe Evidence<br/>Unstructured"]
+    end
+
+    subgraph Layer2["Layer 2: Normalized"]
+        EN["Evidence Normalizer<br/>Standardized format"]
+    end
+
+    subgraph Layer3["Layer 3: Enriched"]
+        EE["Evidence Enricher v3<br/>Business context"]
+        EB["Evidence Bundle<br/>Normalizer"]
+        EGB["Evidence Graph<br/>Builder"]
+    end
+
+    subgraph Layer4["Layer 4: Finding Contract"]
+        DRF["Display-Ready<br/>Formatter (152KB)"]
+        Finding["Confirmed Finding<br/>+ Evidence Chain"]
+    end
+
+    subgraph Gates["Verification Gates"]
+        Gate1["Gate 1: Runtime<br/>Evidence Gate<br/>has_confirmation_evidence()"]
+        Gate2["Gate 2: Business<br/>Evidence Gate<br/>Semantic validation"]
+        Adversarial["Business Adversarial<br/>Validator"]
+    end
+
+    subgraph Store["Persistence"]
+        ArtifactStore["Evidence Artifact Store<br/>SHA-256 addressed"]
+    end
+
+    Input --> Layer1
+    Layer1 --> EN
+    EN --> Layer3
+    EE --> EB --> EGB
+    EGB --> Gate1
+    Gate1 --> Gate2
+    Gate2 --> Adversarial
+    Adversarial --> Layer4
+    DRF --> Finding
+    Layer3 --> ArtifactStore
+    Layer4 --> ArtifactStore
+
+    classDef input fill:#e3f2fd,stroke:#333,color:#000
+    classDef layer1 fill:#fff3e0,stroke:#333,color:#000
+    classDef layer2 fill:#f3e5f5,stroke:#333,color:#000
+    classDef layer3 fill:#e8f5e9,stroke:#333,color:#000
+    classDef layer4 fill:#c8e6c9,stroke:#333,color:#000
+    classDef gate fill:#ffcdd2,stroke:#333,color:#000
+    classDef store fill:#b0bec5,stroke:#333,color:#000
+
+    class HTTP,Browser,DB input
+    class Raw layer1
+    class EN layer2
+    class EE,EB,EGB layer3
+    class DRF,Finding layer4
+    class Gate1,Gate2,Adversarial gate
+    class ArtifactStore store

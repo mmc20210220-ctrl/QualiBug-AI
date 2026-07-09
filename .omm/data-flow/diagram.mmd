@@ -1,0 +1,82 @@
+flowchart LR
+    subgraph Input["Input Sources"]
+        PRD["PRD Document"]
+        OAS["OpenAPI Spec"]
+        SQL["DB Schema / SQL"]
+        Rules["Business Rules"]
+        Perms["Permission Matrix"]
+    end
+
+    subgraph Ingestion["Knowledge Ingestion"]
+        EKC["Enterprise Knowledge Center<br/>Unified ingestion"]
+        DI["Document Intelligence<br/>DBML, SQL, PDF, DOCX"]
+        PCC["Project Context Compiler"]
+    end
+
+    subgraph Planning["Discovery Planning"]
+        Reader["Reader<br/>Extract entities/APIs/rules"]
+        Planner["Probe Planner<br/>Risk-based planning"]
+        Campaign["Campaign<br/>Scope + source hash"]
+    end
+
+    subgraph Reasoning["Business Reasoning (17 engines)"]
+        Causality["Causality<br/>Conservation bugs"]
+        Recon["Reconciliation<br/>Cross-view drift"]
+        Invariant["Invariant<br/>Schema violations"]
+        Lifecycle["Lifecycle<br/>State machine bugs"]
+        Saga["Saga<br/>Compensation gaps"]
+        Temporal["Temporal<br/>Historical drift"]
+    end
+
+    subgraph Execution["Probe Execution"]
+        GPE["Grounded Probe Executor<br/>Live HTTP execution"]
+        Browser["Browser UI Smoke<br/>Playwright"]
+        DB["DB Verifier<br/>Snapshot comparison"]
+    end
+
+    subgraph Evidence["Evidence Pipeline"]
+        Raw["Raw Probe Evidence"]
+        EN["Evidence Normalizer"]
+        EE["Evidence Enricher v3"]
+        EB["Evidence Bundles<br/>SHA-256 verified"]
+    end
+
+    subgraph Gate["Verification Gates"]
+        REGate["Runtime Evidence Gate"]
+        BEGate["Business Evidence Gate"]
+        Judge["Finding Judge<br/>Confirmed / Falsified"]
+    end
+
+    subgraph Output["Output"]
+        DRF["Display-Ready Formatter<br/>Frontend-zero-compute JSON"]
+        Findings["Findings<br/>Bug reports + evidence"]
+        Dashboard["Frontend Dashboard<br/>Risk overview"]
+    end
+
+    Input --> Ingestion
+    Ingestion --> Planning
+    Planning --> Reasoning
+    Reasoning --> Execution
+    Execution --> Raw
+    Raw --> EN --> EE --> EB
+    EB --> REGate --> BEGate --> Judge
+    Judge --> DRF
+    DRF --> Findings --> Dashboard
+
+    classDef input fill:#e1f5fe,stroke:#333,color:#000
+    classDef ingest fill:#fff3e0,stroke:#333,color:#000
+    classDef plan fill:#f3e5f5,stroke:#333,color:#000
+    classDef reason fill:#e8f5e9,stroke:#333,color:#000
+    classDef exec fill:#ffebee,stroke:#333,color:#000
+    classDef evid fill:#e0f2f1,stroke:#333,color:#000
+    classDef gate fill:#fff9c4,stroke:#333,color:#000
+    classDef output fill:#ede7f6,stroke:#333,color:#000
+
+    class PRD,OAS,SQL,Rules,Perms input
+    class EKC,DI,PCC ingest
+    class Reader,Planner,Campaign plan
+    class Causality,Recon,Invariant,Lifecycle,Saga,Temporal reason
+    class GPE,Browser,DB exec
+    class Raw,EN,EE,EB evid
+    class REGate,BEGate,Judge gate
+    class DRF,Findings,Dashboard output
