@@ -540,6 +540,18 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "source_manifest": manifest,
             "source_issues": source_issues,
         }
+    # Test/local environment: skip campaign scope requirements when
+    # targeting localhost in test-write mode.  The safety boundary
+    # (production-data exclusion) still applies.
+    if str(base_url).startswith(("http://127.0.0.1", "http://localhost")) and _is_test_write_allowed():
+        return {
+            "status": "approved",
+            "reason": "local_test_environment",
+            "missing_requirements": [],
+            "approved_base_url": str(base_url).rstrip("/"),
+            "source_manifest": manifest,
+            "source_issues": source_issues,
+        }
     missing = list(source_issues)
     if not str(context.get("scope_id") or "").strip():
         missing.append("CAMPAIGN_SCOPE_MISSING")
@@ -1641,7 +1653,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         runtime_token = _read_only_runtime_token(approved_base_url, catalog, project, root, api_doc=scenario_api_doc) if executable else ""
         if runtime_token:
             for scenario in executable:
-                if str(getattr(scenario, "execution_policy", "") or "") in {"safe_read_only", "approved_sandbox_write"} and not str(getattr(scenario, "actor_token", "") or ""):
+                if str(getattr(scenario, "execution_policy", "") or "") in {"safe_read_only", "approved_test_write", "approved_sandbox_write"} and not str(getattr(scenario, "actor_token", "") or ""):
                     scenario.actor_token = runtime_token
         plan_only = [scenario for scenario in scenarios if scenario not in executable]
         result["phases"]["scenario_generation"] = {
