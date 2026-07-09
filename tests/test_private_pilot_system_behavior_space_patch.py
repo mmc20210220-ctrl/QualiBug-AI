@@ -104,6 +104,7 @@ def test_private_pilot_builder_contract_carries_system_behavior_space() -> None:
         assert system_slices
         assert all(item["kind"] == "invariant" for item in system_slices)
         assert any(item.get("_system_behavior_promise_id") for item in system_slices)
+        assert any(item.get("_system_behavior_api_routes") for item in system_slices)
         assert any(item.get("source") == "system_behavior_space" for item in contract["coverage_gaps"])
     finally:
         restore_system_behavior_space_patch()
@@ -120,6 +121,44 @@ def test_system_behavior_slice_metadata_reaches_scenario_runtime_hints() -> None
         assert "SystemPromiseOracle.open_ended_promise_violation" in scenario["oracle_rules"]
         assert scenario["runtime_hints"]["system_behavior_space"]["promise_id"]
         assert scenario["runtime_hints"]["system_behavior_space"]["surface_plan"]
+        assert "api_routes" in scenario["runtime_hints"]["system_behavior_space"]
+    finally:
+        restore_system_behavior_space_patch()
+
+
+def test_system_promise_scenario_does_not_invent_safe_get_for_write_only_route() -> None:
+    restore_system_behavior_space_patch()
+    install_system_behavior_space_patch()
+    try:
+        builder = BusinessStateGraphBuilder()
+        graphs = builder.build(
+            "退款金额必须守恒。",
+            """
+openapi: 3.0.0
+paths:
+  /api/refunds:
+    post:
+      summary: create refund
+""",
+            "CREATE TABLE refunds (id INTEGER, refund_amount DECIMAL(10,2));",
+        )
+        contract = builder.behavior_contract()
+        system_slices = [item for item in contract["slices"] if item.get("_selection_origin") == "system_behavior_space"]
+        assert system_slices
+        assert any(route.get("method") == "POST" for item in system_slices for route in item.get("_system_behavior_api_routes", []))
+
+        scenarios = SemanticScenarioGenerator().generate(
+            graphs,
+            API_SPEC,
+            active_slices=system_slices,
+            allow_source_runtime=True,
+        )
+        scenario = next(item for item in scenarios if item.selection_origin == "system_behavior_space").to_dict()
+
+        assert scenario["execution_policy"] == "plan_only_requires_fixture"
+        assert scenario["steps"] == []
+        assert scenario["runtime_hints"]["system_promise_execution_guard"] == "plan_only_no_source_bound_safe_read_route"
+        assert "SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND" in scenario["evidence_gaps"]
     finally:
         restore_system_behavior_space_patch()
 
