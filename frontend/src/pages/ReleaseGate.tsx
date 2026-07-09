@@ -1,23 +1,90 @@
 import { useSearchParams } from 'react-router-dom';
-import { useReleaseData } from '../api/data';
+import { usePipelineData, useReleaseData } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
+
+type JsonRecord = Record<string, unknown>;
+type GateCheck = { name: string; status: 'pass' | 'fail' | 'pending'; detail: string };
+
+function asRecord(value: unknown): JsonRecord {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function asNum(value: unknown, fallback = 0): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function regressionGateCheck(record: JsonRecord): GateCheck | null {
+  const regressionRun = asRecord(record.regression_run);
+  const regressionSummary = asRecord(record.regression_summary);
+  const latestRun = asRecord(regressionSummary.latest_run);
+  const regressionRefresh = asRecord(record.regression_suite_refresh);
+  const regressionSuite = asRecord(record.regression_suite);
+  const refreshSummary = asRecord(regressionRefresh.summary);
+  const gateStatus = asText(regressionRun.gate_status) || asText(latestRun.gate_status);
+  const hasLatestRun = Boolean(gateStatus || asText(regressionRun.status) || asText(latestRun.generated_at));
+  const obligationCount = asNum(regressionSuite.total_probe_count, asNum(refreshSummary.total_probe_count));
+  const confirmedLedgerProbeCount = asNum(regressionSuite.confirmed_ledger_probe_count, asNum(refreshSummary.confirmed_ledger_probe_count));
+  const failed = asNum(regressionRun.failed_count, asNum(regressionSummary.failed_defect_count));
+  const needsReview = asNum(regressionRun.needs_review_count, asNum(regressionSummary.pending_defect_count));
+  const passed = asNum(regressionRun.passed_count, asNum(regressionSummary.passed_defect_count));
+
+  if (gateStatus === 'failed') {
+    return {
+      name: '修复后回归 Gate',
+      status: 'fail',
+      detail: `最近一次回归失败：${failed} 个探针失败，${needsReview} 个需复核。发布前必须先修复或复核失败项。`,
+    };
+  }
+  if (gateStatus === 'manual_approval_required') {
+    return {
+      name: '修复后回归 Gate',
+      status: 'pending',
+      detail: `最近一次回归仍需人工复核：${needsReview} 个探针缺少强自动判定，不能直接放行发布。`,
+    };
+  }
+  if (gateStatus === 'passed') {
+    return {
+      name: '修复后回归 Gate',
+      status: 'pass',
+      detail: `最近一次回归通过：${passed} 个探针通过。该结论仅代表最近一次持久化回归结果，不扩大到未覆盖范围。`,
+    };
+  }
+  if (!hasLatestRun && asText(regressionRefresh.status) === 'refreshed' && obligationCount > 0) {
+    return {
+      name: '修复后回归 Gate',
+      status: 'pending',
+      detail: `已自动生成 ${obligationCount} 个回归探针，其中 ${confirmedLedgerProbeCount} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。`,
+    };
+  }
+  return null;
+}
 
 export function ReleaseGate() {
   usePageTitle('发布门禁');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { data, loading } = useReleaseData(project);
+  const { data: pipelineData } = usePipelineData(project);
+  const pipelineRecord = asRecord(pipelineData);
+  const regressionCheck = regressionGateCheck(pipelineRecord);
 
-  const checks = data?.checks || [];
-  const overall = data?.overall || 'pass';
+  const baseChecks = (data?.checks || []) as GateCheck[];
+  const checks = regressionCheck ? [regressionCheck, ...baseChecks] : baseChecks;
+  const derivedOverall: 'pass' | 'fail' | 'pending' = checks.some(c => c.status === 'fail') ? 'fail' : checks.some(c => c.status === 'pending') ? 'pending' : 'pass';
+  const overall = checks.length > 0 ? derivedOverall : (data?.overall || 'pass');
   const passCount = checks.filter(c => c.status === 'pass').length;
   const failCount = checks.filter(c => c.status === 'fail').length;
   const pendingCount = checks.filter(c => c.status === 'pending').length;
   const hasGateData = checks.length > 0;
   const gateMode: 'missing_project' | 'no_data' | 'data' = !project ? 'missing_project' : hasGateData ? 'data' : 'no_data';
-  const gateTitle = gateMode === 'data' ? (overall === 'pass' ? '通过' : '阻塞') : gateMode === 'missing_project' ? '未选择项目' : '暂无数据';
+  const gateTitle = gateMode === 'data' ? (overall === 'pass' ? '通过' : overall === 'pending' ? '待处理' : '阻塞') : gateMode === 'missing_project' ? '未选择项目' : '暂无数据';
   const gateSub = gateMode === 'data'
-    ? `${passCount}/${checks.length} 检查通过`
+    ? `${passCount}/${checks.length} 检查通过${failCount > 0 ? `，${failCount} 项阻塞` : pendingCount > 0 ? `，${pendingCount} 项待处理` : ''}`
     : gateMode === 'missing_project'
       ? '请选择项目后生成门禁结果'
       : '运行一次完整扫描以生成发布门禁检查结果';
@@ -89,8 +156,10 @@ export function ReleaseGate() {
             <p>
               {gateMode === 'data'
                 ? overall === 'pass'
-                  ? '当前门禁检查未发现阻断项，可以进入正式发布评审。'
-                  : '当前仍存在阻断项，不建议直接进入正式发布。'
+                  ? '当前门禁检查未发现阻断或待处理项，可以进入正式发布评审。'
+                  : overall === 'pending'
+                    ? '当前仍存在待处理项，尤其是修复后回归未执行或需人工复核，暂不应直接放行。'
+                    : '当前仍存在阻断项，不建议直接进入正式发布。'
                 : gateMode === 'missing_project'
                   ? '尚未选择客户项目，暂时无法形成发布结论。'
                   : '当前还没有生成门禁检查结果，需先完成一次真实扫描。'}
@@ -108,7 +177,7 @@ export function ReleaseGate() {
           </div>
           <div className="release-summary-card">
             <strong>结果来源</strong>
-            <p>所有门禁结论均基于当前项目的真实检测结果生成，不混入样例或演示数据。</p>
+            <p>所有门禁结论均基于当前项目的真实检测结果生成；修复后回归 Gate 来自 command center 的最新 regression_run / regression_suite_refresh，不混入样例或演示数据。</p>
           </div>
         </div>
       </section>
@@ -128,8 +197,8 @@ export function ReleaseGate() {
             </div>
           </div>
         )}
-        {checks.map(c => (
-          <div key={c.name} className="check-item">
+        {checks.map((c, index) => (
+          <div key={`${c.name}-${index}`} className="check-item">
             <span className={`check-icon ${c.status}`}>
               {c.status === 'pass' ? '✓' : c.status === 'fail' ? '✗' : '!'}
             </span>
