@@ -226,12 +226,81 @@ def _load_customer_ready_defect_probes(project: str, root: Path) -> list[dict[st
     return probes
 
 
-def _load_fix_regression_probes(project: str, root: Path) -> list[dict[str, Any]]:
-    """Load traditional fix-regression probes plus Phase55 approved confirmations.
+def _load_confirmed_findings_regression_probes(project: str, root: Path) -> list[dict[str, Any]]:
+    """Convert persisted confirmed defects into durable regression probes.
 
-    Phase55 candidates are already approval-gated.  They are included alongside
-    fix-verification probes so a confirmed customer defect becomes a durable
-    regression obligation, without requiring raw business payload persistence.
+    ``regression_runner`` already knows how to re-verify ``confirmed_findings.json``.
+    The suite builder also needs to include the same confirmed defects in
+    smoke/release/full suites so a customer can run one regression command after
+    a fix and see whether every delivered bug is covered.
+
+    This bridge only consumes existing evidence-backed confirmed findings. It
+    skips entries without a replayable reproduction path and does not invent
+    request payloads or expected statuses.
+    """
+    project = _safe_project_id(project)
+    ws = root / "platform_workspace" / project / "defect_discovery"
+    ledger = _load_json_safe(ws / "confirmed_findings.json", {})
+    if not isinstance(ledger, dict) or not ledger:
+        return []
+    probes: list[dict[str, Any]] = []
+    for evidence_id, defect in ledger.items():
+        if not isinstance(defect, dict):
+            continue
+        reproduction = defect.get("reproduction") if isinstance(defect.get("reproduction"), dict) else {}
+        raw_evidence = defect.get("raw_evidence") if isinstance(defect.get("raw_evidence"), dict) else {}
+        request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+        evidence_quality = defect.get("evidence_quality") if isinstance(defect.get("evidence_quality"), dict) else {}
+        method = str(reproduction.get("method") or request_raw.get("method") or "GET").upper()
+        path = str(reproduction.get("path") or request_raw.get("path") or "").strip()
+        if not path:
+            path = _extract_path_from_curl(str(reproduction.get("curl_command") or evidence_quality.get("curl_command") or ""))
+        if not path:
+            continue
+        request_body: Any = reproduction.get("request_body") if "request_body" in reproduction else reproduction.get("body")
+        if request_body is None and isinstance(reproduction.get("steps"), list):
+            request_body = _extract_request_body_from_steps(reproduction.get("steps") or [])
+        confidence_raw = defect.get("confidence_score") or evidence_quality.get("score") or 0
+        try:
+            confidence = float(confidence_raw)
+            if confidence > 1:
+                confidence = confidence / 100.0
+        except (TypeError, ValueError):
+            confidence = 0.0
+        probe: dict[str, Any] = {
+            "regression_probe_id": f"CONFIRMED_REG_{evidence_id}",
+            "issue_id": defect.get("issue_id") or defect.get("id") or evidence_id,
+            "title": defect.get("title") or defect.get("business_summary") or f"已确认缺陷回归 {evidence_id}",
+            "risk_type": reproduction.get("risk_type") or defect.get("risk_type") or defect.get("category") or defect.get("defect_family_label") or "business_risk",
+            "severity": defect.get("severity") or "P2",
+            "method": method,
+            "path": path,
+            "actor": reproduction.get("actor") or request_raw.get("actor") or defect.get("actor") or "same_reproduction_actor",
+            "expected": defect.get("expected") or "原 confirmed 缺陷信号不应复现；若缺少强自动断言则进入人工复核。",
+            "source": "confirmed_findings_ledger",
+            "candidate_tier": "confirmed_customer_defect",
+            "verification_status": "confirmed",
+            "verification_badge": "confirmed_finding_regression",
+            "confidence_score": round(max(0.0, min(confidence, 1.0)), 3),
+            "high_confidence_candidate": True,
+            "evidence_quality": dict(evidence_quality),
+            "confirmed_evidence_id": str(evidence_id),
+        }
+        current_campaign_scope = defect.get("current_campaign_scope") if isinstance(defect.get("current_campaign_scope"), dict) else {}
+        if current_campaign_scope:
+            probe["current_campaign_scope"] = dict(current_campaign_scope)
+        if request_body is not None:
+            probe["request_body"] = request_body
+        probes.append(probe)
+    return probes
+
+
+def _load_fix_regression_probes(project: str, root: Path) -> list[dict[str, Any]]:
+    """Load traditional fix-regression probes plus confirmed defect obligations.
+
+    Every evidence-backed confirmed finding with a replayable reproduction path is
+    included as a durable regression probe, even when older fix-regression probe
+    files already exist.  Existing approved candidate sources remain supported.
     """
     project = _safe_project_id(project)
     probes: list[dict[str, Any]] = []
@@ -262,9 +331,7 @@ def _load_fix_regression_probes(project: str, root: Path) -> list[dict[str, Any]
             if isinstance(item, dict) and item.get("approved") is True
         )
 
-    if probes:
-        return probes
-
+    probes.extend(_load_confirmed_findings_regression_probes(project, root))
     probes.extend(_load_customer_ready_defect_probes(project, root))
     if probes:
         return probes
@@ -303,6 +370,8 @@ def _risk_score(probe: dict[str, Any]) -> float:
         score += 10
     if probe.get("source") == "phase55_confirmed_bug_flywheel":
         score += 14
+    if probe.get("source") == "confirmed_findings_ledger":
+        score += 16
     if str(probe.get("issue_id") or ""):
         score += 4
     return round(score, 2)
@@ -442,6 +511,7 @@ def build_regression_suite(project_id: str = "real_project_demo", root: Path | N
     modes = _select_modes(probes, cfg, options)
     p0_p1_count = sum(1 for p in probes if p.get("severity") in {"P0", "P1"})
     destructive_count = sum(1 for p in probes if p.get("destructive"))
+    confirmed_ledger_count = sum(1 for p in probes if p.get("source") == "confirmed_findings_ledger")
     ci_gate_recommendation = "run_release_suite"
     if not probes:
         ci_gate_recommendation = "no_regression_suite_yet"
@@ -458,10 +528,12 @@ def build_regression_suite(project_id: str = "real_project_demo", root: Path | N
         "full_count": len(modes["full"]["items"]),
         "p0_p1_count": p0_p1_count,
         "destructive_probe_count": destructive_count,
+        "confirmed_ledger_probe_count": confirmed_ledger_count,
         "allow_destructive_regression": bool(options.get("allow_destructive_regression") or cfg.get("allow_destructive_tests")),
         "module_distribution": _count_by(probes, "module"),
         "risk_distribution": _count_by(probes, "risk_type"),
         "severity_distribution": _count_by(probes, "severity"),
+        "source_distribution": _count_by(probes, "source"),
         "ci_gate_recommendation": ci_gate_recommendation,
     }
     if current_campaign_scope:
