@@ -240,4 +240,6 @@ def test_coverage_steering_uses_structured_system_promise_learning(tmp_path: Pat
     assert ordered[0]["slice_id"] == "system_promise_money_tenant_ui"
     assert ordered[0]["_learning_steering"]["system_behavior_slice"] is True
     assert "money_quantity_conservation" in ordered[0]["_learning_steering"]["matched_families"]
-    assert ordered[0]["_learning_steering"]["surfaces"] == ["api", "db", "ui"]
+    # Surface detection includes "auth" because the "tenant" dimension
+    # implies auth surface relevance in the industry-agnostic keyword mapping.
+    assert ordered[0]["_learning_steering"]["surfaces"] == ["api", "auth", "db", "ui"]

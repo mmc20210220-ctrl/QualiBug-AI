@@ -212,7 +212,13 @@ def refresh_project_learning(project: str, root: Path, *, refresh_platform: bool
     data = get_risk_clues(project, root)
     clues = data.get("clues") if isinstance(data.get("clues"), dict) else {}
     new_count = int(data.get("new_this_scan") or 0) if isinstance(data, dict) else 0
-    project_learning = _write_project_learning(project, root, clues, now=_now(), new_count=new_count, current_findings=[])
+    # Carry forward recent confirmed findings persisted by save_risk_clues so
+    # that rebuilds (triggered by regression history writes or coverage steering
+    # reads) do not lose the learning signal from the current scan.
+    recent_findings = data.get("recent_confirmed_findings") if isinstance(data, dict) else []
+    if not isinstance(recent_findings, list):
+        recent_findings = []
+    project_learning = _write_project_learning(project, root, clues, now=_now(), new_count=new_count, current_findings=recent_findings)
     if refresh_platform:
         refresh_platform_learning(root)
     return project_learning
@@ -279,7 +285,12 @@ def refresh_platform_learning(root: Path) -> dict[str, Any]:
             pool = _read_json(project_dir / "risk_clue_pool" / "risk_clues.json", {})
             clues = pool.get("clues") if isinstance(pool, dict) and isinstance(pool.get("clues"), dict) else {}
             new_count = int(pool.get("new_this_scan") or 0) if isinstance(pool, dict) else 0
-            project_learning = _write_project_learning(project, root, clues, now=_now(), new_count=new_count, current_findings=[])
+            # Carry forward recent confirmed findings so platform learning
+            # rebuilds include the same signals as project learning.
+            recent_findings = pool.get("recent_confirmed_findings") if isinstance(pool, dict) else []
+            if not isinstance(recent_findings, list):
+                recent_findings = []
+            project_learning = _write_project_learning(project, root, clues, now=_now(), new_count=new_count, current_findings=recent_findings)
             for signal in project_learning.get("signals") if isinstance(project_learning.get("signals"), list) else []:
                 if not isinstance(signal, dict):
                     continue
@@ -306,7 +317,15 @@ def _write_project_learning(
     current_findings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     clues = clues_dict if isinstance(clues_dict, dict) else {}
-    project_learning = build_project_learning(project, root, clues_dict=clues, current_findings=current_findings or [])
+    findings = current_findings or []
+    project_learning = build_project_learning(project, root, clues_dict=clues, current_findings=findings)
+    # Persist recent confirmed findings so refresh_project_learning can
+    # rebuild with them even when called separately (e.g. after regression
+    # history write), closing the confirmed-finding → learning feedback loop.
+    _recent_confirmed = [
+        {k: v for k, v in f.items() if k in ("title", "severity", "verdict", "validation_status", "gate_passed", "system_promise_id", "regression_contract", "system_behavior_dimensions", "system_behavior_surface_plan", "system_behavior_source_family", "evidence", "repro_path", "category", "source")}
+        for f in findings if isinstance(f, dict) and _is_confirmed_finding(f)
+    ]
     pool_data = {
         "phase": "risk_clue_pool_v3_project_learning",
         "project": project,
@@ -316,6 +335,8 @@ def _write_project_learning(
         "clues": clues,
         "project_learning": project_learning,
     }
+    if _recent_confirmed:
+        pool_data["recent_confirmed_findings"] = _recent_confirmed
     _write_json(_project_pool_dir(project, root) / "risk_clue_pool.json", pool_data)
     _write_json(_project_pool_dir(project, root) / "risk_clues.json", pool_data)
     return project_learning
