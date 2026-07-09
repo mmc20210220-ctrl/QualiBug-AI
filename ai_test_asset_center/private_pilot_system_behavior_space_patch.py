@@ -10,6 +10,8 @@ and passes that parsed asset into the behavior-space builder.
 The model is also materialized into existing ``behavior_contract['slices']`` as
 source-grounded invariant slices.  That keeps execution inside the current V12
 scheduler and SemanticScenarioGenerator instead of introducing a second executor.
+The generator is patched only to preserve the system-promise metadata in runtime
+hints and oracle rules; execution still uses the existing scenario contract.
 
 Learning feedback remains handled by existing modules:
 
@@ -172,6 +174,107 @@ def _attach_system_behavior_slices(contract: dict[str, Any], space: dict[str, An
     return contract
 
 
+def _system_behavior_hints(slice_meta: dict[str, Any]) -> dict[str, Any]:
+    if str(slice_meta.get("_selection_origin") or "") != "system_behavior_space":
+        return {}
+    promise_id = str(slice_meta.get("_system_behavior_promise_id") or "").strip()
+    if not promise_id:
+        return {}
+    return {
+        "version": SYSTEM_BEHAVIOR_SPACE_VERSION,
+        "promise_id": promise_id,
+        "probe_id": str(slice_meta.get("_system_behavior_probe_id") or ""),
+        "dimensions": [str(item) for item in (slice_meta.get("_system_behavior_dimensions") or []) if str(item)],
+        "surface_plan": [str(item) for item in (slice_meta.get("_system_behavior_surface_plan") or []) if str(item)],
+        "required_assets": [str(item) for item in (slice_meta.get("_system_behavior_required_assets") or []) if str(item)],
+        "source_slice_id": str(slice_meta.get("slice_id") or ""),
+        "source_family": str(slice_meta.get("_selection_family") or "system_promise"),
+    }
+
+
+def _slice_invariant_text(slice_meta: dict[str, Any]) -> str:
+    for ref in slice_meta.get("source_refs") or []:
+        if isinstance(ref, dict) and str(ref.get("quote") or "").strip():
+            return str(ref.get("quote") or "").strip()
+    return str(slice_meta.get("entity") or "system_promise")
+
+
+def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], discovery_round: int) -> Any:
+    hints = _system_behavior_hints(slice_meta)
+    if not hints:
+        return item
+    try:
+        from ai_test_asset_center.semantic_scenario_generator import ExecutableScenario, ScenarioStep
+    except Exception:
+        return item
+    invariant = _slice_invariant_text(slice_meta)
+    entity = str(slice_meta.get("entity") or "system")
+    endpoints = [str(value) for value in (slice_meta.get("endpoints") or []) if str(value).startswith("/")]
+    evidence_gaps = [str(value) for value in (slice_meta.get("evidence_gaps") or []) if str(value)]
+    if item is None:
+        steps = []
+        execution_policy = "plan_only_requires_fixture"
+        if endpoints:
+            steps = [ScenarioStep(order=1, action="observe_system_promise_surface", api_method="GET", api_path=endpoints[0], expected_status=200, actor="readonly")]
+            execution_policy = "safe_read_only"
+        item = ExecutableScenario(
+            id=f"system_promise:{hints['promise_id']}",
+            title=f"[System promise] {entity}: {hints['source_family']}",
+            description=invariant[:300],
+            category="system_promise",
+            severity="P1",
+            entity=entity,
+            preconditions=["系统行为承诺来自 System Behavior Space，执行必须保留证据链。"],
+            actors=["readonly"],
+            steps=steps,
+            oracle_rules=[],
+            confidence=max(float(slice_meta.get("priority") or 0.0), 0.45),
+            execution_policy=execution_policy,
+            evidence_gaps=evidence_gaps,
+            source_refs=[dict(ref) for ref in (slice_meta.get("source_refs") or []) if isinstance(ref, dict)],
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="system_promise",
+            discovery_round=discovery_round,
+            selection_origin="system_behavior_space",
+        )
+    item.category = "system_promise"
+    item.behavior_slice_kind = "system_promise"
+    item.selection_origin = "system_behavior_space"
+    if not str(item.title).startswith("[System promise]"):
+        item.title = f"[System promise] {item.title}"
+    rules = list(getattr(item, "oracle_rules", []) or [])
+    for rule in ["SystemPromiseOracle.open_ended_promise_violation", *(f"SystemPromiseOracle.dimension:{dim}" for dim in hints["dimensions"][:8])]:
+        if rule not in rules:
+            rules.append(rule)
+    item.oracle_rules = rules
+    runtime_hints = dict(getattr(item, "runtime_hints", {}) or {})
+    runtime_hints["system_behavior_space"] = hints
+    runtime_hints["system_promise_invariant"] = invariant[:500]
+    item.runtime_hints = runtime_hints
+    item.evidence_gaps = list(dict.fromkeys([*(getattr(item, "evidence_gaps", []) or []), *evidence_gaps]))
+    return item
+
+
+def _install_system_behavior_scenario_patch() -> None:
+    try:
+        from ai_test_asset_center import semantic_scenario_generator as _ssg
+    except Exception:
+        return
+    if getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", False):
+        return
+    original = getattr(_ssg.SemanticScenarioGenerator, "_invariant_from_meta", None)
+    if not callable(original):
+        return
+
+    def _invariant_from_meta_with_system_behavior(self: Any, slice_meta: dict[str, Any], discovery_round: int, api_doc: str) -> Any:
+        item = original(self, slice_meta, discovery_round, api_doc)
+        return _enrich_system_behavior_scenario(item, slice_meta, discovery_round)
+
+    _ssg.SemanticScenarioGenerator._ORIGINAL_INVARIANT_FROM_META_SYSTEM_BEHAVIOR = original  # type: ignore[attr-defined]
+    _ssg.SemanticScenarioGenerator._invariant_from_meta = _invariant_from_meta_with_system_behavior  # type: ignore[method-assign]
+    _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED = True  # type: ignore[attr-defined]
+
+
 def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> None:
     if getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", False):
         return
@@ -229,6 +332,7 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
     _bsg.BusinessStateGraphBuilder.build = _build_with_system_behavior_space  # type: ignore[method-assign]
     _bsg.BusinessStateGraphBuilder.behavior_contract = _behavior_contract_with_system_behavior_space  # type: ignore[method-assign]
     _install_v12_behavior_space_context_patch()
+    _install_system_behavior_scenario_patch()
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
 
@@ -285,6 +389,14 @@ def restore_system_behavior_space_patch() -> None:
         if callable(original_v12):
             _v12.run_v12_pipeline = original_v12  # type: ignore[assignment]
         _v12._SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED = False  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        from ai_test_asset_center import semantic_scenario_generator as _ssg
+        original_scenario = getattr(_ssg.SemanticScenarioGenerator, "_ORIGINAL_INVARIANT_FROM_META_SYSTEM_BEHAVIOR", None)
+        if callable(original_scenario):
+            _ssg.SemanticScenarioGenerator._invariant_from_meta = original_scenario  # type: ignore[method-assign]
+        _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED = False  # type: ignore[attr-defined]
     except Exception:
         pass
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = False  # type: ignore[attr-defined]
