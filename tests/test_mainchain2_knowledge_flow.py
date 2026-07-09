@@ -36,8 +36,8 @@ def test_sync_loads_asset_from_registry_when_no_raw_files(tmp_path):
     _write_asset(tmp_path, project, {
         "project_id": project,
         "rule_library": [{"rule_id": "r1", "statement": "订单金额必须等于单价×数量", "risk_type": "money_consistency"}],
-        "permission_matrix": [{"permission_id": "p1", "statement": "普通用户不能访问/admin接口"}],
-        "risk_domains": [{"risk_id": "h1", "statement": "历史bug: 退款后库存未回滚"}],
+        "permission_matrix": [{"permission_id": "p1", "role": "普通用户", "resource": "admin接口", "actions": ["read"]}],
+        "risk_domains": [{"risk_id": "h1", "title": "历史bug: 退款后库存未回滚", "risk_type": "data_conservation"}],
         "summary": {"rule_count": 1, "knowledge_ready": True},
     })
     result = _sync_input_only_knowledge_asset(project, tmp_path)
@@ -69,16 +69,23 @@ def test_sync_disabled_when_no_asset_and_no_files(tmp_path):
 
 def test_knowledge_asset_planning_text_formats_rules_perms_risks():
     """Fix B: the asset's structured knowledge flattens into planning text the
-    behavior-graph builder can parse — fully generic, no hardcoding."""
+    behavior-graph builder can parse — fully generic, no hardcoding.
+
+    Uses the ACTUAL field names produced by enterprise_knowledge_center:
+    - rule_library entries use 'statement'
+    - permission_matrix entries use 'role'/'resource'/'actions'/'scope'
+    - risk_domains entries use 'title'/'expected'/'risk_type'
+    """
     asset = {
         "rule_library": [{"rule_id": "r1", "statement": "金额必须一致"}],
-        "permission_matrix": [{"permission_id": "p1", "statement": "用户不能访问/admin"}],
-        "risk_domains": [{"risk_id": "h1", "statement": "退款后库存未回滚"}],
+        "permission_matrix": [{"permission_id": "p1", "role": "普通用户", "resource": "admin接口", "actions": ["read"], "scope": "own_tenant"}],
+        "risk_domains": [{"risk_id": "h1", "title": "退款后库存未回滚", "risk_type": "data_conservation"}],
     }
     text = _knowledge_asset_planning_text(asset)
     assert "金额必须一致" in text
-    assert "用户不能访问/admin" in text
-    assert "退款后库存未回滚" in text
+    assert "普通用户" in text          # permission role
+    assert "admin接口" in text         # permission resource
+    assert "退款后库存未回滚" in text   # risk domain title
     assert "业务规则" in text and "权限矩阵" in text and "历史风险" in text
 
 
