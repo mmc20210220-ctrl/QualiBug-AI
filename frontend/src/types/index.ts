@@ -3,6 +3,13 @@
  * 前端零计算纯渲染，所有字段由后端格式化。
  */
 
+export interface ProductResponsibilityBoundary {
+  scope: string;
+  no_fix_advice: boolean;
+  source?: string;
+  customer_meaning: string;
+}
+
 export interface Finding {
   // 基础信息
   id: string;
@@ -56,8 +63,8 @@ export interface Finding {
   failed_assertions: FailedAssertion[];
   raw_evidence: RawEvidence;
   technical_details: TechnicalDetails;
-  recommended_fix: string;
-  regression_suggestions: string[];
+  regression_verification_obligations?: string[];
+  product_responsibility_boundary?: ProductResponsibilityBoundary;
 
   // 复现信息（后端基于 HAR 真实数据生成）
   reproduction: {
@@ -223,7 +230,6 @@ export interface RegressionSummary {
     total_probe_count: number;
     executed_count: number;
     passed_count: number;
-    failed_count: number;
     needs_review_count: number;
     skipped_count: number;
   }>;
@@ -262,6 +268,16 @@ export interface CommercialAssets {
     checks?: Array<{ name?: string; status?: string; detail?: string; source?: string }>;
     honesty_rule?: string;
   };
+  customer_delivery_guard?: {
+    status?: string;
+    customer_deliverable?: boolean;
+    safe_for_customer?: boolean;
+    block_reasons?: string[];
+    honesty_rule?: string;
+  };
+  customer_deliverable?: boolean;
+  customer_delivery_status?: string;
+  safe_for_customer?: boolean;
   commercial_handoff: {
     status: string;
     acceptance_status: string;
@@ -283,6 +299,7 @@ export interface CommercialAssets {
     release_gate_overall_status?: string;
     release_gate_blocked?: boolean;
     release_gate_block_reason?: string;
+    customer_deliverable?: boolean;
   };
   artifact_refs: Record<string, string>;
 }
@@ -378,6 +395,11 @@ export interface TechnicalDetails {
     actor: string;
   };
   related_tables: string[];
+  response_status?: number;
+  response_body_excerpt?: string;
+  trace_id?: string;
+  regression_verification_obligations?: string[];
+  product_responsibility_boundary?: ProductResponsibilityBoundary;
   stack_trace?: string;
   logs?: string;
 }
@@ -387,5 +409,5 @@ export type ReleaseGateStatus = { overall_status: 'pass' | 'fail' | 'pending'; c
 
 export interface KnowledgeSource { source_id: string; filename: string; source_type: string; status: string; size_bytes?: number; uploaded_at?: string }
 
-export interface TestTaskSlice { slice_id: string; title: string; status: 'pending' | 'executed' | 'confirmed' | 'blocked' | string; family?: string; severity?: string; source: string; target: string; owner_hint?: string; campaign_id?: string; blocking_reason?: string; production_data_blocked?: boolean }
+export interface TestTaskSlice { slice_id: string; title: string; status: 'pending' | 'executed' | 'confirmed' | 'blocked' | string; family?: string; severity?: string; source: string; target: string; owner_hint?: string; campaign_id?: string; blocking_reason?: boolean | string; production_data_blocked?: boolean }
 export interface TestTaskBoard { ledger: { campaign_id: string; campaign_status: string; attempted_slice_ids: string[]; confirmed_slice_ids: string[]; slice_status: Record<string, TestTaskSlice['status'] & string>; source_snapshot_hash: string }; slices: TestTaskSlice[]; execution: { production_data_blocked: number }; evidence_chains_saved: number }
