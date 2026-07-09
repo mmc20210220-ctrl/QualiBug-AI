@@ -9,10 +9,15 @@ engine.  It simply reorders already-materialized behavior slices using:
 1. current coverage matrix gaps;
 2. project/private-deployment learning weights from risk_clue_pool;
 3. SaaS/platform sanitized learning weights from risk_clue_pool.
+
+System Behavior Space slices are handled through the same mechanism.  Their
+structured dimensions and surface plans are normalized into the same risk-family
+keys that RiskCluePool learns from regression contracts.
 """
 
 import contextvars
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -34,17 +39,34 @@ _KIND_TO_RISK_FAMILY = {
     "authorization": "authorization_access_control",
     "isolation": "tenant_isolation",
     "tenant_isolation": "tenant_isolation",
+    "tenant": "tenant_isolation",
     "money": "money_quantity_conservation",
     "financial": "money_quantity_conservation",
     "quantity": "money_quantity_conservation",
+    "conservation": "money_quantity_conservation",
     "concurrency": "concurrency_race_condition",
     "race": "concurrency_race_condition",
     "transition": "state_machine",
     "state_machine": "state_machine",
     "lifecycle": "state_machine",
+    "state": "state_machine",
     "invariant": "data_consistency",
     "dependency": "data_consistency",
+    "data_consistency": "data_consistency",
     "source_observation": "visibility_disclosure",
+    "visibility": "visibility_disclosure",
+    "ui_api_contract": "ui_api_contract_drift",
+    "ui_contract": "ui_api_contract_drift",
+    "validation": "ui_api_contract_drift",
+    "audit": "audit_traceability",
+    "traceability": "audit_traceability",
+    "async": "async_eventual_consistency",
+    "side_effect": "async_eventual_consistency",
+    "eventual_consistency": "async_eventual_consistency",
+    "idempotency": "idempotency",
+    "retry": "idempotency",
+    "regression": "historical_regression",
+    "historical_bug": "historical_regression",
 }
 
 _TOKEN_TO_RISK_FAMILY = (
@@ -59,8 +81,30 @@ _TOKEN_TO_RISK_FAMILY = (
     (("cache", "stale", "ttl", "redis"), "cache_stale_state"),
     (("audit", "trace", "log", "receipt", "ledger"), "audit_traceability"),
     (("ui", "frontend", "page", "button", "form", "contract"), "ui_api_contract_drift"),
-    (("regression", "historical", "previous", "reopen"), "regression_historical_bug"),
+    (("regression", "historical", "previous", "reopen"), "historical_regression"),
 )
+
+_SURFACE_ALIASES = {
+    "api": "api",
+    "http": "api",
+    "endpoint": "api",
+    "db": "db",
+    "database": "db",
+    "table": "db",
+    "sql": "db",
+    "ui": "ui",
+    "browser": "ui",
+    "page": "ui",
+    "auth": "auth",
+    "role": "auth",
+    "permission": "auth",
+    "log": "log",
+    "trace": "log",
+    "audit": "log",
+    "async": "async",
+    "queue": "async",
+    "event": "async",
+}
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -92,7 +136,7 @@ def _coverage_gap_weights(root: Path, project: str) -> dict[str, float]:
     weights: dict[str, float] = {}
     for row in rows:
         item = _as_dict(row)
-        family = str(item.get("family") or "").strip()
+        family = _normalize_family(str(item.get("family") or ""))
         status = str(item.get("coverage_status") or "").strip()
         if family and status in _FAMILY_WEIGHT:
             weights[family] = max(weights.get(family, 0.0), float(_FAMILY_WEIGHT[status]))
@@ -110,38 +154,129 @@ def _learning_weights(root: Path, project: str) -> tuple[dict[str, float], dict[
     return project_weights, platform_weights
 
 
+def _normalize_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower().replace("-", "_")).strip("_")
+
+
+def _normalize_family(value: Any) -> str:
+    token = _normalize_token(value)
+    if not token:
+        return ""
+    return _KIND_TO_RISK_FAMILY.get(token, token)
+
+
+def _normalize_surface(value: Any) -> str:
+    token = _normalize_token(value)
+    if not token:
+        return ""
+    return _SURFACE_ALIASES.get(token, token)
+
+
+def _deep_get(value: Any, key: str) -> Any:
+    if isinstance(value, dict):
+        if key in value:
+            return value.get(key)
+        for child in value.values():
+            found = _deep_get(child, key)
+            if found not in (None, ""):
+                return found
+    if isinstance(value, list):
+        for child in value:
+            found = _deep_get(child, key)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def _regression_contract(item: dict[str, Any]) -> dict[str, Any]:
+    contract = item.get("regression_contract") if isinstance(item.get("regression_contract"), dict) else {}
+    if contract:
+        return contract
+    evidence = item.get("system_behavior_space_evidence") if isinstance(item.get("system_behavior_space_evidence"), dict) else {}
+    if evidence:
+        return {"system_behavior_space": evidence, "dimensions": evidence.get("dimensions") or [], "surface_plan": evidence.get("surface_plan") or []}
+    return {}
+
+
+def _structured_families(item: dict[str, Any]) -> list[str]:
+    values: list[Any] = []
+    for key in ("_system_behavior_dimensions", "system_behavior_dimensions"):
+        raw = item.get(key)
+        if isinstance(raw, list):
+            values.extend(raw)
+    contract = _regression_contract(item)
+    if isinstance(contract, dict):
+        values.extend(contract.get("dimensions") if isinstance(contract.get("dimensions"), list) else [])
+        hints = contract.get("system_behavior_space") if isinstance(contract.get("system_behavior_space"), dict) else {}
+        values.extend(hints.get("dimensions") if isinstance(hints.get("dimensions"), list) else [])
+    raw_deep = _deep_get(item, "dimensions")
+    if isinstance(raw_deep, list):
+        values.extend(raw_deep)
+    return sorted({family for family in (_normalize_family(value) for value in values) if family})
+
+
+def _structured_surfaces(item: dict[str, Any]) -> list[str]:
+    values: list[Any] = []
+    for key in ("_system_behavior_surface_plan", "system_behavior_surface_plan"):
+        raw = item.get(key)
+        if isinstance(raw, list):
+            values.extend(raw)
+    contract = _regression_contract(item)
+    if isinstance(contract, dict):
+        values.extend(contract.get("surface_plan") if isinstance(contract.get("surface_plan"), list) else [])
+        hints = contract.get("system_behavior_space") if isinstance(contract.get("system_behavior_space"), dict) else {}
+        values.extend(hints.get("surface_plan") if isinstance(hints.get("surface_plan"), list) else [])
+    raw_deep = _deep_get(item, "surfaces") or _deep_get(item, "surface_plan")
+    if isinstance(raw_deep, list):
+        values.extend(raw_deep)
+    return sorted({surface for surface in (_normalize_surface(value) for value in values) if surface})
+
+
 def _slice_text(item: dict[str, Any]) -> str:
     fields: list[Any] = [
         item.get("risk_family"), item.get("family"), item.get("defect_family"),
         item.get("kind"), item.get("entity"), item.get("slice_id"), item.get("title"),
-        item.get("description"), item.get("_selection_family"),
+        item.get("description"), item.get("_selection_family"), item.get("system_promise_id"),
     ]
     fields.extend(item.get("states") if isinstance(item.get("states"), list) else [])
     fields.extend(item.get("endpoints") if isinstance(item.get("endpoints"), list) else [])
+    fields.extend(item.get("_system_behavior_dimensions") if isinstance(item.get("_system_behavior_dimensions"), list) else [])
+    fields.extend(item.get("_system_behavior_surface_plan") if isinstance(item.get("_system_behavior_surface_plan"), list) else [])
     for key, value in item.items():
         if str(key).startswith("_") and isinstance(value, (str, int, float)):
             fields.append(value)
     return " ".join(str(value or "") for value in fields).lower()
 
 
-def _slice_risk_family(item: dict[str, Any]) -> str:
+def _slice_risk_families(item: dict[str, Any]) -> list[str]:
+    families: list[str] = []
+    families.extend(_structured_families(item))
     for key in ("risk_family", "family", "defect_family"):
-        value = str(item.get(key) or "").strip().lower().replace("-", "_").replace(" ", "_")
+        value = _normalize_family(item.get(key))
         if value:
-            return value
-    kind = str(item.get("kind") or "").strip().lower().replace("-", "_")
-    if kind in _KIND_TO_RISK_FAMILY:
-        return _KIND_TO_RISK_FAMILY[kind]
+            families.append(value)
+    kind_family = _normalize_family(item.get("kind"))
+    if kind_family:
+        families.append(kind_family)
+    selection_family = _normalize_family(item.get("_selection_family"))
+    if selection_family:
+        families.append(selection_family)
     text = _slice_text(item)
     for tokens, family in _TOKEN_TO_RISK_FAMILY:
         if any(token in text for token in tokens):
-            return family
-    return ""
+            families.append(family)
+    return sorted(dict.fromkeys(families))
+
+
+def _slice_risk_family(item: dict[str, Any]) -> str:
+    families = _slice_risk_families(item)
+    return families[0] if families else ""
 
 
 def _slice_surfaces(item: dict[str, Any]) -> list[str]:
-    text = _slice_text(item)
     surfaces: list[str] = []
+    surfaces.extend(_structured_surfaces(item))
+    text = _slice_text(item)
     if any(token in text for token in ("api", "endpoint", "http", "/")):
         surfaces.append("api")
     if any(token in text for token in ("db", "table", "schema", "sql", "database")):
@@ -150,14 +285,22 @@ def _slice_surfaces(item: dict[str, Any]) -> list[str]:
         surfaces.append("ui")
     if any(token in text for token in ("auth", "role", "permission", "tenant")):
         surfaces.append("auth")
-    return sorted(set(surfaces))
+    return sorted(dict.fromkeys(_normalize_surface(surface) for surface in surfaces if _normalize_surface(surface)))
 
 
 def _learning_score(item: dict[str, Any], project_weights: dict[str, float], platform_weights: dict[str, float]) -> tuple[float, dict[str, Any]]:
-    family = _slice_risk_family(item)
+    families = _slice_risk_families(item)
     surfaces = _slice_surfaces(item)
-    project_score = float(project_weights.get(family) or 0.0) * 4.0
-    platform_score = float(platform_weights.get(family) or 0.0) * 2.0
+    project_score = 0.0
+    platform_score = 0.0
+    matched_families: list[str] = []
+    for family in families:
+        p = float(project_weights.get(family) or 0.0) * 4.0
+        q = float(platform_weights.get(family) or 0.0) * 2.0
+        if p or q:
+            matched_families.append(family)
+        project_score += p
+        platform_score += q
     for surface in surfaces:
         project_score += float(project_weights.get(f"surface:{surface}") or 0.0) * 0.8
         platform_score += float(platform_weights.get(f"surface:{surface}") or 0.0) * 0.4
@@ -166,10 +309,12 @@ def _learning_score(item: dict[str, Any], project_weights: dict[str, float], pla
         project_score += float(project_weights.get(f"surface_combo:{combo}") or 0.0) * 1.2
         platform_score += float(platform_weights.get(f"surface_combo:{combo}") or 0.0) * 0.6
     return min(project_score + platform_score, 35.0), {
-        "family": family,
+        "families": families,
+        "matched_families": matched_families,
         "surfaces": surfaces,
         "project_learning_score": round(project_score, 3),
         "platform_learning_score": round(platform_score, 3),
+        "system_behavior_slice": bool(item.get("_selection_origin") == "system_behavior_space" or item.get("system_promise_id")),
     }
 
 
@@ -182,18 +327,23 @@ def _steer_slices(slices: list[dict[str, Any]], *, root: Path, project: str) -> 
     indexed: list[tuple[float, int, dict[str, Any]]] = []
     coverage_count = 0
     learning_count = 0
+    system_behavior_learning_count = 0
     for index, raw in enumerate(slices):
         item = dict(raw) if isinstance(raw, dict) else {}
-        family = _slice_risk_family(item)
-        coverage_weight = float(coverage_weights.get(family, 0.0))
+        families = _slice_risk_families(item)
+        coverage_matches = {family: float(coverage_weights.get(family, 0.0)) for family in families if float(coverage_weights.get(family, 0.0)) > 0}
+        coverage_weight = max(coverage_matches.values()) if coverage_matches else 0.0
         if coverage_weight > 0:
             coverage_count += 1
-            item["_coverage_steering_family"] = family
+            item["_coverage_steering_families"] = sorted(coverage_matches)
+            item["_coverage_steering_family"] = sorted(coverage_matches)[0]
             item["_coverage_steering_weight"] = coverage_weight
             item["_coverage_steering_reason"] = "prioritize_current_coverage_matrix_gap"
         learning_weight, learning_detail = _learning_score(item, project_weights, platform_weights)
         if learning_weight > 0:
             learning_count += 1
+            if learning_detail.get("system_behavior_slice"):
+                system_behavior_learning_count += 1
             item["_learning_steering"] = learning_detail
             item["_learning_steering_weight"] = learning_weight
             item["_learning_steering_reason"] = "prioritize_from_project_and_platform_risk_clue_pool"
@@ -212,6 +362,7 @@ def _steer_slices(slices: list[dict[str, Any]], *, root: Path, project: str) -> 
         "platform_learning_weight_count": len(platform_weights),
         "coverage_steered_slice_count": coverage_count,
         "learning_steered_slice_count": learning_count,
+        "system_behavior_learning_steered_slice_count": system_behavior_learning_count,
         "top_steered_slice_ids": [str(item.get("slice_id") or "") for item in ordered if item.get("_coverage_steering_weight") or item.get("_learning_steering_weight")][:12],
     }
 
