@@ -410,5 +410,59 @@ export type ReleaseGateStatus = { overall_status: 'pass' | 'fail' | 'pending'; c
 
 export interface KnowledgeSource { source_id: string; filename: string; source_type: string; status: string; size_bytes?: number; uploaded_at?: string }
 
-export interface TestTaskSlice { slice_id: string; title: string; status: 'pending' | 'executed' | 'confirmed' | 'blocked' | string; family?: string; severity?: string; source: string; target: string; owner_hint?: string; campaign_id?: string; blocking_reason?: string; production_data_blocked?: boolean }
-export interface TestTaskBoard { ledger: { campaign_id: string; campaign_status: string; attempted_slice_ids: string[]; confirmed_slice_ids: string[]; slice_status: Record<string, TestTaskSlice['status'] & string>; source_snapshot_hash: string }; slices: TestTaskSlice[]; execution: { production_data_blocked: number }; evidence_chains_saved: number }
+export interface TestTaskSlice {
+  slice_id: string;
+  title?: string;
+  entity?: string;
+  kind?: string;
+  status: 'pending' | 'executed' | 'confirmed' | 'blocked' | 'plan_only' | string;
+  priority?: number;
+  endpoints?: string[];
+  evidence_gaps?: string[];
+  /** System Behavior Space dimensions — the business risk categories this task verifies */
+  _system_behavior_dimensions?: string[];
+  /** Surfaces that need to be examined (api, db, ui, auth, log, async) */
+  _system_behavior_surface_plan?: string[];
+  /** API routes available for this entity */
+  _system_behavior_api_routes?: Array<{ method: string; path: string }>;
+  /** Required assets that must exist for execution */
+  _system_behavior_required_assets?: string[];
+  /** Risk family label for grouping */
+  _selection_family?: string;
+  /** Origin of this slice (system_behavior_space, etc.) */
+  _selection_origin?: string;
+  /** Coverage steering priority boost */
+  _coverage_steering_weight?: number;
+  /** Learning-based priority boost */
+  _learning_steering_weight?: number;
+  /** Historical boundary pattern match boost */
+  _historical_boundary_boost?: number;
+  /** Historical boundary match details */
+  _historical_boundary_match?: Record<string, unknown>;
+  source_refs?: Array<{ source_type: string; locator: string; quote: string }>;
+  // Legacy fields
+  family?: string;
+  severity?: string;
+  source?: string;
+  target?: string;
+  owner_hint?: string;
+  campaign_id?: string;
+  blocking_reason?: string;
+  production_data_blocked?: boolean;
+}
+
+export interface TestTaskBoard {
+  ledger: {
+    campaign_id: string;
+    campaign_status: string;
+    attempted_slice_ids: string[];
+    confirmed_slice_ids: string[];
+    slice_status: Record<string, TestTaskSlice['status'] & string>;
+    source_snapshot_hash: string;
+    /** Coverage steering diagnostic */
+    coverage_steering?: Record<string, unknown>;
+  };
+  slices: TestTaskSlice[];
+  execution: { production_data_blocked: number };
+  evidence_chains_saved: number;
+}

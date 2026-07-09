@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTestTaskBoard } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
+import type { TestTaskSlice } from '../types';
 
 type TaskStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked';
 
@@ -12,6 +13,46 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   failed: '未通过',
   blocked: '已阻断',
 };
+
+/** Color-coded dimension labels for business risk categories */
+const DIM_LABELS: Record<string, { label: string; tone: string }> = {
+  authorization_access_control: { label: '角色权限', tone: 'tone-danger' },
+  permission_boundary: { label: '权限边界', tone: 'tone-danger' },
+  tenant_isolation: { label: '租户隔离', tone: 'tone-danger' },
+  tenant: { label: '租户隔离', tone: 'tone-danger' },
+  money_quantity_conservation: { label: '金额守恒', tone: 'tone-warning' },
+  money: { label: '金额守恒', tone: 'tone-warning' },
+  quantity: { label: '库存守恒', tone: 'tone-warning' },
+  conservation: { label: '守恒约束', tone: 'tone-warning' },
+  data_conservation: { label: '守恒约束', tone: 'tone-warning' },
+  state_machine: { label: '状态流转', tone: 'tone-flow' },
+  lifecycle: { label: '状态流转', tone: 'tone-flow' },
+  state: { label: '状态流转', tone: 'tone-flow' },
+  audit_traceability: { label: '审计追溯', tone: 'tone-doc' },
+  audit: { label: '审计追溯', tone: 'tone-doc' },
+  cross_surface_consistency: { label: '跨面一致', tone: 'tone-api' },
+  data_consistency: { label: '数据一致', tone: 'tone-api' },
+  ui_api_contract: { label: 'UI/API契约', tone: 'tone-api' },
+  idempotency: { label: '幂等性', tone: 'tone-warning' },
+  async_eventual_consistency: { label: '异步一致', tone: 'tone-flow' },
+  concurrency_race_condition: { label: '并发竞态', tone: 'tone-danger' },
+  visibility_disclosure: { label: '可见性', tone: 'tone-flow' },
+};
+
+function normalizeDimKey(dim: string): string {
+  return dim.toLowerCase().replace(/-/g, '_').replace(/ /g, '_');
+}
+
+function dimLabel(dim: string): { label: string; tone: string } {
+  return DIM_LABELS[normalizeDimKey(dim)] || { label: dim, tone: 'tone-flow' };
+}
+
+function surfaceIcon(surface: string): string {
+  const icons: Record<string, string> = {
+    api: '🔗', db: '🗄️', ui: '🖥️', auth: '🔐', log: '📋', async: '⏳',
+  };
+  return icons[surface.toLowerCase()] || '📌';
+}
 
 export function TestTasks() {
   usePageTitle('测试任务看板');
@@ -33,19 +74,42 @@ export function TestTasks() {
   const safetyBlocked = board?.execution.production_data_blocked ?? 0;
   const evidenceSaved = board?.evidence_chains_saved ?? 0;
 
+  // Compute dimension distribution for summary
+  const dimSummary = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!board) return counts;
+    for (const slice of board.slices) {
+      for (const dim of slice._system_behavior_dimensions || []) {
+        const key = dimLabel(dim).label;
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [board]);
+
+  // Count slices with steering signals
+  const steeredCount = board?.slices.filter(
+    (s) => (s._coverage_steering_weight || 0) > 0 || (s._learning_steering_weight || 0) > 0
+  ).length ?? 0;
+  const boundaryBoostedCount = board?.slices.filter(
+    (s) => (s._historical_boundary_boost || 0) > 0
+  ).length ?? 0;
+
   return (
     <div>
       <div className="page-header">
         <div>
           <span className="panel-kicker">主链闭环</span>
           <h1>测试任务看板</h1>
-          <p>把测试任务规划（主链 4）的每一个可执行任务及其生命周期状态、生产数据禁触拦截（主链 5/6）与证据链采集（主链 7）统一展示，全程由后端单一真相源驱动。</p>
+          <p>后端 System Behavior Space 的多维度业务风险验证任务，每个任务携带业务语义维度、证据面和优先级信号，全程由后端单一真相源驱动。</p>
           <div className="page-summary-strip">
             <span className="summary-pill strong">任务 {total}</span>
             <span className="summary-pill">已通过 {stats.passed}</span>
             <span className="summary-pill">执行中 {stats.running}</span>
             <span className="summary-pill">待执行 {stats.pending}</span>
             <span className="summary-pill">已阻断 {stats.blocked}</span>
+            {steeredCount > 0 && <span className="summary-pill">学习调度 {steeredCount}</span>}
+            {boundaryBoostedCount > 0 && <span className="summary-pill">历史边界 {boundaryBoostedCount}</span>}
           </div>
         </div>
       </div>
@@ -81,8 +145,10 @@ export function TestTasks() {
               { label: '执行中', val: stats.running, tone: 'tone-warning' },
               { label: '待执行', val: stats.pending, tone: 'tone-flow' },
               { label: '已阻断', val: stats.blocked, tone: 'tone-danger' },
-              { label: '生产数据禁触拦截', val: safetyBlocked, tone: 'tone-danger' },
+              { label: '生产数据禁触', val: safetyBlocked, tone: 'tone-danger' },
               { label: '已落盘证据链', val: evidenceSaved, tone: 'tone-doc' },
+              { label: '学习调度', val: steeredCount, tone: 'tone-api' },
+              { label: '历史边界匹配', val: boundaryBoostedCount, tone: 'tone-warning' },
             ] as Array<{ label: string; val: number; tone: string }>).map((m) => (
               <article key={m.label} className={`behavior-stat-card ${m.tone}`}>
                 <strong>{m.val}</strong>
@@ -90,6 +156,20 @@ export function TestTasks() {
               </article>
             ))}
           </div>
+
+          {/* Dimension distribution summary */}
+          {Object.keys(dimSummary).length > 0 && (
+            <div className="behavior-dim-summary mb-4">
+              <span className="panel-kicker">业务维度分布</span>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {Object.entries(dimSummary).sort((a, b) => b[1] - a[1]).map(([dim, count]) => (
+                  <span key={dim} className="behavior-endpoint-chip tone-flow">
+                    {dim} ×{count}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="behavior-matrix-panel">
             <div className="behavior-matrix-head">
@@ -108,29 +188,74 @@ export function TestTasks() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>任务 ID</th>
-                    <th>业务实体</th>
+                    <th>实体</th>
                     <th>类型</th>
-                    <th>优先级</th>
+                    <th>业务维度</th>
+                    <th>证据面</th>
                     <th>覆盖端点</th>
-                    <th className="text-center">生命周期状态</th>
+                    <th>缺口</th>
+                    <th>调度信号</th>
+                    <th className="text-center">状态</th>
                   </tr>
                 </thead>
                 <tbody>
                   {board.slices.map((slice) => {
                     const status = (slice.status || board.ledger.slice_status?.[slice.slice_id] || 'pending') as TaskStatus;
+                    const dims = slice._system_behavior_dimensions || [];
+                    const surfaces = slice._system_behavior_surface_plan || [];
+                    const gaps = slice.evidence_gaps || [];
+                    const steering = [
+                      (slice._coverage_steering_weight || 0) > 0 ? 'C' : '',
+                      (slice._learning_steering_weight || 0) > 0 ? 'L' : '',
+                      (slice._historical_boundary_boost || 0) > 0 ? 'H' : '',
+                    ].filter(Boolean).join('/');
                     return (
                       <tr key={slice.slice_id}>
-                        <td className="font-mono behavior-matrix-code">{slice.slice_id}</td>
-                        <td>{slice.entity || '—'}</td>
+                        <td className="font-medium">{slice.entity || slice.slice_id?.slice(0, 12) || '—'}</td>
                         <td>{slice.kind || '—'}</td>
-                        <td>{slice.priority || '—'}</td>
+                        <td>
+                          <div className="flex flex-wrap gap-1">
+                            {dims.length > 0
+                              ? dims.map((dim) => {
+                                  const { label, tone } = dimLabel(dim);
+                                  return (
+                                    <span key={dim} className={`behavior-endpoint-chip ${tone}`} title={dim}>
+                                      {label}
+                                    </span>
+                                  );
+                                })
+                              : '—'}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="flex flex-wrap gap-1">
+                            {surfaces.length > 0
+                              ? surfaces.map((s) => (
+                                  <span key={s} className="behavior-endpoint-chip" title={s}>
+                                    {surfaceIcon(s)} {s}
+                                  </span>
+                                ))
+                              : '—'}
+                          </div>
+                        </td>
                         <td className="behavior-matrix-detail">
                           {slice.endpoints && slice.endpoints.length > 0
                             ? slice.endpoints.map((ep, i) => (
                                 <span key={i} className="behavior-endpoint-chip">{ep}</span>
                               ))
                             : '—'}
+                        </td>
+                        <td>
+                          {gaps.length > 0
+                            ? gaps.slice(0, 2).map((g) => (
+                                <span key={g} className="behavior-endpoint-chip tone-danger" title={g}>
+                                  {g.length > 30 ? g.slice(0, 30) + '…' : g}
+                                </span>
+                              ))
+                            : '—'}
+                        </td>
+                        <td className="text-center">
+                          {steering || '—'}
                         </td>
                         <td className="text-center">
                           <span className={`status task-status-${status}`}>{STATUS_LABEL[status]}</span>

@@ -430,7 +430,41 @@ export function useTestTaskBoard(project: string) {
       const boardRaw = asRecord(record.test_task_board);
       if (!boardRaw || (Object.keys(boardRaw).length === 0)) { setBoard(null); setLoading(false); return; }
       const ledger = asRecord(boardRaw.ledger);
-      const slices = asArray(boardRaw.slices).map((value) => asRecord(value) as unknown as TestTaskSlice);
+      const slices = asArray(boardRaw.slices).map((value) => {
+        const record = asRecord(value);
+        const dims = asArray(record._system_behavior_dimensions).map(asString).filter(Boolean);
+        const surfaces = asArray(record._system_behavior_surface_plan).map(asString).filter(Boolean);
+        const routes = asArray(record._system_behavior_api_routes).map((r) => {
+          const route = asRecord(r);
+          return { method: asString(route.method), path: asString(route.path) };
+        }).filter((r) => r.method && r.path);
+        const assets = asArray(record._system_behavior_required_assets).map(asString).filter(Boolean);
+        return {
+          slice_id: asString(record.slice_id),
+          title: asString(record.title),
+          entity: asString(record.entity),
+          kind: asString(record.kind),
+          status: (asString(record.status) || 'pending') as TestTaskSlice['status'],
+          priority: asFiniteNumber(record.priority),
+          endpoints: asArray(record.endpoints).map(asString).filter(Boolean),
+          evidence_gaps: asArray(record.evidence_gaps).map(asString).filter(Boolean),
+          _system_behavior_dimensions: dims.length > 0 ? dims : undefined,
+          _system_behavior_surface_plan: surfaces.length > 0 ? surfaces : undefined,
+          _system_behavior_api_routes: routes.length > 0 ? routes : undefined,
+          _system_behavior_required_assets: assets.length > 0 ? assets : undefined,
+          _selection_family: asString(record._selection_family) || undefined,
+          _selection_origin: asString(record._selection_origin) || undefined,
+          _coverage_steering_weight: asFiniteNumber(record._coverage_steering_weight) || undefined,
+          _learning_steering_weight: asFiniteNumber(record._learning_steering_weight) || undefined,
+          _historical_boundary_boost: asFiniteNumber(record._historical_boundary_boost) || undefined,
+          _historical_boundary_match: Object.keys(asRecord(record._historical_boundary_match)).length > 0 ? asRecord(record._historical_boundary_match) : undefined,
+          source_refs: asArray(record.source_refs).map((r) => asRecord(r) as { source_type: string; locator: string; quote: string }),
+          family: asString(record.family) || asString(record._selection_family) || undefined,
+          severity: asString(record.severity) || undefined,
+          source: asString(record.source) || '',
+          target: asString(record.target) || '',
+        } as TestTaskSlice;
+      });
       const execution = asRecord(boardRaw.execution);
       setBoard({
         ledger: {
