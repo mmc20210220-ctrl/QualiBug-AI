@@ -14,6 +14,7 @@ Project/private deployment scope:
 
 SaaS/platform scope:
 - aggregate only sanitized pattern weights across projects;
+- rebuild each project's local learning before sanitized aggregation;
 - refresh sanitized platform weights when project learning is refreshed;
 - never stores customer titles, endpoint paths, payloads, evidence chains,
   screenshots, logs, table names or business data.
@@ -200,7 +201,7 @@ def get_risk_clues(project: str, root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {"total_clues": 0, "clues": {}}
 
 
-def refresh_project_learning(project: str, root: Path) -> dict[str, Any]:
+def refresh_project_learning(project: str, root: Path, *, refresh_platform: bool = True) -> dict[str, Any]:
     """Refresh project learning from clues, ledgers and regression history.
 
     Coverage steering consumes project weights through ``get_project_learning_weights``.
@@ -212,7 +213,8 @@ def refresh_project_learning(project: str, root: Path) -> dict[str, Any]:
     clues = data.get("clues") if isinstance(data.get("clues"), dict) else {}
     new_count = int(data.get("new_this_scan") or 0) if isinstance(data, dict) else 0
     project_learning = _write_project_learning(project, root, clues, now=_now(), new_count=new_count, current_findings=[])
-    refresh_platform_learning(root)
+    if refresh_platform:
+        refresh_platform_learning(root)
     return project_learning
 
 
@@ -227,8 +229,7 @@ def get_project_learning_weights(project: str, root: Path) -> dict[str, float]:
 
 
 def get_platform_learning(root: Path) -> dict[str, Any]:
-    data = _read_json(_platform_pool_file(root), {})
-    return data if isinstance(data, dict) else {}
+    return refresh_platform_learning(root)
 
 
 def get_platform_learning_weights(root: Path) -> dict[str, float]:
@@ -274,12 +275,15 @@ def refresh_platform_learning(root: Path) -> dict[str, Any]:
         for project_dir in workspace_root.iterdir():
             if not project_dir.is_dir() or project_dir.name == PLATFORM_PROJECT_ID:
                 continue
+            project = project_dir.name
             pool = _read_json(project_dir / "risk_clue_pool" / "risk_clues.json", {})
-            project_learning = pool.get("project_learning") if isinstance(pool, dict) and isinstance(pool.get("project_learning"), dict) else {}
+            clues = pool.get("clues") if isinstance(pool, dict) and isinstance(pool.get("clues"), dict) else {}
+            new_count = int(pool.get("new_this_scan") or 0) if isinstance(pool, dict) else 0
+            project_learning = _write_project_learning(project, root, clues, now=_now(), new_count=new_count, current_findings=[])
             for signal in project_learning.get("signals") if isinstance(project_learning.get("signals"), list) else []:
                 if not isinstance(signal, dict):
                     continue
-                row = _sanitize_for_platform(project_dir.name, signal)
+                row = _sanitize_for_platform(project, signal)
                 sanitized[str(row["platform_signal_id"])] = row
     signals = list(sanitized.values())[-5000:]
     payload = _learning_payload(PLATFORM_LEARNING_VERSION, "platform_saas_sanitized_cross_project", signals)
@@ -312,6 +316,7 @@ def _write_project_learning(
         "clues": clues,
         "project_learning": project_learning,
     }
+    _write_json(_project_pool_dir(project, root) / "risk_clue_pool.json", pool_data)
     _write_json(_project_pool_dir(project, root) / "risk_clues.json", pool_data)
     return project_learning
 
