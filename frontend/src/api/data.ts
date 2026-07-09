@@ -33,6 +33,23 @@ export function useScanCompletedRefresh(project: string, refresh: () => void): v
 function getResolvedProjectId(raw: unknown): string { const record = asRecord(raw); return (asString(record.resolvedProjectId) || asString(record.projectId)).trim(); }
 function getReportFindings(raw: unknown): Finding[] { return asArray(field(raw, 'defects')).map(findingFrom).filter((value): value is Finding => value !== null); }
 function getReportClues(raw: unknown): Finding[] { return asArray(field(raw, 'clues')).map(findingFrom).filter((value): value is Finding => value !== null); }
+function parseCommercialReleaseGate(raw: unknown): CommercialAssets['release_gate'] | undefined {
+  const gate = asRecord(raw);
+  if (!Object.keys(gate).length) return undefined;
+  const checks = asArray(gate.checks).map((item) => {
+    const check = asRecord(item);
+    return { name: asString(check.name), status: asString(check.status), detail: asString(check.detail), source: asString(check.source) };
+  }).filter((item) => item.name || item.status || item.detail);
+  return {
+    overall_status: asString(gate.overall_status),
+    blocking_check_count: asFiniteNumber(gate.blocking_check_count),
+    pending_check_count: asFiniteNumber(gate.pending_check_count),
+    pass_check_count: asFiniteNumber(gate.pass_check_count),
+    release_recommendation: asString(gate.release_recommendation),
+    checks,
+    honesty_rule: asString(gate.honesty_rule),
+  };
+}
 export function getCommercialAssets(raw: unknown): CommercialAssets | null {
   const record = asRecord(raw);
   const assets = asRecord(record.commercial_assets);
@@ -45,14 +62,20 @@ export function getCommercialAssets(raw: unknown): CommercialAssets | null {
     status: asString(assets.status),
     finding_count: asFiniteNumber(assets.finding_count),
     customer_ready_reproduction_count: asFiniteNumber(assets.customer_ready_reproduction_count),
+    release_gate_overall_status: asString(assets.release_gate_overall_status),
+    release_recommendation: asString(assets.release_recommendation),
+    release_gate_honesty_rule: asString(assets.release_gate_honesty_rule),
+    release_gate: parseCommercialReleaseGate(assets.release_gate),
     commercial_handoff: {
       status: asString(handoff.status),
       acceptance_status: asString(handoff.acceptance_status),
       safe_for_customer: Boolean(handoff.safe_for_customer),
+      release_gate_status: asString(handoff.release_gate_status),
     },
     tracker_sync: {
       payload_status: asString(tracker.payload_status),
       payload_gate_status: asString(tracker.payload_gate_status),
+      release_gate_overall_status: asString(tracker.release_gate_overall_status),
     },
     delivery_package: {
       status: asString(delivery.status),
@@ -60,6 +83,10 @@ export function getCommercialAssets(raw: unknown): CommercialAssets | null {
       package_ref: asString(delivery.package_ref),
       release_verdict: asString(delivery.release_verdict),
       evidence_bundle_id: asString(delivery.evidence_bundle_id),
+      release_recommendation: asString(delivery.release_recommendation),
+      release_gate_overall_status: asString(delivery.release_gate_overall_status),
+      release_gate_blocked: Boolean(delivery.release_gate_blocked),
+      release_gate_block_reason: asString(delivery.release_gate_block_reason),
     },
     artifact_refs: Object.entries(refs).reduce<Record<string, string>>((acc, [key, value]) => {
       if (typeof value === 'string' && value.trim()) acc[key] = value;
