@@ -964,6 +964,26 @@ class OracleRegistry:
             if score > 0: scored.append((score, o))
         scored.sort(key=lambda x: -x[0])
         result = [o for _, o in scored[:limit]]
+
+        # ── Oracle DSL integration: boost oracles for DSL-matched rules ──
+        try:
+            from .oracle_dsl import DSLParser, DSLCompiler
+            parser = DSLParser()
+            compiler = DSLCompiler()
+            dsl_rules = parser.parse_prd(prd_text)
+            if dsl_rules:
+                dsl_oracle_families: set[str] = set()
+                for rule in dsl_rules:
+                    compiled = compiler.compile_to_oracle_object(rule)
+                    dsl_oracle_families.add(compiled.oracle_family)
+                # Boost: ensure DSL-matched oracle families are included
+                for o in self._oracles.values():
+                    o_family = getattr(o, 'oracle_family', '')
+                    if o_family in dsl_oracle_families and o not in result:
+                        result.append(o)
+        except Exception:
+            pass  # DSL is optional; keyword matching is the fallback
+
         # Always prepend L1 oracles
         return self.get_by_layer("L1") + result
 

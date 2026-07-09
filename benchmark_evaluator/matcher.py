@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+# NOTE: This mapping is extensible. Add project-specific equivalence classes
+# via RISK_EQUIVALENCE.update(custom_map) before evaluation.
 RISK_EQUIVALENCE = {
     "privilege_escalation": {"permission_bypass", "auth_bypass", "privilege_escalation"},
     "permission_bypass": {"permission_bypass", "privilege_escalation"},
@@ -28,12 +30,22 @@ def normalize_api(api: str) -> str:
 
 
 def normalize_path(path: str) -> str:
+    """Normalize API path for matching — replaces path params and numeric IDs with '*'.
+
+    Industry-agnostic: handles {any_param}, :param, and pure numeric segments.
+    """
+    import re
     normalized = path.strip().lower()
-    for token in ("{order_id}", "{product_id}", "{id}", "{tenant_id}"):
-        normalized = normalized.replace(token, "*")
+    # Replace any {param} or :param pattern
+    normalized = re.sub(r"\{[^}]+\}", "*", normalized)
+    normalized = re.sub(r":[a-zA-Z_][a-zA-Z0-9_]*", "*", normalized)
     parts = []
     for part in normalized.split("/"):
-        if part.startswith(("o", "p", "u")) and part[1:].isdigit():
+        # Replace pure numeric segments (IDs)
+        if part.isdigit():
+            parts.append("*")
+        # Replace alphanumeric segments that look like IDs (e.g., "o123", "abc456def")
+        elif re.match(r"^[a-zA-Z]+\d+[a-zA-Z]*$", part) and len(part) >= 3:
             parts.append("*")
         else:
             parts.append(part)

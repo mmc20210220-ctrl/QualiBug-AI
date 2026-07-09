@@ -516,7 +516,10 @@ def _find_cleanup_endpoint(spec: dict[str, Any], target_path: str) -> tuple[str,
         return "DELETE", delete_path
     best: tuple[int, str, str] = (0, "", "")
     normalized_target = normalize_path_placeholders(target_path).rstrip("/")
-    cleanup_action_re = re.compile(r"/(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|delete)$", re.I)
+    cleanup_action_re = re.compile(
+        r"/(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|discard|retire|freeze|reset|clear|purge|取消|删除|关闭|作废|停用|冻结|撤销)$",
+        re.I,
+    )
     for p, ops in _paths(spec).items():
         if not isinstance(ops, dict) or not path_has_placeholders(str(p)):
             continue
@@ -1169,6 +1172,13 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
             if cleanup_method in {"PATCH", "PUT"}:
                 cleanup_request["body"] = _cleanup_transition_body(spec, cleanup_method, cleanup_path, seed, generated_id)
             cleanup_requests.append(cleanup_request)
+        else:
+            # Fallback: mark that manual cleanup is required — never silently skip
+            cleanup_requests.append({
+                "method": "MANUAL", "path": f"/{entity_alias}/{{id}}",
+                "purpose": "cleanup_qb_auto_fixture_manual_required",
+                "note": "No automatic cleanup endpoint found. Customer must manually clean up qb_auto_* test data."
+            })
         cleanup_requests.extend(dependency_cleanup_requests if 'dependency_cleanup_requests' in locals() else [])
 
     return {

@@ -812,10 +812,17 @@ def build_confirmed_bug_flywheel(project_id: str = "real_project_demo", root: Pa
                 lg = LearningGenerator(project_context={})
                 manifest = lg.generate_from_confirmed_bugs(confirmed_findings)
                 profile["generated_artifacts"] = lg.manifest_to_dict(manifest)
+                # Persist manifest so generated artifacts survive across runs
+                try:
+                    lg.persist_manifest(manifest, paths["out"].parent)
+                except Exception:
+                    pass
             else:
                 profile["generated_artifacts"] = {"status": "no_confirmed_findings"}
-        except Exception:
-            profile["generated_artifacts"] = {"status": "unavailable"}
+        except Exception as e:
+            import sys
+            print(f"[confirmed_bug_flywheel] LearningGenerator failed: {e}", file=sys.stderr)
+            profile["generated_artifacts"] = {"status": "unavailable", "error": str(e)}
 
     except Exception:
         profile["pattern_memory"] = {"status": "unavailable"}

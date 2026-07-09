@@ -48,5 +48,13 @@ _e2e_stage/
 !.trae/specs/nextgen-frontend-nextjs-rsc-sso/tasks.md
 !.trae/specs/nextgen-frontend-nextjs-rsc-sso/checklist.md
 
+# Debug / scratch / diagnostic artefacts (never commit)
+_diag_*.py
+_gs*.txt
+_tmp_*.py
+_explore_*.py
+debug-*.md
+.dbg/
+
 # Windows reserved device name accidentally captured as a file (never commit)
 nul

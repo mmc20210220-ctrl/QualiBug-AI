@@ -185,7 +185,9 @@ def _read_json(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8") or "null")
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[benchmark_compute] Failed to read {path}: {e}", file=sys.stderr)
         return {}
 
 
@@ -796,6 +798,18 @@ def run_benchmark_end_to_end(
             if tracker.get_run_count() >= 2:
                 regressions = tracker.detect_regressions()
                 result["stages"]["regression_check"] = regressions
+
+            # ── Stage 7: Cross-round bridge ──────────────────────────
+            try:
+                from .cross_round_bridge import CrossRoundBridge
+                bridge = CrossRoundBridge()
+                priority_signals = bridge.derive_priority_signals_from_benchmark(metrics)
+                bridge.on_learning_generated({
+                    "probes": 0, "oracles": 0, "fixtures": 0,
+                })
+                result["stages"]["cross_round"] = bridge.build_closed_loop_summary()
+            except Exception:
+                result["stages"]["cross_round"] = {"status": "unavailable"}
 
         except Exception as e:
             result["stages"]["metrics"] = {"status": "failed", "error": str(e)}

@@ -35,6 +35,12 @@ from .enterprise_project_config import (
 )
 
 _v12_har_entries: list[dict[str, Any]] = []
+# NOTE: _v12_har_entries is a module-level global. It is reset at the start of each
+# pipeline run (line ~1414: `global _v12_har_entries; _v12_har_entries = []`).
+# CONCURRENCY WARNING: If two scans run concurrently in the same process (e.g.,
+# multithreaded server), HAR entries from one scan will contaminate the other.
+# This is safe for the current single-scan-per-process deployment model.
+# If multi-scan concurrency is ever enabled, replace this with threading.local().
 _SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 

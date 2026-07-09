@@ -5709,6 +5709,13 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["value_metrics"]["commercial_delivery_package_created"] = 1 if _first_text((commercial_assets.get("delivery_package") or {}).get("status")) == "created" else 0
             data["executive_summary"]["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
             data["executive_summary"]["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
+        # ── Rounds Summary (Round 1-4 data for dashboard) ──
+        try:
+            from .rounds_summary import build_rounds_summary
+            data["rounds_summary"] = build_rounds_summary(project_id, root)
+        except Exception:
+            data["rounds_summary"] = {"available": False}
+
         # ── 主链 8: 测试任务看板 ──
         # Surface the per-task lifecycle status board (主链 4), the production-data
         # safety-boundary block count (主链 5/6), and the persisted evidence-chain

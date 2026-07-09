@@ -4,6 +4,10 @@ Phase79: Reasoner Engine Stability Refactor — stage_reason_all v2
 Drop-in replacement for discovery_engine.py AutonomousDiscoveryEngine.stage_reason_all().
 11 engines, max 4 parallel workers, independent ReasoningClient per engine,
 2 attempts max, JSON truncation recovery via raw_decode.
+
+NOTE: Engine outputs are merged without quality weighting. An engine producing
+15 low-quality hypotheses can drown out an engine producing 2 high-quality ones.
+Future improvement: score hypotheses by engine reliability history + evidence grounding.
 """
 
 import ast, copy, json, os, re, time

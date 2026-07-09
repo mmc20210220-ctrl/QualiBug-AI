@@ -29,6 +29,7 @@ from typing import Any
 
 BASELINE_VERSION = "baseline_tracker.v1"
 MAX_HISTORY_ENTRIES = 200
+MAX_LEDGER_LINES = 10000  # Rotate ledger after 10K lines
 DEFAULT_REGRESSION_THRESHOLD = 0.05  # 5% absolute drop = regression alert
 
 
@@ -144,7 +145,7 @@ class BenchmarkBaselineTracker:
             encoding="utf-8",
         )
 
-        # Append to ledger (append-only JSONL)
+        # Append to ledger (append-only JSONL, auto-rotated)
         ledger_entry = {
             "event": "run_recorded",
             "run_id": run_id,
@@ -152,10 +153,30 @@ class BenchmarkBaselineTracker:
             "industry": self.industry,
             "metric_keys": sorted(snapshot.metrics.keys()),
         }
-        with open(self._ledger_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(ledger_entry, ensure_ascii=False) + "\n")
+        try:
+            with open(self._ledger_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(ledger_entry, ensure_ascii=False) + "\n")
+        except (OSError, IOError):
+            pass  # Non-fatal: ledger is supplementary
+
+        # Rotate ledger if too large
+        self._rotate_ledger_if_needed()
 
         return snapshot
+
+    def _rotate_ledger_if_needed(self) -> None:
+        """Truncate the ledger file to the last MAX_LEDGER_LINES lines."""
+        try:
+            if not self._ledger_path.exists():
+                return
+            lines = self._ledger_path.read_text(encoding="utf-8").strip().split("\n")
+            if len(lines) > MAX_LEDGER_LINES:
+                self._ledger_path.write_text(
+                    "\n".join(lines[-MAX_LEDGER_LINES:]) + "\n",
+                    encoding="utf-8",
+                )
+        except Exception:
+            pass  # Non-fatal: ledger rotation is best-effort
 
     def _normalize_metrics(self, metrics: dict[str, Any]) -> dict[str, Any]:
         """Extract and normalize the key metrics from a metrics payload."""

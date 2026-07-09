@@ -575,6 +575,26 @@ export function Dashboard() {
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>进入内部线索页</button>
         </article>
       )}
+      {/* ── Rounds Overview: real data from Rounds 1-4 ── */}
+      {(() => {
+        const rs = asRecord((data as any).rounds_summary);
+        if (!rs || !(rs.round_1_benchmark || rs.round_2_gaps || rs.round_3_learning || rs.round_4_dsl)) return null;
+        const r1 = asRecord(rs.round_1_benchmark); const r2 = asRecord(rs.round_2_gaps);
+        const r3 = asRecord(rs.round_3_learning); const r4 = asRecord(rs.round_4_dsl);
+        const available = asNum(rs.rounds_with_data);
+        const cardS: React.CSSProperties = { padding: '8px 10px', borderRadius: '6px', background: '#f0f9ff', border: '1px solid #bae6fd', fontSize: '0.78rem', lineHeight: 1.5 };
+        return (
+          <article className="customer-secondary-card" style={{ borderLeft: '3px solid var(--primary-color, #3b82f6)' }}>
+            <span className="customer-value-kicker">Rounds Pipeline ({available}/4 rounds active)</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px', marginTop: '8px' }}>
+              {r1.available ? <div style={cardS}><strong>R1 Benchmark</strong><br/>Recall: {asNum(r1.recall) > 0 ? Math.round(asNum(r1.recall)*100)+'%' : '—'}<br/>F1: {asNum(r1.f1_score) > 0 ? Math.round(asNum(r1.f1_score)*100)+'%' : '—'}</div> : null}
+              {r2.available ? <div style={cardS}><strong>R2 Gaps</strong><br/>Open: {asNum(r2.currently_open)}<br/>Resolved: {asNum(r2.resolved)}</div> : null}
+              {r3.available ? <div style={cardS}><strong>R3 Learning</strong><br/>Probes: {asNum(r3.total_probes_generated)}<br/>Oracles: {asNum(r3.total_oracles_generated)}</div> : null}
+              {r4.available ? <div style={cardS}><strong>R4 DSL</strong><br/>Rules: {asNum(r4.total_rules)}<br/>Industries: {asNum(r4.industry_count)}</div> : null}
+            </div>
+          </article>
+        );
+      })()}
       {benchmarkActive && (
         <article className={`customer-secondary-card${asNum(benchmarkMetrics.recall) >= 0.8 ? '' : ' muted'}`}>
           <span className="customer-value-kicker">检测能力 Benchmark</span>

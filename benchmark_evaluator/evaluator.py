@@ -43,8 +43,10 @@ def evaluate(discovered_path: Path, ground_truth_path: Path, output_dir: Path) -
         else:
             false_positives.append(bug)
     improvement_plan = build_probe_improvement_plan(truth, used)
-    strategy = read_optional_json(Path("platform_workspace/enterprise_shop/defect_discovery/probe_generation_strategy.json"))
-    adaptive_policy = read_optional_json(Path("platform_workspace/enterprise_shop/defect_discovery/learned_probe_policy.json"))
+    # Derive project directory from discovered_path instead of hardcoding
+    discovered_dir = Path(discovered_path).parent.parent if discovered_path else Path(".")
+    strategy = read_optional_json(discovered_dir / "defect_discovery" / "probe_generation_strategy.json")
+    adaptive_policy = read_optional_json(discovered_dir / "defect_discovery" / "learned_probe_policy.json")
     scorecard = {
         "discovery_mode": discovered_payload.get("discovery_mode", "unknown"),
         "benchmark_compat_enabled": discovered_payload.get("benchmark_compat_enabled", None),
@@ -149,7 +151,7 @@ def build_training_samples(matches: list[dict], false_positives: list[dict]) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--discovered", default="platform_outputs/enterprise_shop/defect_discovery/discovered_bugs.json")
+    parser.add_argument("--discovered", default="platform_outputs/default_project/defect_discovery/discovered_bugs.json")
     parser.add_argument("--ground-truth", default="enterprise_bug_factory/private_ground_truth/ground_truth_bugs.json")
     parser.add_argument("--out", default="benchmark_outputs")
     args = parser.parse_args()

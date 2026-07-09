@@ -88,11 +88,19 @@ def deterministic_disprove(
         counterarguments.append(f"Low binding confidence ({binding_conf}) — entity binding may be wrong")
         disproofs.append("DETERMINISTIC_DISPROOF: low binding confidence")
 
-    # 2. Check that entity_alias is consistent
-    # Phase92A: Snapshot refs are often hash digests (snap:abc123), not containing entity_alias
-    # Only flag as unresolved if entity_alias is clearly mismatched (e.g., different entity type)
+    # 2. Check that entity_alias is present (lightweight re-enable)
+    # Snapshot refs are often hash digests, so we can't compare entity names directly.
+    # But if entity_alias is present on the finding and missing from snapshots, flag it.
     entity_alias = entity.get("entity_alias", "")
-    # Skip this check - snapshot refs are hash digests, not containing entity names
+    if entity_alias:
+        # Check if any snapshot ref contains a non-hash entity hint
+        has_snapshot_entity = False
+        for ref in (before_ref, after_ref):
+            if ref and not ref.startswith("snap:") and not all(c in "0123456789abcdef" for c in ref[:8]):
+                has_snapshot_entity = True
+        if not has_snapshot_entity:
+            counterarguments.append(f"Entity alias '{entity_alias}' present but snapshot refs are hash digests — cross-reference not verifiable")
+            disproofs.append("DETERMINISTIC_DISPROOF: entity_alias cannot be verified against hash-digest snapshot refs")
     
     # 3. Before/After snapshot integrity
     if before_ref == after_ref and before_ref != "":

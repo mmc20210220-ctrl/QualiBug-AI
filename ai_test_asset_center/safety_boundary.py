@@ -29,8 +29,8 @@ from typing import Any
 # Environment classification
 # ---------------------------------------------------------------------------
 
-VALID_ENVIRONMENTS = {"test", "staging", "dev", "development", "sandbox", "qa", "uat"}
-PRODUCTION_INDICATORS = {"prod", "production", "live", "online", "prd"}
+VALID_ENVIRONMENTS = {"test", "staging", "dev", "development", "sandbox", "qa", "uat", "preprod", "integration", "demo", "training"}
+PRODUCTION_INDICATORS = {"prod", "production", "live", "online", "prd", "生产", "线上", "produktion", "produccion"}
 
 # URL patterns that indicate production
 PRODUCTION_URL_PATTERNS = [
@@ -175,12 +175,12 @@ class SafetyBoundary:
                         "severity": "WARNING",
                         "message": f"测试账号 '{name}' 的邮箱 '{email}' 看起来像真实用户邮箱。请使用 @test.com 或 @example.com。",
                     })
-                # Block real-looking phone numbers
-                if phone and re.match(r"^1[3-9]\d{9}$", phone):
+                # Block real-looking phone numbers (locale-agnostic: any 7+ digit sequence)
+                if phone and re.search(r"\d{7,}", str(phone)):
                     self._warnings.append({
                         "rule": "account_phone_looks_real",
                         "severity": "WARNING",
-                        "message": f"测试账号 '{name}' 的手机号看起来像真实号码。请使用虚拟号码。",
+                        "message": f"测试账号 '{name}' 的手机号包含真实号码特征（7位以上连续数字）。请使用虚拟号码。",
                     })
         return self
 

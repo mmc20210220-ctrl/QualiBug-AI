@@ -79,7 +79,9 @@ class IndustryProfile:
 
 UNIVERSAL_TEMPLATES: list[BugTemplate] = [
     # ── Permission / Authorization ──
-    BugTemplate(
+    # NOTE: title_template and trigger_template support both languages.
+# Use {entity}, {role}, {action}, {prefix} placeholders for industry-agnostic instantiation.
+BugTemplate(
         template_id="AUTH_VERTICAL_BYPASS",
         risk_type="permission_bypass",
         severity="P0",

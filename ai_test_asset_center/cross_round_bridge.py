@@ -42,19 +42,25 @@ class CrossRoundBridge:
 
     Usage::
 
-        bridge = CrossRoundBridge()
-        
-        # After benchmark run:
+        bridge = CrossRoundBridge(thresholds={"critical_recall": 0.3, "low_recall": 0.5})
         signals = bridge.derive_priority_signals_from_benchmark(metrics)
-        
-        # After gap resolution:
-        bridge.on_gap_resolved("security_boundary")
-        
-        # Get accumulated learning priorities:
-        boosts = bridge.get_learning_priority_boosts()
     """
 
-    def __init__(self) -> None:
+    # Default thresholds — can be overridden per industry
+    DEFAULT_THRESHOLDS = {
+        "critical_recall": 0.3,     # recall below this → critical boost
+        "low_recall": 0.5,           # recall below this → significant boost
+        "moderate_recall": 0.7,      # recall below this → moderate boost
+        "critical_boost": 0.4,
+        "significant_boost": 0.25,
+        "moderate_boost": 0.1,
+        "high_value_recall_threshold": 0.5,
+        "high_value_boost": 0.3,
+        "evidence_recall_threshold": 0.3,
+        "evidence_boost": 0.2,
+    }
+
+    def __init__(self, thresholds: dict[str, float] | None = None) -> None:
         self._priority_boosts: dict[str, list[PrioritySignal]] = {}
         self._resolved_families: list[str] = []
         self._log: list[str] = []
@@ -63,6 +69,10 @@ class CrossRoundBridge:
             "on_benchmark_complete": [],
             "on_learning_generated": [],
         }
+        # Merge custom thresholds with defaults
+        self.thresholds = dict(self.DEFAULT_THRESHOLDS)
+        if thresholds:
+            self.thresholds.update(thresholds)
 
     # ── Priority Derivation from Benchmark ─────────────────────────────
 
@@ -90,14 +100,15 @@ class CrossRoundBridge:
                 continue
 
             # Compute priority boost based on recall gap
-            if recall < 0.3:
-                boost = 0.4  # Critical gap
+            t = self.thresholds
+            if recall < t["critical_recall"]:
+                boost = t["critical_boost"]
                 reason = f"Very low recall ({recall:.0%}) for {risk_type}: {detected}/{total} detected"
-            elif recall < 0.5:
-                boost = 0.25  # Significant gap
+            elif recall < t["low_recall"]:
+                boost = t["significant_boost"]
                 reason = f"Low recall ({recall:.0%}) for {risk_type}: {detected}/{total} detected"
-            elif recall < 0.7:
-                boost = 0.1  # Moderate gap
+            elif recall < t["moderate_recall"]:
+                boost = t["moderate_boost"]
                 reason = f"Moderate recall ({recall:.0%}) for {risk_type}: {detected}/{total} detected"
             else:
                 continue  # Good recall, no boost needed
@@ -116,10 +127,10 @@ class CrossRoundBridge:
 
         # Check high_value_recall for P0/P1 gaps
         high_recall = metrics.get("high_value_recall", 1.0)
-        if isinstance(high_recall, (int, float)) and high_recall < 0.5:
+        if isinstance(high_recall, (int, float)) and high_recall < self.thresholds["high_value_recall_threshold"]:
             signal = PrioritySignal(
                 risk_type="*",
-                priority_boost=0.3,
+                priority_boost=self.thresholds["high_value_boost"],
                 reason=f"High-value (P0+P1) recall is low: {high_recall:.0%}",
                 source="benchmark_recall_gap",
                 generated_at=timestamp,
@@ -129,10 +140,10 @@ class CrossRoundBridge:
 
         # Check evidence_weighted_recall
         ev_recall = metrics.get("evidence_weighted_recall", 1.0)
-        if isinstance(ev_recall, (int, float)) and ev_recall < 0.3:
+        if isinstance(ev_recall, (int, float)) and ev_recall < self.thresholds["evidence_recall_threshold"]:
             signal = PrioritySignal(
                 risk_type="*",
-                priority_boost=0.2,
+                priority_boost=self.thresholds["evidence_boost"],
                 reason=f"Evidence-weighted recall is very low: {ev_recall:.0%}. Generate more runtime probes.",
                 source="benchmark_recall_gap",
                 generated_at=timestamp,

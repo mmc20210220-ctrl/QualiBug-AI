@@ -150,6 +150,50 @@ def _write_blob(root: Path, project_id: str, source_hash: str, content: str) -> 
     return blob
 
 
+def _validate_source_content(content_text: str, source_type: str) -> dict[str, Any]:
+    """Basic structural validation of imported source documents.
+
+    Returns {'valid': bool, 'reason': str}. Validation is advisory, not blocking.
+    """
+    if not content_text or not content_text.strip():
+        return {"valid": False, "reason": "Content is empty"}
+
+    source_type_lower = source_type.lower().strip()
+
+    # OpenAPI validation
+    if source_type_lower in ("openapi", "openapi3", "swagger", "api_spec"):
+        try:
+            import json as _json
+            spec = _json.loads(content_text)
+            if not isinstance(spec, dict):
+                return {"valid": False, "reason": "OpenAPI spec is not a JSON object"}
+            if "openapi" not in spec and "swagger" not in spec:
+                return {"valid": False, "reason": "Missing 'openapi' or 'swagger' version field"}
+            if "paths" not in spec or not isinstance(spec.get("paths"), dict):
+                return {"valid": False, "reason": "Missing or empty 'paths' — no API endpoints defined"}
+            return {"valid": True, "reason": f"OpenAPI {spec.get('openapi', spec.get('swagger', '?'))} with {len(spec['paths'])} paths"}
+        except Exception as e:
+            return {"valid": False, "reason": f"Invalid JSON: {e}"}
+
+    # PRD validation
+    if source_type_lower in ("prd", "requirement", "business_rules"):
+        if len(content_text.strip()) < 10:
+            return {"valid": False, "reason": "PRD content too short (<10 chars)"}
+        return {"valid": True, "reason": f"PRD with {len(content_text)} chars"}
+
+    # DB Schema validation
+    if source_type_lower in ("db_design", "database_schema", "sql", "db_schema"):
+        if len(content_text.strip()) < 10:
+            return {"valid": False, "reason": "DB schema too short (<10 chars)"}
+        # Basic SQL check: should contain CREATE or ALTER or table definition
+        has_sql = any(kw in content_text.upper() for kw in ("CREATE TABLE", "ALTER TABLE", "CREATE INDEX"))
+        if not has_sql:
+            return {"valid": True, "reason": "No CREATE/ALTER TABLE found — may be schema description rather than SQL DDL"}
+        return {"valid": True, "reason": f"DB schema with {len(content_text)} chars"}
+
+    return {"valid": True, "reason": f"Content accepted ({len(content_text)} chars, type={source_type})"}
+
+
 def register_source_asset(
     project_id: str,
     source_id: str,
@@ -170,6 +214,26 @@ def register_source_asset(
     """
     project = _safe_project(project_id)
     asset_id = _safe_asset_id(source_id)
+    # Convert content to text for validation (handles bytes, str, dict)
+    # Only validate if content is already in-memory (not file-like streams)
+    content_text = ""
+    if isinstance(content, bytes):
+        content_text = content.decode("utf-8", errors="replace")
+    elif isinstance(content, str):
+        content_text = content
+    elif isinstance(content, dict):
+        import json as _json
+        content_text = _json.dumps(content, ensure_ascii=False)
+
+    # Validate content structure based on source_type (only if we have text)
+    if content_text:
+        validation = _validate_source_content(content_text, source_type)
+        if not validation["valid"]:
+            import sys
+            print(f"[source_registry] Validation warning for {source_id} ({source_type}): {validation['reason']}", file=sys.stderr)
+            # Store validation result in metadata for downstream consumers
+            metadata = dict(metadata or {})
+            metadata["_validation"] = validation
     source_kind = str(source_type or "other_document").strip()[:80]
     if not source_kind:
         raise SourceRegistryError("source_type is required")

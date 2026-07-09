@@ -104,7 +104,9 @@ def _generate_learning_probes(
         generator = LearningGenerator(project_context=context)
         manifest = generator.generate_from_confirmed_bugs(confirmed)
         return generator.manifest_to_dict(manifest).get("generated_probes", [])
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[closed_loop_feedback] LearningGenerator failed: {e}", file=sys.stderr)
         return []
 
 

@@ -130,7 +130,8 @@ class LearningManifest:
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
-# Role escalation ladder: lower → higher privilege
+# Role escalation ladder: lower → higher privilege.
+# NOTE: This is a generic default. Override per-industry via project_context["role_hierarchy"].
 ROLE_ESCALATION: list[list[str]] = [
     ["anonymous", "guest"],
     ["normal_user", "customer", "member", "user"],
@@ -192,10 +193,11 @@ def _extract_entity_from_path(path: str) -> str:
     # e.g., /api/v1/orders/123 → orders
     # e.g., /admin/products → products
     parts = [p for p in path.strip("/").split("/") if p and not p.startswith("{") and not p.isdigit()]
-    # Skip common prefixes
-    skip = {"api", "v1", "v2", "v3", "admin", "tenant"}
+    # Skip common API prefixes — version-agnostic using regex
+    import re as _re
+    skip_pattern = _re.compile(r'^(api|v\d+|[a-z]{2}(-[A-Z]{2})?|admin|internal|public|private|web|gateway|proxy|services|platform)$')
     for p in parts:
-        if p.lower() not in skip:
+        if not skip_pattern.match(p.lower()):
             return p
     return parts[-1] if parts else "resource"
 
@@ -217,7 +219,7 @@ def _extract_actor_from_finding(finding: dict[str, Any]) -> str:
             for role in role_group:
                 if role in title:
                     return role
-    return actor or ""  # Return empty string when no actor is detectable
+    return actor or "normal_user"  # Sensible default for variant generation
 
 
 def _normalize_method_path(method: str, path: str) -> str:
@@ -748,6 +750,8 @@ class FixtureGenerator:
                     "method": "POST",
                     "path": create_path,
                     "body": {
+                        # NOTE: body fields (name, source, disposable) are generic defaults.
+# Override via confirmed_bug["fixture_fields"] for industry-specific entities.
                         "name": f"qb_learning_test_{bug_id[:8]}",
                         "source": "learning_generator",
                         "disposable": True,
@@ -1046,6 +1050,37 @@ class LearningGenerator:
                 for f in manifest.generated_fixtures
             ],
         }
+
+    def persist_manifest(
+        self,
+        manifest: LearningManifest,
+        output_dir: str | Path,
+    ) -> Path:
+        """Persist a learning manifest to disk so generated artifacts survive across runs.
+
+        Args:
+            manifest: The LearningManifest to persist.
+            output_dir: Directory to write the manifest JSON.
+
+        Returns:
+            Path to the written file.
+        """
+        import os
+        output_path = Path(output_dir or os.environ.get(
+            "QUALIBUG_WORKSPACE_ROOT",
+            str(Path(__file__).resolve().parents[1])
+        ))
+        out_dir = output_path / "platform_outputs" / "_learning"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        manifest_path = out_dir / f"learning_manifest_{manifest.manifest_id}.json"
+        manifest_dict = self.manifest_to_dict(manifest)
+        manifest_path.write_text(
+            json.dumps(manifest_dict, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._log.append(f"persist_manifest: {manifest_path}")
+        return manifest_path
 
     def get_log(self) -> list[str]:
         return list(self._log)

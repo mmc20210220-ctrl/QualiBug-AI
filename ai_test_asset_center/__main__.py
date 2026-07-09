@@ -4099,14 +4099,16 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                 result["p4_ui_evidence_bridge"] = {"status": "bridge_skipped"}
 
     except Exception as exc:
-        evidence_bundle = {"status": "persistence_failed", "reason": type(exc).__name__}
-        if confirmed:
-            for item in confirmed:
-                item["confirmation_status"] = "inconclusive"
-                item["evidence_persistence_status"] = "failed"
-            candidates.extend(confirmed)
-            confirmed = []
-        input_gaps.append(_gap("EVIDENCE_BUNDLE_PERSISTENCE_FAILED", "Runtime evidence could not be persisted with integrity guarantees; customer-deliverable confirmation is blocked."))
+        import sys
+        print(f"[scan] Evidence persistence failed: {exc}", file=sys.stderr)
+        evidence_bundle = {"status": "persistence_failed", "reason": str(exc), "error_type": type(exc).__name__}
+        # Best-effort: do NOT downgrade confirmed findings to inconclusive.
+        # The findings are valid; only the persistence layer failed.
+        # Mark them with a warning so the customer knows the evidence file is missing.
+        for item in confirmed:
+            item["evidence_persistence_status"] = "failed"
+            item["evidence_persistence_warning"] = str(exc)[:200]
+        input_gaps.append(_gap("EVIDENCE_BUNDLE_PERSISTENCE_FAILED", f"Runtime evidence persistence failed ({type(exc).__name__}). Findings remain confirmed but evidence file may be missing. Retry the scan to regenerate."))
 
     if str(runtime_contract.get("status") or "") == "blocked":
         requirements = runtime_contract.get("missing_requirements") if isinstance(runtime_contract.get("missing_requirements"), list) else []
@@ -4309,6 +4311,35 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         }
     except Exception:
         pass
+
+    # ── Closed-Loop Learning: extract patterns + generate probes for next scan ──
+    try:
+        from .closed_loop_feedback import build_closed_loop_context
+
+        if confirmed:
+            feedback = build_closed_loop_context(project, root, confirmed)
+            result["closed_loop"] = {
+                "patterns": feedback.get("total_patterns", 0),
+                "new_patterns": feedback.get("new_this_scan", 0),
+                "generated_probes": len(feedback.get("generated_probes", [])),
+            }
+
+            # Persist generated probes so the next scan can consume them
+            probes = feedback.get("generated_probes", [])
+            if probes:
+                probe_pool_path = output_root / "learned_probes.json"
+                _write_json(probe_pool_path, {
+                    "schema": "learned_probes.v1",
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "source": "closed_loop_feedback",
+                    "probe_count": len(probes),
+                    "probes": probes,
+                })
+                result["closed_loop"]["probe_pool_path"] = str(probe_pool_path)
+    except Exception as e:
+        import sys
+        print(f"[scan] Closed-loop learning failed: {e}", file=sys.stderr)
+        result["closed_loop"] = {"status": "unavailable", "error": str(e)}
 
     return result
 

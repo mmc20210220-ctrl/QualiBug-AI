@@ -466,7 +466,10 @@ class AutonomousDiscoveryEngine:
             current = getattr(self.client.config, "model", "") or getattr(self.client, "model", "")
             if not current or "chat" in str(current):
                 self.client.config.model = model
-        except: pass
+        except Exception as e:
+            import sys
+            print(f"[discovery_engine] Model config set failed: {e}. Engine may produce degraded results.", file=sys.stderr)
+            self._model_config_warning = str(e)
         self.client.config.max_tokens = max(getattr(self.client.config, 'max_tokens', 0), max_tokens)
         # ⛔ CRITICAL: Reader prompt (8000 chars) needs 150-200s on DeepSeek.
         # Removing this line causes silent loop death (API timeout → crash disguised as "process died").
