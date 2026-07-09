@@ -554,29 +554,10 @@ def _install_system_behavior_finding_patch() -> None:
         return _attach_system_behavior_to_finding(finding, hints, scenario_payload)
 
     def _persist_confirmed_findings_with_system_behavior(root: Path, project: str, findings: list[dict[str, Any]]) -> int:
-        saved = int(original_persist(root, project, findings) or 0)
-        system_findings = {str(item.get("evidence_id") or ""): item for item in findings or [] if isinstance(item, dict) and str(item.get("evidence_id") or "") and isinstance(item.get("system_behavior_space_evidence"), dict)}
-        if not system_findings:
-            return saved
-        try:
-            path = _v12._confirmed_findings_path(root, project)
-            payload = json.loads(path.read_text(encoding="utf-8") or "{}") if path.exists() else {}
-            ledger = payload if isinstance(payload, dict) else {}
-            changed = False
-            for evidence_id, finding in system_findings.items():
-                if evidence_id not in ledger or not isinstance(ledger.get(evidence_id), dict):
-                    continue
-                hints = dict(finding.get("system_behavior_space_evidence") or {})
-                regression_contract = dict(finding.get("regression_contract") or _system_behavior_regression_contract(hints))
-                _attach_regression_contract_fields(ledger[evidence_id], regression_contract)
-                ledger[evidence_id]["learning_signal"] = dict(finding.get("learning_signal") or {})
-                changed = True
-            if changed:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        except Exception:
-            return saved
-        return saved
+        # Base _persist_confirmed_findings now forwards system_promise_id,
+        # regression_contract and all system behavior metadata through the ledger.
+        # The fragile re-read/patch step from earlier versions is no longer needed.
+        return int(original_persist(root, project, findings) or 0)
 
     _v12._ORIGINAL_CONFIRMED_ORACLE_FINDING_SYSTEM_BEHAVIOR = original_confirmed  # type: ignore[attr-defined]
     _v12._ORIGINAL_PERSIST_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR = original_persist  # type: ignore[attr-defined]
@@ -602,89 +583,42 @@ def _install_system_behavior_regression_patch() -> None:
         return
 
     def _load_confirmed_findings_regression_probes_with_system_behavior(project: str, root: Path) -> list[dict[str, Any]]:
-        probes = list(original_load_confirmed(project, root) or [])
-        try:
-            safe_project = _rsb._safe_project_id(project)
-            ledger = _rsb._load_json_safe(root / "platform_workspace" / safe_project / "defect_discovery" / "confirmed_findings.json", {})
-            if not isinstance(ledger, dict):
-                return probes
-            by_evidence = {str(k): v for k, v in ledger.items() if isinstance(v, dict)}
-            for probe in probes:
-                defect = by_evidence.get(str(probe.get("confirmed_evidence_id") or probe.get("issue_id") or ""))
-                if not isinstance(defect, dict):
-                    continue
-                contract = _contract_from_row(defect)
-                if contract:
-                    _attach_regression_contract_fields(probe, contract)
-                    probe["source"] = "confirmed_findings_system_promise_ledger"
-                    probe["verification_badge"] = "system_promise_regression"
-                    probe["risk_type"] = str(contract.get("source_family") or probe.get("risk_type") or "system_promise")
-        except Exception:
-            return probes
-        return probes
+        # Base _load_confirmed_findings_regression_probes now forwards
+        # system_promise_id, regression_contract and all system behavior
+        # metadata from the ledger into each probe. No re-read needed.
+        return list(original_load_confirmed(project, root) or [])
 
     def _judge_probe_with_system_behavior(probe: dict[str, Any], execution: dict[str, Any], skipped: bool = False, skip_reason: str = "") -> dict[str, Any]:
+        # Base _judge_probe now forwards system_promise_id and
+        # regression_contract. Only add oracle_intent here.
         item = original_judge(probe, execution, skipped=skipped, skip_reason=skip_reason)
         contract = _contract_from_row(probe)
         if contract:
-            _attach_regression_contract_fields(item, contract)
-            item["regression_contract_type"] = "system_behavior_promise_regression"
             item["oracle_intent"] = [f"SystemPromiseOracle.dimension:{dim}" for dim in contract.get("dimensions") or []]
         return item
 
     def _reverify_confirmed_findings_with_system_behavior(project: str, root: Path, cfg: dict[str, Any], safety_boundary: dict[str, Any], timeout: float, dry_run: bool) -> dict[str, Any]:
+        # Base _reverify_confirmed_findings now forwards system_promise_id
+        # and regression_contract from the ledger into each verdict.
         result = original_reverify(project, root, cfg, safety_boundary, timeout, dry_run)
-        if not isinstance(result, dict):
-            return result
-        try:
-            ledger = _rr._load_json_safe(root / "platform_workspace" / project / "defect_discovery" / "confirmed_findings.json", {})
-            if not isinstance(ledger, dict):
-                return result
-            for verdict in result.get("verdicts") if isinstance(result.get("verdicts"), list) else []:
-                if not isinstance(verdict, dict):
-                    continue
-                defect = ledger.get(str(verdict.get("evidence_id") or ""))
-                if not isinstance(defect, dict):
-                    continue
-                contract = _contract_from_row(defect)
-                if contract:
-                    _attach_regression_contract_fields(verdict, contract)
-                    verdict["reverification_contract_type"] = "system_behavior_promise_regression"
-            result["system_promise_reverification_count"] = sum(1 for item in result.get("verdicts", []) if isinstance(item, dict) and item.get("system_promise_id"))
-        except Exception:
-            return result
+        if isinstance(result, dict):
+            result["system_promise_reverification_count"] = sum(
+                1 for item in result.get("verdicts", [])
+                if isinstance(item, dict) and item.get("system_promise_id")
+            )
         return result
 
     def _append_regression_history_with_system_behavior(project: str, root: Path, result: dict[str, Any]) -> list[dict[str, Any]]:
+        # Base _append_regression_history now forwards system_promise_id and
+        # regression_contract into history items and writes to both locations.
+        # Patch only needs to trigger learning refresh after history is written.
         history = list(original_append_history(project, root, result) or [])
         if not history:
             return history
         try:
-            item_contracts: dict[str, dict[str, Any]] = {}
-            for item in result.get("items") if isinstance(result.get("items"), list) else []:
-                if not isinstance(item, dict):
-                    continue
-                contract = _contract_from_row(item)
-                if not contract:
-                    continue
-                for key in (item.get("issue_id"), item.get("regression_probe_id")):
-                    if str(key or ""):
-                        item_contracts[str(key)] = contract
-            if not item_contracts:
-                return history
-            last = history[-1]
-            for row in last.get("items") if isinstance(last.get("items"), list) else []:
-                if not isinstance(row, dict):
-                    continue
-                contract = item_contracts.get(str(row.get("issue_id") or "")) or item_contracts.get(str(row.get("regression_probe_id") or ""))
-                if contract:
-                    _attach_regression_contract_fields(row, contract)
-                    row["regression_contract_type"] = "system_behavior_promise_regression"
-            history[-1] = last
-            _rr._write_json(root / "platform_outputs" / project / "regression_run" / "regression_run_history.json", history)
-            _rr._write_json(root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json", history)
             refresh = _system_behavior_learning_refresh_summary(project, root)
             result["risk_clue_pool_learning_refresh"] = refresh
+            last = history[-1]
             last["risk_clue_pool_learning_refresh"] = refresh
             history[-1] = last
             _rr._write_json(root / "platform_outputs" / project / "regression_run" / "regression_run_history.json", history)

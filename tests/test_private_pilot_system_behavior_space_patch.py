@@ -47,11 +47,36 @@ def _first_system_promise_scenario():
     return next(item for item in scenarios if item.selection_origin == "system_behavior_space")
 
 
+def _first_money_system_promise_scenario():
+    """Return the first system promise scenario whose dimensions include money-related terms."""
+    builder = BusinessStateGraphBuilder()
+    graphs = builder.build("普通用户只能看自己的订单。金额必须一致。", API_SPEC, DB_SCHEMA)
+    contract = builder.behavior_contract()
+    system_slices = [item for item in contract["slices"] if item.get("_selection_origin") == "system_behavior_space"]
+    scenarios = SemanticScenarioGenerator().generate(
+        graphs,
+        API_SPEC,
+        active_slices=system_slices,
+        allow_source_runtime=True,
+    )
+    money_dims = {"money", "quantity", "conservation", "data_consistency"}
+    for item in scenarios:
+        if item.selection_origin != "system_behavior_space":
+            continue
+        hints = item.runtime_hints.get("system_behavior_space", {}) if hasattr(item, "runtime_hints") and isinstance(item.runtime_hints, dict) else {}
+        dims = {str(d).lower() for d in hints.get("dimensions", [])}
+        if dims.intersection(money_dims):
+            return item
+    raise AssertionError("No system promise scenario with money-related dimensions found")
+
+
 def _make_system_promise_finding(tmp_path):
     from ai_test_asset_center import v12_pipeline
     from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleEngine
 
-    scenario_obj = _first_system_promise_scenario()
+    # Use a money-related scenario so the oracle detects negative-value violations
+    # and the regression contract carries money dimensions for learning.
+    scenario_obj = _first_money_system_promise_scenario()
     scenario = scenario_obj.to_dict()
     trace = {
         "steps": [
@@ -169,7 +194,9 @@ def test_system_promise_oracle_links_dimension_violation_to_evidence() -> None:
     try:
         from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleEngine
 
-        scenario = _first_system_promise_scenario().to_dict()
+        # Use a money-related scenario so the oracle's dimension check triggers
+        # the negative-value detection path.
+        scenario = _first_money_system_promise_scenario().to_dict()
         trace = {
             "steps": [
                 {

@@ -286,6 +286,37 @@ def _load_confirmed_findings_regression_probes(project: str, root: Path) -> list
             "evidence_quality": dict(evidence_quality),
             "confirmed_evidence_id": str(evidence_id),
         }
+        # ── System Behavior Space contract forwarding ──
+        # Forward system promise metadata from the confirmed-findings ledger
+        # so regression runner and regression history inherit the contract.
+        _sb_promise_id = str(defect.get("system_promise_id") or "").strip()
+        _sb_regression_contract = defect.get("regression_contract") if isinstance(defect.get("regression_contract"), dict) else {}
+        _sb_evidence = defect.get("system_behavior_space_evidence") if isinstance(defect.get("system_behavior_space_evidence"), dict) else {}
+        _sb_dimensions = defect.get("system_behavior_dimensions") if isinstance(defect.get("system_behavior_dimensions"), list) else []
+        _sb_surface_plan = defect.get("system_behavior_surface_plan") if isinstance(defect.get("system_behavior_surface_plan"), list) else []
+        _sb_required_assets = defect.get("system_behavior_required_assets") if isinstance(defect.get("system_behavior_required_assets"), list) else []
+        _sb_source_family = str(defect.get("system_behavior_source_family") or "").strip()
+        _sb_learning_signal = defect.get("learning_signal") if isinstance(defect.get("learning_signal"), dict) else {}
+        if _sb_promise_id:
+            probe["system_promise_id"] = _sb_promise_id
+            probe["source"] = "confirmed_findings_system_promise_ledger"
+            probe["verification_badge"] = "system_promise_regression"
+            if _sb_source_family:
+                probe["risk_type"] = _sb_source_family
+        if _sb_regression_contract:
+            probe["regression_contract"] = _sb_regression_contract
+        if _sb_evidence:
+            probe["system_behavior_space_evidence"] = _sb_evidence
+        if _sb_dimensions:
+            probe["system_behavior_dimensions"] = [str(item) for item in _sb_dimensions if str(item)]
+        if _sb_surface_plan:
+            probe["system_behavior_surface_plan"] = [str(item) for item in _sb_surface_plan if str(item)]
+        if _sb_required_assets:
+            probe["system_behavior_required_assets"] = [str(item) for item in _sb_required_assets if str(item)]
+        if _sb_source_family:
+            probe["system_behavior_source_family"] = _sb_source_family
+        if _sb_learning_signal:
+            probe["learning_signal"] = _sb_learning_signal
         current_campaign_scope = defect.get("current_campaign_scope") if isinstance(defect.get("current_campaign_scope"), dict) else {}
         if current_campaign_scope:
             probe["current_campaign_scope"] = dict(current_campaign_scope)

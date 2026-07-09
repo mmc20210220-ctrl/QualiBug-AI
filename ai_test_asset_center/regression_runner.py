@@ -209,7 +209,10 @@ def _judge_probe(probe: dict[str, Any], execution: dict[str, Any], skipped: bool
             status = "needs_review"
             passed = False
             reason = "该探针缺少可自动判定的强断言，已采集证据，建议 QA 复核。"
-    return {
+    # ── System Behavior Space contract forwarding ──
+    # Preserve system promise metadata from the regression probe through the
+    # judge verdict so regression_run_history inherits the contract.
+    _sb_item: dict[str, Any] = {
         "regression_probe_id": probe.get("regression_probe_id"),
         "issue_id": issue_id,
         "title": _safe_text(probe.get("title"), 260),
@@ -229,6 +232,23 @@ def _judge_probe(probe: dict[str, Any], execution: dict[str, Any], skipped: bool
             "body_excerpt": _safe_text(execution.get("body_excerpt"), 1200),
         },
     }
+    _sb_promise_id = str(probe.get("system_promise_id") or "").strip()
+    _sb_contract = probe.get("regression_contract") if isinstance(probe.get("regression_contract"), dict) else {}
+    if _sb_promise_id:
+        _sb_item["system_promise_id"] = _sb_promise_id
+    if _sb_contract:
+        _sb_item["regression_contract"] = dict(_sb_contract)
+        _sb_item["regression_contract_type"] = "system_behavior_promise_regression"
+    if isinstance(probe.get("system_behavior_dimensions"), list):
+        _sb_item["system_behavior_dimensions"] = [str(item) for item in probe["system_behavior_dimensions"] if str(item)]
+    if isinstance(probe.get("system_behavior_surface_plan"), list):
+        _sb_item["system_behavior_surface_plan"] = [str(item) for item in probe["system_behavior_surface_plan"] if str(item)]
+    if isinstance(probe.get("system_behavior_required_assets"), list):
+        _sb_item["system_behavior_required_assets"] = [str(item) for item in probe["system_behavior_required_assets"] if str(item)]
+    _sb_source_family = str(probe.get("system_behavior_source_family") or "").strip()
+    if _sb_source_family:
+        _sb_item["system_behavior_source_family"] = _sb_source_family
+    return _sb_item
 
 
 def _count(items: list[dict[str, Any]], status: str) -> int:
@@ -263,6 +283,28 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
         if not isinstance(defect, dict):
             continue
         c["total"] += 1
+        # ── System Behavior Space contract forwarding ──
+        # Preserve system promise metadata from the confirmed-findings ledger
+        # so reverification verdicts inherit the contract for learning feedback.
+        _sb_promise_id = str(defect.get("system_promise_id") or "").strip()
+        _sb_contract = defect.get("regression_contract") if isinstance(defect.get("regression_contract"), dict) else {}
+        _sb_dimensions = defect.get("system_behavior_dimensions") if isinstance(defect.get("system_behavior_dimensions"), list) else []
+        _sb_surface_plan = defect.get("system_behavior_surface_plan") if isinstance(defect.get("system_behavior_surface_plan"), list) else []
+        _sb_source_family = str(defect.get("system_behavior_source_family") or "").strip()
+
+        def _attach_sb_to_verdict(v: dict[str, Any]) -> dict[str, Any]:
+            if _sb_promise_id:
+                v["system_promise_id"] = _sb_promise_id
+            if _sb_contract:
+                v["regression_contract"] = dict(_sb_contract)
+                v["regression_contract_type"] = "system_behavior_promise_regression"
+            if _sb_dimensions:
+                v["system_behavior_dimensions"] = [str(item) for item in _sb_dimensions if str(item)]
+            if _sb_surface_plan:
+                v["system_behavior_surface_plan"] = [str(item) for item in _sb_surface_plan if str(item)]
+            if _sb_source_family:
+                v["system_behavior_source_family"] = _sb_source_family
+            return v
         repro = defect.get("reproduction") if isinstance(defect.get("reproduction"), dict) else {}
         method = str(repro.get("method") or "GET").upper()
         path = str(repro.get("path") or "").strip()
@@ -279,7 +321,7 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
         # Hard safety boundary applies to re-verification exactly as to discovery.
         block = _is_production_data_blocked(safety_boundary, probe)
         if block:
-            verdicts.append({
+            verdicts.append(_attach_sb_to_verdict({
                 "evidence_id": evidence_id,
                 "title": str(defect.get("title") or ""),
                 "severity": str(defect.get("severity") or "P2"),
@@ -288,11 +330,11 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
                 "current_status_code": None,
                 "reason": f"复现路径命中生产数据禁触边界，已跳过自动复验：{block}",
                 "invariant_context": invariant_ctx,
-            })
+            }))
             c["blocked"] += 1
             continue
         if dry_run:
-            verdicts.append({
+            verdicts.append(_attach_sb_to_verdict({
                 "evidence_id": evidence_id,
                 "title": str(defect.get("title") or ""),
                 "severity": str(defect.get("severity") or "P2"),
@@ -301,12 +343,12 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
                 "current_status_code": None,
                 "reason": "dry run 模式下未发起真实复现请求，需 QA 复核。",
                 "invariant_context": invariant_ctx,
-            })
+            }))
             c["needs_review"] += 1
             continue
         execution = _execute_http_probe(probe, cfg, project, root, timeout, safety_boundary)
         if not execution.get("reachable"):
-            verdicts.append({
+            verdicts.append(_attach_sb_to_verdict({
                 "evidence_id": evidence_id,
                 "title": str(defect.get("title") or ""),
                 "severity": str(defect.get("severity") or "P2"),
@@ -315,7 +357,7 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
                 "current_status_code": execution.get("status_code"),
                 "reason": f"被测系统不可访问（{execution.get('error')}），无法判定修复结果。",
                 "invariant_context": invariant_ctx,
-            })
+            }))
             c["needs_review"] += 1
             continue
         current = int(execution.get("status_code") or 0)
@@ -325,7 +367,7 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
         else:
             status = "resolved"
             reason = f"复现请求返回 {current}，与缺陷状态码 {buggy_status} 不同，缺陷已修复。"
-        verdicts.append({
+        verdicts.append(_attach_sb_to_verdict({
             "evidence_id": evidence_id,
             "title": str(defect.get("title") or ""),
             "severity": str(defect.get("severity") or "P2"),
@@ -334,7 +376,7 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
             "current_status_code": current,
             "reason": reason,
             "invariant_context": invariant_ctx,
-        })
+        }))
         c[status] += 1
     return {"consumed": True, "verdicts": verdicts, "counts": c}
 
@@ -454,6 +496,15 @@ def _append_regression_history(project: str, root: Path, result: dict[str, Any])
                 ),
                 "expected_status_code": item.get("expected_status_code"),
                 "actual_status_code": item.get("actual_status_code"),
+                # ── System Behavior Space contract forwarding ──
+                # Preserve system promise metadata in regression history so
+                # risk_clue_pool and coverage steering can learn from it.
+                **({"system_promise_id": str(item.get("system_promise_id"))} if str(item.get("system_promise_id") or "") else {}),
+                **({"regression_contract": item.get("regression_contract")} if isinstance(item.get("regression_contract"), dict) else {}),
+                **({"regression_contract_type": str(item.get("regression_contract_type"))} if str(item.get("regression_contract_type") or "") else {}),
+                **({"system_behavior_dimensions": [str(x) for x in item["system_behavior_dimensions"] if str(x)]} if isinstance(item.get("system_behavior_dimensions"), list) else {}),
+                **({"system_behavior_surface_plan": [str(x) for x in item["system_behavior_surface_plan"] if str(x)]} if isinstance(item.get("system_behavior_surface_plan"), list) else {}),
+                **({"system_behavior_source_family": str(item.get("system_behavior_source_family"))} if str(item.get("system_behavior_source_family") or "") else {}),
             }
             for item in items
             if isinstance(item, dict)

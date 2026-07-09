@@ -655,7 +655,20 @@ def _persist_confirmed_findings(root: Path, project: str, findings: list[dict[st
             buggy_status_code = int(response_raw.get("status_code") or 0)
         except (TypeError, ValueError):
             buggy_status_code = 0
-        ledger[evidence_id] = {
+        # ── System Behavior Space contract forwarding ──
+        # Preserve system promise metadata through the confirmed-findings ledger
+        # so regression suite builder, regression runner, and risk clue pool all
+        # inherit the contract without re-reading fragile two-step patches.
+        _system_promise_id = str(f.get("system_promise_id") or "").strip()
+        _regression_contract = f.get("regression_contract") if isinstance(f.get("regression_contract"), dict) else {}
+        _sb_evidence = f.get("system_behavior_space_evidence") if isinstance(f.get("system_behavior_space_evidence"), dict) else {}
+        _sb_dimensions = f.get("system_behavior_dimensions") if isinstance(f.get("system_behavior_dimensions"), list) else []
+        _sb_surface_plan = f.get("system_behavior_surface_plan") if isinstance(f.get("system_behavior_surface_plan"), list) else []
+        _sb_required_assets = f.get("system_behavior_required_assets") if isinstance(f.get("system_behavior_required_assets"), list) else []
+        _sb_source_family = str(f.get("system_behavior_source_family") or "").strip()
+        _learning_signal = f.get("learning_signal") if isinstance(f.get("learning_signal"), dict) else {}
+
+        entry: dict[str, Any] = {
             "evidence_id": evidence_id,
             "title": str(f.get("title") or ""),
             "severity": str(f.get("severity") or "P2"),
@@ -678,6 +691,23 @@ def _persist_confirmed_findings(root: Path, project: str, findings: list[dict[st
                 "reproduction_steps": list(ev.get("reproduction_steps") or []),
             },
         }
+        if _system_promise_id:
+            entry["system_promise_id"] = _system_promise_id
+        if _regression_contract:
+            entry["regression_contract"] = _regression_contract
+        if _sb_evidence:
+            entry["system_behavior_space_evidence"] = _sb_evidence
+        if _sb_dimensions:
+            entry["system_behavior_dimensions"] = [str(item) for item in _sb_dimensions if str(item)]
+        if _sb_surface_plan:
+            entry["system_behavior_surface_plan"] = [str(item) for item in _sb_surface_plan if str(item)]
+        if _sb_required_assets:
+            entry["system_behavior_required_assets"] = [str(item) for item in _sb_required_assets if str(item)]
+        if _sb_source_family:
+            entry["system_behavior_source_family"] = _sb_source_family
+        if _learning_signal:
+            entry["learning_signal"] = _learning_signal
+        ledger[evidence_id] = entry
         saved += 1
     if saved:
         try:
