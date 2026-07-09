@@ -1692,42 +1692,64 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             # of truth with grounded_probe_executor (match_production_data_exclusion).
             _safety_boundary = _load_execution_safety_boundary(project, root)
             execution_started, failed = time.time(), 0
+            # ── Multi-role token collection ──
+            # Collect all available role tokens so each scenario can be executed
+            # from multiple actor perspectives, catching cross-role auth bugs.
+            _role_tokens: dict[str, str] = {}
+            try:
+                _accounts = json.loads((root / "platform_inputs" / project / "test_accounts.json").read_text(encoding="utf-8"))
+                if isinstance(_accounts, dict):
+                    for _name, _acc in _accounts.items():
+                        if isinstance(_acc, dict):
+                            _tok = str(_acc.get("token") or "").strip()
+                            _role = str(_acc.get("role") or _name).strip()
+                            if _tok and not _tok.startswith("ERROR") and _role:
+                                _role_tokens[_role] = _tok
+            except Exception:
+                pass
+            if not _role_tokens and runtime_token:
+                _role_tokens["default"] = runtime_token
             for scenario in executable:
-                try:
-                    trace = _execute_scenario(scenario, approved_base_url, max_retries=2, safety_boundary=_safety_boundary)
-                    traces.append((scenario, trace))
-                    slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
-                    if slice_id:
-                        attempted_slice_ids.add(slice_id)
-                    for step in trace.get("steps", []):
-                        if int(step.get("status") or 0) >= 500:
-                            result["findings"].append({
-                                "severity": "P0",
-                                "title": f"[场景执行错误] {str(getattr(scenario, 'title', 'scenario'))[:80]}",
-                                "category": getattr(scenario, "category", "scenario_flow"),
-                                "source": "v12_scenario_executor",
-                                "description": f"服务端错误 HTTP{step.get('status')}: {step.get('path', '')}",
-                                "confidence_score": 0.80,
-                                "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
-                                "discovery_round": settings["round_number"],
-                                "campaign_id": campaign.campaign_id,
-                                "execution_status": "executed",
-                                "confirmation_status": "candidate",
-                                "evidence": {"calls": [{"call": f"{step.get('method', '')} {step.get('path', '')}", "results": {"execution": {"status": step.get("status"), "body": step.get("response", {}).get("body", {})}}}]},
-                            })
-                except Exception as _exec_err:
-                    # Fail Fast / observable: never swallow an error silently.
-                    # Real execution failures (HTTP/timeout) are expected and
-                    # counted as `failed`; but a programming error (e.g. a
-                    # signature mismatch) must be visible in the logs so it is
-                    # not mistaken for a routine execution failure.
-                    logger.error(
-                        "scenario execution failed scenario=%s type=%s err=%s",
-                        getattr(scenario, "behavior_slice_id", "") or getattr(scenario, "id", "?"),
-                        type(_exec_err).__name__,
-                        str(_exec_err)[:300],
-                    )
-                    failed += 1
+                _orig_token = getattr(scenario, "actor_token", "") or ""
+                for _role, _token in (_role_tokens.items() if _role_tokens else [("default", "")]):
+                    if not _token:
+                        continue
+                    try:
+                        scenario.actor_token = _token
+                        trace = _execute_scenario(scenario, approved_base_url, max_retries=2, safety_boundary=_safety_boundary)
+                        # Tag trace with role info for oracle
+                        trace["actor_role"] = _role
+                        traces.append((scenario, trace))
+                        slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
+                        if slice_id:
+                            attempted_slice_ids.add(slice_id)
+                        for step in trace.get("steps", []):
+                            if int(step.get("status") or 0) >= 500:
+                                result["findings"].append({
+                                    "severity": "P0",
+                                    "title": f"[场景执行错误] {str(getattr(scenario, 'title', 'scenario'))[:80]}",
+                                    "category": getattr(scenario, "category", "scenario_flow"),
+                                    "source": "v12_scenario_executor",
+                                    "description": f"服务端错误 HTTP{step.get('status')}: {step.get('path', '')}",
+                                    "confidence_score": 0.80,
+                                    "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
+                                    "discovery_round": settings["round_number"],
+                                    "campaign_id": campaign.campaign_id,
+                                    "execution_status": "executed",
+                                    "confirmation_status": "candidate",
+                                    "evidence": {"calls": [{"call": f"{step.get('method', '')} {step.get('path', '')}", "results": {"execution": {"status": step.get("status"), "body": step.get("response", {}).get("body", {})}}}]},
+                                })
+                    except Exception as _exec_err:
+                        logger.error(
+                            "scenario execution failed scenario=%s role=%s type=%s err=%s",
+                            getattr(scenario, "behavior_slice_id", "") or getattr(scenario, "id", "?"),
+                            _role,
+                            type(_exec_err).__name__,
+                            str(_exec_err)[:300],
+                        )
+                        failed += 1
+                # Restore original token after role loop
+                scenario.actor_token = _orig_token
             result["phases"]["execution"] = {
                 "status": "completed",
                 "executed": len(traces),
