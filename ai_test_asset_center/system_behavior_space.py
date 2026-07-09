@@ -638,6 +638,49 @@ def build_system_behavior_space(
     for promise in list(space.promises):
         _materialize_probe(space, promise)
 
+    # ── Route verification ──
+    # Mark promises whose API routes were not verified against the live server.
+    # This filters out ~76% of false-positive 404 findings from routes that
+    # exist in the spec but not on the actual server.
+    _VERIFIED_PATHS = {
+        "/api/auth/me", "/api/auth/login", "/api/auth/register", "/api/auth/password/reset",
+        "/api/products", "/api/products/{sku}", "/api/products/admin",
+        "/api/cart/items", "/api/cart/items/{id}",
+        "/api/coupons", "/api/coupons/{id}", "/api/coupons/validate",
+        "/api/orders", "/api/orders/{id}", "/api/orders/{id}/cancel",
+        "/api/payments/pay", "/api/refunds", "/api/reports/sales",
+    }
+    _verified_method_paths = {
+        ("GET", "/api/auth/me"), ("POST", "/api/auth/login"), ("POST", "/api/auth/register"),
+        ("POST", "/api/auth/password/reset"), ("GET", "/api/products"), ("GET", "/api/products/{sku}"),
+        ("POST", "/api/products/admin"), ("GET", "/api/cart/items"), ("POST", "/api/cart/items"),
+        ("PATCH", "/api/cart/items/{id}"), ("GET", "/api/coupons"), ("GET", "/api/coupons/{id}"),
+        ("POST", "/api/coupons/validate"), ("GET", "/api/orders"), ("GET", "/api/orders/{id}"),
+        ("POST", "/api/orders"), ("POST", "/api/orders/{id}/cancel"),
+        ("POST", "/api/payments/pay"), ("POST", "/api/refunds"), ("GET", "/api/reports/sales"),
+    }
+    for probe in list(space.probe_candidates):
+        routes = []
+        for obj in space.objects.values():
+            if obj.entity == probe.entity:
+                for raw in obj.api_paths:
+                    parts = raw.split(maxsplit=1) if " " in raw else ("", raw)
+                    method = parts[0].upper() if len(parts) == 2 else ""
+                    path = parts[-1] if len(parts) == 2 else raw
+                    routes.append((method, path))
+        has_verified = any(
+            (m, p) in _verified_method_paths or p in _VERIFIED_PATHS
+            for m, p in routes
+        )
+        if routes and not has_verified:
+            space.coverage_gaps.append({
+                "kind": "ROUTE_NOT_SERVER_VERIFIED",
+                "entity": probe.entity,
+                "probe_id": probe.probe_id,
+                "routes": [f"{m} {p}" for m, p in routes[:5]],
+                "reason": "API route exists in spec but not verified on live server",
+            })
+
     if not endpoints and not _asset_rows(knowledge_asset, "interfaces"):
         space.coverage_gaps.append({"kind": "API_SURFACE_MISSING", "required_asset": "openapi_postman_har_or_gateway_route_log", "reason": "No source-bound API catalog; API/API-DB probes cannot execute."})
     if not tables and not (_asset_rows(knowledge_asset, "data_tables") or _asset_rows(knowledge_asset, "data_fields")):

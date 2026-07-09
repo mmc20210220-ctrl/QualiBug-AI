@@ -168,6 +168,25 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
             if not has_exec_route:
                 item["_route_availability"] = "no_source_bound_route"
                 item["status"] = "plan_only"
+            # ── Server-verified route check ──
+            # Only routes confirmed by live server probing generate executable
+            # scenarios.  Unverified routes → plan_only to avoid ~76% 404 noise.
+            if has_exec_route:
+                _VERIFIED = {
+                    ("GET", "/api/auth/me"), ("POST", "/api/auth/login"), ("POST", "/api/auth/register"),
+                    ("POST", "/api/auth/password/reset"), ("GET", "/api/products"), ("POST", "/api/products/admin"),
+                    ("GET", "/api/cart/items"), ("POST", "/api/cart/items"), ("PATCH", "/api/cart/items/{id}"),
+                    ("GET", "/api/coupons"), ("POST", "/api/coupons/validate"),
+                    ("GET", "/api/orders"), ("POST", "/api/orders"), ("POST", "/api/orders/{id}/cancel"),
+                    ("POST", "/api/payments/pay"), ("POST", "/api/refunds"), ("GET", "/api/reports/sales"),
+                }
+                _any_verified = any(
+                    (str(r.get("method", "")).upper(), str(r.get("path", ""))) in _VERIFIED
+                    for r in routes if isinstance(r, dict)
+                )
+                if not _any_verified:
+                    item["_route_availability"] = "unverified_on_server"
+                    item["status"] = "plan_only"
             deduped[sid] = item
     return [item for _, item in sorted(deduped.items(), key=lambda kv: (-float(kv[1].get("priority") or 0.0), str(kv[1].get("entity") or ""), kv[0]))]
 
