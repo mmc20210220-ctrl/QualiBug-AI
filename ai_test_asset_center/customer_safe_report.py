@@ -95,6 +95,44 @@ def normalize_release_gate(value: Any) -> dict[str, Any]:
     }
 
 
+def merge_release_gates(*gates: dict[str, Any]) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    sources: list[str] = []
+    honesty_rules: list[str] = []
+    for gate in gates:
+        normalized = normalize_release_gate(gate)
+        if not normalized:
+            continue
+        source = str(normalized.get("source") or "")
+        if source and source not in sources:
+            sources.append(source)
+        rule = str(normalized.get("honesty_rule") or "")
+        if rule and rule not in honesty_rules:
+            honesty_rules.append(rule)
+        checks.extend(as_dict(item) for item in as_list(normalized.get("checks")))
+    if not checks:
+        return {}
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in checks:
+        check = normalize_release_check(item)
+        if not check or check["name"] in seen:
+            continue
+        seen.add(check["name"])
+        unique.append(check)
+    overall = "fail" if any(item["status"] == "fail" for item in unique) else "pending" if any(item["status"] == "pending" for item in unique) else "pass"
+    return {
+        "overall_status": overall,
+        "checks": unique,
+        "blocking_check_count": sum(1 for item in unique if item["status"] == "fail"),
+        "pending_check_count": sum(1 for item in unique if item["status"] == "pending"),
+        "pass_check_count": sum(1 for item in unique if item["status"] == "pass"),
+        "release_recommendation": "block_release" if overall == "fail" else "hold_for_validation" if overall == "pending" else "candidate_release",
+        "honesty_rule": "；".join(honesty_rules) if honesty_rules else "发布门禁基于已持久化的扫描、回归和人工复核状态；未覆盖范围不能被声明为安全。",
+        "source": "+".join(sources) if sources else "merged_release_gate",
+    }
+
+
 def release_gate_from_regression_run(value: Any) -> dict[str, Any]:
     result = as_dict(value)
     if not result:
@@ -144,15 +182,13 @@ def release_gate_from_suite_refresh(report: dict[str, Any], scan_result: dict[st
 def load_customer_release_gate(project: str, root: Path, report: dict[str, Any]) -> dict[str, Any]:
     scan_result = read_json_file(root / "platform_outputs" / project / "scan_result.json", {})
     scan_result = scan_result if isinstance(scan_result, dict) else {}
-    for candidate in (report.get("release_gate"), scan_result.get("release_gate")):
-        gate = normalize_release_gate(candidate)
-        if gate:
-            return gate
     regression_result = read_json_file(root / "platform_outputs" / project / "regression_run" / "regression_run_result.json", {})
-    gate = release_gate_from_regression_run(regression_result)
-    if gate:
-        return gate
-    return release_gate_from_suite_refresh(report, scan_result)
+    return merge_release_gates(
+        as_dict(report.get("release_gate")),
+        as_dict(scan_result.get("release_gate")),
+        release_gate_from_regression_run(regression_result),
+        release_gate_from_suite_refresh(report, scan_result),
+    )
 
 
 def release_status_label(status: str) -> str:
@@ -259,7 +295,6 @@ def render_customer_safe_report_html(project: str, root: Path) -> str:
 
     total = len(findings)
     p0p1 = sum(1 for finding in findings if str(finding.get("severity") or "") in {"P0", "P1"})
-    llm_count = stage3.get("llm_powered", 0) if isinstance(stage3, dict) else 0
     object_count = stage1.get("object_count", 0) if isinstance(stage1, dict) else 0
     release_label = release_status_label(str(release_gate.get("overall_status") or "")) if release_gate else "暂无结论"
     release_section = render_release_gate_section(release_gate)
