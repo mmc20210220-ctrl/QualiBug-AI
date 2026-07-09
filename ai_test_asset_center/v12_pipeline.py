@@ -548,11 +548,18 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
 
 
 def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCampaign, base_url: str, root: Path) -> dict[str, Any]:
-    """Verify an approval only after the canonical Campaign identity is known."""
+    """Verify an approval only after the canonical Campaign identity is known.
+
+    ``safe_read_only`` execution does NOT require an approval — it cannot
+    mutate the target.  Only write-capable modes need an explicit approval.
+    """
     if not base_url:
         return {"status": "not_required", "reason": "runtime_target_missing"}
-    approval_id = str(context.get("execution_approval_id") or "").strip()
     execution_mode = str(context.get("execution_mode") or "safe_read_only").strip()
+    # safe_read_only is inherently safe — no approval needed
+    if execution_mode == "safe_read_only":
+        return {"status": "approved", "execution_mode": execution_mode}
+    approval_id = str(context.get("execution_approval_id") or "").strip()
     if not approval_id:
         return {"status": "blocked", "code": "EXECUTION_APPROVAL_MISSING", "execution_mode": execution_mode}
     try:

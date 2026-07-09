@@ -128,8 +128,15 @@ def test_private_pilot_builder_contract_carries_system_behavior_space() -> None:
         system_slices = [item for item in contract["slices"] if item.get("_selection_origin") == "system_behavior_space"]
         assert system_slices
         assert all(item["kind"] == "invariant" for item in system_slices)
-        assert any(item.get("_system_behavior_promise_id") for item in system_slices)
-        assert any(item.get("_system_behavior_api_routes") for item in system_slices)
+        # Priority 1: all 7 required _system_behavior_* fields must be present on every slice
+        for item in system_slices:
+            assert item.get("_system_behavior_promise_id"), f"slice missing _system_behavior_promise_id: {item.get('slice_id')}"
+            assert item.get("_system_behavior_dimensions") and isinstance(item["_system_behavior_dimensions"], list), f"slice missing _system_behavior_dimensions: {item.get('slice_id')}"
+            assert item.get("_system_behavior_surface_plan") and isinstance(item["_system_behavior_surface_plan"], list), f"slice missing _system_behavior_surface_plan: {item.get('slice_id')}"
+            assert isinstance(item.get("_system_behavior_api_routes"), list), f"slice missing _system_behavior_api_routes: {item.get('slice_id')}"
+            assert item.get("_system_behavior_required_assets") and isinstance(item["_system_behavior_required_assets"], list), f"slice missing _system_behavior_required_assets: {item.get('slice_id')}"
+            assert item.get("_selection_family"), f"slice missing _selection_family: {item.get('slice_id')}"
+            assert item.get("_system_behavior_probe_id"), f"slice missing _system_behavior_probe_id: {item.get('slice_id')}"
         assert any(item.get("source") == "system_behavior_space" for item in contract["coverage_gaps"])
     finally:
         restore_system_behavior_space_patch()
@@ -144,9 +151,21 @@ def test_system_behavior_slice_metadata_reaches_scenario_runtime_hints() -> None
         assert scenario["category"] == "system_promise"
         assert scenario["behavior_slice_kind"] == "system_promise"
         assert "SystemPromiseOracle.open_ended_promise_violation" in scenario["oracle_rules"]
-        assert scenario["runtime_hints"]["system_behavior_space"]["promise_id"]
-        assert scenario["runtime_hints"]["system_behavior_space"]["surface_plan"]
-        assert "api_routes" in scenario["runtime_hints"]["system_behavior_space"]
+
+        hints = scenario["runtime_hints"]["system_behavior_space"]
+        # Priority 1: all 7 required structured metadata fields must be present
+        assert hints["promise_id"], "promise_id missing"
+        assert isinstance(hints.get("dimensions"), list), "dimensions missing or not list"
+        assert isinstance(hints.get("surface_plan"), list), "surface_plan missing or not list"
+        assert isinstance(hints.get("api_routes"), list), "api_routes missing or not list"
+        # api_routes entries, when present, must have method and path keys
+        for route in hints["api_routes"]:
+            assert isinstance(route, dict), f"api_route not dict: {route}"
+            assert "method" in route, f"api_route missing method: {route}"
+            assert "path" in route, f"api_route missing path: {route}"
+        assert isinstance(hints.get("required_assets"), list), "required_assets missing or not list"
+        assert hints["source_slice_id"], "source_slice_id missing"
+        assert hints["source_family"], "source_family missing"
     finally:
         restore_system_behavior_space_patch()
 
