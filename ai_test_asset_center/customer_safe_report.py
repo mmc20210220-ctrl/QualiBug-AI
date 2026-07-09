@@ -197,9 +197,13 @@ def release_gate_from_suite_refresh(report: dict[str, Any], scan_result: dict[st
     })
 
 
+def _scan_result(project: str, root: Path) -> dict[str, Any]:
+    value = read_json_file(root / "platform_outputs" / project / "scan_result.json", {})
+    return value if isinstance(value, dict) else {}
+
+
 def load_customer_release_gate(project: str, root: Path, report: dict[str, Any]) -> dict[str, Any]:
-    scan_result = read_json_file(root / "platform_outputs" / project / "scan_result.json", {})
-    scan_result = scan_result if isinstance(scan_result, dict) else {}
+    scan_result = _scan_result(project, root)
     regression_result = read_json_file(root / "platform_outputs" / project / "regression_run" / "regression_run_result.json", {})
     return merge_release_gates(
         as_dict(report.get("release_gate")),
@@ -207,6 +211,58 @@ def load_customer_release_gate(project: str, root: Path, report: dict[str, Any])
         release_gate_from_regression_run(regression_result),
         release_gate_from_suite_refresh(report, scan_result),
     )
+
+
+def load_customer_commercial_assets(project: str, root: Path, report: dict[str, Any]) -> dict[str, Any]:
+    scan_result = _scan_result(project, root)
+    return as_dict(report.get("commercial_assets")) or as_dict(scan_result.get("commercial_assets"))
+
+
+def commercial_handoff_label(assets: dict[str, Any]) -> str:
+    if not assets:
+        return "暂无结论"
+    handoff = as_dict(assets.get("commercial_handoff"))
+    tracker = as_dict(assets.get("tracker_sync"))
+    delivery = as_dict(assets.get("delivery_package"))
+    if bool(handoff.get("safe_for_customer")):
+        return "已放行"
+    status = str(handoff.get("acceptance_status") or tracker.get("payload_status") or delivery.get("status") or "").strip()
+    if status == "blocked_by_release_gate":
+        return "被门禁阻塞"
+    if status == "hold_for_validation":
+        return "待复核"
+    return status or "未放行"
+
+
+def commercial_handoff_message(assets: dict[str, Any]) -> str:
+    if not assets:
+        return "暂无商业交付 Handoff 数据；报告不会把发布门禁通过等同为整包可交付。"
+    handoff = as_dict(assets.get("commercial_handoff"))
+    delivery = as_dict(assets.get("delivery_package"))
+    if bool(handoff.get("safe_for_customer")):
+        return "后端 commercial_handoff.safe_for_customer 已明确放行，可进入客户验收。"
+    return str(
+        delivery.get("release_gate_block_reason")
+        or assets.get("release_gate_honesty_rule")
+        or "发布门禁通过并不等同于商业交付安全；必须等待 commercial_handoff.safe_for_customer=true。"
+    )
+
+
+def render_commercial_handoff_section(assets: dict[str, Any]) -> str:
+    label = commercial_handoff_label(assets)
+    tone = "pass" if label == "已放行" else "fail" if label == "被门禁阻塞" else "pending"
+    handoff = as_dict(assets.get("commercial_handoff"))
+    tracker = as_dict(assets.get("tracker_sync"))
+    delivery = as_dict(assets.get("delivery_package"))
+    return f"""
+<h2>商业交付 Handoff</h2>
+<div class="release-summary gate-{html_text(tone, 20)}">
+  <strong>交付安全状态：{html_text(label, 40)}</strong>
+  <p>{html_text(commercial_handoff_message(assets), 360)}</p>
+  <p>safe_for_customer：{html_text(str(bool(handoff.get('safe_for_customer'))).lower(), 20)} · acceptance：{html_text(handoff.get('acceptance_status') or '-', 80)} · tracker：{html_text(tracker.get('payload_status') or '-', 80)} · package：{html_text(delivery.get('release_verdict') or delivery.get('status') or '-', 80)}</p>
+</div>
+<div class="notice warning">报告将“发布门禁结论”和“商业交付安全”分开展示；只有 handoff 明确放行时，才可声明整包进入客户验收。</div>
+"""
 
 
 def release_status_label(status: str) -> str:
@@ -226,7 +282,7 @@ def release_status_message(gate: dict[str, Any]) -> str:
     if status == "pending":
         return "当前仍有待处理门禁项，发布前需要完成回归执行或人工复核。"
     if status == "pass":
-        return "当前门禁未发现阻断或待处理项，可进入正式发布评审。"
+        return "当前门禁未发现阻断或待处理项，可进入正式发布评审；这不等同于商业交付已放行。"
     return "暂无发布门禁结论，请先完成一次真实扫描和必要回归。"
 
 
@@ -272,6 +328,7 @@ def render_customer_safe_report_html(project: str, root: Path) -> str:
     history = history if isinstance(history, list) else []
     findings = report_findings(report)
     release_gate = load_customer_release_gate(project, root, report)
+    commercial_assets = load_customer_commercial_assets(project, root, report)
     stage1 = report.get("stage1_industry") if isinstance(report.get("stage1_industry"), dict) else {}
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
@@ -314,7 +371,9 @@ def render_customer_safe_report_html(project: str, root: Path) -> str:
     p0p1 = sum(1 for finding in findings if str(finding.get("severity") or "") in {"P0", "P1"})
     object_count = stage1.get("object_count", 0) if isinstance(stage1, dict) else 0
     release_label = release_status_label(str(release_gate.get("overall_status") or "")) if release_gate else "暂无结论"
+    handoff_label = commercial_handoff_label(commercial_assets)
     release_section = render_release_gate_section(release_gate)
+    handoff_section = render_commercial_handoff_section(commercial_assets)
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -353,9 +412,11 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
   <div class="metric"><span>发现总数</span><strong>{total}</strong></div>
   <div class="metric"><span>P0/P1</span><strong>{p0p1}</strong></div>
   <div class="metric"><span>发布门禁</span><strong>{html_text(release_label, 20)}</strong></div>
+  <div class="metric"><span>交付安全</span><strong>{html_text(handoff_label, 20)}</strong></div>
   <div class="metric"><span>对象/接口</span><strong>{html_text(object_count, 20)}</strong></div>
 </div>
 {release_section}
+{handoff_section}
 <h2>缺陷发现列表</h2>
 <table><tr><th>严重度</th><th>标题</th><th>类别</th><th>置信度</th><th>证据摘要</th></tr>{''.join(rows)}</table>
 <h2>扫描历史（最近 10 次）</h2>
