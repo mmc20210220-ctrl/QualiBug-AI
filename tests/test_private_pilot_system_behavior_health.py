@@ -14,6 +14,15 @@ class _Handler:
         return {"available": True, "status": "online", "label": "online"}
 
 
+def _restore_attrs(values: dict) -> None:
+    for module, name, key in values["items"]:
+        value = values["old_values"][key]
+        if value is None and hasattr(module, name):
+            delattr(module, name)
+        elif value is not None:
+            setattr(module, name, value)
+
+
 def test_health_payload_reports_system_behavior_runtime_chain(tmp_path: Path) -> None:
     from ai_test_asset_center import business_state_graph as _bsg
     from ai_test_asset_center import oracle_engine as _oe
@@ -21,17 +30,18 @@ def test_health_payload_reports_system_behavior_runtime_chain(tmp_path: Path) ->
     from ai_test_asset_center import semantic_scenario_generator as _ssg
     from ai_test_asset_center import v12_pipeline as _v12
 
-    old_values = {
-        "bsg_patched": getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", None),
-        "bsg_source": getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE", None),
-        "v12_context": getattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", None),
-        "v12_finding": getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", None),
-        "v12_steering": getattr(_v12, "_COVERAGE_STEERING_PATCHED", None),
-        "v12_steering_source": getattr(_v12, "_COVERAGE_STEERING_PATCH_SOURCE", None),
-        "ssg": getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", None),
-        "oe": getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", None),
-        "rr": getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", None),
-    }
+    items = [
+        (_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", "bsg_patched"),
+        (_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE", "bsg_source"),
+        (_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", "v12_context"),
+        (_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", "v12_finding"),
+        (_v12, "_COVERAGE_STEERING_PATCHED", "v12_steering"),
+        (_v12, "_COVERAGE_STEERING_PATCH_SOURCE", "v12_steering_source"),
+        (_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", "ssg"),
+        (_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", "oe"),
+        (_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", "rr"),
+    ]
+    old_values = {key: getattr(module, name, None) for module, name, key in items}
     try:
         _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
         _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = "test"  # type: ignore[attr-defined]
@@ -59,19 +69,44 @@ def test_health_payload_reports_system_behavior_runtime_chain(tmp_path: Path) ->
         assert runtime["data_boundary"]["raw_customer_data_in_platform_learning"] is False
         assert "coverage_learning_steering" in runtime["chain"]
     finally:
-        for module, name, key in [
-            (_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", "bsg_patched"),
-            (_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE", "bsg_source"),
-            (_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", "v12_context"),
-            (_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", "v12_finding"),
-            (_v12, "_COVERAGE_STEERING_PATCHED", "v12_steering"),
-            (_v12, "_COVERAGE_STEERING_PATCH_SOURCE", "v12_steering_source"),
-            (_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", "ssg"),
-            (_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", "oe"),
-            (_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", "rr"),
-        ]:
-            value = old_values[key]
-            if value is None and hasattr(module, name):
-                delattr(module, name)
-            elif value is not None:
-                setattr(module, name, value)
+        _restore_attrs({"items": items, "old_values": old_values})
+
+
+def test_entrypoint_reinstalls_system_behavior_auxiliary_chain_when_primary_patch_already_exists() -> None:
+    from ai_test_asset_center import business_state_graph as _bsg
+    from ai_test_asset_center import oracle_engine as _oe
+    from ai_test_asset_center import regression_runner as _rr
+    from ai_test_asset_center import semantic_scenario_generator as _ssg
+    from ai_test_asset_center import v12_pipeline as _v12
+    from ai_test_asset_center.private_pilot_entrypoint import install_system_behavior_runtime_patch_chain
+    from ai_test_asset_center.private_pilot_system_behavior_space_patch import restore_system_behavior_space_patch
+
+    items = [
+        (_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", "bsg_patched"),
+        (_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE", "bsg_source"),
+        (_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", "v12_context"),
+        (_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", "v12_finding"),
+        (_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", "ssg"),
+        (_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", "oe"),
+        (_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", "rr"),
+    ]
+    old_values = {key: getattr(module, name, None) for module, name, key in items}
+    try:
+        _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
+        _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = "already-installed"  # type: ignore[attr-defined]
+        _v12._SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED = False  # type: ignore[attr-defined]
+        _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = False  # type: ignore[attr-defined]
+        _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED = False  # type: ignore[attr-defined]
+        _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED = False  # type: ignore[attr-defined]
+        _rr._SYSTEM_BEHAVIOR_REGRESSION_PATCHED = False  # type: ignore[attr-defined]
+
+        install_system_behavior_runtime_patch_chain()
+
+        assert _v12._SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED is True
+        assert _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED is True
+        assert _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED is True
+        assert _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED is True
+        assert _rr._SYSTEM_BEHAVIOR_REGRESSION_PATCHED is True
+    finally:
+        restore_system_behavior_space_patch()
+        _restore_attrs({"items": items, "old_values": old_values})
