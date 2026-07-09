@@ -5,7 +5,7 @@ from __future__ import annotations
 This module owns customer-visible HTML report text. It deliberately avoids the
 legacy renderer that contained mojibake strings and keeps the delivery wording
 aligned with the evidence gate: unverified clues are not customer-deliverable
-bugs.
+bugs, and QualiBug-AI does not provide remediation advice.
 """
 
 import html
@@ -17,6 +17,7 @@ from typing import Any
 from ai_test_asset_center.version import PRODUCT_VERSION
 
 MOJIBAKE_MARKERS = ("鎵", "鐢", "鍒", "椤", "鏃", "瑕", "绉", "娴", "缃", "搴", "", "€")
+PRODUCT_BOUNDARY_TEXT = "QualiBug-AI 只提供缺陷事实、证据链、客户处理后的回归验证和发布状态；不提供修复建议、修复方案、修复代码或根因承诺。"
 
 
 def html_text(value: Any, limit: int = 300) -> str:
@@ -110,7 +111,7 @@ def normalize_release_gate(value: Any) -> dict[str, Any]:
 
 
 def _should_replace_release_check(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
-    if incoming.get("name") != "修复后回归 Gate":
+    if incoming.get("name") != "客户处理后回归 Gate":
         return False
     incoming_source = str(incoming.get("source") or "")
     existing_source = str(existing.get("source") or "")
@@ -144,6 +145,8 @@ def merge_release_gates(*gates: dict[str, Any]) -> dict[str, Any]:
         check = normalize_release_check(item)
         if not check:
             continue
+        if check["name"] == "修复后回归 Gate":
+            check["name"] = "客户处理后回归 Gate"
         key = check["name"]
         existing_index = index_by_name.get(key)
         if existing_index is None:
@@ -177,7 +180,7 @@ def release_gate_from_regression_run(value: Any) -> dict[str, Any]:
     passed = safe_int(summary.get("passed_count"))
     if gate_status == "failed":
         status = "fail"
-        detail = f"最近一次回归失败：{failed} 个探针失败，{needs_review} 个需复核。发布前必须继续修复或复核失败项。"
+        detail = f"最近一次回归失败：{failed} 个探针失败，{needs_review} 个需复核。客户内部处理或复核后，必须再次执行回归验证。"
     elif gate_status == "manual_approval_required":
         status = "pending"
         detail = f"最近一次回归仍需人工复核：{needs_review} 个探针缺少强自动判定，不能直接放行发布。"
@@ -187,7 +190,7 @@ def release_gate_from_regression_run(value: Any) -> dict[str, Any]:
     else:
         return {}
     return normalize_release_gate({
-        "checks": [{"name": "修复后回归 Gate", "status": status, "detail": detail, "source": "regression_run_result"}],
+        "checks": [{"name": "客户处理后回归 Gate", "status": status, "detail": detail, "source": "regression_run_result"}],
         "source": "regression_run_result",
     })
 
@@ -202,7 +205,7 @@ def release_gate_from_suite_refresh(report: dict[str, Any], scan_result: dict[st
         return {}
     return normalize_release_gate({
         "checks": [{
-            "name": "修复后回归 Gate",
+            "name": "客户处理后回归 Gate",
             "status": "pending",
             "detail": f"已自动生成 {total} 个回归探针，其中 {confirmed} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。",
             "source": "regression_suite_refresh",
@@ -336,7 +339,7 @@ def release_status_label(status: str) -> str:
 def release_status_message(gate: dict[str, Any]) -> str:
     status = str(gate.get("overall_status") or "")
     if status == "fail":
-        return "当前存在发布阻断项，不建议进入正式发布。"
+        return "当前存在发布阻断项，不能进入正式发布。客户内部处理后，需要再次执行回归验证。"
     if status == "pending":
         return "当前仍有待处理门禁项，发布前需要完成回归执行或人工复核。"
     if status == "pass":
@@ -347,7 +350,7 @@ def release_status_message(gate: dict[str, Any]) -> str:
 def render_release_gate_section(gate: dict[str, Any]) -> str:
     if not gate:
         return """
-<h2>发布门禁与修复后回归</h2>
+<h2>发布门禁与客户处理后回归</h2>
 <div class="notice warning">暂无发布门禁结论。请先完成真实扫描；如已形成 confirmed bug 回归义务，发布前必须执行回归。</div>
 """
     status = str(gate.get("overall_status") or "")
@@ -365,7 +368,7 @@ def render_release_gate_section(gate: dict[str, Any]) -> str:
     if not rows:
         rows.append("<tr><td colspan='4'>暂无门禁检查明细。</td></tr>")
     return f"""
-<h2>发布门禁与修复后回归</h2>
+<h2>发布门禁与客户处理后回归</h2>
 <div class="release-summary gate-{html_text(status or 'pending', 20)}">
   <strong>当前发布结论：{html_text(release_status_label(status), 40)}</strong>
   <p>{html_text(release_status_message(gate), 220)}</p>
@@ -466,6 +469,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 <h1>QualiBug AI 缺陷扫描报告</h1>
 <p>项目：<strong>{html_text(project, 120)}</strong> · 生成时间：<strong>{html_text(generated_at, 40)}</strong></p>
 <div class="notice">本报告仅展示客户可读结果。未复现、证据不足或仍需授权的线索应保留在内部线索区，不作为客户可交付缺陷声明。</div>
+<div class="notice warning">{html_text(PRODUCT_BOUNDARY_TEXT, 260)}</div>
 <div>
   <div class="metric"><span>发现总数</span><strong>{total}</strong></div>
   <div class="metric"><span>P0/P1</span><strong>{p0p1}</strong></div>
