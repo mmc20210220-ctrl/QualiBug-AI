@@ -8,6 +8,7 @@ Project/private deployment scope:
 - keep blocked/inconclusive findings as project risk clues;
 - accumulate project-local learning weights from clues, confirmed findings and
   regression history;
+- learn directly from system-promise regression contracts when present;
 - never requires customer data to leave the deployment.
 
 SaaS/platform scope:
@@ -25,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-PROJECT_LEARNING_VERSION = "risk_clue_pool_project_learning.v2"
+PROJECT_LEARNING_VERSION = "risk_clue_pool_project_learning.v3"
 PLATFORM_LEARNING_VERSION = "risk_clue_pool_platform_learning.v1"
 PLATFORM_PROJECT_ID = "_platform"
 
@@ -52,6 +53,64 @@ _SURFACE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("log", ("log", "trace", "audit", "日志", "审计", "追踪")),
     ("async", ("queue", "message", "event", "callback", "webhook", "队列", "消息", "事件", "回调")),
 )
+
+_DIMENSION_ALIASES = {
+    "tenant": "tenant_isolation",
+    "tenant_isolation": "tenant_isolation",
+    "authorization": "authorization_access_control",
+    "auth": "authorization_access_control",
+    "role": "authorization_access_control",
+    "permission": "authorization_access_control",
+    "visibility": "visibility_disclosure",
+    "privacy": "visibility_disclosure",
+    "state": "state_machine",
+    "lifecycle": "state_machine",
+    "transition": "state_machine",
+    "money": "money_quantity_conservation",
+    "amount": "money_quantity_conservation",
+    "quantity": "money_quantity_conservation",
+    "conservation": "money_quantity_conservation",
+    "data_conservation": "money_quantity_conservation",
+    "data_consistency": "data_consistency",
+    "cross_surface_consistency": "data_consistency",
+    "ui_api_contract": "ui_api_contract_drift",
+    "ui_contract": "ui_api_contract_drift",
+    "validation": "ui_api_contract_drift",
+    "audit": "audit_traceability",
+    "traceability": "audit_traceability",
+    "async": "async_eventual_consistency",
+    "side_effect": "async_eventual_consistency",
+    "eventual_consistency": "async_eventual_consistency",
+    "concurrency": "concurrency_race_condition",
+    "retry": "idempotency",
+    "idempotency": "idempotency",
+    "performance": "performance_reliability",
+    "reliability": "performance_reliability",
+    "historical_bug": "historical_regression",
+    "regression": "historical_regression",
+}
+
+_SURFACE_ALIASES = {
+    "api": "api",
+    "http": "api",
+    "endpoint": "api",
+    "db": "db",
+    "database": "db",
+    "table": "db",
+    "sql": "db",
+    "ui": "ui",
+    "browser": "ui",
+    "page": "ui",
+    "auth": "auth",
+    "role": "auth",
+    "permission": "auth",
+    "log": "log",
+    "trace": "log",
+    "audit": "log",
+    "async": "async",
+    "queue": "async",
+    "event": "async",
+}
 
 
 def save_risk_clues(
@@ -117,7 +176,7 @@ def save_risk_clues(
 
     project_learning = build_project_learning(project, root, clues_dict=clues_dict, current_findings=findings or [])
     pool_data = {
-        "phase": "risk_clue_pool_v2_project_learning",
+        "phase": "risk_clue_pool_v3_project_learning",
         "project": project,
         "updated_at_utc": now,
         "total_clues": len(clues_dict),
@@ -224,8 +283,11 @@ def refresh_platform_learning(root: Path) -> dict[str, Any]:
 def _learning_payload(version: str, scope: str, signals: list[dict[str, Any]]) -> dict[str, Any]:
     weights: dict[str, float] = {}
     surface_combo_weights: dict[str, float] = {}
+    system_promise_signal_count = 0
     for signal in signals:
         weight = float(signal.get("learning_weight") or 0.0)
+        if signal.get("system_promise_signal"):
+            system_promise_signal_count += 1
         for dimension in signal.get("dimensions") or []:
             weights[str(dimension)] = weights.get(str(dimension), 0.0) + weight
         for surface in signal.get("surfaces") or []:
@@ -244,6 +306,7 @@ def _learning_payload(version: str, scope: str, signals: list[dict[str, Any]]) -
         "scope": scope,
         "updated_at_utc": _now(),
         "signal_count": len(signals),
+        "system_promise_signal_count": system_promise_signal_count,
         "signals": signals[-500:],
         "priority_weights": dict(sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))[:80]),
         "surface_combo_weights": dict(sorted(surface_combo_weights.items(), key=lambda kv: (-kv[1], kv[0]))[:40]),
@@ -253,44 +316,138 @@ def _learning_payload(version: str, scope: str, signals: list[dict[str, Any]]) -
 def _project_signal(source: str, signal_id: str, payload: dict[str, Any], *, default_weight: float) -> dict[str, Any]:
     dimensions = _detect_dimensions(payload)
     surfaces = _detect_surfaces(payload)
-    return {
+    contract = _system_contract(payload)
+    system_promise_signal = bool(contract.get("promise_id") or _deep_get(payload, "system_promise_id"))
+    signal = {
         "signal_id": f"{source}:{signal_id}",
         "source": source,
+        "signal_kind": "system_behavior_promise" if system_promise_signal else "behavior_observation",
         "entity_hint": _entity_hint(payload),
         "entity_archetype": _entity_archetype(dimensions),
         "severity": str(_deep_get(payload, "severity") or "P2")[:10],
         "dimensions": dimensions,
         "surfaces": surfaces,
         "learning_weight": max(0.0, float(default_weight)),
+        "system_promise_signal": system_promise_signal,
     }
+    if contract:
+        signal["contract_type"] = str(contract.get("contract_type") or "system_behavior_promise_regression")[:120]
+        signal["source_family"] = str(contract.get("source_family") or "")[:120]
+    regression_status = str(_deep_get(payload, "status") or _deep_get(payload, "lifecycle") or "")
+    if regression_status:
+        signal["regression_status"] = regression_status[:80]
+    return signal
 
 
 def _sanitize_for_platform(project: str, signal: dict[str, Any]) -> dict[str, Any]:
     row = {
         "source_project_hash": hashlib.sha256(_safe_project(project).encode("utf-8")).hexdigest()[:16],
         "signal_source": str(signal.get("source") or "project_signal")[:80],
+        "signal_kind": str(signal.get("signal_kind") or "behavior_observation")[:80],
         "entity_archetype": str(signal.get("entity_archetype") or "generic_business_object")[:80],
         "severity": str(signal.get("severity") or "P2")[:10],
         "dimensions": sorted({str(x) for x in signal.get("dimensions") or [] if str(x)}),
         "surfaces": sorted({str(x) for x in signal.get("surfaces") or [] if str(x)}),
         "learning_weight": float(signal.get("learning_weight") or 0.0),
+        "regression_status": str(signal.get("regression_status") or "")[:80],
+        "system_promise_signal": bool(signal.get("system_promise_signal")),
     }
     row["platform_signal_id"] = hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
     return row
 
 
+def _system_contract(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        contract = value.get("regression_contract") if isinstance(value.get("regression_contract"), dict) else {}
+        if isinstance(contract.get("system_behavior_space"), dict) or str(contract.get("promise_id") or ""):
+            return contract
+        hints = value.get("system_behavior_space_evidence") if isinstance(value.get("system_behavior_space_evidence"), dict) else {}
+        if hints:
+            return {
+                "contract_type": "system_behavior_promise_regression",
+                "system_behavior_space": hints,
+                "promise_id": str(hints.get("promise_id") or value.get("system_promise_id") or ""),
+                "dimensions": hints.get("dimensions") or value.get("system_behavior_dimensions") or [],
+                "surface_plan": hints.get("surface_plan") or value.get("system_behavior_surface_plan") or [],
+                "required_assets": hints.get("required_assets") or value.get("system_behavior_required_assets") or [],
+                "source_family": hints.get("source_family") or value.get("system_behavior_source_family") or "",
+            }
+        for child in value.values():
+            found = _system_contract(child)
+            if found:
+                return found
+    if isinstance(value, list):
+        for child in value:
+            found = _system_contract(child)
+            if found:
+                return found
+    return {}
+
+
+def _structured_dimensions(value: Any) -> list[str]:
+    found: list[str] = []
+    contract = _system_contract(value)
+    candidates: list[Any] = []
+    if contract:
+        candidates.extend(contract.get("dimensions") or [])
+        hints = contract.get("system_behavior_space") if isinstance(contract.get("system_behavior_space"), dict) else {}
+        candidates.extend(hints.get("dimensions") or [])
+    explicit = _deep_get(value, "system_behavior_dimensions")
+    if isinstance(explicit, list):
+        candidates.extend(explicit)
+    for item in candidates:
+        canonical = _canonical_dimension(str(item or ""))
+        if canonical:
+            found.append(canonical)
+    return sorted(set(found))
+
+
+def _structured_surfaces(value: Any) -> list[str]:
+    found: list[str] = []
+    contract = _system_contract(value)
+    candidates: list[Any] = []
+    if contract:
+        candidates.extend(contract.get("surface_plan") or [])
+        hints = contract.get("system_behavior_space") if isinstance(contract.get("system_behavior_space"), dict) else {}
+        candidates.extend(hints.get("surface_plan") or [])
+    explicit = _deep_get(value, "system_behavior_surface_plan")
+    if isinstance(explicit, list):
+        candidates.extend(explicit)
+    for item in candidates:
+        canonical = _canonical_surface(str(item or ""))
+        if canonical:
+            found.append(canonical)
+    return sorted(set(found))
+
+
+def _canonical_dimension(value: str) -> str:
+    key = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    if not key:
+        return ""
+    return _DIMENSION_ALIASES.get(key, key)
+
+
+def _canonical_surface(value: str) -> str:
+    key = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    if not key:
+        return ""
+    return _SURFACE_ALIASES.get(key, key)
+
+
 def _detect_dimensions(value: Any) -> list[str]:
     text = _blob(value)
-    dims = [dimension for dimension, keys in _DIMENSION_KEYWORDS if any(key.lower() in text for key in keys)]
-    return sorted(set(dims))
+    dims = [_canonical_dimension(dimension) for dimension, keys in _DIMENSION_KEYWORDS if any(key.lower() in text for key in keys)]
+    dims.extend(_structured_dimensions(value))
+    return sorted({dim for dim in dims if dim})
 
 
 def _detect_surfaces(value: Any) -> list[str]:
     text = _blob(value)
-    surfaces = [surface for surface, keys in _SURFACE_KEYWORDS if any(key.lower() in text for key in keys)]
+    surfaces = [_canonical_surface(surface) for surface, keys in _SURFACE_KEYWORDS if any(key.lower() in text for key in keys)]
+    surfaces.extend(_structured_surfaces(value))
     if not surfaces and any(token in text for token in ("/api/", "http", "endpoint")):
         surfaces.append("api")
-    return sorted(set(surfaces))
+    return sorted({surface for surface in surfaces if surface})
 
 
 def _blob(value: Any) -> str:
