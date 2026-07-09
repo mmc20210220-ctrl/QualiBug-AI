@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
+from ai_test_asset_center import private_pilot_system_behavior_space_patch as _system_behavior_patch
 from ai_test_asset_center.display_ready_no_fix_advice_patch import (
     install_display_ready_no_fix_advice_patch,
     restore_display_ready_no_fix_advice_patch,
@@ -114,6 +115,23 @@ def install_extracted_credential_safety_patch() -> None:
     install_service_credentials_patch(patch_source=PATCH_SOURCE)
 
 
+def install_system_behavior_runtime_patch_chain() -> None:
+    """Install the System Behavior Space chain idempotently for real entrypoints.
+
+    ``install_system_behavior_space_patch`` owns the primary BusinessStateGraph
+    wrapper.  In long-running or hot-reloaded private deployments it may return
+    early when that primary wrapper is already installed.  The auxiliary wrappers
+    are still safe and idempotent, so the entrypoint explicitly re-checks them to
+    avoid a partially-installed chain.
+    """
+    install_system_behavior_space_patch(patch_source=PATCH_SOURCE)
+    _system_behavior_patch._install_v12_behavior_space_context_patch()
+    _system_behavior_patch._install_system_behavior_scenario_patch()
+    _system_behavior_patch._install_system_behavior_oracle_patch()
+    _system_behavior_patch._install_system_behavior_finding_patch()
+    _system_behavior_patch._install_system_behavior_regression_patch()
+
+
 def restore_deployment_contract_patch() -> None:
     _restore_deployment_contract_patch()
     restore_regression_run_visibility_patch()
@@ -138,7 +156,7 @@ def install_runtime_patches() -> None:
     install_scan_result_repair_patch(patch_source=PATCH_SOURCE)
     install_regression_oracle_patch(patch_source=PATCH_SOURCE)
     install_regression_suite_refresh_patch(patch_source=PATCH_SOURCE)
-    install_system_behavior_space_patch(patch_source=PATCH_SOURCE)
+    install_system_behavior_runtime_patch_chain()
     install_coverage_matrix_patch(patch_source=PATCH_SOURCE, root=_service._root())
     install_regression_run_visibility_patch(patch_source=PATCH_SOURCE, root=_service._root())
     install_display_ready_no_fix_advice_patch(patch_source=PATCH_SOURCE)
