@@ -296,6 +296,21 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     item.selection_origin = "system_behavior_space"
     if not str(item.title).startswith("[System promise]"):
         item.title = f"[System promise] {item.title}"
+    # When a source-bound safe read route exists, upgrade the execution policy
+    # and generate the observe step.  The original generator may have set
+    # plan_only_requires_fixture or left steps empty; the enrichment owns the
+    # final safety decision because it has the authoritative slice metadata.
+    if safe_route:
+        item.execution_policy = "safe_read_only"
+        if not getattr(item, "steps", []):
+            try:
+                from ai_test_asset_center.semantic_scenario_generator import ScenarioStep
+            except Exception:
+                ScenarioStep = None  # type: ignore[assignment]
+            if ScenarioStep is not None:
+                item.steps = [ScenarioStep(order=1, action="observe_system_promise_surface", api_method=safe_route["method"], api_path=safe_route["path"], expected_status=200, actor="readonly")]
+        if "SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND" in evidence_gaps:
+            evidence_gaps.remove("SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND")
     if not safe_route and "SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND" not in evidence_gaps:
         evidence_gaps.append("SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND")
     if not safe_route and getattr(item, "execution_policy", "") == "safe_read_only":

@@ -245,6 +245,14 @@ class SemanticScenarioGenerator:
         # source-grounded coverage metadata is preserved but the executable
         # steps are stripped — otherwise the scenario would be miscounted as an
         # executed probe. This keeps the planning/execution boundary honest.
+        #
+        # Exception: system behavior space scenarios carry an authoritative
+        # execution_policy determined by the slice metadata (safe_read_only when
+        # a source-bound GET/HEAD/OPTIONS route exists, plan_only otherwise).
+        # The enrichment already strips steps for plan_only promises, so
+        # overriding it here would lose the safe_read_only decision.
+        if getattr(item, "selection_origin", "") == "system_behavior_space":
+            return item
         item.steps = []
         item.cleanup_steps = []
         item.execution_policy = "plan_only_requires_fixture"
