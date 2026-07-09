@@ -28,6 +28,18 @@ def test_inject_coverage_matrix_lifts_benchmark_matrix_to_command_center(tmp_pat
         json.dumps({"benchmark_active": False, "ground_truth_available": False, "coverage_matrix": matrix}),
         encoding="utf-8",
     )
+    (tmp_path / "platform_outputs" / project / "scan_result.json").write_text(
+        json.dumps({
+            "coverage_steering": {
+                "status": "applied",
+                "reason": "gap_family_slices_prioritized",
+                "steered_slice_count": 2,
+                "gap_family_weights": {"tenant_isolation": 50},
+                "top_steered_slice_ids": ["s_isolation"],
+            }
+        }),
+        encoding="utf-8",
+    )
 
     payload = {
         "data": {
@@ -54,9 +66,42 @@ def test_inject_coverage_matrix_lifts_benchmark_matrix_to_command_center(tmp_pat
     assert data["coverage_matrix"]["invariant_coverage"]["actor_must_have_required_role"]["coverage_rate"] == 1.0
     assert data["coverage_gaps"][0]["kind"] == "RISK_FAMILY_COVERAGE_GAP"
     assert data["coverage_gaps"][0]["family"] == "tenant_isolation"
+    assert data["coverage_steering"]["status"] == "applied"
+    assert data["scan_meta"]["coverage_steering"]["top_steered_slice_ids"] == ["s_isolation"]
     assert data["value_metrics"]["risk_invariant_coverage_rate"] == 0.1875
     assert data["value_metrics"]["risk_family_gap_count"] == 1
+    assert data["value_metrics"]["coverage_steered_slice_count"] == 2
     assert data["executive_summary"]["risk_invariant_coverage_label"] == "风险家族覆盖 19%，确认覆盖 6%"
+    assert data["executive_summary"]["coverage_steering_label"] == "已按覆盖缺口优先调度 2 个行为 slice"
     assert data["evidence_classification"] == {"confirmed": 1, "candidate": 2, "clue": 1}
     assert "not recall" in data["data_contract"]["coverage_matrix"]["honesty_rule"].lower()
     assert "risk_family_coverage" in data["data_contract"]["coverage_matrix"]["frontend_compatibility_keys"]
+    assert data["data_contract"]["coverage_steering"]["display_key"] == "coverage_steering"
+
+
+def test_inject_coverage_steering_without_matrix(tmp_path: Path) -> None:
+    project = "steering_only"
+    output_dir = tmp_path / "platform_outputs" / project
+    output_dir.mkdir(parents=True)
+    (output_dir / "scan_result.json").write_text(
+        json.dumps({
+            "behavior_slice_ledger": {
+                "coverage_steering": {
+                    "status": "not_applied",
+                    "reason": "coverage_matrix_without_actionable_gaps",
+                    "steered_slice_count": 0,
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    payload = {"data": {"project_id": project, "scan_meta": {}, "value_metrics": {}, "executive_summary": {}, "data_contract": {}}}
+
+    injected = inject_coverage_matrix(payload, root=tmp_path)
+    data = injected["data"]
+
+    assert data["coverage_steering"]["status"] == "not_applied"
+    assert data["value_metrics"]["coverage_steering_status"] == "not_applied"
+    assert "coverage_matrix" not in data
+    assert data["data_contract"]["coverage_steering"]["display_key"] == "coverage_steering"
