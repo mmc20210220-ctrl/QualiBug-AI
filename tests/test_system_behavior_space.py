@@ -55,6 +55,20 @@ def test_system_behavior_space_builds_cross_surface_promises() -> None:
     assert dimensions["conservation"] >= 1
 
 
+def test_system_behavior_space_preserves_openapi_methods_for_runtime_safety() -> None:
+    space = build_system_behavior_space(api_spec_text=API_SPEC).to_dict()
+    api_paths = {
+        path
+        for obj in space["objects"]
+        for path in obj.get("api_paths", [])
+    }
+
+    assert "GET /api/orders" in api_paths
+    assert "POST /api/orders" in api_paths
+    assert "POST /api/orders/{id}/pay" in api_paths
+    assert "/api/orders" not in api_paths
+
+
 def test_system_behavior_space_does_not_limit_itself_to_bug_families() -> None:
     space = build_system_behavior_space(
         prd_text="订单金额必须一致，软删除后不可见，操作必须有审计追踪。",
