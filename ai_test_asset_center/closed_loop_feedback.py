@@ -62,7 +62,50 @@ def build_closed_loop_context(
         "total_patterns": len(history["patterns"]),
         "new_this_scan": new_patterns,
         "mutations": mutations,
+        "generated_probes": _generate_learning_probes(findings, project, root),
     }
+
+
+def _generate_learning_probes(
+    findings: list[dict], project: str, root
+) -> list[dict[str, Any]]:
+    """Generate new probes from confirmed bugs using the LearningGenerator.
+
+    This wires the formerly-unused mutation hints into actual probe generation,
+    proving that learning is NOT just re-sorting — it creates new artifacts.
+    """
+    try:
+        from .learning_generator import LearningGenerator
+
+        confirmed = [f for f in findings if str(f.get("verdict", "")).lower() == "confirmed"
+                     or f.get("source") in ("runtime_probe", "v12_state_graph")]
+        if not confirmed:
+            return []
+
+        # Build minimal context from findings
+        entities: list[str] = []
+        endpoints: list[dict[str, str]] = []
+        seen_paths: set[str] = set()
+        for f in confirmed:
+            path_val = str(f.get("path") or f.get("api", ""))
+            method_val = str(f.get("method", "GET")).upper()
+            if path_val and method_val:
+                key = f"{method_val}:{path_val}"
+                if key not in seen_paths:
+                    seen_paths.add(key)
+                    endpoints.append({"method": method_val, "path": path_val})
+            # Extract entity from path
+            parts = [p for p in path_val.strip("/").split("/") if p and not p.startswith("{")]
+            for p in parts:
+                if p.lower() not in ("api", "v1", "v2", "v3") and p not in entities:
+                    entities.append(p)
+
+        context = {"entities": entities[:20], "endpoints": endpoints[:50], "roles": []}
+        generator = LearningGenerator(project_context=context)
+        manifest = generator.generate_from_confirmed_bugs(confirmed)
+        return generator.manifest_to_dict(manifest).get("generated_probes", [])
+    except Exception:
+        return []
 
 
 def _extract_pattern(finding: dict) -> dict:

@@ -394,17 +394,17 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
                         if "order" in wr["path"]:
                             _post_body = {"items": [{"sku": "{body_sku}", "qty": 1}]}
                         elif "refund" in wr["path"]:
-                            _post_body = {"order_id": "{body_order_id}", "reason": "qualibug test"}
+                            _post_body = {"orderId": "{body_order_id}", "reason": "qualibug test"}
                         elif "payment" in wr["path"]:
-                            _post_body = {"order_id": "{body_order_id}"}
+                            _post_body = {"orderId": "{body_order_id}"}
                         elif "coupon" in wr["path"]:
-                            _post_body = {"code": "{body_code}", "order_id": "{body_order_id}"}
+                            _post_body = {"code": "{body_code}", "orderId": "{body_order_id}"}
                         existing_steps.append(ScenarioStep(
                             order=next_order, action="test_write_create_fixture",
                             api_method="POST", api_path=wr["path"],
                             expected_status=201, actor="readonly",
                             body_template=_post_body,
-                            extract_from_response=["id", "sku", "order_id"],
+                            extract_from_response=["id", "sku", "order_id", "orderId"],
                         ))
                     elif wr["method"] == "DELETE":
                         safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]

@@ -790,6 +790,33 @@ def build_confirmed_bug_flywheel(project_id: str = "real_project_demo", root: Pa
         }
         _write_json(paths["out"] / "confirmed_bug_learning_manifest.json", learning_manifest)
         profile["pattern_memory"] = learning_manifest
+
+        # ── Learning Generator: produce NEW probes/oracles/fixtures ──
+        try:
+            from .learning_generator import LearningGenerator
+
+            confirmed_findings = []
+            for item in (profile.get("registry") or []):
+                finding = (item.get("finding") or item) if isinstance(item, dict) else {}
+                if isinstance(finding, dict) and finding.get("title"):
+                    finding.setdefault("verdict", "confirmed")
+                    confirmed_findings.append(finding)
+            for item in (profile.get("promotions") or []):
+                if isinstance(item, dict) and item.get("status") == "approved":
+                    finding = item.get("finding") or {}
+                    if isinstance(finding, dict) and finding.get("title"):
+                        finding.setdefault("verdict", "confirmed")
+                        confirmed_findings.append(finding)
+
+            if confirmed_findings:
+                lg = LearningGenerator(project_context={})
+                manifest = lg.generate_from_confirmed_bugs(confirmed_findings)
+                profile["generated_artifacts"] = lg.manifest_to_dict(manifest)
+            else:
+                profile["generated_artifacts"] = {"status": "no_confirmed_findings"}
+        except Exception:
+            profile["generated_artifacts"] = {"status": "unavailable"}
+
     except Exception:
         profile["pattern_memory"] = {"status": "unavailable"}
 
