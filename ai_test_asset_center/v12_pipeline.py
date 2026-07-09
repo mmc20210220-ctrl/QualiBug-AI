@@ -1161,7 +1161,11 @@ def _schedule_behavior_slices(slices: list[dict[str, Any]], settings: dict[str, 
             return _selection_result(status="stopped", stop_reason="all_pending_slices_attempted_needs_new_evidence_or_policy", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="history_exhausted")
         return _selection_result(status="stopped", stop_reason="all_pending_slices_attempted_needs_new_evidence_or_policy", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="history_exhausted")
     offset = (round_number - 1) * budget
-    selected = _take_diverse_slice_batch(pending[offset:], budget)
+    # Prioritize slices with source-bound executable routes on first round too.
+    # Without this filter, route-less slices (DB-only entities) generate
+    # scenarios with empty steps → 404 false positives.
+    _candidates = [item for item in pending if _slice_has_source_executable_route(item)] or pending
+    selected = _take_diverse_slice_batch(_candidates[offset:], budget)
     if not selected:
         return _selection_result(status="stopped", stop_reason="no_remaining_slice_in_configured_round", selected=[], pending=pending, attempted=attempted, confirmed=confirmed, next_round=None, selection_mode="round_paging")
     remaining = len(pending) - offset - len(selected)
@@ -1843,6 +1847,15 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         from .oracle_engine import EvidenceGraphBuilder, OracleEngine
         oracle, evidence_builder = OracleEngine(), EvidenceGraphBuilder()
         for scenario, trace in traces:
+            # Skip traces that never made a real HTTP request (all steps errored/skipped).
+            # These produce false-positive 404/400 findings from unexecutable scenarios.
+            _has_real_request = any(
+                int(s.get("status") or s.get("response", {}).get("status_code") or 0) > 0
+                for s in (trace.get("steps") if isinstance(trace, dict) and isinstance(trace.get("steps"), list) else [])
+                if isinstance(s, dict)
+            )
+            if not _has_real_request:
+                continue
             for oracle_result in oracle.evaluate(scenario.to_dict(), trace, None):
                 if oracle_result.passed:
                     continue
@@ -1936,10 +1949,98 @@ def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2,
     return {"scenario_id": "?", "steps": [], "errors": ["unreachable"], "duration_ms": 0}
 
 
+def _resolve_seed_bindings(scenario: Any, base_url: str) -> dict[str, Any]:
+    """Query the live API for real entity IDs and populate runtime bindings.
+
+    Paths like ``/api/orders/{id}`` need a real UUID to execute.  This
+    function discovers seed data from the running system and maps entity
+    types (id, sku, order_id, etc.) to concrete values.
+    """
+    if not base_url:
+        return {}
+    bindings: dict[str, Any] = {}
+    entity = str(getattr(scenario, "entity", "") or "").strip()
+    if not entity:
+        return bindings
+
+    # ── Entity-to-endpoint mapping ──
+    # For each entity name, try the list endpoint and extract the first ID.
+    _entity_list_endpoints: dict[str, str] = {
+        "order": "/api/orders",
+        "orders": "/api/orders",
+        "order_items": "/api/orders",
+        "order_item": "/api/orders",
+        "product": "/api/products",
+        "products": "/api/products",
+        "cart": "/api/cart/items",
+        "cart_items": "/api/cart/items",
+        "cart_item": "/api/cart/items",
+        "coupon": "/api/coupons",
+        "coupons": "/api/coupons",
+        "coupon_usage": "/api/coupons",
+        "auth": "/api/auth/me",
+        "user": "/api/auth/me",
+        "users": "/api/auth/me",
+        "report": "/api/reports/sales",
+        "reports": "/api/reports/sales",
+        # Entities without dedicated list endpoints — use related endpoints
+        "payment": "/api/orders",
+        "payments": "/api/orders",
+        "refund": "/api/orders",
+        "refunds": "/api/orders",
+        "inventory": "/api/products",
+        "inventory_locks": "/api/products",
+        "addresses": "/api/auth/me",
+        "audit_logs": "/api/orders",
+    }
+    # ID field names by entity
+    _entity_id_field: dict[str, str] = {
+        "order": "id", "orders": "id",
+        "product": "sku", "products": "sku",
+        "cart": "id", "cart_items": "id", "cart_item": "id",
+        "coupon": "id", "coupons": "id",
+        "auth": "id", "user": "id", "users": "id",
+    }
+
+    list_path = _entity_list_endpoints.get(entity, "")
+    if not list_path:
+        return bindings
+
+    token = str(getattr(scenario, "actor_token", "") or "")
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        req = urllib.request.Request(f"{base_url.rstrip('/')}{list_path}", headers=headers, method="GET")
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read(4096))
+    except Exception:
+        return bindings
+
+    # Extract first item's ID
+    items = data if isinstance(data, list) else data.get("items", data.get("records", data.get("data", [])))
+    if isinstance(items, list) and items:
+        first = items[0]
+        if isinstance(first, dict):
+            id_field = _entity_id_field.get(entity, "id")
+            real_id = first.get(id_field) or first.get("id") or first.get("sku")
+            if real_id:
+                bindings["id"] = str(real_id)
+                bindings[id_field] = str(real_id)
+                # Also bind entity-specific params
+                if entity in ("product", "products"):
+                    bindings["sku"] = str(real_id)
+                elif entity in ("order", "orders"):
+                    bindings["order_id"] = str(real_id)
+
+    return bindings
+
+
 def __execute_scenario_once(scenario: Any, base_url: str,
                             safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
     trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}
-    bindings: dict[str, Any] = {}
+    bindings: dict[str, Any] = _resolve_seed_bindings(scenario, base_url)
 
     # ── DB evidence: snapshot the data layer before/after write scenarios ──
     # Config-driven (QUALIBUG_DB_DSN); no per-project table hardcoding. The diff
