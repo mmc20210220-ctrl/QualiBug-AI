@@ -213,9 +213,52 @@ def load_customer_release_gate(project: str, root: Path, report: dict[str, Any])
     )
 
 
-def load_customer_commercial_assets(project: str, root: Path, report: dict[str, Any]) -> dict[str, Any]:
+def _merge_nested_dicts(*values: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value in values:
+        for key, incoming in as_dict(value).items():
+            if isinstance(incoming, dict) and isinstance(merged.get(key), dict):
+                merged[key] = _merge_nested_dicts(as_dict(merged[key]), incoming)
+            elif incoming is not None:
+                merged[key] = incoming
+    return merged
+
+
+def commercial_assets_from_release_gate(gate: dict[str, Any]) -> dict[str, Any]:
+    gate = normalize_release_gate(gate)
+    if not gate:
+        return {}
+    overall = str(gate.get("overall_status") or "")
+    first_check = as_dict(as_list(gate.get("checks"))[0]) if as_list(gate.get("checks")) else {}
+    block_reason = str(first_check.get("detail") or gate.get("honesty_rule") or "")
+    assets: dict[str, Any] = {
+        "release_gate": gate,
+        "release_gate_overall_status": overall,
+        "release_recommendation": gate.get("release_recommendation"),
+        "release_gate_honesty_rule": gate.get("honesty_rule"),
+        "commercial_handoff": {"release_gate_status": overall},
+        "tracker_sync": {"payload_gate_status": overall, "release_gate_overall_status": overall},
+        "delivery_package": {
+            "release_verdict": overall,
+            "release_recommendation": gate.get("release_recommendation"),
+            "release_gate_overall_status": overall,
+        },
+    }
+    if overall in {"fail", "pending"}:
+        blocked_status = "blocked_by_release_gate" if overall == "fail" else "hold_for_validation"
+        assets["commercial_handoff"].update({"safe_for_customer": False, "acceptance_status": blocked_status})
+        assets["tracker_sync"]["payload_status"] = blocked_status
+        assets["delivery_package"].update({"release_gate_blocked": True, "release_gate_block_reason": block_reason})
+    return assets
+
+
+def load_customer_commercial_assets(project: str, root: Path, report: dict[str, Any], release_gate: dict[str, Any]) -> dict[str, Any]:
     scan_result = _scan_result(project, root)
-    return as_dict(report.get("commercial_assets")) or as_dict(scan_result.get("commercial_assets"))
+    return _merge_nested_dicts(
+        as_dict(report.get("commercial_assets")),
+        as_dict(scan_result.get("commercial_assets")),
+        commercial_assets_from_release_gate(release_gate),
+    )
 
 
 def commercial_handoff_label(assets: dict[str, Any]) -> str:
@@ -328,7 +371,7 @@ def render_customer_safe_report_html(project: str, root: Path) -> str:
     history = history if isinstance(history, list) else []
     findings = report_findings(report)
     release_gate = load_customer_release_gate(project, root, report)
-    commercial_assets = load_customer_commercial_assets(project, root, report)
+    commercial_assets = load_customer_commercial_assets(project, root, report, release_gate)
     stage1 = report.get("stage1_industry") if isinstance(report.get("stage1_industry"), dict) else {}
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
