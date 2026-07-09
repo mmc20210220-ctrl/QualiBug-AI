@@ -2018,10 +2018,34 @@ def _resolve_seed_bindings(scenario: Any, base_url: str) -> dict[str, Any]:
     except Exception:
         return bindings
 
-    # Extract first item's ID
+    # Extract first USABLE item's ID (filter by status for stateful entities)
     items = data if isinstance(data, list) else data.get("items", data.get("records", data.get("data", [])))
     if isinstance(items, list) and items:
-        first = items[0]
+        # For orders, prefer PENDING_PAYMENT or PAID status (not CANCELLED/REFUNDED)
+        if entity in ("order", "orders"):
+            usable = [o for o in items if isinstance(o, dict) and o.get("status") in ("PENDING_PAYMENT", "PAID", "CREATED")]
+            if not usable:
+                # No payable order exists — create one
+                try:
+                    _sku = bindings.get("sku") or ""
+                    if not _sku:
+                        # Get a product SKU first
+                        _pr = urllib.request.Request(f"{base_url.rstrip('/')}/api/products", headers=headers, method="GET")
+                        _pd = json.loads(urllib.request.urlopen(_pr, timeout=5).read(4096))
+                        _pitems = _pd if isinstance(_pd, list) else _pd.get("items", _pd.get("data", []))
+                        if isinstance(_pitems, list) and _pitems and isinstance(_pitems[0], dict):
+                            _sku = _pitems[0].get("sku", "")
+                    if _sku:
+                        _create_body = json.dumps({"items": [{"sku": _sku, "qty": 1}]}).encode("utf-8")
+                        _create_headers = {**headers, "Content-Type": "application/json"}
+                        _cr = urllib.request.Request(f"{base_url.rstrip('/')}/api/orders", data=_create_body, headers=_create_headers, method="POST")
+                        _cdata = json.loads(urllib.request.urlopen(_cr, timeout=5).read(4096))
+                        if isinstance(_cdata, dict) and _cdata.get("id"):
+                            usable = [_cdata]
+                except Exception:
+                    pass
+            items = usable or items
+        first = items[0] if items else None
         if isinstance(first, dict):
             id_field = _entity_id_field.get(entity, "id")
             real_id = first.get(id_field) or first.get("id") or first.get("sku")
