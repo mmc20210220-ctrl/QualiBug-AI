@@ -378,9 +378,25 @@ function parseReleaseChecks(raw: unknown): { overall: ReleaseOverall; checks: Re
   return { overall, checks };
 }
 
+function hasReleaseDecisionData(raw: unknown): boolean {
+  const normalized = normalizeCampaignSnapshot(raw);
+  const record = asRecord(normalized);
+  const status = asString(record.status) || asString(field(record.live_map, 'status'));
+  if (status && status !== 'idle') return true;
+  if (backendReleaseGateChecks(normalized).length > 0 || regressionReleaseGate(normalized)) return true;
+  const regressionRefresh = asRecord(record.regression_suite_refresh);
+  const regressionSuite = asRecord(record.regression_suite);
+  const refreshSummary = asRecord(regressionRefresh.summary);
+  if (asString(regressionRefresh.status) || firstFiniteNumber(regressionSuite.total_probe_count, refreshSummary.total_probe_count) > 0) return true;
+  if (getReportFindings(normalized).length > 0 || getReportClues(normalized).length > 0) return true;
+  const campaign = campaignFrom(normalized);
+  if (asString(campaign.campaign_status || campaign.campaign_state)) return true;
+  return Object.keys(asRecord(record.runtime_verification)).length > 0 || Object.keys(asRecord(record.db_verification)).length > 0;
+}
+
 export function useReleaseData(project: string) {
   const [data, setData] = useState<{ overall: ReleaseOverall; checks: ReleaseCheck[] } | null>(null); const [loading, setLoading] = useState(true);
-  const load = useCallback(() => { if (!project) { setData(null); setLoading(false); return; } setLoading(true); getFindings(project).then((raw) => { const status = asString(field(raw, 'status')) || asString(field(field(raw, 'live_map'), 'status')); setData(getResolvedProjectId(raw) && status && status !== 'idle' ? parseReleaseChecks(raw) : null); }).catch(() => setData(null)).finally(() => setLoading(false)); }, [project]);
+  const load = useCallback(() => { if (!project) { setData(null); setLoading(false); return; } setLoading(true); getFindings(project).then((raw) => { const resolved = getResolvedProjectId(raw) || project; setData(resolved && hasReleaseDecisionData(raw) ? parseReleaseChecks(raw) : null); }).catch(() => setData(null)).finally(() => setLoading(false)); }, [project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
   return { data, loading, refetch: load };
 }
