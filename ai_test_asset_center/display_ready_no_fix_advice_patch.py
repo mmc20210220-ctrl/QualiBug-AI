@@ -73,8 +73,16 @@ def _safe_details_from_original(original: Callable[..., dict[str, Any]], finding
     return details
 
 
-def _safe_finding_from_original(original: Callable[..., dict[str, Any]], finding: dict[str, Any], enterprise_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
-    formatted = original(finding, enterprise_ctx)
+def _safe_finding_from_original(original_finding: Callable[..., dict[str, Any]], original_details: Callable[..., dict[str, Any]], finding: dict[str, Any], enterprise_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    # The legacy _format_single_finding expects the legacy technical-details
+    # object to contain recommended_fix.  Keep the original details builder only
+    # for the duration of the legacy call, then strip the resulting payload.
+    active_details = getattr(_formatter, "_build_technical_details")
+    try:
+        _formatter._build_technical_details = original_details  # type: ignore[attr-defined]
+        formatted = original_finding(finding, enterprise_ctx)
+    finally:
+        _formatter._build_technical_details = active_details  # type: ignore[attr-defined]
     formatted = _strip_advice(formatted) if isinstance(formatted, dict) else {}
     technical = formatted.get("technical_details") if isinstance(formatted.get("technical_details"), dict) else {}
     formatted["technical_details"] = _normalize_regression_obligations(_strip_advice(technical), finding if isinstance(finding, dict) else {})
@@ -97,7 +105,7 @@ def install_display_ready_no_fix_advice_patch(*, patch_source: str = PATCH_SOURC
         return _safe_details_from_original(original_details, finding, investigation, reproduction)
 
     def _format_single_finding_no_fix(finding: dict, enterprise_ctx: dict | None = None) -> dict[str, Any]:
-        return _safe_finding_from_original(original_finding, finding, enterprise_ctx)
+        return _safe_finding_from_original(original_finding, original_details, finding, enterprise_ctx)
 
     _formatter._ORIGINAL_BUILD_TECHNICAL_DETAILS_NO_FIX = original_details  # type: ignore[attr-defined]
     _formatter._ORIGINAL_FORMAT_SINGLE_FINDING_NO_FIX = original_finding  # type: ignore[attr-defined]
