@@ -24,6 +24,7 @@ from .business_state_graph import _api_facts, _schema_facts
 SYSTEM_BEHAVIOR_SPACE_VERSION = "system_behavior_space.v1"
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+_HTTP_METHODS = _READ_METHODS | _WRITE_METHODS
 _STATE_RE = re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I)
 
 _TENANT_HINTS = ("tenant", "org_id", "organization_id", "company_id", "workspace_id", "account_id")
@@ -253,6 +254,77 @@ def _ui_routes(ui_materials: Any) -> list[str]:
     return routes[:200]
 
 
+def _endpoint_entity(path: str) -> str:
+    parts = [part for part in str(path or "").strip("/").split("/") if part and not part.startswith("{")]
+    return _entity(parts[0] if parts else "api")
+
+
+def _openapi_route_facts(api_spec_text: str) -> list[dict[str, str]]:
+    """Best-effort method/path extraction when the existing parser is sparse.
+
+    The runtime safety layer needs to know whether a source-bound API path is a
+    safe read route.  This fallback keeps method information from simple JSON or
+    YAML OpenAPI snippets such as ``paths: /x: get:`` without creating another
+    API-ingestion subsystem.
+    """
+    text = str(api_spec_text or "")
+    routes: list[dict[str, str]] = []
+
+    def add(method: str, path: str) -> None:
+        method = str(method or "").upper()
+        path = str(path or "").strip().rstrip(".,;，。；")
+        if method in _HTTP_METHODS and path.startswith("/"):
+            routes.append({"method": method, "path": path, "entity": _endpoint_entity(path)})
+
+    try:
+        parsed = json.loads(text)
+        paths = parsed.get("paths") if isinstance(parsed, dict) else {}
+        if isinstance(paths, dict):
+            for path, spec in paths.items():
+                if isinstance(spec, dict):
+                    for method in spec:
+                        add(method, str(path))
+    except Exception:
+        pass
+
+    current_path = ""
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        path_match = re.match(r"^\s{0,12}(/[A-Za-z0-9_./{}:@?=&%\-]+)\s*:\s*(?:#.*)?$", line)
+        if path_match:
+            current_path = path_match.group(1)
+            continue
+        method_match = re.match(r"^\s{1,24}(get|post|put|patch|delete|head|options)\s*:\s*(?:#.*)?$", line, re.I)
+        if current_path and method_match:
+            add(method_match.group(1), current_path)
+
+    for match in re.finditer(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/[A-Za-z0-9_./{}:@?=&%\-]+)", text, re.I):
+        add(match.group(1), match.group(2))
+
+    deduped: dict[tuple[str, str], dict[str, str]] = {}
+    for route in routes:
+        deduped[(route["method"], route["path"])] = route
+    return list(deduped.values())
+
+
+def _merge_api_endpoints(primary: Any, fallback: list[dict[str, str]]) -> list[dict[str, Any]]:
+    rows = [row for row in primary if isinstance(row, dict)] if isinstance(primary, list) else []
+    fallback_keys = {(row["method"], row["path"]) for row in fallback if row.get("method") and row.get("path")}
+    fallback_paths = {path for _, path in fallback_keys}
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        method = str(row.get("method") or "").upper()
+        path = str(row.get("path") or "").strip()
+        if not path:
+            continue
+        if not method and path in fallback_paths:
+            continue
+        merged[(method, path)] = {**row, "method": method, "path": path, "entity": row.get("entity") or _endpoint_entity(path)}
+    for row in fallback:
+        merged.setdefault((row["method"], row["path"]), dict(row))
+    return list(merged.values())
+
+
 def _assets(surfaces: list[str]) -> list[str]:
     required: list[str] = []
     if "api" in surfaces:
@@ -399,7 +471,8 @@ def _apply_enterprise_knowledge_asset(space: SystemBehaviorSpace, asset: Any) ->
                 obj.states.add(state)
         _add_promise(space, entity, "Documented state machine transitions must be enforced consistently across API, DB and UI.", ["api", "db", "ui"], ["state", "lifecycle", "cross_surface_consistency"], "enterprise_knowledge_asset.state_machine", 0.74)
 
-    for row in [*_asset_rows(asset, "rule_library"), *_asset_rows(asset, "risk_domains")]:
+    risk_domain_rows = _asset_rows(asset, "risk_domains")
+    for row in [*_asset_rows(asset, "rule_library"), *risk_domain_rows]:
         risk_type = _first_text(row, "risk_type", "family", "oracle_family")
         title = _first_text(row, "title", "statement", "expected", "assertion") or "enterprise knowledge rule"
         entity = _first_text(row, "entity", "object", "module") or _entity(title.split()[0] if title.split() else "system")
@@ -411,7 +484,7 @@ def _apply_enterprise_knowledge_asset(space: SystemBehaviorSpace, asset: Any) ->
             surfaces.append("auth")
         if any(dim in dims for dim in ("audit", "traceability", "async", "side_effect")):
             surfaces.append("log")
-        source = "enterprise_knowledge_asset.risk_domain" if row in _asset_rows(asset, "risk_domains") else "enterprise_knowledge_asset.rule_library"
+        source = "enterprise_knowledge_asset.risk_domain" if row in risk_domain_rows else "enterprise_knowledge_asset.rule_library"
         _add_promise(space, entity, f"Enterprise knowledge rule must hold: {title[:240]}", surfaces, dims, source, 0.76)
 
     for row in _asset_rows(asset, "oracle_library"):
@@ -448,6 +521,7 @@ def build_system_behavior_space(
         api_entities, api_states, endpoints = _api_facts(api_spec_text, _STATE_RE)
     except Exception:
         api_entities, api_states, endpoints = {}, {}, []
+    endpoints = _merge_api_endpoints(endpoints, _openapi_route_facts(api_spec_text))
     for entity, refs in api_entities.items():
         obj = _obj(space, entity)
         obj.surfaces.add("api")
@@ -458,7 +532,7 @@ def build_system_behavior_space(
         path = str(endpoint.get("path") or "").strip() if isinstance(endpoint, dict) else ""
         if not path:
             continue
-        entity = _entity(endpoint.get("entity") or path.strip("/").split("/")[0])
+        entity = _entity(endpoint.get("entity") or _endpoint_entity(path))
         obj = _obj(space, entity)
         obj.surfaces.add("api")
         obj.api_paths.add(f"{method} {path}" if method else path)
@@ -483,10 +557,7 @@ def build_system_behavior_space(
         obj.surfaces.add("db")
         obj.db_tables.add(table["table"])
         columns = list(table["columns"])
-        for group, hints in (
-            ("tenant", _TENANT_HINTS), ("soft_delete", _SOFT_DELETE_HINTS), ("audit", _AUDIT_HINTS),
-            ("money", _MONEY_HINTS), ("quantity", _QUANTITY_HINTS), ("state", _STATE_HINTS), ("time", _TIME_HINTS),
-        ):
+        for group, hints in (("tenant", _TENANT_HINTS), ("soft_delete", _SOFT_DELETE_HINTS), ("audit", _AUDIT_HINTS), ("money", _MONEY_HINTS), ("quantity", _QUANTITY_HINTS), ("state", _STATE_HINTS), ("time", _TIME_HINTS)):
             for col in _columns_for_group(columns, hints):
                 _add_field(obj, group, col)
         if obj.fields.get("tenant"):
