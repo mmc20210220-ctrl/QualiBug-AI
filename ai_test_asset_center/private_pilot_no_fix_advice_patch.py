@@ -2,74 +2,36 @@ from __future__ import annotations
 
 """Customer boundary patch: never expose fix advice in customer payloads.
 
-QualiBug-AI's responsibility is defect discovery, evidence, post-fix regression,
-and release status.  It must not provide remediation advice, repair steps,
-patches, or root-cause claims to customers.  This runtime normalizer strips such
-fields from command-center/customer API envelopes while keeping evidence and
+QualiBug-AI's responsibility is defect discovery, evidence, post-customer-change
+regression, and release status. It must not provide remediation advice, repair
+steps, patches, or root-cause claims to customers. This runtime normalizer strips
+such fields from command-center/customer API envelopes while keeping evidence and
 regression verification intact.
 """
 
 from typing import Any
 
+from ai_test_asset_center.customer_report_boundary import (
+    attach_product_responsibility_boundary,
+    data_contract_product_responsibility_boundary,
+    strip_fix_advice_fields,
+)
+
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_no_fix_advice_patch"
-
-_FIX_ADVICE_KEYS = {
-    "recommended_fix",
-    "fix_advice",
-    "fix_suggestion",
-    "repair_suggestion",
-    "repair_plan",
-    "remediation",
-    "remediation_advice",
-    "remediation_plan",
-    "patch_suggestion",
-    "code_fix",
-    "possible_root_cause",
-    "root_cause_hypothesis",
-}
-
-
-def _strip_fix_advice(value: Any) -> Any:
-    if isinstance(value, list):
-        return [_strip_fix_advice(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    cleaned: dict[str, Any] = {}
-    for key, item in value.items():
-        if str(key) in _FIX_ADVICE_KEYS:
-            continue
-        cleaned[key] = _strip_fix_advice(item)
-    return cleaned
-
-
-def _attach_boundary(value: dict[str, Any]) -> dict[str, Any]:
-    boundary = value.get("product_responsibility_boundary") if isinstance(value.get("product_responsibility_boundary"), dict) else {}
-    value["product_responsibility_boundary"] = {
-        **boundary,
-        "scope": "defect_discovery_evidence_post_fix_regression_release_status",
-        "no_fix_advice": True,
-        "customer_meaning": "QualiBug-AI only reports defect facts, evidence chains, post-fix regression verification, and release status. It does not provide fix advice, repair plans, or code changes.",
-    }
-    return value
 
 
 def sanitize_customer_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
-    sanitized = _strip_fix_advice(payload)
+    sanitized = strip_fix_advice_fields(payload)
     data = sanitized.get("data") if isinstance(sanitized.get("data"), dict) else sanitized
     if isinstance(data, dict):
-        data = _attach_boundary(data)
+        data = attach_product_responsibility_boundary(data, PATCH_SOURCE)
         for key in ("defects", "findings", "real_findings", "clues", "bug_scores"):
             if isinstance(data.get(key), list):
-                data[key] = [_attach_boundary(item) if isinstance(item, dict) else item for item in data[key]]
+                data[key] = [attach_product_responsibility_boundary(item, PATCH_SOURCE) if isinstance(item, dict) else item for item in data[key]]
         contract = data.get("data_contract") if isinstance(data.get("data_contract"), dict) else {}
-        contract["product_responsibility_boundary"] = {
-            "display_key": "product_responsibility_boundary",
-            "source": PATCH_SOURCE,
-            "honesty_rule": "Customer payloads must not contain fix advice, remediation plans, root-cause claims, or code changes. The platform only verifies defects and post-fix closure status.",
-            "customer_meaning": "The customer owns remediation. QualiBug-AI owns defect evidence and regression verification after remediation.",
-        }
+        contract["product_responsibility_boundary"] = data_contract_product_responsibility_boundary(PATCH_SOURCE)
         data["data_contract"] = contract
         if isinstance(sanitized.get("data"), dict):
             sanitized["data"] = data
