@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-"""Runtime wiring for the System Behavior Space Model and learning loop.
+"""Runtime wiring for the System Behavior Space Model and dual-scope learning.
 
-The existing V12 builder already creates state-machine slices.  This patch keeps
-that behavior intact and attaches the broader behavior-space model to the same
-behavior contract so every private-pilot scan carries the real product goal:
-open-ended system-promise discovery across API, DB, UI, auth and cross-surface
-consistency — not a fixed bug-family list.
+Learning scopes:
 
-It also threads project/root into the builder through a narrow runtime context so
-project learning memory can boost future probes.  After every V12 scan it
-persists fresh learning memory from confirmed defects, evidence chains and
-regression outcomes.
+* Project/private deployment memory: local project evidence and regression
+  outcomes boost the same project's future probes.
+* SaaS/platform memory: sanitized cross-project patterns boost cold-start and
+  future probes without sharing customer raw data.
 """
 
 import contextvars
@@ -22,7 +18,11 @@ from ai_test_asset_center import business_state_graph as _bsg
 from ai_test_asset_center.behavior_learning_memory import (
     apply_learning_to_probe_candidates,
     load_behavior_learning_memory,
-    persist_behavior_learning_memory,
+)
+from ai_test_asset_center.platform_behavior_learning_memory import (
+    apply_platform_learning_to_probe_candidates,
+    load_platform_behavior_learning_memory,
+    refresh_learning_memories,
 )
 from ai_test_asset_center.system_behavior_space import (
     SYSTEM_BEHAVIOR_SPACE_VERSION,
@@ -62,9 +62,12 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
             space = build_system_behavior_space(prd_text, api_spec_text, db_schema_text).to_dict()
             project, root = _learning_context_from_builder(self)
             if project and root:
-                memory = load_behavior_learning_memory(project, root)
-                if memory:
-                    space = apply_learning_to_probe_candidates(space, memory)
+                project_memory = load_behavior_learning_memory(project, root)
+                if project_memory:
+                    space = apply_learning_to_probe_candidates(space, project_memory)
+                platform_memory = load_platform_behavior_learning_memory(root)
+                if platform_memory:
+                    space = apply_platform_learning_to_probe_candidates(space, platform_memory)
             self.system_behavior_space = space
         except Exception as exc:
             self.system_behavior_space = {
@@ -95,6 +98,10 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
             summary["learning_memory_version"] = str(space_summary.get("learning_memory_version") or "")
             summary["learning_signal_count"] = int(space_summary.get("learning_signal_count") or 0)
             summary["learning_boosted_probe_count"] = int(space_summary.get("learning_boosted_probe_count") or 0)
+            summary["platform_learning_memory_version"] = str(space_summary.get("platform_learning_memory_version") or "")
+            summary["platform_learning_signal_count"] = int(space_summary.get("platform_learning_signal_count") or 0)
+            summary["platform_learning_contributing_project_count"] = int(space_summary.get("platform_learning_contributing_project_count") or 0)
+            summary["platform_learning_boosted_probe_count"] = int(space_summary.get("platform_learning_boosted_probe_count") or 0)
             contract["summary"] = summary
             gaps = contract.get("coverage_gaps") if isinstance(contract.get("coverage_gaps"), list) else []
             system_gaps = space.get("coverage_gaps") if isinstance(space.get("coverage_gaps"), list) else []
@@ -131,17 +138,27 @@ def _install_v12_learning_lifecycle_patch() -> None:
         finally:
             _LEARNING_CONTEXT.reset(token)
         try:
-            memory = persist_behavior_learning_memory(project, Path(root))
+            memories = refresh_learning_memories(project, Path(root), include_platform=True)
+            project_memory = memories.get("project_learning_memory") if isinstance(memories.get("project_learning_memory"), dict) else {}
+            platform_memory = memories.get("platform_learning_memory") if isinstance(memories.get("platform_learning_memory"), dict) else {}
             if isinstance(result, dict):
                 result["behavior_learning_memory"] = {
-                    "version": str(memory.get("version") or ""),
-                    "summary": memory.get("summary") if isinstance(memory.get("summary"), dict) else {},
-                    "learning_goal": str(memory.get("learning_goal") or ""),
+                    "project": {
+                        "version": str(project_memory.get("version") or ""),
+                        "summary": project_memory.get("summary") if isinstance(project_memory.get("summary"), dict) else {},
+                        "learning_goal": str(project_memory.get("learning_goal") or ""),
+                    },
+                    "platform": {
+                        "version": str(platform_memory.get("version") or ""),
+                        "summary": platform_memory.get("summary") if isinstance(platform_memory.get("summary"), dict) else {},
+                        "learning_scope": str(platform_memory.get("learning_scope") or ""),
+                        "privacy_rule": str(platform_memory.get("privacy_rule") or ""),
+                    },
                 }
         except Exception as exc:
             if isinstance(result, dict):
                 result["behavior_learning_memory"] = {
-                    "version": "behavior_learning_memory.v1",
+                    "version": "dual_scope_behavior_learning_memory.v1",
                     "status": "unavailable",
                     "reason": f"behavior_learning_memory_refresh_failed:{type(exc).__name__}",
                 }
@@ -153,12 +170,6 @@ def _install_v12_learning_lifecycle_patch() -> None:
 
 
 def prepare_system_behavior_space_learning_context(builder: Any, *, project: str, root: Path) -> Any:
-    """Attach project/root learning context before ``builder.build(...)``.
-
-    BusinessStateGraphBuilder intentionally stays generic; the V12 pipeline owns
-    project/root.  This helper is a direct bridge for tests or explicit callers;
-    the private-pilot runtime also sets a ContextVar around run_v12_pipeline.
-    """
     setattr(builder, "system_behavior_space_project", str(project or ""))
     setattr(builder, "system_behavior_space_root", Path(root))
     return builder
