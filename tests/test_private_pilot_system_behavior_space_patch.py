@@ -48,6 +48,11 @@ def test_private_pilot_builder_contract_carries_system_behavior_space() -> None:
         assert space["summary"]["probe_candidate_count"] >= 1
         assert contract["summary"]["system_behavior_goal"] == "open_ended_system_promise_discovery_across_all_surfaces"
         assert contract["summary"]["system_probe_candidate_count"] == space["summary"]["probe_candidate_count"]
+        assert contract["summary"]["system_behavior_materialized_slice_count"] >= 1
+        system_slices = [item for item in contract["slices"] if item.get("_selection_origin") == "system_behavior_space"]
+        assert system_slices
+        assert all(item["kind"] == "invariant" for item in system_slices)
+        assert any(item.get("_system_behavior_promise_id") for item in system_slices)
         assert any(item.get("source") == "system_behavior_space" for item in contract["coverage_gaps"])
     finally:
         restore_system_behavior_space_patch()
