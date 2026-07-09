@@ -2108,6 +2108,8 @@ def _resolve_seed_bindings(scenario: Any, base_url: str) -> dict[str, Any]:
                     _cdata = json.loads(urllib.request.urlopen(_cr, timeout=5).read(4096))
                     if isinstance(_cdata, dict) and _cdata.get("id"):
                         items = [_cdata]
+                        # Ensure the created item's ID is bound
+                        bindings["id"] = str(_cdata["id"])
             except Exception:
                 pass
         first = items[0] if isinstance(items, list) and items else None
@@ -2128,6 +2130,12 @@ def _resolve_seed_bindings(scenario: Any, base_url: str) -> dict[str, Any]:
         bindings["body_sku"] = str(bindings["sku"])
     if bindings.get("id"):
         bindings["body_qty"] = 1
+    # Coupon code from seed data
+    if entity in ("coupon", "coupons", "coupon_usage") and isinstance(items, list) and items:
+        for item in items:
+            if isinstance(item, dict) and item.get("code"):
+                bindings["body_code"] = str(item["code"])
+                break
 
     return bindings
 
