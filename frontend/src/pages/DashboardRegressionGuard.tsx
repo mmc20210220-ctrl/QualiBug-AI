@@ -12,9 +12,25 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function asNum(value: unknown, fallback = 0): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function releaseTone(overallStatus: string): string {
+  if (overallStatus === 'fail') return 'danger';
+  if (overallStatus === 'pending') return 'warning';
+  return 'neutral';
+}
+
+function releaseLabel(overallStatus: string): string {
+  if (overallStatus === 'fail') return '发布门禁阻塞，不能直接发布';
+  if (overallStatus === 'pending') return '发布门禁待处理，需先完成回归或复核';
+  return '发布门禁状态待同步';
 }
 
 function gateLabel(gateStatus: string, hasPendingObligation: boolean): string {
@@ -33,6 +49,29 @@ function gateTone(gateStatus: string, hasPendingObligation: boolean): string {
 }
 
 function DashboardRegressionBanner({ record }: { record: JsonRecord }) {
+  const releaseGate = asRecord(record.release_gate);
+  const releaseOverall = asText(releaseGate.overall_status);
+  const releaseChecks = asArray(releaseGate.checks).map(asRecord);
+  const blockingCount = asNum(releaseGate.blocking_check_count, releaseChecks.filter((item) => asText(item.status) === 'fail').length);
+  const pendingCount = asNum(releaseGate.pending_check_count, releaseChecks.filter((item) => asText(item.status) === 'pending').length);
+  const regressionGateCheck = releaseChecks.find((item) => asText(item.name) === '修复后回归 Gate') || releaseChecks[0];
+
+  if (releaseOverall === 'fail' || releaseOverall === 'pending') {
+    return (
+      <section className={`customer-status-card ${releaseTone(releaseOverall)} mb-4`}>
+        <span>发布门禁 Gate</span>
+        <strong>{releaseLabel(releaseOverall)}</strong>
+        <p>{asText(regressionGateCheck?.detail) || '后端 release_gate 合同显示当前仍存在发布阻断或待处理项。'}</p>
+        <div className="customer-secondary-meta">
+          <span><em>阻塞项</em><b>{blockingCount}</b></span>
+          <span><em>待处理</em><b>{pendingCount}</b></span>
+          <span><em>门禁来源</em><b>{asText(releaseGate.source) || 'release_gate'}</b></span>
+          <span><em>首要检查</em><b>{asText(regressionGateCheck?.name) || '发布门禁'}</b></span>
+        </div>
+      </section>
+    );
+  }
+
   const regressionRun = asRecord(record.regression_run);
   const regressionSummary = asRecord(record.regression_summary);
   const latestRun = asRecord(regressionSummary.latest_run);
