@@ -28,6 +28,8 @@ from ai_test_asset_center.system_behavior_space import (
 )
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_system_behavior_space_patch"
+_SAFE_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+_KNOWN_HTTP_METHODS = {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"}
 _BEHAVIOR_SPACE_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
     "qualibug_system_behavior_space_context",
     default={},
@@ -54,14 +56,19 @@ def _load_existing_enterprise_asset() -> dict[str, Any]:
         return {}
 
 
-def _path_only(value: str) -> str:
-    text = str(value or "").strip()
+def _api_route(raw: Any) -> dict[str, str]:
+    text = str(raw or "").strip()
     if not text:
-        return ""
+        return {"method": "", "path": ""}
     parts = text.split(maxsplit=1)
-    if len(parts) == 2 and parts[0].upper() in {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"}:
-        return parts[1] if parts[1].startswith("/") else ""
-    return text if text.startswith("/") else ""
+    if len(parts) == 2 and parts[0].upper() in _KNOWN_HTTP_METHODS:
+        path = parts[1].strip()
+        return {"method": parts[0].upper(), "path": path if path.startswith("/") else ""}
+    return {"method": "", "path": text if text.startswith("/") else ""}
+
+
+def _path_only(value: str) -> str:
+    return _api_route(value).get("path", "")
 
 
 def _object_index(space: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -72,6 +79,21 @@ def _object_index(space: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _promise_index(space: dict[str, Any]) -> dict[str, dict[str, Any]]:
     rows = space.get("promises") if isinstance(space.get("promises"), list) else []
     return {str(item.get("promise_id") or ""): item for item in rows if isinstance(item, dict)}
+
+
+def _dedupe_routes(routes: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+    for route in routes:
+        method = str(route.get("method") or "").upper()
+        path = str(route.get("path") or "")
+        if not path:
+            continue
+        key = (method, path)
+        if key not in seen:
+            seen.add(key)
+            out.append({"method": method, "path": path})
+    return out
 
 
 def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
@@ -90,9 +112,10 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         entity = str(probe.get("entity") or promise.get("entity") or "system")
         obj = objects.get(entity, {})
+        routes = _dedupe_routes([_api_route(raw) for raw in (obj.get("api_paths") if isinstance(obj.get("api_paths"), list) else [])])
         endpoints: list[str] = []
-        for raw in obj.get("api_paths") if isinstance(obj.get("api_paths"), list) else []:
-            path = _path_only(str(raw))
+        for route in routes:
+            path = route.get("path", "")
             if path and path not in endpoints:
                 endpoints.append(path)
         invariant = str(promise.get("invariant") or probe.get("objective") or "system promise")
@@ -101,6 +124,8 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
         evidence_gaps: list[str] = []
         if "api" in surface_plan and not endpoints:
             evidence_gaps.append("SYSTEM_PROMISE_API_ROUTE_NOT_SOURCE_BOUND")
+        if "api" in surface_plan and endpoints and not any(route.get("method") in _SAFE_READ_METHODS for route in routes):
+            evidence_gaps.append("SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND")
         if "db" in surface_plan and not (obj.get("db_tables") if isinstance(obj.get("db_tables"), list) else []):
             evidence_gaps.append("SYSTEM_PROMISE_DB_TABLE_NOT_SOURCE_BOUND")
         if "ui" in surface_plan and not (obj.get("ui_routes") if isinstance(obj.get("ui_routes"), list) else []):
@@ -122,6 +147,7 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
             "_system_behavior_probe_id": str(probe.get("probe_id") or ""),
             "_system_behavior_dimensions": dimensions,
             "_system_behavior_surface_plan": surface_plan,
+            "_system_behavior_api_routes": routes,
             "_system_behavior_required_assets": [str(item) for item in (probe.get("required_assets") or []) if str(item)],
         })
     deduped: dict[str, dict[str, Any]] = {}
@@ -171,6 +197,7 @@ def _system_behavior_hints(slice_meta: dict[str, Any]) -> dict[str, Any]:
         "probe_id": str(slice_meta.get("_system_behavior_probe_id") or ""),
         "dimensions": [str(item) for item in (slice_meta.get("_system_behavior_dimensions") or []) if str(item)],
         "surface_plan": [str(item) for item in (slice_meta.get("_system_behavior_surface_plan") or []) if str(item)],
+        "api_routes": [dict(route) for route in (slice_meta.get("_system_behavior_api_routes") or []) if isinstance(route, dict)],
         "required_assets": [str(item) for item in (slice_meta.get("_system_behavior_required_assets") or []) if str(item)],
         "source_slice_id": str(slice_meta.get("slice_id") or ""),
         "source_family": str(slice_meta.get("_selection_family") or "system_promise"),
@@ -215,6 +242,17 @@ def _slice_invariant_text(slice_meta: dict[str, Any]) -> str:
     return str(slice_meta.get("entity") or "system_promise")
 
 
+def _safe_read_route(slice_meta: dict[str, Any]) -> dict[str, str]:
+    for route in slice_meta.get("_system_behavior_api_routes") or []:
+        if not isinstance(route, dict):
+            continue
+        method = str(route.get("method") or "").upper()
+        path = str(route.get("path") or "")
+        if method in _SAFE_READ_METHODS and path.startswith("/"):
+            return {"method": method, "path": path}
+    return {}
+
+
 def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], discovery_round: int) -> Any:
     hints = _system_behavior_hints(slice_meta)
     if not hints:
@@ -225,13 +263,13 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
         return item
     invariant = _slice_invariant_text(slice_meta)
     entity = str(slice_meta.get("entity") or "system")
-    endpoints = [str(value) for value in (slice_meta.get("endpoints") or []) if str(value).startswith("/")]
+    safe_route = _safe_read_route(slice_meta)
     evidence_gaps = [str(value) for value in (slice_meta.get("evidence_gaps") or []) if str(value)]
     if item is None:
         steps = []
         execution_policy = "plan_only_requires_fixture"
-        if endpoints:
-            steps = [ScenarioStep(order=1, action="observe_system_promise_surface", api_method="GET", api_path=endpoints[0], expected_status=200, actor="readonly")]
+        if safe_route:
+            steps = [ScenarioStep(order=1, action="observe_system_promise_surface", api_method=safe_route["method"], api_path=safe_route["path"], expected_status=200, actor="readonly")]
             execution_policy = "safe_read_only"
         item = ExecutableScenario(
             id=f"system_promise:{hints['promise_id']}",
@@ -258,6 +296,11 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     item.selection_origin = "system_behavior_space"
     if not str(item.title).startswith("[System promise]"):
         item.title = f"[System promise] {item.title}"
+    if not safe_route and "SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND" not in evidence_gaps:
+        evidence_gaps.append("SYSTEM_PROMISE_SAFE_READ_ROUTE_NOT_SOURCE_BOUND")
+    if not safe_route and getattr(item, "execution_policy", "") == "safe_read_only":
+        item.execution_policy = "plan_only_requires_fixture"
+        item.steps = []
     rules = list(getattr(item, "oracle_rules", []) or [])
     for rule in ["SystemPromiseOracle.open_ended_promise_violation", *(f"SystemPromiseOracle.dimension:{dim}" for dim in hints["dimensions"][:8])]:
         if rule not in rules:
@@ -266,6 +309,10 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     runtime_hints = dict(getattr(item, "runtime_hints", {}) or {})
     runtime_hints["system_behavior_space"] = hints
     runtime_hints["system_promise_invariant"] = invariant[:500]
+    if safe_route:
+        runtime_hints["system_promise_safe_read_route"] = safe_route
+    else:
+        runtime_hints["system_promise_execution_guard"] = "plan_only_no_source_bound_safe_read_route"
     item.runtime_hints = runtime_hints
     item.evidence_gaps = list(dict.fromkeys([*(getattr(item, "evidence_gaps", []) or []), *evidence_gaps]))
     return item
