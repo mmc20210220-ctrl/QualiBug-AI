@@ -312,14 +312,14 @@ def test_tracker_record_same_gap_again() -> None:
 
 
 def test_tracker_gap_resolved_when_no_longer_detected() -> None:
-    """When a gap is no longer detected, it should auto-resolve."""
+    """When a gap is no longer detected, it should auto-resolve (with force_resolve=True)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tracker = GapTracker("test_proj", root=tmpdir)
         gap = CapabilityGap("G1", GapRootCause.MISSING_BASE_URL, GapResolution.NEEDS_CUSTOMER_CONFIG, "P0", "Missing URL")
         tracker.record_gaps([gap])
 
-        # Record empty list — gap should resolve
-        result = tracker.record_gaps([])
+        # Record empty list with force_resolve — gap should resolve
+        result = tracker.record_gaps([], force_resolve=True)
         assert result["resolved_gaps"] == 1
 
         open_gaps = tracker.get_open_gaps()
@@ -332,9 +332,9 @@ def test_tracker_gap_reopened() -> None:
         tracker = GapTracker("test_proj", root=tmpdir)
         gap = CapabilityGap("G1", GapRootCause.MISSING_BASE_URL, GapResolution.NEEDS_CUSTOMER_CONFIG, "P0", "Missing URL")
 
-        # Record, then resolve
+        # Record, then resolve with force_resolve
         tracker.record_gaps([gap])
-        tracker.record_gaps([])
+        tracker.record_gaps([], force_resolve=True)
         assert len(tracker.get_open_gaps()) == 0
 
         # Record again — should reopen

@@ -439,15 +439,11 @@ def compute_benchmark(
     elif os.environ.get("QUALIBUG_BENCHMARK_GROUND_TRUTH"):
         gt_path = Path(os.environ["QUALIBUG_BENCHMARK_GROUND_TRUTH"])
     else:
-        # Try project-local benchmark dir first, then known absolute paths
+        # Try project-local benchmark dir first
         candidates_paths = [
+            root / "platform_workspace" / project / "private_ground_truth" / "ground_truth_bugs.json",
             root / "platform_workspace" / project / "benchmark_ground_truth" / "bugs.json",
-            root.parent / "benchmark_mall" / "hidden_ground_truth" / "bugs.json",
         ]
-        # Only add absolute desktop paths when they actually exist
-        _desktop = Path("C:/Users/Test/Desktop/qualibug_enterprise_benchmark_v0_5_windows_native_stable/qualibug_enterprise_benchmark_v0_5_windows_native_stable/hidden_ground_truth/bugs.json")
-        if _desktop.exists():
-            candidates_paths.append(_desktop)
         for p in candidates_paths:
             if p.exists():
                 gt_path = p
@@ -700,6 +696,7 @@ def run_benchmark_end_to_end(
         return result
 
     # ── Stage 2: Write ground truth ─────────────────────────────────
+    gt_path: Path | None = None
     try:
         gt_path = factory.write_ground_truth(bugs, output_dir=root_path)
         integrity = validate_ground_truth_integrity(gt_path)
@@ -748,7 +745,7 @@ def run_benchmark_end_to_end(
                 findings or [],
                 candidates,
                 root=root_path,
-                ground_truth_path=str(gt_path) if 'gt_path' in dir() else "",
+                ground_truth_path=str(gt_path) if gt_path is not None else "",
             )
 
             result["stages"]["metrics"] = {

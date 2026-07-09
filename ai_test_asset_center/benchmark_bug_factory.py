@@ -729,7 +729,10 @@ class BenchmarkBugFactory:
             "templates_used": sorted({b["template_id"] for b in bugs}),
             "bugs": bugs,
         }
-        gt_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            gt_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, IOError) as e:
+            raise IOError(f"Failed to write ground truth to {gt_path}: {e}") from e
 
         self._log.append(
             f"write_ground_truth: {len(bugs)} bugs -> {gt_path} "
@@ -775,19 +778,28 @@ class BenchmarkBugFactory:
         # ── OpenAPI stub ──
         openapi_path = public_dir / "openapi.json"
         openapi_spec = self._build_openapi_stub(bugs)
-        openapi_path.write_text(json.dumps(openapi_spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            openapi_path.write_text(json.dumps(openapi_spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, IOError) as e:
+            raise IOError(f"Failed to write OpenAPI stub to {openapi_path}: {e}") from e
         result["openapi"] = openapi_path
 
         # ── PRD excerpt ──
         prd_path = public_dir / "PRD.md"
         prd_content = self._build_prd_excerpt(bugs)
-        prd_path.write_text(prd_content, encoding="utf-8")
+        try:
+            prd_path.write_text(prd_content, encoding="utf-8")
+        except (OSError, IOError) as e:
+            raise IOError(f"Failed to write PRD to {prd_path}: {e}") from e
         result["prd"] = prd_path
 
         # ── Accounts stub ──
         accounts_path = public_dir / "accounts.json"
         accounts_stub = self._build_accounts_stub()
-        accounts_path.write_text(json.dumps(accounts_stub, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            accounts_path.write_text(json.dumps(accounts_stub, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, IOError) as e:
+            raise IOError(f"Failed to write accounts stub to {accounts_path}: {e}") from e
         result["accounts"] = accounts_path
 
         self._log.append(

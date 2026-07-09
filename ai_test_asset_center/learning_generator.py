@@ -374,10 +374,26 @@ class ProbeGenerator:
                 continue
 
             # Replace the source entity with the target entity in the path
-            new_path = path.replace(source_entity, entity)
-            if new_path == path:
-                # Try replacing the last path segment
-                new_path = "/".join(path.strip("/").split("/")[:-1] + [entity])
+            # Use path-segment replacement to avoid substring issues (e.g., "order" in "orders")
+            path_segments = path.strip("/").split("/")
+            new_segments = []
+            replaced = False
+            for seg in path_segments:
+                # Only replace if the segment matches the source entity exactly or with 's' suffix
+                if seg == source_entity:
+                    new_segments.append(entity)
+                    replaced = True
+                elif seg == source_entity + "s":
+                    new_segments.append(entity + "s")
+                    replaced = True
+                elif seg.rstrip("s") == source_entity:
+                    new_segments.append(entity + ("s" if seg.endswith("s") else ""))
+                    replaced = True
+                else:
+                    new_segments.append(seg)
+            new_path = "/" + "/".join(new_segments)
+            if not replaced or new_path == path:
+                continue
 
             if self._is_duplicate(method, new_path, actor, risk_type):
                 continue
