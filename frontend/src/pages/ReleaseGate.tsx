@@ -1,82 +1,17 @@
 import { useSearchParams } from 'react-router-dom';
-import { usePipelineData, useReleaseData } from '../api/data';
+import { useReleaseData } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
 
-type JsonRecord = Record<string, unknown>;
 type GateCheck = { name: string; status: 'pass' | 'fail' | 'pending'; detail: string };
-
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function asNum(value: unknown, fallback = 0): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function regressionGateCheck(record: JsonRecord): GateCheck | null {
-  const regressionRun = asRecord(record.regression_run);
-  const regressionSummary = asRecord(record.regression_summary);
-  const latestRun = asRecord(regressionSummary.latest_run);
-  const regressionRefresh = asRecord(record.regression_suite_refresh);
-  const regressionSuite = asRecord(record.regression_suite);
-  const refreshSummary = asRecord(regressionRefresh.summary);
-  const gateStatus = asText(regressionRun.gate_status) || asText(latestRun.gate_status);
-  const hasLatestRun = Boolean(gateStatus || asText(regressionRun.status) || asText(latestRun.generated_at));
-  const obligationCount = asNum(regressionSuite.total_probe_count, asNum(refreshSummary.total_probe_count));
-  const confirmedLedgerProbeCount = asNum(regressionSuite.confirmed_ledger_probe_count, asNum(refreshSummary.confirmed_ledger_probe_count));
-  const failed = asNum(regressionRun.failed_count, asNum(regressionSummary.failed_defect_count));
-  const needsReview = asNum(regressionRun.needs_review_count, asNum(regressionSummary.pending_defect_count));
-  const passed = asNum(regressionRun.passed_count, asNum(regressionSummary.passed_defect_count));
-
-  if (gateStatus === 'failed') {
-    return {
-      name: '修复后回归 Gate',
-      status: 'fail',
-      detail: `最近一次回归失败：${failed} 个探针失败，${needsReview} 个需复核。发布前必须先修复或复核失败项。`,
-    };
-  }
-  if (gateStatus === 'manual_approval_required') {
-    return {
-      name: '修复后回归 Gate',
-      status: 'pending',
-      detail: `最近一次回归仍需人工复核：${needsReview} 个探针缺少强自动判定，不能直接放行发布。`,
-    };
-  }
-  if (gateStatus === 'passed') {
-    return {
-      name: '修复后回归 Gate',
-      status: 'pass',
-      detail: `最近一次回归通过：${passed} 个探针通过。该结论仅代表最近一次持久化回归结果，不扩大到未覆盖范围。`,
-    };
-  }
-  if (!hasLatestRun && asText(regressionRefresh.status) === 'refreshed' && obligationCount > 0) {
-    return {
-      name: '修复后回归 Gate',
-      status: 'pending',
-      detail: `已自动生成 ${obligationCount} 个回归探针，其中 ${confirmedLedgerProbeCount} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。`,
-    };
-  }
-  return null;
-}
 
 export function ReleaseGate() {
   usePageTitle('发布门禁');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { data, loading } = useReleaseData(project);
-  const { data: pipelineData } = usePipelineData(project);
-  const pipelineRecord = asRecord(pipelineData);
-  const regressionCheck = regressionGateCheck(pipelineRecord);
 
-  const baseChecks = (data?.checks || []) as GateCheck[];
-  const checks = regressionCheck ? [regressionCheck, ...baseChecks] : baseChecks;
-  const derivedOverall: 'pass' | 'fail' | 'pending' = checks.some(c => c.status === 'fail') ? 'fail' : checks.some(c => c.status === 'pending') ? 'pending' : 'pass';
-  const overall = checks.length > 0 ? derivedOverall : (data?.overall || 'pass');
+  const checks = (data?.checks || []) as GateCheck[];
+  const overall = data?.overall || 'pass';
   const passCount = checks.filter(c => c.status === 'pass').length;
   const failCount = checks.filter(c => c.status === 'fail').length;
   const pendingCount = checks.filter(c => c.status === 'pending').length;
