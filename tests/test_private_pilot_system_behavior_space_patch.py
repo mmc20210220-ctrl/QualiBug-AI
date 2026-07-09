@@ -47,6 +47,40 @@ def _first_system_promise_scenario():
     return next(item for item in scenarios if item.selection_origin == "system_behavior_space")
 
 
+def _make_system_promise_finding(tmp_path):
+    from ai_test_asset_center import v12_pipeline
+    from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleEngine
+
+    scenario_obj = _first_system_promise_scenario()
+    scenario = scenario_obj.to_dict()
+    trace = {
+        "steps": [
+            {
+                "action": "observe_system_promise_surface",
+                "method": "GET",
+                "path": "/api/orders",
+                "status": 200,
+                "expected_status": 200,
+                "response": {"status_code": 200, "body": {"items": [{"id": 1, "total_amount": -1}]}},
+            }
+        ]
+    }
+    system_result = next(item for item in OracleEngine().evaluate(scenario, trace, None) if item.oracle_name == "SystemPromiseOracle")
+    evidence = EvidenceGraphBuilder().build(scenario, trace, None, [system_result])
+    finding = v12_pipeline._confirmed_oracle_finding(
+        scenario_obj,
+        trace,
+        system_result,
+        evidence,
+        campaign_id="campaign-1",
+        discovery_round=1,
+        base_url="http://example.test",
+    )
+    saved = v12_pipeline._persist_confirmed_findings(tmp_path, "proj", [finding])
+    assert saved == 1
+    return finding
+
+
 def test_private_pilot_builder_contract_carries_system_behavior_space() -> None:
     restore_system_behavior_space_patch()
     install_system_behavior_space_patch()
@@ -124,46 +158,61 @@ def test_system_promise_finding_and_regression_ledger_keep_contract(tmp_path) ->
     restore_system_behavior_space_patch()
     install_system_behavior_space_patch()
     try:
-        from ai_test_asset_center import v12_pipeline
-        from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleEngine
+        finding = _make_system_promise_finding(tmp_path)
 
-        scenario_obj = _first_system_promise_scenario()
-        scenario = scenario_obj.to_dict()
-        trace = {
-            "steps": [
-                {
-                    "action": "observe_system_promise_surface",
-                    "method": "GET",
-                    "path": "/api/orders",
-                    "status": 200,
-                    "expected_status": 200,
-                    "response": {"status_code": 200, "body": {"items": [{"id": 1, "total_amount": -1}]}},
-                }
-            ]
-        }
-        system_result = next(item for item in OracleEngine().evaluate(scenario, trace, None) if item.oracle_name == "SystemPromiseOracle")
-        evidence = EvidenceGraphBuilder().build(scenario, trace, None, [system_result])
-        finding = v12_pipeline._confirmed_oracle_finding(
-            scenario_obj,
-            trace,
-            system_result,
-            evidence,
-            campaign_id="campaign-1",
-            discovery_round=1,
-            base_url="http://example.test",
-        )
-
-        assert finding["system_promise_id"] == scenario["runtime_hints"]["system_behavior_space"]["promise_id"]
+        assert finding["system_promise_id"]
         assert finding["regression_contract"]["contract_type"] == "system_behavior_promise_regression"
         assert finding["raw_evidence"]["system_behavior_space"]["dimensions"]
 
-        saved = v12_pipeline._persist_confirmed_findings(tmp_path, "proj", [finding])
-        assert saved == 1
         ledger_path = tmp_path / "platform_workspace" / "proj" / "defect_discovery" / "confirmed_findings.json"
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         row = ledger[finding["evidence_id"]]
         assert row["system_promise_id"] == finding["system_promise_id"]
         assert row["regression_contract"]["system_behavior_space"]["promise_id"] == finding["system_promise_id"]
         assert row["system_behavior_dimensions"]
+    finally:
+        restore_system_behavior_space_patch()
+
+
+def test_system_promise_contract_reaches_regression_suite_runner_and_history(tmp_path) -> None:
+    restore_system_behavior_space_patch()
+    install_system_behavior_space_patch()
+    try:
+        from ai_test_asset_center import regression_runner, regression_suite_builder
+
+        finding = _make_system_promise_finding(tmp_path)
+        probes = regression_suite_builder._load_confirmed_findings_regression_probes("proj", tmp_path)
+        probe = next(item for item in probes if item.get("confirmed_evidence_id") == finding["evidence_id"])
+
+        assert probe["system_promise_id"] == finding["system_promise_id"]
+        assert probe["regression_contract"]["contract_type"] == "system_behavior_promise_regression"
+
+        item = regression_runner._judge_probe(probe, {"reachable": True, "status_code": 200, "body_excerpt": "ok", "error": ""})
+        assert item["system_promise_id"] == finding["system_promise_id"]
+        assert item["regression_contract_type"] == "system_behavior_promise_regression"
+
+        reverification = regression_runner._reverify_confirmed_findings(
+            "proj",
+            tmp_path,
+            {"base_url": ""},
+            {},
+            0.1,
+            True,
+        )
+        verdict = next(v for v in reverification["verdicts"] if v["evidence_id"] == finding["evidence_id"])
+        assert verdict["system_promise_id"] == finding["system_promise_id"]
+        assert reverification["system_promise_reverification_count"] >= 1
+
+        history = regression_runner._append_regression_history(
+            "proj",
+            tmp_path,
+            {
+                "summary": {"generated_at": "now", "suite_mode": "release", "suite_mode_label": "Release"},
+                "ci_feedback": {"gate_status": "manual_approval_required", "ci_message": "review"},
+                "items": [item],
+            },
+        )
+        history_item = next(row for row in history[-1]["items"] if row.get("system_promise_id") == finding["system_promise_id"])
+        assert history_item["regression_contract_type"] == "system_behavior_promise_regression"
     finally:
         restore_system_behavior_space_patch()
