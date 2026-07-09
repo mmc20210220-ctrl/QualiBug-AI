@@ -628,3 +628,175 @@ def persist_benchmark_result(
     path = out_dir / "benchmark_metrics.json"
     path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return path
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# End-to-End Benchmark Pipeline
+# ═════════════════════════════════════════════════════════════════════════════
+
+def run_benchmark_end_to_end(
+    industry: str,
+    bug_count: int = 50,
+    seed: int | None = None,
+    *,
+    root: str | Path | None = None,
+    findings: list[dict[str, Any]] | None = None,
+    candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Run a complete benchmark pipeline end-to-end for one industry.
+
+    Flow:
+      1. BenchmarkBugFactory generates known bugs
+      2. Ground truth written to PRIVATE_BLOCKLIST path
+      3. Public artifacts generated for blind discovery
+      4. Runtime seeds built for benchmark_runtime target
+      5. If findings/candidates provided, compute benchmark metrics
+      6. Baseline snapshot recorded and compared
+
+    This is the SINGLE entry point for a complete benchmark run.
+    It never fabricates data — all metrics are computed from real inputs.
+
+    Args:
+        industry: Industry ID (crm, ecommerce, erp, finance, medical, education, saas).
+        bug_count: Number of bug instances to generate.
+        seed: Random seed for reproducibility.
+        root: Workspace root directory.
+        findings: Optional list of discovery findings (from a scan).
+        candidates: Optional list of candidate findings.
+
+    Returns:
+        Dict with full pipeline result including paths, counts, and metrics.
+    """
+    from .benchmark_bug_factory import BenchmarkBugFactory, validate_ground_truth_integrity
+    from .benchmark_baseline_tracker import BenchmarkBaselineTracker
+
+    root_path = Path(root or os.environ.get("QUALIBUG_WORKSPACE_ROOT", Path.cwd()))
+
+    result: dict[str, Any] = {
+        "pipeline": "benchmark_end_to_end.v1",
+        "industry": industry,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "stages": {},
+    }
+
+    # ── Stage 1: Generate bugs ──────────────────────────────────────
+    try:
+        factory = BenchmarkBugFactory(industry)
+        bugs = factory.generate(count=bug_count, seed=seed)
+
+        result["stages"]["bug_generation"] = {
+            "status": "ok",
+            "bug_count": len(bugs),
+            "templates_used": sorted({b["template_id"] for b in bugs}),
+            "risk_types": sorted({b["risk_type"] for b in bugs}),
+            "severity_distribution": {
+                sev: len([b for b in bugs if b["severity"] == sev])
+                for sev in sorted({b["severity"] for b in bugs})
+            },
+        }
+    except Exception as e:
+        result["stages"]["bug_generation"] = {"status": "failed", "error": str(e)}
+        return result
+
+    # ── Stage 2: Write ground truth ─────────────────────────────────
+    try:
+        gt_path = factory.write_ground_truth(bugs, output_dir=root_path)
+        integrity = validate_ground_truth_integrity(gt_path)
+
+        result["stages"]["ground_truth"] = {
+            "status": "ok" if integrity["valid"] else "invalid",
+            "path": str(gt_path),
+            "integrity": integrity,
+        }
+    except Exception as e:
+        result["stages"]["ground_truth"] = {"status": "failed", "error": str(e)}
+
+    # ── Stage 3: Public artifacts ───────────────────────────────────
+    try:
+        public = factory.generate_public_artifacts(bugs, output_dir=root_path)
+        result["stages"]["public_artifacts"] = {
+            "status": "ok",
+            "files": {k: str(v) for k, v in public.items()},
+        }
+    except Exception as e:
+        result["stages"]["public_artifacts"] = {"status": "failed", "error": str(e)}
+
+    # ── Stage 4: Runtime seeds ──────────────────────────────────────
+    try:
+        seeds = factory.build_runtime_seeds(bugs)
+        seeds_path = root_path / "platform_workspace" / industry / "oracle" / "BUG_GROUND_TRUTH.json"
+        seeds_path.parent.mkdir(parents=True, exist_ok=True)
+        seeds_path.write_text(json.dumps(seeds, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        result["stages"]["runtime_seeds"] = {
+            "status": "ok",
+            "seed_count": seeds.get("total_seeds", 0),
+            "path": str(seeds_path),
+        }
+    except Exception as e:
+        result["stages"]["runtime_seeds"] = {"status": "failed", "error": str(e)}
+
+    # ── Stage 5: Compute metrics (if findings provided) ─────────────
+    if findings or candidates:
+        try:
+            truth_bugs = bugs  # Use the generated bugs as ground truth
+            all_findings = list(findings or []) + list(candidates or [])
+
+            metrics = compute_benchmark(
+                industry,
+                findings or [],
+                candidates,
+                root=root_path,
+                ground_truth_path=str(gt_path) if 'gt_path' in dir() else "",
+            )
+
+            result["stages"]["metrics"] = {
+                "status": "ok",
+                "benchmark_active": metrics.get("benchmark_active", False),
+                "recall": metrics.get("recall"),
+                "precision": metrics.get("precision"),
+                "f1_score": metrics.get("f1_score"),
+                "true_positives": metrics.get("true_positives"),
+                "false_positives": metrics.get("false_positives"),
+                "false_negatives": metrics.get("false_negatives"),
+            }
+
+            # ── Stage 6: Baseline tracking ─────────────────────────
+            tracker = BenchmarkBaselineTracker(industry, root=root_path)
+            snapshot = tracker.record_run(
+                metrics,
+                ground_truth_bug_count=len(bugs),
+                scan_findings_total=len(all_findings),
+                true_positives=metrics.get("true_positives", 0),
+                false_positives=metrics.get("false_positives", 0),
+                false_negatives=metrics.get("false_negatives", 0),
+            )
+
+            result["stages"]["baseline"] = {
+                "status": "ok",
+                "run_id": snapshot.run_id,
+                "total_runs": tracker.get_run_count(),
+            }
+
+            # Detect regressions if we have at least 2 runs
+            if tracker.get_run_count() >= 2:
+                regressions = tracker.detect_regressions()
+                result["stages"]["regression_check"] = regressions
+
+        except Exception as e:
+            result["stages"]["metrics"] = {"status": "failed", "error": str(e)}
+    else:
+        result["stages"]["metrics"] = {
+            "status": "skipped",
+            "reason": "No findings or candidates provided — metrics require scan output",
+        }
+
+    # ── Summary ─────────────────────────────────────────────────────
+    stage_statuses = [
+        s.get("status") for s in result["stages"].values()
+        if isinstance(s, dict)
+    ]
+    all_ok = all(s == "ok" for s in stage_statuses if s != "skipped")
+    result["overall_status"] = "ok" if all_ok else "partial"
+
+    return result

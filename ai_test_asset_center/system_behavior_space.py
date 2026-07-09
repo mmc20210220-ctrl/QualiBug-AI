@@ -626,7 +626,7 @@ def build_system_behavior_space(
                 for route in parent.api_paths:
                     obj.api_paths.add(route)
             # Try removing known suffixes
-            for suffix in ("_items", "_locks", "_usage", "_logs", "_entries"):
+            for suffix in ("_items", "_locks", "_usage", "_logs", "_entries", "_item"):
                 stripped = entity.replace(suffix, "")
                 if stripped != entity and stripped in _api_entities:
                     parent = _api_entities[stripped]
