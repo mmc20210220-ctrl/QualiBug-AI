@@ -7,6 +7,10 @@ BusinessStateGraphBuilder contract.  It does not create a new ingestion system:
 when V12 runs inside a project, it loads the existing enterprise knowledge asset
 and passes that parsed asset into the behavior-space builder.
 
+The model is also materialized into existing ``behavior_contract['slices']`` as
+source-grounded invariant slices.  That keeps execution inside the current V12
+scheduler and SemanticScenarioGenerator instead of introducing a second executor.
+
 Learning feedback remains handled by existing modules:
 
 * risk_clue_pool.py persists project/private and platform/SaaS learning weights;
@@ -51,6 +55,123 @@ def _load_existing_enterprise_asset() -> dict[str, Any]:
         return {}
 
 
+def _path_only(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parts = text.split(maxsplit=1)
+    if len(parts) == 2 and parts[0].upper() in {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"}:
+        return parts[1] if parts[1].startswith("/") else ""
+    return text if text.startswith("/") else ""
+
+
+def _object_index(space: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = space.get("objects") if isinstance(space.get("objects"), list) else []
+    return {str(item.get("entity") or ""): item for item in rows if isinstance(item, dict)}
+
+
+def _promise_index(space: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = space.get("promises") if isinstance(space.get("promises"), list) else []
+    return {str(item.get("promise_id") or ""): item for item in rows if isinstance(item, dict)}
+
+
+def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert system promises into existing behavior-slice contract rows.
+
+    We intentionally use kind='invariant' because SemanticScenarioGenerator
+    already knows how to turn invariant slices into read-only/runtime-upgraded
+    source-bound scenarios.  Extra metadata is additive and ignored by older
+    consumers.
+    """
+    if not isinstance(space, dict):
+        return []
+    objects = _object_index(space)
+    promises = _promise_index(space)
+    probes = space.get("probe_candidates") if isinstance(space.get("probe_candidates"), list) else []
+    slices: list[dict[str, Any]] = []
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        promise_id = str(probe.get("promise_id") or "")
+        promise = promises.get(promise_id)
+        if not promise:
+            continue
+        entity = str(probe.get("entity") or promise.get("entity") or "system")
+        obj = objects.get(entity, {})
+        endpoints = []
+        for raw in obj.get("api_paths") if isinstance(obj.get("api_paths"), list) else []:
+            path = _path_only(str(raw))
+            if path and path not in endpoints:
+                endpoints.append(path)
+        invariant = str(promise.get("invariant") or probe.get("objective") or "system promise")
+        dimensions = [str(item) for item in (promise.get("dimensions") or probe.get("oracle_intent") or []) if str(item)]
+        surface_plan = [str(item) for item in (probe.get("surface_plan") or promise.get("surfaces") or []) if str(item)]
+        evidence_gaps = []
+        if "api" in surface_plan and not endpoints:
+            evidence_gaps.append("SYSTEM_PROMISE_API_ROUTE_NOT_SOURCE_BOUND")
+        if "db" in surface_plan and not (obj.get("db_tables") if isinstance(obj.get("db_tables"), list) else []):
+            evidence_gaps.append("SYSTEM_PROMISE_DB_TABLE_NOT_SOURCE_BOUND")
+        if "ui" in surface_plan and not (obj.get("ui_routes") if isinstance(obj.get("ui_routes"), list) else []):
+            evidence_gaps.append("SYSTEM_PROMISE_UI_ROUTE_NOT_SOURCE_BOUND")
+        sid = _bsg.behavior_slice_id("system_promise", entity, promise_id)
+        slices.append({
+            "slice_id": sid,
+            "entity": entity,
+            "kind": "invariant",
+            "states": [f"system_promise:{dimension}" for dimension in dimensions[:6]],
+            "endpoints": endpoints,
+            "priority": max(float(probe.get("priority") or 0.0), float(promise.get("confidence") or 0.0)),
+            "source_refs": [{
+                "source_type": "system_behavior_space",
+                "locator": promise_id,
+                "quote": invariant[:500],
+            }],
+            "evidence_gaps": evidence_gaps,
+            "status": "pending",
+            "_selection_family": dimensions[0] if dimensions else "system_promise",
+            "_selection_origin": "system_behavior_space",
+            "_system_behavior_promise_id": promise_id,
+            "_system_behavior_probe_id": str(probe.get("probe_id") or ""),
+            "_system_behavior_dimensions": dimensions,
+            "_system_behavior_surface_plan": surface_plan,
+            "_system_behavior_required_assets": [str(item) for item in (probe.get("required_assets") or []) if str(item)],
+        })
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in slices:
+        deduped.setdefault(str(item.get("slice_id") or ""), item)
+    return [item for _, item in sorted(deduped.items(), key=lambda kv: (-float(kv[1].get("priority") or 0.0), str(kv[1].get("entity") or ""), kv[0]))]
+
+
+def _attach_system_behavior_slices(contract: dict[str, Any], space: dict[str, Any]) -> dict[str, Any]:
+    existing = contract.get("slices") if isinstance(contract.get("slices"), list) else []
+    generated = _system_behavior_slices(space)
+    if not generated:
+        return contract
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in existing:
+        if isinstance(item, dict) and str(item.get("slice_id") or ""):
+            by_id[str(item.get("slice_id"))] = item
+    added = 0
+    for item in generated:
+        sid = str(item.get("slice_id") or "")
+        if sid and sid not in by_id:
+            by_id[sid] = item
+            added += 1
+    merged = list(by_id.values())
+    contract["slices"] = sorted(merged, key=lambda item: (-float(item.get("priority") or 0.0), str(item.get("entity") or ""), str(item.get("slice_id") or "")))
+    summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
+    by_kind: dict[str, int] = {}
+    for item in contract["slices"]:
+        kind = str(item.get("kind") or "unknown")
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+    summary["total_slices"] = len(contract["slices"])
+    summary["by_kind"] = dict(sorted(by_kind.items()))
+    summary["system_behavior_materialized_slice_count"] = len(generated)
+    summary["system_behavior_added_slice_count"] = added
+    contract["summary"] = summary
+    return contract
+
+
 def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> None:
     if getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", False):
         return
@@ -85,6 +206,7 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
         space = getattr(self, "system_behavior_space", None)
         if isinstance(space, dict) and space:
             contract["system_behavior_space"] = space
+            contract = _attach_system_behavior_slices(contract, space)
             summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
             space_summary = space.get("summary") if isinstance(space.get("summary"), dict) else {}
             summary["system_behavior_space_version"] = str(space.get("version") or SYSTEM_BEHAVIOR_SPACE_VERSION)
