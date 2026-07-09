@@ -283,6 +283,10 @@ def _release_gate_from(data: dict[str, Any], compact: dict[str, Any]) -> dict[st
     }
 
 
+def _blocked_commercial_status(overall: str) -> str:
+    return "blocked_by_release_gate" if overall == "fail" else "hold_for_validation" if overall == "pending" else "release_gate_passed"
+
+
 def _inject_release_gate(data: dict[str, Any], compact: dict[str, Any]) -> None:
     release_gate = _release_gate_from(data, compact)
     if not release_gate:
@@ -302,8 +306,34 @@ def _inject_release_gate(data: dict[str, Any], compact: dict[str, Any]) -> None:
     delivery_tracks["release_recommendation"] = release_gate["release_recommendation"]
     data["delivery_tracks"] = delivery_tracks
 
-    executive = _as_dict(data.get("executive_summary"))
     overall = str(release_gate.get("overall_status") or "")
+    commercial_assets = _as_dict(data.get("commercial_assets"))
+    commercial_assets["release_gate"] = release_gate
+    commercial_assets["release_gate_overall_status"] = overall
+    commercial_assets["release_recommendation"] = release_gate["release_recommendation"]
+    commercial_assets["release_gate_honesty_rule"] = release_gate["honesty_rule"]
+    handoff = _as_dict(commercial_assets.get("commercial_handoff"))
+    tracker = _as_dict(commercial_assets.get("tracker_sync"))
+    delivery_package = _as_dict(commercial_assets.get("delivery_package"))
+    handoff["release_gate_status"] = overall
+    tracker["payload_gate_status"] = overall
+    tracker["release_gate_overall_status"] = overall
+    delivery_package["release_verdict"] = overall
+    delivery_package["release_recommendation"] = release_gate["release_recommendation"]
+    delivery_package["release_gate_overall_status"] = overall
+    if overall in {"fail", "pending"}:
+        blocked_status = _blocked_commercial_status(overall)
+        handoff["safe_for_customer"] = False
+        handoff["acceptance_status"] = blocked_status
+        tracker["payload_status"] = blocked_status
+        delivery_package["release_gate_blocked"] = True
+        delivery_package["release_gate_block_reason"] = release_gate["checks"][0]["detail"] if release_gate.get("checks") else release_gate["honesty_rule"]
+    commercial_assets["commercial_handoff"] = handoff
+    commercial_assets["tracker_sync"] = tracker
+    commercial_assets["delivery_package"] = delivery_package
+    data["commercial_assets"] = commercial_assets
+
+    executive = _as_dict(data.get("executive_summary"))
     if overall == "fail":
         executive["release_gate_label"] = "发布门禁阻塞：存在失败门禁项"
     elif overall == "pending":
