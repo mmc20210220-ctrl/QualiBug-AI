@@ -1,5 +1,8 @@
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { runRegression } from '../api/client';
 import { usePipelineData } from '../api/data';
+import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
 
 type JsonRecord = Record<string, unknown>;
@@ -144,6 +147,38 @@ export function CoverageMatrix() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { data, loading, error, refetch } = usePipelineData(project);
+  const toast = useToast();
+  const [regressionRunning, setRegressionRunning] = useState(false);
+
+  const handleRunRegression = async () => {
+    if (!project || regressionRunning) return;
+    setRegressionRunning(true);
+    try {
+      const result = await runRegression(project, { mode: 'release' });
+      if (result.ok === false) {
+        throw new Error(result.message || result.error || '回归执行失败');
+      }
+      const ci = asRecord(result.ci_feedback);
+      const gate = asText(ci.gate_status);
+      const summary = asRecord(result.summary);
+      const failed = asNum(summary.failed_count);
+      const review = asNum(summary.needs_review_count);
+      if (gate === 'passed') {
+        toast.show('回归执行完成：全部通过。', 'success');
+      } else if (gate === 'failed' || failed > 0) {
+        toast.show(`回归执行完成：${failed} 个探针失败。`, 'danger');
+      } else if (review > 0) {
+        toast.show(`回归执行完成：${review} 个探针需要复核。`, 'warning');
+      } else {
+        toast.show('回归执行完成，正在刷新结果。', 'info');
+      }
+      await refetch();
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : '回归执行失败', 'danger');
+    } finally {
+      setRegressionRunning(false);
+    }
+  };
 
   if (!project) {
     return <section className="state-panel"><div className="state-panel-badge">客户选择</div><h2>请先选择客户项目</h2><p>风险覆盖矩阵基于当前项目的 command center 结果生成。</p></section>;
@@ -196,7 +231,12 @@ export function CoverageMatrix() {
           <h1>{asText(record.project_name) || project} · 风险覆盖矩阵</h1>
           <p>这里展示的是风险家族与业务不变量覆盖，不是 bug 召回率。只有接入 seeded ground truth 时，Benchmark 才能计算 recall / precision。</p>
         </div>
-        <button className="btn btn-secondary" onClick={refetch}>刷新矩阵</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={refetch} disabled={regressionRunning}>刷新矩阵</button>
+          <button className="btn btn-primary" onClick={handleRunRegression} disabled={regressionRunning || !project}>
+            {regressionRunning ? '回归执行中…' : '运行回归验证'}
+          </button>
+        </div>
       </div>
 
       <div className="customer-summary-grid mb-4">
