@@ -363,6 +363,7 @@ class CapabilityGapResolver:
     def __init__(self, project_id: str = "") -> None:
         self.project_id = project_id
         self._log: list[str] = []
+        self._gap_seq: int = 0
 
     # ── Gap Detection ──────────────────────────────────────────────────
 
@@ -436,7 +437,7 @@ class CapabilityGapResolver:
                 )
 
             gap = CapabilityGap(
-                gap_id=f"GAP-{self.project_id}-{root_cause.value}-{int(time.time())}",
+                gap_id=self._next_gap_id(root_cause),
                 root_cause=root_cause,
                 resolution=resolution,
                 priority=severity,
@@ -484,7 +485,7 @@ class CapabilityGapResolver:
                     estimated_effort=task_template.get("estimated_effort", "hours"),
                 )
             gaps.append(CapabilityGap(
-                gap_id=f"GAP-{self.project_id}-{root_cause.value}-{int(time.time())}",
+                gap_id=self._next_gap_id(root_cause),
                 root_cause=root_cause,
                 resolution=resolution,
                 priority="P1",
@@ -523,7 +524,7 @@ class CapabilityGapResolver:
             for cap in missing:
                 root_cause = self._root_cause_for_capability(str(cap))
                 gaps.append(CapabilityGap(
-                    gap_id=f"GAP-MATRIX-{root_cause.value}-{int(time.time())}",
+                    gap_id=self._next_gap_id(root_cause),
                     root_cause=root_cause,
                     resolution=ROOT_CAUSE_RESOLUTION.get(root_cause, GapResolution.NEEDS_CUSTOMER_CONFIG),
                     priority="P1",
@@ -563,7 +564,7 @@ class CapabilityGapResolver:
                 )
 
             gaps.append(CapabilityGap(
-                gap_id=f"GAP-SCAN-{root_cause.value}-{int(time.time())}",
+                gap_id=self._next_gap_id(root_cause),
                 root_cause=root_cause,
                 resolution=resolution,
                 priority="P1",
@@ -736,6 +737,11 @@ class CapabilityGapResolver:
         }
 
     # ── Helpers ────────────────────────────────────────────────────────
+
+    def _next_gap_id(self, root_cause: GapRootCause) -> str:
+        """Generate a unique gap ID using a monotonically increasing counter."""
+        self._gap_seq += 1
+        return f"GAP-{self.project_id}-{root_cause.value}-{self._gap_seq:04d}"
 
     @staticmethod
     def _find_check(preflight: dict[str, Any], name: str) -> dict[str, Any] | None:

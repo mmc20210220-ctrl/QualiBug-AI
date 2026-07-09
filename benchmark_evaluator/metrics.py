@@ -116,7 +116,9 @@ def compute_metrics(truth: list[dict], discovered: list[dict], matches: list[dic
         "p0_p1_recall": round(len(p0p1_found) / len(p0p1), 4) if p0p1 else 0,
         "p0_p1_instance_recall": round(len(p0p1_found) / len(p0p1), 4) if p0p1 else 0,
         "p0_p1_template_recall": round(len(p0p1_found_templates) / len(p0p1_templates), 4) if p0p1_templates else 0,
-        "evidence_completeness_avg": round(sum(float(d.get("confidence", 0)) for d in discovered) / found, 4) if found else 0,
+        "evidence_completeness_avg": round(
+            sum(float(d.get("confidence", 0) or 0) for d in discovered) / found, 4
+        ) if found else 0.0,
         "evidence_weighted_recall": evidence_weighted_recall,
         "evidence_weighted_precision": evidence_weighted_precision,
         "risk_type_breakdown": risk_type_breakdown,

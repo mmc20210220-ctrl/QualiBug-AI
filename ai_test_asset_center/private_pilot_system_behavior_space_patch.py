@@ -380,6 +380,12 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     if not safe_route and getattr(item, "execution_policy", "") == "safe_read_only":
         item.execution_policy = "plan_only_requires_fixture"
         item.steps = []
+    # ── Clean up: if no safe_read route exists, strip any observe steps
+    # that the original generator may have created from POST-only endpoints.
+    # These would generate invalid GET-on-POST requests → 404 noise.
+    if not safe_route and getattr(item, "execution_policy", "") not in ("approved_test_write", "approved_sandbox_write"):
+        item.steps = []
+        item.execution_policy = "plan_only_requires_fixture"
     # ── Write scenario upgrade ──
     # When QUALIBUG_ALLOW_TEST_WRITE is enabled and the entity has write routes
     # (POST/PUT/PATCH/DELETE), upgrade from safe_read_only to approved_test_write
