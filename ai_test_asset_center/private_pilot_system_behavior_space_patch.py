@@ -404,6 +404,7 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
                             api_method="POST", api_path=wr["path"],
                             expected_status=201, actor="readonly",
                             body_template=_post_body,
+                            extract_from_response=["id", "sku", "order_id"],
                         ))
                     elif wr["method"] == "DELETE":
                         safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]

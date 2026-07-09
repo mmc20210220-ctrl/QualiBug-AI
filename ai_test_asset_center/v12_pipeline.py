@@ -2188,6 +2188,17 @@ def __execute_scenario_once(scenario: Any, base_url: str,
             value = _extract(response_body, str(field))
             if value not in (None, "", [], {}):
                 bindings[str(field)] = value
+        # ── Auto-extract: POST responses that create resources ──
+        # If a POST/PUT step succeeded (2xx) and the response contains an "id"
+        # field, bind it for subsequent steps.  This enables multi-step flows
+        # like: POST /api/orders → bind id → POST /api/payments/pay.
+        if method in ("POST", "PUT") and 200 <= status < 300:
+            if isinstance(response_body, dict):
+                for auto_field in ("id", "sku", "order_id", "order_no"):
+                    auto_val = response_body.get(auto_field)
+                    if auto_val not in (None, "", [], {}):
+                        bindings[str(auto_field)] = auto_val
+                        bindings["id"] = str(auto_val)  # generic binding
         # Filtered extraction: pick items in a GET list whose attribute
         # matches a where= clause, then extract their ids.  This lets a
         # precondition resolver bind a concrete entity id when the state
