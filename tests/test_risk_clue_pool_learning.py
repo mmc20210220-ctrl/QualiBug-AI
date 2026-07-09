@@ -153,10 +153,22 @@ def test_risk_clue_pool_learns_structured_system_promise_regression_contract(tmp
     assert "system_promise_signal" in platform_text
 
 
+def test_project_learning_refreshes_from_regression_history_without_save_risk_clues(tmp_path: Path) -> None:
+    project = "customer_a"
+    _write_system_promise_history(tmp_path, project)
+
+    project_learning = get_project_learning(project, tmp_path)
+    platform_learning = get_platform_learning(tmp_path)
+
+    assert project_learning["system_promise_signal_count"] == 1
+    assert project_learning["priority_weights"]["money_quantity_conservation"] > 0
+    assert project_learning["priority_weights"]["surface_combo:api+db+ui"] > 0
+    assert platform_learning["signal_count"] >= 1
+
+
 def test_coverage_steering_uses_structured_system_promise_learning(tmp_path: Path) -> None:
     project = "customer_a"
     _write_system_promise_history(tmp_path, project)
-    save_risk_clues(project, tmp_path, [])
 
     slices = [
         {"slice_id": "plain_state", "kind": "state_machine", "entity": "orders", "priority": 0.2},
