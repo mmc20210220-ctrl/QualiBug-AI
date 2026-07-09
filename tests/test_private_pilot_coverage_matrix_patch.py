@@ -76,6 +76,12 @@ def test_inject_coverage_matrix_lifts_benchmark_matrix_to_command_center(tmp_pat
     assert data["coverage_matrix"]["risk_family_coverage"]["authorization_access_control"]["coverage_status"] == "confirmed_with_evidence"
     assert data["coverage_matrix"]["risk_family_coverage"]["tenant_isolation"]["coverage_rate"] == 0.0
     assert data["coverage_matrix"]["invariant_coverage"]["actor_must_have_required_role"]["coverage_rate"] == 1.0
+    assert data["coverage_matrix"]["behavior_slice_seed_contract"]["status"] == "ready"
+    assert data["coverage_matrix"]["behavior_slice_seed_contract"]["can_seed_behavior_slices"] is True
+    assert data["coverage_matrix"]["behavior_slice_seed_contract"]["seed_family_count"] == 3
+    assert data["coverage_matrix"]["behavior_slice_seed_contract"]["seed_invariant_count"] == 1
+    assert data["coverage_matrix"]["behavior_slice_seed_contract"]["priority_families"] == ["concurrency_race_condition", "tenant_isolation"]
+    assert data["behavior_slice_seed_contract"]["source"] == "coverage_matrix"
     assert data["coverage_gaps"][0]["kind"] == "RISK_FAMILY_COVERAGE_GAP"
     assert data["coverage_gaps"][0]["family"] == "tenant_isolation"
     assert data["coverage_steering"]["status"] == "applied"
@@ -87,12 +93,17 @@ def test_inject_coverage_matrix_lifts_benchmark_matrix_to_command_center(tmp_pat
     assert data["value_metrics"]["coverage_steered_slice_count"] == 2
     assert data["value_metrics"]["regression_suite_probe_count"] == 4
     assert data["value_metrics"]["confirmed_ledger_regression_probe_count"] == 1
+    assert data["value_metrics"]["behavior_slice_seed_status"] == "ready"
+    assert data["value_metrics"]["behavior_slice_seed_family_count"] == 3
+    assert data["value_metrics"]["behavior_slice_seed_invariant_count"] == 1
     assert data["executive_summary"]["risk_invariant_coverage_label"] == "风险家族覆盖 19%，确认覆盖 6%"
     assert data["executive_summary"]["coverage_steering_label"] == "已按覆盖缺口优先调度 2 个行为 slice"
     assert data["executive_summary"]["regression_suite_refresh_label"] == "已自动刷新 4 个回归探针"
+    assert data["executive_summary"]["behavior_slice_seed_label"] == "可用覆盖矩阵种子：3 个风险家族 / 1 个业务不变量"
     assert data["evidence_classification"] == {"confirmed": 1, "candidate": 2, "clue": 1}
     assert "not recall" in data["data_contract"]["coverage_matrix"]["honesty_rule"].lower()
-    assert "risk_family_coverage" in data["data_contract"]["coverage_matrix"]["frontend_compatibility_keys"]
+    assert "behavior_slice_seed_contract" in data["data_contract"]["coverage_matrix"]["frontend_compatibility_keys"]
+    assert data["data_contract"]["behavior_slice_seed_contract"]["display_key"] == "behavior_slice_seed_contract"
     assert data["data_contract"]["coverage_steering"]["display_key"] == "coverage_steering"
     assert data["data_contract"]["regression_suite_refresh"]["display_key"] == "regression_suite_refresh"
 
