@@ -2034,6 +2034,12 @@ def _resolve_seed_bindings(scenario: Any, base_url: str) -> dict[str, Any]:
                 elif entity in ("order", "orders"):
                     bindings["order_id"] = str(real_id)
 
+    # ── Populate body templates for POST/PUT steps ──
+    if bindings.get("sku"):
+        bindings["body_sku"] = str(bindings["sku"])
+    if bindings.get("id"):
+        bindings["body_qty"] = 1
+
     return bindings
 
 
@@ -2067,20 +2073,21 @@ def __execute_scenario_once(scenario: Any, base_url: str,
             _db_verifier = None
     for step in getattr(scenario, "steps", []) or []:
         method = str(getattr(step, "api_method", "") or "").upper()
-        path = str(getattr(step, "api_path", "") or "")
+        path, body = str(getattr(step, "api_path", "") or ""), getattr(step, "body_template", {}) or {}
         if not method or not path.startswith("/"):
             trace["errors"].append("invalid_source_bound_step")
             continue
-        path, body = _replace(path, bindings), _replace(getattr(step, "body_template", {}) or {}, bindings)
-        normalized_path = normalize_path_placeholders(path)
-        if path_has_placeholders(normalized_path):
-            missing_bindings = infer_path_params(normalized_path)
+        # Normalize placeholders FIRST (:id → {id}) so _replace can match them
+        path = normalize_path_placeholders(path)
+        path, body = _replace(path, bindings), _replace(body, bindings)
+        if path_has_placeholders(path):
+            missing_bindings = infer_path_params(path)
             reason = f"missing_runtime_path_binding:{','.join(missing_bindings)}" if missing_bindings else "missing_runtime_path_binding"
             trace["errors"].append(reason)
             trace.setdefault("precondition_not_met", list(trace.get("precondition_not_met", [])))
             trace["precondition_not_met"].append({
                 "step": getattr(step, "action", ""),
-                "path": normalized_path,
+                "path": path,
                 "missing_path_params": missing_bindings,
             })
             trace["steps"].append({

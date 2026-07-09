@@ -1,0 +1,75 @@
+graph TB
+    subgraph Frontend["Frontend (Port 5174)"]
+        SPA["React 19 SPA<br/>Vite 8 + TypeScript"]
+        Router["React Router v7<br/>12 protected routes"]
+        ThreeJS["Three.js / BEIRing<br/>3D risk visualization"]
+        Flow["@xyflow/react<br/>Graph visualization"]
+    end
+
+    subgraph Backend["Backend (Port 8088)"]
+        PPS["private_pilot_service.py<br/>ThreadingHTTPServer<br/>6700 lines"]
+        Patches["Runtime Patch System<br/>~15 patches"]
+        FastAPI["backend/main.py<br/>FastAPI (legacy compat)"]
+    end
+
+    subgraph Core["AI Discovery Core"]
+        V12["V12 Pipeline<br/>Campaign governance"]
+        DE["Discovery Engine<br/>Reader→Reasoner→Executor→Verifier"]
+        GPE["Grounded Probe Executor<br/>Live HTTP execution"]
+        LLM["LLM Reasoning<br/>17+ engine types"]
+    end
+
+    subgraph Knowledge["Knowledge Layer"]
+        EKC["Enterprise Knowledge Center<br/>PRD, OpenAPI, DB schemas"]
+        DI["Document Intelligence<br/>DBML, SQL, PDF, DOCX"]
+        PGC["Project Context Compiler"]
+    end
+
+    subgraph Evidence["Evidence Pipeline"]
+        EN["Evidence Normalizer"]
+        EE["Evidence Enricher v3"]
+        EB["Evidence Bundles"]
+        DRF["Display-Ready Formatter"]
+    end
+
+    subgraph Enterprise["Enterprise Layer"]
+        ERP["Enterprise Pilot Runtime<br/>task queue, approvals, audit"]
+        EA["Enterprise Access Policy<br/>token/JWT auth"]
+        CDG["Customer Delivery Gate"]
+    end
+
+    subgraph External["External"]
+        Target["Target System<br/>Under Test"]
+        LLMAPI["LLM Providers<br/>OpenAI / Anthropic"]
+        Browser["Browser<br/>Playwright"]
+    end
+
+    Frontend -->|"/api proxy"| Backend
+    Backend --> Core
+    Backend --> Knowledge
+    Backend --> Enterprise
+    Core --> Evidence
+    Core --> LLM
+    Core --> Target
+    Evidence --> DRF
+    DRF --> Frontend
+    Knowledge --> Core
+    Enterprise --> Core
+    LLM --> LLMAPI
+    GPE --> Browser
+
+    classDef frontend fill:#61dafb,stroke:#333,color:#000
+    classDef backend fill:#306998,stroke:#333,color:#fff
+    classDef core fill:#ff6b6b,stroke:#333,color:#fff
+    classDef knowledge fill:#f9ca24,stroke:#333,color:#000
+    classDef evidence fill:#6ab04c,stroke:#333,color:#fff
+    classDef enterprise fill:#be2edd,stroke:#333,color:#fff
+    classDef external fill:#95a5a6,stroke:#333,color:#fff
+
+    class SPA,Router,ThreeJS,Flow frontend
+    class PPS,Patches,FastAPI backend
+    class V12,DE,GPE,LLM core
+    class EKC,DI,PGC knowledge
+    class EN,EE,EB,DRF evidence
+    class ERP,EA,CDG enterprise
+    class Target,LLMAPI,Browser external

@@ -387,11 +387,23 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
             if ScenarioStep is not None:
                 for wr in write_routes[:2]:
                     if wr["method"] == "POST":
+                        # Use bindable seed data placeholders instead of hardcoded
+                        # fixture names.  At runtime, _resolve_seed_bindings queries
+                        # the real API for seed data and _replace resolves these.
+                        _post_body: dict[str, Any] = {"sku": "{body_sku}", "qty": "{body_qty}"}
+                        if "order" in wr["path"]:
+                            _post_body = {"items": [{"sku": "{body_sku}", "qty": 1}]}
+                        elif "refund" in wr["path"]:
+                            _post_body = {"order_id": "{body_order_id}", "reason": "qualibug test"}
+                        elif "payment" in wr["path"]:
+                            _post_body = {"order_id": "{body_order_id}"}
+                        elif "coupon" in wr["path"]:
+                            _post_body = {"code": "{body_code}", "order_id": "{body_order_id}"}
                         existing_steps.append(ScenarioStep(
                             order=next_order, action="test_write_create_fixture",
                             api_method="POST", api_path=wr["path"],
                             expected_status=201, actor="readonly",
-                            body_template={"_qualibug_fixture": True, "name": f"{fixture_prefix}probe", "email": f"{fixture_prefix}probe@test.local", "description": "qualibug automated test fixture — safe to delete"},
+                            body_template=_post_body,
                         ))
                     elif wr["method"] == "DELETE":
                         safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]
@@ -406,7 +418,7 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
                             order=next_order, action="test_write_update_fixture",
                             api_method=wr["method"], api_path=safe_path,
                             expected_status=200, actor="readonly",
-                            body_template={"_qualibug_fixture": True, "description": "qualibug automated test update — safe to revert"},
+                            body_template={"qty": "{body_qty}", "sku": "{body_sku}"},
                         ))
                     next_order += 1
                 item.steps = existing_steps
