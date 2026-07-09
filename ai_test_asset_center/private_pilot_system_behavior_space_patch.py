@@ -22,6 +22,11 @@ Confirmed finding integration is additive too: V12's existing confirmed-finding
 and regression-ledger writers are wrapped so a system-promise defect keeps its
 promise id, dimensions, surfaces and required assets through later regression.
 
+Regression integration is additive: existing regression_suite_builder and
+regression_runner keep running unchanged, but confirmed-finding probes, runner
+items, re-verification verdicts and regression history carry the same system
+promise regression contract.
+
 Learning feedback remains handled by existing modules:
 
 * risk_clue_pool.py persists project/private and platform/SaaS learning weights;
@@ -410,6 +415,34 @@ def _system_behavior_regression_contract(hints: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _contract_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    contract = row.get("regression_contract") if isinstance(row.get("regression_contract"), dict) else {}
+    if isinstance(contract.get("system_behavior_space"), dict) and str(contract.get("promise_id") or contract["system_behavior_space"].get("promise_id") or ""):
+        hints = dict(contract.get("system_behavior_space") or {})
+        if not str(hints.get("promise_id") or ""):
+            hints["promise_id"] = str(contract.get("promise_id") or "")
+        return _system_behavior_regression_contract(hints)
+    hints = row.get("system_behavior_space_evidence") if isinstance(row.get("system_behavior_space_evidence"), dict) else {}
+    if hints:
+        return _system_behavior_regression_contract(hints)
+    return {}
+
+
+def _attach_regression_contract_fields(target: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(target, dict) or not contract:
+        return target
+    target["regression_contract"] = contract
+    target["system_promise_id"] = str(contract.get("promise_id") or "")
+    target["system_behavior_space_evidence"] = dict(contract.get("system_behavior_space") or {})
+    target["system_behavior_dimensions"] = list(contract.get("dimensions") or [])
+    target["system_behavior_surface_plan"] = list(contract.get("surface_plan") or [])
+    target["system_behavior_required_assets"] = list(contract.get("required_assets") or [])
+    target["system_behavior_source_family"] = str(contract.get("source_family") or "")
+    return target
+
+
 def _attach_system_behavior_to_finding(finding: dict[str, Any], hints: dict[str, Any], scenario: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(finding, dict) or not hints:
         return finding
@@ -417,13 +450,7 @@ def _attach_system_behavior_to_finding(finding: dict[str, Any], hints: dict[str,
     if not promise_id:
         return finding
     regression_contract = _system_behavior_regression_contract(hints)
-    finding["system_promise_id"] = promise_id
-    finding["system_behavior_space_evidence"] = hints
-    finding["system_behavior_dimensions"] = regression_contract.get("dimensions", [])
-    finding["system_behavior_surface_plan"] = regression_contract.get("surface_plan", [])
-    finding["system_behavior_required_assets"] = regression_contract.get("required_assets", [])
-    finding["system_behavior_source_family"] = regression_contract.get("source_family", "")
-    finding["regression_contract"] = regression_contract
+    _attach_regression_contract_fields(finding, regression_contract)
     finding["learning_signal"] = {
         "source": "system_behavior_space",
         "promise_id": promise_id,
@@ -571,12 +598,7 @@ def _install_system_behavior_finding_patch() -> None:
                     continue
                 hints = dict(finding.get("system_behavior_space_evidence") or {})
                 regression_contract = dict(finding.get("regression_contract") or _system_behavior_regression_contract(hints))
-                ledger[evidence_id]["system_promise_id"] = str(hints.get("promise_id") or "")
-                ledger[evidence_id]["system_behavior_space_evidence"] = hints
-                ledger[evidence_id]["system_behavior_dimensions"] = list(regression_contract.get("dimensions") or [])
-                ledger[evidence_id]["system_behavior_surface_plan"] = list(regression_contract.get("surface_plan") or [])
-                ledger[evidence_id]["system_behavior_required_assets"] = list(regression_contract.get("required_assets") or [])
-                ledger[evidence_id]["regression_contract"] = regression_contract
+                _attach_regression_contract_fields(ledger[evidence_id], regression_contract)
                 ledger[evidence_id]["learning_signal"] = dict(finding.get("learning_signal") or {})
                 changed = True
             if changed:
@@ -591,6 +613,122 @@ def _install_system_behavior_finding_patch() -> None:
     _v12._confirmed_oracle_finding = _confirmed_oracle_finding_with_system_behavior  # type: ignore[assignment]
     _v12._persist_confirmed_findings = _persist_confirmed_findings_with_system_behavior  # type: ignore[assignment]
     _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = True  # type: ignore[attr-defined]
+
+
+def _install_system_behavior_regression_patch() -> None:
+    try:
+        from ai_test_asset_center import regression_suite_builder as _rsb
+        from ai_test_asset_center import regression_runner as _rr
+    except Exception:
+        return
+    if getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", False):
+        return
+
+    original_load_confirmed = getattr(_rsb, "_load_confirmed_findings_regression_probes", None)
+    original_judge = getattr(_rr, "_judge_probe", None)
+    original_reverify = getattr(_rr, "_reverify_confirmed_findings", None)
+    original_append_history = getattr(_rr, "_append_regression_history", None)
+    if not all(callable(fn) for fn in (original_load_confirmed, original_judge, original_reverify, original_append_history)):
+        return
+
+    def _load_confirmed_findings_regression_probes_with_system_behavior(project: str, root: Path) -> list[dict[str, Any]]:
+        probes = list(original_load_confirmed(project, root) or [])
+        try:
+            safe_project = _rsb._safe_project_id(project)
+            ledger = _rsb._load_json_safe(root / "platform_workspace" / safe_project / "defect_discovery" / "confirmed_findings.json", {})
+            if not isinstance(ledger, dict):
+                return probes
+            by_evidence = {str(k): v for k, v in ledger.items() if isinstance(v, dict)}
+            for probe in probes:
+                evidence_id = str(probe.get("confirmed_evidence_id") or probe.get("issue_id") or "")
+                defect = by_evidence.get(evidence_id)
+                if not defect:
+                    continue
+                contract = _contract_from_row(defect)
+                if contract:
+                    _attach_regression_contract_fields(probe, contract)
+                    probe["source"] = "confirmed_findings_system_promise_ledger"
+                    probe["verification_badge"] = "system_promise_regression"
+                    probe["risk_type"] = str(contract.get("source_family") or probe.get("risk_type") or "system_promise")
+        except Exception:
+            return probes
+        return probes
+
+    def _judge_probe_with_system_behavior(probe: dict[str, Any], execution: dict[str, Any], skipped: bool = False, skip_reason: str = "") -> dict[str, Any]:
+        item = original_judge(probe, execution, skipped=skipped, skip_reason=skip_reason)
+        contract = _contract_from_row(probe)
+        if contract:
+            _attach_regression_contract_fields(item, contract)
+            item["regression_contract_type"] = "system_behavior_promise_regression"
+            item["oracle_intent"] = [f"SystemPromiseOracle.dimension:{dim}" for dim in contract.get("dimensions") or []]
+        return item
+
+    def _reverify_confirmed_findings_with_system_behavior(project: str, root: Path, cfg: dict[str, Any], safety_boundary: dict[str, Any], timeout: float, dry_run: bool) -> dict[str, Any]:
+        result = original_reverify(project, root, cfg, safety_boundary, timeout, dry_run)
+        if not isinstance(result, dict):
+            return result
+        try:
+            ledger = _rr._load_json_safe(root / "platform_workspace" / project / "defect_discovery" / "confirmed_findings.json", {})
+            if not isinstance(ledger, dict):
+                return result
+            for verdict in result.get("verdicts") if isinstance(result.get("verdicts"), list) else []:
+                if not isinstance(verdict, dict):
+                    continue
+                defect = ledger.get(str(verdict.get("evidence_id") or ""))
+                if not isinstance(defect, dict):
+                    continue
+                contract = _contract_from_row(defect)
+                if contract:
+                    _attach_regression_contract_fields(verdict, contract)
+                    verdict["reverification_contract_type"] = "system_behavior_promise_regression"
+            result["system_promise_reverification_count"] = sum(
+                1 for item in result.get("verdicts", []) if isinstance(item, dict) and item.get("system_promise_id")
+            )
+        except Exception:
+            return result
+        return result
+
+    def _append_regression_history_with_system_behavior(project: str, root: Path, result: dict[str, Any]) -> list[dict[str, Any]]:
+        history = list(original_append_history(project, root, result) or [])
+        if not history:
+            return history
+        try:
+            item_contracts: dict[str, dict[str, Any]] = {}
+            for item in result.get("items") if isinstance(result.get("items"), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                contract = _contract_from_row(item)
+                if not contract:
+                    continue
+                for key in (item.get("issue_id"), item.get("regression_probe_id")):
+                    if str(key or ""):
+                        item_contracts[str(key)] = contract
+            if not item_contracts:
+                return history
+            last = history[-1]
+            for row in last.get("items") if isinstance(last.get("items"), list) else []:
+                if not isinstance(row, dict):
+                    continue
+                contract = item_contracts.get(str(row.get("issue_id") or "")) or item_contracts.get(str(row.get("regression_probe_id") or ""))
+                if contract:
+                    _attach_regression_contract_fields(row, contract)
+                    row["regression_contract_type"] = "system_behavior_promise_regression"
+            history[-1] = last
+            _rr._write_json(root / "platform_outputs" / project / "regression_run" / "regression_run_history.json", history)
+            _rr._write_json(root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json", history)
+        except Exception:
+            return history
+        return history
+
+    _rsb._ORIGINAL_LOAD_CONFIRMED_FINDINGS_REGRESSION_PROBES_SYSTEM_BEHAVIOR = original_load_confirmed  # type: ignore[attr-defined]
+    _rr._ORIGINAL_JUDGE_PROBE_SYSTEM_BEHAVIOR = original_judge  # type: ignore[attr-defined]
+    _rr._ORIGINAL_REVERIFY_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR = original_reverify  # type: ignore[attr-defined]
+    _rr._ORIGINAL_APPEND_REGRESSION_HISTORY_SYSTEM_BEHAVIOR = original_append_history  # type: ignore[attr-defined]
+    _rsb._load_confirmed_findings_regression_probes = _load_confirmed_findings_regression_probes_with_system_behavior  # type: ignore[assignment]
+    _rr._judge_probe = _judge_probe_with_system_behavior  # type: ignore[assignment]
+    _rr._reverify_confirmed_findings = _reverify_confirmed_findings_with_system_behavior  # type: ignore[assignment]
+    _rr._append_regression_history = _append_regression_history_with_system_behavior  # type: ignore[assignment]
+    _rr._SYSTEM_BEHAVIOR_REGRESSION_PATCHED = True  # type: ignore[attr-defined]
 
 
 def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> None:
@@ -653,6 +791,7 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
     _install_system_behavior_scenario_patch()
     _install_system_behavior_oracle_patch()
     _install_system_behavior_finding_patch()
+    _install_system_behavior_regression_patch()
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
 
@@ -739,6 +878,24 @@ def restore_system_behavior_space_patch() -> None:
         if callable(original_persist):
             _v12._persist_confirmed_findings = original_persist  # type: ignore[assignment]
         _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = False  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        from ai_test_asset_center import regression_suite_builder as _rsb
+        from ai_test_asset_center import regression_runner as _rr
+        original_load_confirmed = getattr(_rsb, "_ORIGINAL_LOAD_CONFIRMED_FINDINGS_REGRESSION_PROBES_SYSTEM_BEHAVIOR", None)
+        original_judge = getattr(_rr, "_ORIGINAL_JUDGE_PROBE_SYSTEM_BEHAVIOR", None)
+        original_reverify = getattr(_rr, "_ORIGINAL_REVERIFY_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR", None)
+        original_append_history = getattr(_rr, "_ORIGINAL_APPEND_REGRESSION_HISTORY_SYSTEM_BEHAVIOR", None)
+        if callable(original_load_confirmed):
+            _rsb._load_confirmed_findings_regression_probes = original_load_confirmed  # type: ignore[assignment]
+        if callable(original_judge):
+            _rr._judge_probe = original_judge  # type: ignore[assignment]
+        if callable(original_reverify):
+            _rr._reverify_confirmed_findings = original_reverify  # type: ignore[assignment]
+        if callable(original_append_history):
+            _rr._append_regression_history = original_append_history  # type: ignore[assignment]
+        _rr._SYSTEM_BEHAVIOR_REGRESSION_PATCHED = False  # type: ignore[attr-defined]
     except Exception:
         pass
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = False  # type: ignore[attr-defined]
