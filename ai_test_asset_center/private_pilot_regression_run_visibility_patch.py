@@ -120,12 +120,7 @@ def compact_regression_run(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
-    """Mirror latest regression_run into the legacy Dashboard regression_summary.
-
-    The existing Dashboard already renders regression_summary cards and buttons.
-    Keeping this compatibility avoids a risky Dashboard rewrite while making the
-    new latest-run verdict visible on the primary customer landing page.
-    """
+    """Mirror latest regression_run into the legacy Dashboard regression_summary."""
     if not compact:
         return existing
     gate = str(compact.get("gate_status") or "")
@@ -199,6 +194,90 @@ def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, A
     return merged
 
 
+def _release_gate_from(data: dict[str, Any], compact: dict[str, Any]) -> dict[str, Any]:
+    """Build an API-visible release gate from regression run/suite state."""
+    checks: list[dict[str, Any]] = []
+    gate = str(compact.get("gate_status") or "") if compact else ""
+    if gate == "failed":
+        checks.append({
+            "name": "修复后回归 Gate",
+            "status": "fail",
+            "detail": f"最近一次回归失败：{int(compact.get('failed_count') or 0)} 个探针失败，{int(compact.get('needs_review_count') or 0)} 个需复核。发布前必须先修复或复核失败项。",
+            "source": "regression_run",
+        })
+    elif gate == "manual_approval_required":
+        checks.append({
+            "name": "修复后回归 Gate",
+            "status": "pending",
+            "detail": f"最近一次回归仍需人工复核：{int(compact.get('needs_review_count') or 0)} 个探针缺少强自动判定，不能直接放行发布。",
+            "source": "regression_run",
+        })
+    elif gate == "passed":
+        checks.append({
+            "name": "修复后回归 Gate",
+            "status": "pass",
+            "detail": f"最近一次回归通过：{int(compact.get('passed_count') or 0)} 个探针通过。该结论仅代表最近一次持久化回归结果，不扩大到未覆盖范围。",
+            "source": "regression_run",
+        })
+    else:
+        refresh = _as_dict(data.get("regression_suite_refresh"))
+        suite = _as_dict(data.get("regression_suite"))
+        summary = _as_dict(refresh.get("summary"))
+        total = int(suite.get("total_probe_count") or summary.get("total_probe_count") or 0)
+        confirmed = int(suite.get("confirmed_ledger_probe_count") or summary.get("confirmed_ledger_probe_count") or 0)
+        if str(refresh.get("status") or "") == "refreshed" and total > 0:
+            checks.append({
+                "name": "修复后回归 Gate",
+                "status": "pending",
+                "detail": f"已自动生成 {total} 个回归探针，其中 {confirmed} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。",
+                "source": "regression_suite_refresh",
+            })
+    if not checks:
+        return {}
+    overall = "fail" if any(item.get("status") == "fail" for item in checks) else "pending" if any(item.get("status") == "pending" for item in checks) else "pass"
+    return {
+        "overall_status": overall,
+        "checks": checks,
+        "blocking_check_count": sum(1 for item in checks if item.get("status") == "fail"),
+        "pending_check_count": sum(1 for item in checks if item.get("status") == "pending"),
+        "pass_check_count": sum(1 for item in checks if item.get("status") == "pass"),
+        "release_recommendation": "block_release" if overall == "fail" else "hold_for_validation" if overall == "pending" else "candidate_release",
+        "source": PATCH_SOURCE,
+        "honesty_rule": "Release gate reports the latest persisted regression state; it does not execute regression or prove untested scope is safe.",
+    }
+
+
+def _inject_release_gate(data: dict[str, Any], compact: dict[str, Any]) -> None:
+    release_gate = _release_gate_from(data, compact)
+    if not release_gate:
+        return
+    data["release_gate"] = release_gate
+    value_metrics = _as_dict(data.get("value_metrics"))
+    value_metrics["release_gate_overall_status"] = release_gate["overall_status"]
+    value_metrics["release_gate_blocking_check_count"] = release_gate["blocking_check_count"]
+    value_metrics["release_gate_pending_check_count"] = release_gate["pending_check_count"]
+    data["value_metrics"] = value_metrics
+
+    executive = _as_dict(data.get("executive_summary"))
+    overall = str(release_gate.get("overall_status") or "")
+    if overall == "fail":
+        executive["release_gate_label"] = "发布门禁阻塞：最近回归失败"
+    elif overall == "pending":
+        executive["release_gate_label"] = "发布门禁待处理：回归未执行或需复核"
+    elif overall == "pass":
+        executive["release_gate_label"] = "发布门禁通过：最近回归通过"
+    data["executive_summary"] = executive
+
+    contract = _as_dict(data.get("data_contract"))
+    contract["release_gate"] = {
+        "display_key": "release_gate",
+        "source": "regression_run/regression_suite_refresh command-center contract",
+        "honesty_rule": release_gate["honesty_rule"],
+        "customer_meaning": "API-visible release verdict derived from the latest regression run or pending regression obligations.",
+    }
+    data["data_contract"] = contract
+
+
 def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
@@ -208,46 +287,47 @@ def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) 
     project = _project_from_payload(payload) or _project_from_payload({"data": data})
     result = _load_regression_run(project, Path(root or Path.cwd()))
     compact = compact_regression_run(result)
-    if not compact:
-        return payload
 
-    data["regression_run"] = compact
-    data["regression_summary"] = _dashboard_regression_summary(compact, _as_dict(data.get("regression_summary")))
-    scan_meta = _as_dict(data.get("scan_meta"))
-    scan_meta["regression_run"] = compact
-    data["scan_meta"] = scan_meta
+    if compact:
+        data["regression_run"] = compact
+        data["regression_summary"] = _dashboard_regression_summary(compact, _as_dict(data.get("regression_summary")))
+        scan_meta = _as_dict(data.get("scan_meta"))
+        scan_meta["regression_run"] = compact
+        data["scan_meta"] = scan_meta
 
-    value_metrics = _as_dict(data.get("value_metrics"))
-    value_metrics["regression_last_gate_status"] = compact["gate_status"]
-    value_metrics["regression_last_failed_count"] = compact["failed_count"]
-    value_metrics["regression_last_needs_review_count"] = compact["needs_review_count"]
-    value_metrics["regression_last_passed_count"] = compact["passed_count"]
-    data["value_metrics"] = value_metrics
+        value_metrics = _as_dict(data.get("value_metrics"))
+        value_metrics["regression_last_gate_status"] = compact["gate_status"]
+        value_metrics["regression_last_failed_count"] = compact["failed_count"]
+        value_metrics["regression_last_needs_review_count"] = compact["needs_review_count"]
+        value_metrics["regression_last_passed_count"] = compact["passed_count"]
+        data["value_metrics"] = value_metrics
 
-    executive = _as_dict(data.get("executive_summary"))
-    gate = str(compact.get("gate_status") or "")
-    if gate == "passed":
-        executive["regression_run_label"] = f"最近回归通过：{compact['passed_count']} 个探针通过"
-    elif gate == "failed":
-        executive["regression_run_label"] = f"最近回归失败：{compact['failed_count']} 个探针失败"
-    elif gate:
-        executive["regression_run_label"] = f"最近回归需复核：{compact['needs_review_count']} 个探针待确认"
-    data["executive_summary"] = executive
+        executive = _as_dict(data.get("executive_summary"))
+        gate = str(compact.get("gate_status") or "")
+        if gate == "passed":
+            executive["regression_run_label"] = f"最近回归通过：{compact['passed_count']} 个探针通过"
+        elif gate == "failed":
+            executive["regression_run_label"] = f"最近回归失败：{compact['failed_count']} 个探针失败"
+        elif gate:
+            executive["regression_run_label"] = f"最近回归需复核：{compact['needs_review_count']} 个探针待确认"
+        data["executive_summary"] = executive
 
-    contract = _as_dict(data.get("data_contract"))
-    contract["regression_run"] = {
-        "display_key": "regression_run",
-        "source": "platform_outputs/<project>/regression_run/regression_run_result.json",
-        "honesty_rule": compact["honesty_rule"],
-        "customer_meaning": "Shows the latest persisted regression execution verdict after the customer runs regression.",
-    }
-    contract["regression_summary"] = {
-        "display_key": "regression_summary",
-        "source": "regression_run compatibility mirror",
-        "honesty_rule": data["regression_summary"]["honesty_rule"],
-        "customer_meaning": "Dashboard-compatible mirror so the primary customer overview can render the latest regression verdict.",
-    }
-    data["data_contract"] = contract
+        contract = _as_dict(data.get("data_contract"))
+        contract["regression_run"] = {
+            "display_key": "regression_run",
+            "source": "platform_outputs/<project>/regression_run/regression_run_result.json",
+            "honesty_rule": compact["honesty_rule"],
+            "customer_meaning": "Shows the latest persisted regression execution verdict after the customer runs regression.",
+        }
+        contract["regression_summary"] = {
+            "display_key": "regression_summary",
+            "source": "regression_run compatibility mirror",
+            "honesty_rule": data["regression_summary"]["honesty_rule"],
+            "customer_meaning": "Dashboard-compatible mirror so the primary customer overview can render the latest regression verdict.",
+        }
+        data["data_contract"] = contract
+
+    _inject_release_gate(data, compact)
     payload["data"] = data
     return payload
 
