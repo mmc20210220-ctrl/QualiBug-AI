@@ -17,8 +17,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ai_test_asset_center.system_behavior_graph import inject_system_behavior_graph
-
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_regression_run_visibility_patch"
 
 
@@ -482,10 +480,7 @@ def inject_regression_run(payload: dict[str, Any], *, root: Path | None = None) 
     _inject_release_gate(data, compact)
     _inject_customer_delivery_guard(data, _load_customer_delivery_guard(project, root_path))
     payload["data"] = data
-    try:
-        return inject_system_behavior_graph(payload)
-    except Exception:
-        return payload
+    return payload
 
 
 def install_regression_run_visibility_patch(*, patch_source: str = PATCH_SOURCE, root: Path | None = None) -> None:
