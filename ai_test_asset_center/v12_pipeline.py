@@ -1700,6 +1700,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             # Collect all available role tokens so each scenario can be executed
             # from multiple actor perspectives, catching cross-role auth bugs.
             _role_tokens: dict[str, str] = {}
+            _account_statuses: dict[str, str] = {}
             try:
                 _accounts = json.loads((root / "platform_inputs" / project / "test_accounts.json").read_text(encoding="utf-8"))
                 if isinstance(_accounts, dict):
@@ -1707,8 +1708,12 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         if isinstance(_acc, dict):
                             _tok = str(_acc.get("token") or "").strip()
                             _role = str(_acc.get("role") or _name).strip()
+                            _status = str(_acc.get("status") or "").strip().upper()
                             if _tok and not _tok.startswith("ERROR") and _role:
-                                _role_tokens[_role] = _tok
+                                _role_key = f"{_role}:{_name}"
+                                _role_tokens[_role_key] = _tok
+                                if _status:
+                                    _account_statuses[_role_key] = _status
             except Exception:
                 pass
             if not _role_tokens and runtime_token:
@@ -1718,11 +1723,52 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 for _role, _token in (_role_tokens.items() if _role_tokens else [("default", "")]):
                     if not _token:
                         continue
+                    # ── Role-aware expected status ──
+                    # If the actor is disabled/locked, all endpoints should reject.
+                    # This catches AUTH-001 (disabled user login) automatically.
+                    _account_status = _account_statuses.get(_role, "")
+                    _role_expected_override = None
+                    if _account_status in ("DISABLED", "LOCKED"):
+                        _role_expected_override = 403
                     try:
                         scenario.actor_token = _token
                         trace = _execute_scenario(scenario, approved_base_url, max_retries=2, safety_boundary=_safety_boundary)
                         # Tag trace with role info for oracle
                         trace["actor_role"] = _role
+                        # ── DISABLED/LOCKED account check ──
+                        # Catch AUTH-001 automatically: any 2xx response from a
+                        # disabled/locked account is a confirmed violation.
+                        if _account_status in ("DISABLED", "LOCKED"):
+                            for step in trace.get("steps", []):
+                                st = int((step.get("response") or {}).get("status_code") or step.get("status") or 0) if isinstance(step, dict) else 0
+                                if 200 <= st < 300:
+                                    result["findings"].append({
+                                        "severity": "P0",
+                                        "title": f"[账号状态绕过] DISABLED/LOCKED账号 {_role} 访问成功 HTTP {st}",
+                                        "category": "authorization_access_control",
+                                        "source": "v12_role_aware_executor",
+                                        "description": f"账号状态={_account_status}但端点返回 {st}，应返回401/403",
+                                        "confidence_score": 0.95,
+                                        "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
+                                        "discovery_round": settings["round_number"],
+                                        "campaign_id": campaign.campaign_id,
+                                        "execution_status": "executed",
+                                        "confirmation_status": "confirmed",
+                                        "gate_passed": True,
+                                        "customer_delivery_status": "defect",
+                                        "bug_status": "reproduced",
+                                        "expected": f"DISABLED/LOCKED账号应被拒绝 (401/403)",
+                                        "actual": f"HTTP {st}",
+                                        "evidence_id": f"EVID_DISABLED_{_role}_{int(time.time())}",
+                                        "evidence": {"request": f"{_role} token", "assertion": "DISABLED/LOCKED account must be rejected", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                                        "raw_evidence": {"actor_role": _role, "account_status": _account_status},
+                                        "reproduction": {"method": str(step.get("method","")), "path": str(step.get("path",""))},
+                                        "system_promise_id": f"AUTO-DISABLED-{_role}",
+                                        "regression_contract": {"contract_type": "system_behavior_promise_regression", "promise_id": f"AUTO-DISABLED-{_role}", "dimensions": ["authorization_access_control"], "surface_plan": ["api", "auth"], "source_family": "authorization_access_control"},
+                                        "system_behavior_dimensions": ["authorization_access_control"],
+                                        "system_behavior_surface_plan": ["api", "auth"],
+                                        "learning_signal": {"source": "role_aware_executor", "dimensions": ["authorization_access_control"], "surfaces": ["api", "auth"]},
+                                    })
                         traces.append((scenario, trace))
                         slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
                         if slice_id:

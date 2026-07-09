@@ -292,8 +292,9 @@ class BenchmarkBaselineTracker:
         """Compare the last two runs and flag any regressions.
 
         A regression is defined as an absolute drop >= regression_threshold
-        in any tracked metric (higher is better for recall, precision, F1;
-        lower is better for false_positive_rate).
+        in metrics where higher is better (recall, precision, F1),
+        OR an absolute increase >= regression_threshold in metrics where
+        lower is better (false_positive_rate).
 
         Returns:
             Dict with 'has_regressions' (bool) and 'regressions' (list of details).
@@ -309,39 +310,44 @@ class BenchmarkBaselineTracker:
         delta = comparison.get("delta", {})
         regressions: list[dict[str, Any]] = []
 
-        # Metrics where higher is better
+        # Metrics where higher is better (a DROP is a regression)
         higher_better = {"recall", "precision", "f1_score", "high_value_recall",
                          "evidence_completeness_rate", "reproduction_success_rate",
                          "regression_success_rate"}
 
-        # Metrics where lower is better
+        # Metrics where lower is better (an INCREASE is a regression)
         lower_better = {"false_positive_rate"}
 
         for key, d in delta.items():
-            if d.get("direction") != "regressed":
+            if d.get("direction") == "non_numeric":
                 continue
-            abs_drop = abs(d.get("delta", 0))
-            if abs_drop >= self.regression_threshold:
-                regressions.append({
-                    "metric": key,
-                    "previous": d["previous"],
-                    "current": d["current"],
-                    "delta": d["delta"],
-                    "threshold": self.regression_threshold,
-                    "severity": "critical" if abs_drop >= self.regression_threshold * 3 else "warning",
-                })
+            delta_val = d.get("delta")
+            if not isinstance(delta_val, (int, float)):
+                continue
 
-        # Also check false_positive_rate (higher is worse)
-        fpr = delta.get("false_positive_rate", {})
-        if isinstance(fpr.get("delta"), (int, float)) and fpr["delta"] > self.regression_threshold:
-            regressions.append({
-                "metric": "false_positive_rate",
-                "previous": fpr["previous"],
-                "current": fpr["current"],
-                "delta": fpr["delta"],
-                "threshold": self.regression_threshold,
-                "severity": "critical" if fpr["delta"] >= self.regression_threshold * 3 else "warning",
-            })
+            if key in higher_better and delta_val < 0:
+                # Higher-is-better metric dropped → regression
+                abs_drop = abs(delta_val)
+                if abs_drop >= self.regression_threshold:
+                    regressions.append({
+                        "metric": key,
+                        "previous": d["previous"],
+                        "current": d["current"],
+                        "delta": delta_val,
+                        "threshold": self.regression_threshold,
+                        "severity": "critical" if abs_drop >= self.regression_threshold * 3 else "warning",
+                    })
+            elif key in lower_better and delta_val > 0:
+                # Lower-is-better metric increased → regression
+                if delta_val >= self.regression_threshold:
+                    regressions.append({
+                        "metric": key,
+                        "previous": d["previous"],
+                        "current": d["current"],
+                        "delta": delta_val,
+                        "threshold": self.regression_threshold,
+                        "severity": "critical" if delta_val >= self.regression_threshold * 3 else "warning",
+                    })
 
         return {
             "has_regressions": len(regressions) > 0,

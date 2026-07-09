@@ -187,6 +187,8 @@ def _make_id(prefix: str, *parts: str) -> str:
 
 def _extract_entity_from_path(path: str) -> str:
     """Extract the entity name from an API path."""
+    if not path or path == "/":
+        return "resource"
     # e.g., /api/v1/orders/123 → orders
     # e.g., /admin/products → products
     parts = [p for p in path.strip("/").split("/") if p and not p.startswith("{") and not p.isdigit()]
@@ -237,10 +239,12 @@ def _role_level(actor: str) -> int:
 def _lower_roles(actor: str) -> list[str]:
     """Return roles with lower privilege than the given actor."""
     level = _role_level(actor)
+    if level <= 0:
+        return []  # No lower roles for lowest-privilege actors
     result = []
     for group in ROLE_ESCALATION[:level]:
         result.extend(group)
-    return result if result else ["anonymous"]
+    return result
 
 
 def _higher_roles(actor: str) -> list[str]:

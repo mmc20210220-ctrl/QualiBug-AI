@@ -116,11 +116,15 @@ class GapTracker:
     def record_gaps(
         self,
         gaps: list[Any],  # CapabilityGap from capability_gap_resolver
+        *,
+        force_resolve: bool = False,
     ) -> dict[str, Any]:
         """Record newly detected gaps, merging with existing state.
 
         Args:
             gaps: List of CapabilityGap objects from CapabilityGapResolver.
+            force_resolve: If True, auto-resolve gaps not in the incoming list.
+                           If False (default), only add/update, never auto-resolve.
 
         Returns:
             Summary of changes (new, updated, resolved).
@@ -191,17 +195,19 @@ class GapTracker:
                 new_count += 1
                 self._append_ledger("gap_detected", cause, {"priority": record.priority})
 
-        # Mark gaps as resolved if they were open but no longer detected
-        for cause, record in self._gaps.items():
-            if cause not in incoming_causes and record.state in (GapState.OPEN, GapState.IN_PROGRESS, GapState.REOPENED):
-                record.state = GapState.RESOLVED
-                record.resolved_at = timestamp
-                record.last_updated_at = timestamp
-                record.state_history.append({
-                    "from": record.state.value, "to": "resolved", "at": timestamp,
-                })
-                resolved_count += 1
-                self._append_ledger("gap_resolved", cause, {})
+        # Mark gaps as resolved ONLY if force_resolve=True and they were open but no longer detected
+        if force_resolve:
+            for cause, record in self._gaps.items():
+                if cause not in incoming_causes and record.state in (GapState.OPEN, GapState.IN_PROGRESS, GapState.REOPENED):
+                    previous_state = record.state.value
+                    record.state = GapState.RESOLVED
+                    record.resolved_at = timestamp
+                    record.last_updated_at = timestamp
+                    record.state_history.append({
+                        "from": previous_state, "to": "resolved", "at": timestamp,
+                    })
+                    resolved_count += 1
+                    self._append_ledger("gap_resolved", cause, {})
 
         self._persist_state()
 
@@ -219,11 +225,12 @@ class GapTracker:
                 if record.state == GapState.RESOLVED:
                     return True  # Already resolved
                 timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                previous_state = record.state.value  # Capture BEFORE mutation
                 record.state = GapState.RESOLVED
                 record.resolved_at = timestamp
                 record.last_updated_at = timestamp
                 record.state_history.append({
-                    "from": record.state.value, "to": "resolved", "at": timestamp,
+                    "from": previous_state, "to": "resolved", "at": timestamp,
                 })
                 self._persist_state()
                 self._append_ledger("gap_manually_resolved", cause, {})
@@ -235,11 +242,12 @@ class GapTracker:
         for cause, record in self._gaps.items():
             if record.gap_id == gap_id or cause == gap_id:
                 timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                previous_state = record.state.value  # Capture BEFORE mutation
                 record.state = GapState.BLOCKED
                 record.last_updated_at = timestamp
                 record.summary = reason or record.summary
                 record.state_history.append({
-                    "from": record.state.value, "to": "blocked", "at": timestamp,
+                    "from": previous_state, "to": "blocked", "at": timestamp,
                 })
                 self._persist_state()
                 self._append_ledger("gap_blocked", cause, {"reason": reason})
@@ -346,10 +354,18 @@ class GapTracker:
             for cause, raw in gaps_raw.items():
                 if not isinstance(raw, dict):
                     continue
+                # Safely parse state enum
+                try:
+                    state = GapState(raw.get("state", "open"))
+                except ValueError:
+                    state = GapState.OPEN  # Fallback for invalid persisted state
+                # Safely handle JSON null in state_history
+                sh_raw = raw.get("state_history")
+                state_history = sh_raw if isinstance(sh_raw, list) else []
                 result[cause] = GapRecord(
                     gap_id=raw.get("gap_id", ""),
                     root_cause=raw.get("root_cause", cause),
-                    state=GapState(raw.get("state", "open")),
+                    state=state,
                     priority=raw.get("priority", "P1"),
                     summary=raw.get("summary", ""),
                     first_seen_at=raw.get("first_seen_at", ""),
@@ -358,7 +374,7 @@ class GapTracker:
                     reopened_count=raw.get("reopened_count", 0),
                     affected_families=raw.get("affected_families", []),
                     config_task_title=raw.get("config_task_title", ""),
-                    state_history=raw.get("state_history", []),
+                    state_history=state_history,
                 )
             return result
         except Exception:

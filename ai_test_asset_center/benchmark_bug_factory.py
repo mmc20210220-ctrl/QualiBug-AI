@@ -257,6 +257,120 @@ UNIVERSAL_TEMPLATES: list[BugTemplate] = [
         expected_status=200,
         oracle_signal="invariant violated after concurrent mutations",
     ),
+
+    # ── Money / Quantity Conservation ──
+    BugTemplate(
+        template_id="MONEY_NEGATIVE_AMOUNT",
+        risk_type="money_consistency",
+        severity="P0",
+        title_template="{entity} 接受负金额/负数量",
+        api_pattern="POST /{prefix}/{entity}s",
+        trigger_template="提交负数 {entity} 金额/数量",
+        expected_status=400,
+        oracle_signal="status_code in [200, 201]",
+    ),
+    BugTemplate(
+        template_id="MONEY_BALANCE_MISMATCH",
+        risk_type="money_consistency",
+        severity="P0",
+        title_template="{entity} 金额/数量与关联记录不一致",
+        api_pattern="GET /{prefix}/{entity}s/{id}",
+        trigger_template="比较 {entity} 记录与关联账目",
+        expected_status=200,
+        oracle_signal="balance != sum of ledger entries",
+    ),
+
+    # ── Visibility / Data Disclosure ──
+    BugTemplate(
+        template_id="VISIBILITY_LIST_LEAK",
+        risk_type="visibility_disclosure",
+        severity="P1",
+        title_template="{entity} 列表接口泄露受限数据",
+        api_pattern="GET /{prefix}/{entity}s",
+        trigger_template="低权限角色请求 {entity} 列表",
+        expected_status=200,
+        oracle_signal="response contains entities outside actor scope",
+    ),
+    BugTemplate(
+        template_id="VISIBILITY_EXPORT_LEAK",
+        risk_type="visibility_disclosure",
+        severity="P1",
+        title_template="{entity} 导出接口泄露跨范围数据",
+        api_pattern="GET /{prefix}/{entity}s/export",
+        trigger_template="导出 {entity} 数据",
+        expected_status=200,
+        oracle_signal="export contains data from unauthorized scope",
+    ),
+
+    # ── Async / Eventual Consistency ──
+    BugTemplate(
+        template_id="ASYNC_CALLBACK_LOST",
+        risk_type="async_eventual_consistency",
+        severity="P1",
+        title_template="{entity} 异步回调丢失导致状态不一致",
+        api_pattern="POST /{prefix}/{entity}s/callback",
+        trigger_template="模拟异步回调丢失场景",
+        expected_status=200,
+        oracle_signal="state not updated after expected callback window",
+    ),
+    BugTemplate(
+        template_id="ASYNC_DUPLICATE_CONSUME",
+        risk_type="async_eventual_consistency",
+        severity="P1",
+        title_template="{entity} 消息重复消费",
+        api_pattern="POST /{prefix}/{entity}s",
+        trigger_template="重复发送相同消息",
+        expected_status=200,
+        oracle_signal="duplicate side effects observed",
+    ),
+
+    # ── Cache / Stale State ──
+    BugTemplate(
+        template_id="CACHE_STALE_AFTER_WRITE",
+        risk_type="cache_staleness",
+        severity="P1",
+        title_template="{entity} 修改后缓存未失效",
+        api_pattern="PUT /{prefix}/{entity}s/{id}",
+        trigger_template="修改 {entity} 后立即查询",
+        expected_status=200,
+        oracle_signal="response shows pre-update values (cache hit)",
+    ),
+
+    # ── Configuration / Environment ──
+    BugTemplate(
+        template_id="CONFIG_SECRET_EXPOSURE",
+        risk_type="configuration_environment",
+        severity="P0",
+        title_template="{entity} 接口泄露密钥/配置信息",
+        api_pattern="GET /{prefix}/{entity}s",
+        trigger_template="请求 {entity} 接口检查响应",
+        expected_status=200,
+        oracle_signal="response contains secret/token/credential",
+    ),
+
+    # ── UI/API Contract Drift ──
+    BugTemplate(
+        template_id="UI_API_FIELD_MISMATCH",
+        risk_type="ui_api_contract_drift",
+        severity="P1",
+        title_template="{entity} UI 字段与 API 响应不一致",
+        api_pattern="GET /{prefix}/{entity}s/{id}",
+        trigger_template="对比 UI 展示字段与 API 响应字段",
+        expected_status=200,
+        oracle_signal="UI field missing or different from API response",
+    ),
+
+    # ── Regression / Historical Bug ──
+    BugTemplate(
+        template_id="REGRESSION_PREVIOUS_BUG",
+        risk_type="regression_historical_bug",
+        severity="P1",
+        title_template="已修复 {entity} 缺陷回归",
+        api_pattern="GET /{prefix}/{entity}s/{id}",
+        trigger_template="回归测试已修复的 {entity} 缺陷",
+        expected_status=200,
+        oracle_signal="previously fixed bug behavior reappears",
+    ),
 ]
 
 

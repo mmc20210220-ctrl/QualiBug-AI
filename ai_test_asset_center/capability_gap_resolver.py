@@ -289,6 +289,38 @@ CONFIG_TASK_TEMPLATES: dict[GapRootCause, dict[str, Any]] = {
         "validation_steps": ["Upload OpenAPI/Swagger/Postman spec in Materials"],
         "estimated_effort": "minutes",
     },
+    GapRootCause.SAFETY_BOUNDARY: {
+        "title": "Approve safety boundary for live execution",
+        "description": "Live HTTP probes are blocked by safety boundary. A quality owner must approve sandbox execution.",
+        "config_keys": ["execution_mode", "sandbox_approval"],
+        "config_example": {"execution_mode": "safe_read_only"},
+        "validation_steps": ["Request sandbox approval from quality owner", "Confirm safety boundary check passes"],
+        "estimated_effort": "hours",
+    },
+    GapRootCause.DOCUMENT_GROUNDING: {
+        "title": "Ensure all probes have document grounding",
+        "description": "Some probes lack document grounding (PRD/OpenAPI source reference). The system can auto-resolve this.",
+        "config_keys": ["source_assets"],
+        "config_example": {},
+        "validation_steps": ["Upload PRD or OpenAPI to provide grounding", "Rerun preflight"],
+        "estimated_effort": "minutes",
+    },
+    GapRootCause.INTERACTIVE_AUTH_BLOCKER: {
+        "title": "Resolve interactive authentication blocker",
+        "description": "SSO, MFA, CAPTCHA, or mTLS is blocking automated authentication. Switch to API-key or service-account auth.",
+        "config_keys": ["auth_flow", "auth_type"],
+        "config_example": {"auth_type": "api_key"},
+        "validation_steps": ["Switch to non-interactive auth (API key, service account)", "Rerun preflight"],
+        "estimated_effort": "hours",
+    },
+    GapRootCause.UNKNOWN: {
+        "title": "Investigate unknown capability gap",
+        "description": "An unknown preflight check failure was detected. Review the check details to determine the fix.",
+        "config_keys": ["check_details"],
+        "config_example": {},
+        "validation_steps": ["Review preflight check details", "Determine root cause and fix"],
+        "estimated_effort": "hours",
+    },
 }
 
 
