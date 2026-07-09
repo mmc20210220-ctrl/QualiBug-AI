@@ -10,6 +10,12 @@ def _write_report(root: Path, project: str, payload: dict) -> None:
     (report_dir / "latest_pipeline_report.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def _write_scan_result(root: Path, project: str, payload: dict) -> None:
+    out_dir = root / "platform_outputs" / project
+    out_dir.mkdir(parents=True)
+    (out_dir / "scan_result.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
 def test_customer_report_renders_backend_release_gate(tmp_path: Path) -> None:
     project = "demo_project"
     _write_report(tmp_path, project, {
@@ -136,4 +142,34 @@ def test_report_does_not_equate_release_gate_pass_with_handoff_safe(tmp_path: Pa
     assert "商业交付 Handoff" in html
     assert "safe_for_customer：false" in html
     assert "发布门禁通过并不等同于商业交付安全" in html
+    assert not contains_mojibake(html)
+
+
+def test_report_latest_release_gate_blocks_stale_handoff_safe(tmp_path: Path) -> None:
+    project = "stale_handoff_project"
+    _write_report(tmp_path, project, {
+        "commercial_assets": {
+            "commercial_handoff": {"safe_for_customer": True, "acceptance_status": "accepted"},
+            "tracker_sync": {"payload_status": "ready", "payload_gate_status": "pass"},
+            "delivery_package": {"release_verdict": "pass"},
+        },
+    })
+    _write_scan_result(tmp_path, project, {
+        "release_gate": {
+            "overall_status": "fail",
+            "checks": [
+                {"name": "修复后回归 Gate", "status": "fail", "detail": "最新回归失败。", "source": "scan_result"},
+            ],
+            "source": "scan_result",
+        }
+    })
+
+    html = render_customer_safe_report_html(project, tmp_path)
+
+    assert "当前发布结论：阻塞" in html
+    assert "交付安全</span><strong>被门禁阻塞" in html
+    assert "safe_for_customer：false" in html
+    assert "acceptance：blocked_by_release_gate" in html
+    assert "最新回归失败" in html
+    assert "accepted" not in html
     assert not contains_mojibake(html)
