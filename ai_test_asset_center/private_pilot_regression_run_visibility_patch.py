@@ -294,6 +294,14 @@ def _inject_release_gate(data: dict[str, Any], compact: dict[str, Any]) -> None:
     value_metrics["release_gate_pending_check_count"] = release_gate["pending_check_count"]
     data["value_metrics"] = value_metrics
 
+    delivery_tracks = _as_dict(data.get("delivery_tracks"))
+    delivery_tracks["release_gate"] = release_gate
+    delivery_tracks["release_gate_overall_status"] = release_gate["overall_status"]
+    delivery_tracks["release_gate_blocking_check_count"] = release_gate["blocking_check_count"]
+    delivery_tracks["release_gate_pending_check_count"] = release_gate["pending_check_count"]
+    delivery_tracks["release_recommendation"] = release_gate["release_recommendation"]
+    data["delivery_tracks"] = delivery_tracks
+
     executive = _as_dict(data.get("executive_summary"))
     overall = str(release_gate.get("overall_status") or "")
     if overall == "fail":
