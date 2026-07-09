@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 
-from ai_test_asset_center.private_pilot_coverage_steering_patch import _steer_slices_by_coverage_gap
+from ai_test_asset_center.private_pilot_coverage_steering_patch import (
+    _attach_coverage_steering_result,
+    _steer_slices_by_coverage_gap,
+)
 
 
 def test_steer_slices_prioritizes_gap_risk_families_without_creating_slices(tmp_path: Path) -> None:
@@ -49,3 +52,24 @@ def test_steer_slices_noops_without_actionable_coverage_matrix(tmp_path: Path) -
 
     assert [item["slice_id"] for item in steered] == ["s1"]
     assert diagnostic["status"] == "not_applied"
+
+
+def test_attach_coverage_steering_result_surfaces_diagnostics() -> None:
+    result = {
+        "phases": {"incremental_discovery": {"status": "planned"}},
+        "behavior_slice_ledger": {"selected_slice_ids": ["s_isolation"]},
+    }
+    diagnostic = {
+        "status": "applied",
+        "reason": "gap_family_slices_prioritized",
+        "gap_family_weights": {"tenant_isolation": 50},
+        "top_steered_slice_ids": ["s_isolation"],
+    }
+
+    enriched = _attach_coverage_steering_result(result, diagnostic)
+
+    assert enriched["coverage_steering"]["status"] == "applied"
+    assert enriched["coverage_steering"]["gap_family_weights"]["tenant_isolation"] == 50
+    assert enriched["coverage_steering"]["honesty_rule"].startswith("Coverage steering only reorders")
+    assert enriched["phases"]["incremental_discovery"]["coverage_steering"]["status"] == "applied"
+    assert enriched["behavior_slice_ledger"]["coverage_steering"]["top_steered_slice_ids"] == ["s_isolation"]
