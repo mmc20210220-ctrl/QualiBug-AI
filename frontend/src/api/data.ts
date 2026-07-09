@@ -14,6 +14,16 @@ type ReleaseOverall = 'pass' | 'fail' | 'pending';
 function asRecord(value: unknown): JsonRecord { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
 function asArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function asString(value: unknown): string { return typeof value === 'string' ? value : ''; }
+function asBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', 'off', ''].includes(normalized)) return false;
+  }
+  return false;
+}
 function asFiniteNumber(value: unknown, fallback = 0): number { const parsed = typeof value === 'number' ? value : Number(value); return Number.isFinite(parsed) ? parsed : fallback; }
 function firstFiniteNumber(...values: unknown[]): number { for (const value of values) { if (value === null || value === undefined || value === '') continue; const parsed = Number(value); if (Number.isFinite(parsed)) return parsed; } return 0; }
 function field(value: unknown, name: string): unknown { return asRecord(value)[name]; }
@@ -69,7 +79,7 @@ export function getCommercialAssets(raw: unknown): CommercialAssets | null {
     commercial_handoff: {
       status: asString(handoff.status),
       acceptance_status: asString(handoff.acceptance_status),
-      safe_for_customer: Boolean(handoff.safe_for_customer),
+      safe_for_customer: asBoolean(handoff.safe_for_customer),
       release_gate_status: asString(handoff.release_gate_status),
     },
     tracker_sync: {
@@ -85,7 +95,7 @@ export function getCommercialAssets(raw: unknown): CommercialAssets | null {
       evidence_bundle_id: asString(delivery.evidence_bundle_id),
       release_recommendation: asString(delivery.release_recommendation),
       release_gate_overall_status: asString(delivery.release_gate_overall_status),
-      release_gate_blocked: Boolean(delivery.release_gate_blocked),
+      release_gate_blocked: asBoolean(delivery.release_gate_blocked),
       release_gate_block_reason: asString(delivery.release_gate_block_reason),
     },
     artifact_refs: Object.entries(refs).reduce<Record<string, string>>((acc, [key, value]) => {
