@@ -57,6 +57,95 @@ def browser_ui_status() -> dict[str, Any]:
     }
 
 
+def system_behavior_runtime_status() -> dict[str, Any]:
+    """Expose whether the existing runtime chain is patched end-to-end.
+
+    This is a health/readiness manifest, not a new execution path.  It inspects
+    the existing modules that are patched by ``private_pilot_entrypoint`` so a
+    private deployment can verify the System Behavior Space loop is actually on.
+    """
+    checks: dict[str, bool] = {}
+    sources: dict[str, str] = {}
+    versions: dict[str, str] = {}
+    try:
+        from ai_test_asset_center import business_state_graph as _bsg
+        checks["behavior_contract"] = bool(getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", False))
+        sources["behavior_contract"] = str(getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE", "") or "")
+    except Exception:
+        checks["behavior_contract"] = False
+    try:
+        from ai_test_asset_center import v12_pipeline as _v12
+        checks["v12_project_context"] = bool(getattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", False))
+        checks["confirmed_finding_contract"] = bool(getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", False))
+        checks["coverage_steering"] = bool(getattr(_v12, "_COVERAGE_STEERING_PATCHED", False))
+        sources["coverage_steering"] = str(getattr(_v12, "_COVERAGE_STEERING_PATCH_SOURCE", "") or "")
+    except Exception:
+        checks["v12_project_context"] = False
+        checks["confirmed_finding_contract"] = False
+        checks["coverage_steering"] = False
+    try:
+        from ai_test_asset_center import semantic_scenario_generator as _ssg
+        checks["scenario_runtime_hints"] = bool(getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", False))
+    except Exception:
+        checks["scenario_runtime_hints"] = False
+    try:
+        from ai_test_asset_center import oracle_engine as _oe
+        checks["oracle_evidence_linkage"] = bool(getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", False))
+    except Exception:
+        checks["oracle_evidence_linkage"] = False
+    try:
+        from ai_test_asset_center import regression_runner as _rr
+        checks["regression_contract_replay"] = bool(getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", False))
+    except Exception:
+        checks["regression_contract_replay"] = False
+    try:
+        from ai_test_asset_center import risk_clue_pool as _risk
+        versions["risk_clue_pool_project_learning"] = str(getattr(_risk, "PROJECT_LEARNING_VERSION", "") or "")
+        versions["risk_clue_pool_platform_learning"] = str(getattr(_risk, "PLATFORM_LEARNING_VERSION", "") or "")
+    except Exception:
+        versions["risk_clue_pool_project_learning"] = ""
+        versions["risk_clue_pool_platform_learning"] = ""
+    try:
+        from ai_test_asset_center.system_behavior_space import SYSTEM_BEHAVIOR_SPACE_VERSION
+        versions["system_behavior_space"] = SYSTEM_BEHAVIOR_SPACE_VERSION
+    except Exception:
+        versions["system_behavior_space"] = ""
+
+    required = [
+        "behavior_contract",
+        "v12_project_context",
+        "scenario_runtime_hints",
+        "oracle_evidence_linkage",
+        "confirmed_finding_contract",
+        "regression_contract_replay",
+        "coverage_steering",
+    ]
+    ready = all(bool(checks.get(key)) for key in required)
+    return {
+        "ready": ready,
+        "mode": "system_promise_discovery_loop" if ready else "partially_installed",
+        "checks": checks,
+        "sources": sources,
+        "versions": versions,
+        "data_boundary": {
+            "project_learning_scope": "private_deployment",
+            "platform_learning_scope": "sanitized_pattern_weights_only",
+            "raw_customer_data_in_platform_learning": False,
+        },
+        "chain": [
+            "enterprise_knowledge_asset",
+            "system_behavior_space",
+            "behavior_contract_slices",
+            "semantic_scenarios",
+            "oracle_evidence",
+            "confirmed_findings_ledger",
+            "regression_contract_replay",
+            "risk_clue_pool_learning",
+            "coverage_learning_steering",
+        ],
+    }
+
+
 def _handler_root(handler: Any, fallback_root: Path) -> Path:
     try:
         return handler._root()
@@ -106,6 +195,7 @@ def build_private_pilot_health_payload(
         "llm_status": llm_health,
         "browser_ui_smoke": browser_ui_status(),
         "pattern_library_patterns": pattern_library_count(root),
+        "system_behavior_runtime": system_behavior_runtime_status(),
         "deployment_contract_patch": {
             "patched": True,
             "source": patch_source,
