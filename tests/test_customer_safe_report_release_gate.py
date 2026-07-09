@@ -173,3 +173,26 @@ def test_report_latest_release_gate_blocks_stale_handoff_safe(tmp_path: Path) ->
     assert "最新回归失败" in html
     assert "accepted" not in html
     assert not contains_mojibake(html)
+
+
+def test_report_string_false_handoff_is_not_safe(tmp_path: Path) -> None:
+    project = "string_false_project"
+    _write_report(tmp_path, project, {
+        "release_gate": {
+            "overall_status": "pass",
+            "checks": [{"name": "修复后回归 Gate", "status": "pass", "detail": "回归通过。", "source": "regression_run"}],
+        },
+        "commercial_assets": {
+            "commercial_handoff": {"safe_for_customer": "false", "acceptance_status": "hold_for_validation"},
+            "tracker_sync": {"payload_status": "hold_for_validation"},
+            "delivery_package": {"release_verdict": "pass"},
+        },
+    })
+
+    html = render_customer_safe_report_html(project, tmp_path)
+
+    assert "当前发布结论：通过" in html
+    assert "交付安全</span><strong>待复核" in html
+    assert "safe_for_customer：false" in html
+    assert "商业交付可进入验收" not in html
+    assert not contains_mojibake(html)
