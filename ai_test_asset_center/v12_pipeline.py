@@ -81,9 +81,24 @@ def is_v12_enabled() -> bool:
 def _scenario_executable(scenario: Any) -> bool:
     return bool(getattr(scenario, "steps", []) or []) and str(getattr(scenario, "execution_policy", "") or "") in {
         "safe_read_only",
+        "approved_test_write",
         "approved_sandbox_write",
         "runtime_approved",
     }
+
+
+def _is_test_write_allowed() -> bool:
+    """Check if test-environment write operations are approved.
+
+    ``QUALIBUG_ALLOW_TEST_WRITE=1`` means the target is a customer test
+    environment where write operations are safe.  The system will still
+    enforce DELETE safety guards and fixture data isolation.
+    """
+    return os.environ.get("QUALIBUG_ALLOW_TEST_WRITE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _test_write_fixture_prefix() -> str:
+    return os.environ.get("QUALIBUG_TEST_FIXTURE_PREFIX", "qualibug_test_").strip() or "qualibug_test_"
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -551,7 +566,9 @@ def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCa
     """Verify an approval only after the canonical Campaign identity is known.
 
     ``safe_read_only`` execution does NOT require an approval — it cannot
-    mutate the target.  Only write-capable modes need an explicit approval.
+    mutate the target.  ``approved_test_write`` is allowed when the
+    ``QUALIBUG_ALLOW_TEST_WRITE`` flag is set (customer test environment).
+    Only ``approved_sandbox_write`` needs an explicit approval.
     """
     if not base_url:
         return {"status": "not_required", "reason": "runtime_target_missing"}
@@ -559,6 +576,10 @@ def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCa
     # safe_read_only is inherently safe — no approval needed
     if execution_mode == "safe_read_only":
         return {"status": "approved", "execution_mode": execution_mode}
+    # approved_test_write: allowed when the env flag confirms a test environment
+    if execution_mode == "approved_test_write" and _is_test_write_allowed():
+        return {"status": "approved", "execution_mode": "approved_test_write",
+                "fixture_prefix": _test_write_fixture_prefix()}
     approval_id = str(context.get("execution_approval_id") or "").strip()
     if not approval_id:
         return {"status": "blocked", "code": "EXECUTION_APPROVAL_MISSING", "execution_mode": execution_mode}
@@ -877,6 +898,8 @@ def _scenario_selection_score(scenario: Any) -> float:
 
     if execution_policy == "approved_sandbox_write":
         score += 6.0
+    elif execution_policy == "approved_test_write":
+        score += 5.0
     elif execution_policy in {"runtime_approved", "safe_read_only"}:
         score += 3.0
 
@@ -1963,6 +1986,36 @@ def __execute_scenario_once(scenario: Any, base_url: str,
                     "execution_blocked": True,
                 })
                 continue
+        # ── DELETE safety guard: never allow blanket DELETE ──
+        # Every DELETE must target a specific resource (path param like /:id)
+        # or carry a query/filter condition.  Table-wide deletes are never
+        # allowed — even in test environments.
+        if method == "DELETE":
+            _has_path_param = bool(re.search(r"/:[A-Za-z_]|/\{[A-Za-z_]", path))
+            _has_query_filter = bool(re.search(r"[?&](id|uuid|sku|code|name|limit)=", str(getattr(step, "api_path", "") or "")))
+            _has_body_filter = isinstance(body, dict) and any(
+                k for k in body if k.lower() in ("id", "ids", "uuid", "sku", "email", "code", "filter", "where")
+            )
+            if not (_has_path_param or _has_query_filter or _has_body_filter):
+                _delete_block_reason = "DELETE_SAFETY_GUARD: 禁止无条件的全表删除操作。DELETE 必须携带路径参数 (/:id) 或查询条件 (?id=) 或请求体过滤。"
+                trace["errors"].append(_delete_block_reason)
+                trace["steps"].append({
+                    "action": getattr(step, "action", ""),
+                    "method": method,
+                    "path": path,
+                    "status": 0,
+                    "request": {"body": _redact(body)} if body else {},
+                    "response": {"status_code": 0, "headers": {}, "body": {"error": _delete_block_reason}},
+                    "expected_status": getattr(step, "expected_status", 0),
+                    "skipped_reason": _delete_block_reason,
+                    "execution_blocked": True,
+                })
+                continue
+            # Inject safety LIMIT if not present
+            if "limit" not in str(getattr(step, "api_path", "") or "").lower() and not _has_path_param:
+                # Append ?_limit=1 or &limit=1 as safety net
+                sep = "&" if "?" in path else "?"
+                path = f"{path}{sep}_qualibug_safe_limit=1"
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
         headers = {"Accept": "application/json"}
         if data is not None:

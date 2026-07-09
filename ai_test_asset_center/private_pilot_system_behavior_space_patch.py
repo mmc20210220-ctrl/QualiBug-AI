@@ -30,6 +30,7 @@ from ai_test_asset_center.system_behavior_space import (
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_system_behavior_space_patch"
 _SAFE_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _KNOWN_HTTP_METHODS = {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"}
+_WRITE_METHODS = _KNOWN_HTTP_METHODS - _SAFE_READ_METHODS
 _BEHAVIOR_SPACE_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
     "qualibug_system_behavior_space_context",
     default={},
@@ -253,6 +254,35 @@ def _safe_read_route(slice_meta: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
+def _write_routes(slice_meta: dict[str, Any]) -> list[dict[str, str]]:
+    """Return all write-capable routes (POST/PUT/PATCH/DELETE) from slice metadata."""
+    routes: list[dict[str, str]] = []
+    for route in slice_meta.get("_system_behavior_api_routes") or []:
+        if not isinstance(route, dict):
+            continue
+        method = str(route.get("method") or "").upper()
+        path = str(route.get("path") or "")
+        if method in _WRITE_METHODS and path.startswith("/"):
+            routes.append({"method": method, "path": path})
+    return routes
+
+
+def _test_write_allowed() -> bool:
+    try:
+        import os as _os
+        return _os.environ.get("QUALIBUG_ALLOW_TEST_WRITE", "").strip().lower() in ("1", "true", "yes")
+    except Exception:
+        return False
+
+
+def _fixture_prefix() -> str:
+    try:
+        import os as _os
+        return _os.environ.get("QUALIBUG_TEST_FIXTURE_PREFIX", "qualibug_test_").strip() or "qualibug_test_"
+    except Exception:
+        return "qualibug_test_"
+
+
 def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], discovery_round: int) -> Any:
     hints = _system_behavior_hints(slice_meta)
     if not hints:
@@ -316,6 +346,48 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
     if not safe_route and getattr(item, "execution_policy", "") == "safe_read_only":
         item.execution_policy = "plan_only_requires_fixture"
         item.steps = []
+    # ── Write scenario upgrade ──
+    # When QUALIBUG_ALLOW_TEST_WRITE is enabled and the entity has write routes
+    # (POST/PUT/PATCH/DELETE), upgrade from safe_read_only to approved_test_write
+    # and add write steps.  All write data carries the fixture prefix for isolation.
+    write_routes = _write_routes(slice_meta)
+    if write_routes and _test_write_allowed() and safe_route:
+        item.execution_policy = "approved_test_write"
+        fixture_prefix = _fixture_prefix()
+        existing_steps = list(getattr(item, "steps", []) or [])
+        next_order = max((int(getattr(s, "order", 0) or 0) for s in existing_steps), default=0) + 1
+        try:
+            from ai_test_asset_center.semantic_scenario_generator import ScenarioStep
+        except Exception:
+            ScenarioStep = None  # type: ignore[assignment]
+        if ScenarioStep is not None:
+            for wr in write_routes[:2]:
+                if wr["method"] == "POST":
+                    existing_steps.append(ScenarioStep(
+                        order=next_order, action="test_write_create_fixture",
+                        api_method="POST", api_path=wr["path"],
+                        expected_status=201, actor="readonly",
+                        body_template={"_qualibug_fixture": True, "name": f"{fixture_prefix}probe", "email": f"{fixture_prefix}probe@test.local", "description": "qualibug automated test fixture — safe to delete"},
+                    ))
+                elif wr["method"] == "DELETE":
+                    safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]
+                    existing_steps.append(ScenarioStep(
+                        order=next_order, action="test_write_delete_fixture",
+                        api_method="DELETE", api_path=safe_path,
+                        expected_status=204, actor="readonly",
+                    ))
+                elif wr["method"] in ("PUT", "PATCH"):
+                    safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]
+                    existing_steps.append(ScenarioStep(
+                        order=next_order, action="test_write_update_fixture",
+                        api_method=wr["method"], api_path=safe_path,
+                        expected_status=200, actor="readonly",
+                        body_template={"_qualibug_fixture": True, "description": "qualibug automated test update — safe to revert"},
+                    ))
+                next_order += 1
+            item.steps = existing_steps
+        if "SYSTEM_PROMISE_WRITE_ROUTE_NOT_EXECUTED" in evidence_gaps:
+            evidence_gaps.remove("SYSTEM_PROMISE_WRITE_ROUTE_NOT_EXECUTED")
     rules = list(getattr(item, "oracle_rules", []) or [])
     for rule in ["SystemPromiseOracle.open_ended_promise_violation", *(f"SystemPromiseOracle.dimension:{dim}" for dim in hints["dimensions"][:8])]:
         if rule not in rules:
