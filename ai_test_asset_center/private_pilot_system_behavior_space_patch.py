@@ -18,6 +18,10 @@ engine.  This patch wraps it so oracle failures can be attributed back to the
 specific System Behavior Space promise and so direct promise contradictions can
 emit a SystemPromiseOracle result.
 
+Confirmed finding integration is additive too: V12's existing confirmed-finding
+and regression-ledger writers are wrapped so a system-promise defect keeps its
+promise id, dimensions, surfaces and required assets through later regression.
+
 Learning feedback remains handled by existing modules:
 
 * risk_clue_pool.py persists project/private and platform/SaaS learning weights;
@@ -26,6 +30,7 @@ Learning feedback remains handled by existing modules:
 """
 
 import contextvars
+import json
 from pathlib import Path
 from typing import Any
 
@@ -194,6 +199,26 @@ def _system_behavior_hints(slice_meta: dict[str, Any]) -> dict[str, Any]:
         "required_assets": [str(item) for item in (slice_meta.get("_system_behavior_required_assets") or []) if str(item)],
         "source_slice_id": str(slice_meta.get("slice_id") or ""),
         "source_family": str(slice_meta.get("_selection_family") or "system_promise"),
+    }
+
+
+def _scenario_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "to_dict"):
+        try:
+            payload = value.to_dict()
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+    return {
+        "id": str(getattr(value, "id", "") or ""),
+        "title": str(getattr(value, "title", "") or ""),
+        "category": str(getattr(value, "category", "") or ""),
+        "runtime_hints": dict(getattr(value, "runtime_hints", {}) or {}),
+        "behavior_slice_id": str(getattr(value, "behavior_slice_id", "") or ""),
+        "behavior_slice_kind": str(getattr(value, "behavior_slice_kind", "") or ""),
+        "selection_origin": str(getattr(value, "selection_origin", "") or ""),
     }
 
 
@@ -368,6 +393,61 @@ def _annotate_oracle_failures_with_system_promise(results: list[Any], scenario: 
             setattr(result, "explanation", (explanation + f" | {marker}; dimensions={dims}; invariant={invariant}").strip(" |")[:1200])
 
 
+def _system_behavior_regression_contract(hints: dict[str, Any]) -> dict[str, Any]:
+    if not hints or not str(hints.get("promise_id") or ""):
+        return {}
+    return {
+        "contract_type": "system_behavior_promise_regression",
+        "system_behavior_space_version": SYSTEM_BEHAVIOR_SPACE_VERSION,
+        "system_behavior_space": hints,
+        "promise_id": str(hints.get("promise_id") or ""),
+        "probe_id": str(hints.get("probe_id") or ""),
+        "dimensions": [str(item) for item in hints.get("dimensions") or [] if str(item)],
+        "surface_plan": [str(item) for item in hints.get("surface_plan") or [] if str(item)],
+        "required_assets": [str(item) for item in hints.get("required_assets") or [] if str(item)],
+        "source_slice_id": str(hints.get("source_slice_id") or ""),
+        "source_family": str(hints.get("source_family") or ""),
+    }
+
+
+def _attach_system_behavior_to_finding(finding: dict[str, Any], hints: dict[str, Any], scenario: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(finding, dict) or not hints:
+        return finding
+    promise_id = str(hints.get("promise_id") or "").strip()
+    if not promise_id:
+        return finding
+    regression_contract = _system_behavior_regression_contract(hints)
+    finding["system_promise_id"] = promise_id
+    finding["system_behavior_space_evidence"] = hints
+    finding["system_behavior_dimensions"] = regression_contract.get("dimensions", [])
+    finding["system_behavior_surface_plan"] = regression_contract.get("surface_plan", [])
+    finding["system_behavior_required_assets"] = regression_contract.get("required_assets", [])
+    finding["system_behavior_source_family"] = regression_contract.get("source_family", "")
+    finding["regression_contract"] = regression_contract
+    finding["learning_signal"] = {
+        "source": "system_behavior_space",
+        "promise_id": promise_id,
+        "dimensions": regression_contract.get("dimensions", []),
+        "surfaces": regression_contract.get("surface_plan", []),
+        "entity": str(finding.get("category") or scenario.get("entity") or "system"),
+    }
+    evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+    evidence["system_promise_id"] = promise_id
+    evidence["system_behavior_space"] = hints
+    finding["evidence"] = evidence
+    raw = finding.get("raw_evidence") if isinstance(finding.get("raw_evidence"), dict) else {}
+    raw["system_behavior_space"] = hints
+    raw["regression_contract"] = regression_contract
+    finding["raw_evidence"] = raw
+    status = finding.get("evidence_status") if isinstance(finding.get("evidence_status"), dict) else {}
+    if finding.get("gate_passed") is True:
+        status["system_promise_verdict"] = "SYSTEM_PROMISE_CONFIRMED"
+    else:
+        status["system_promise_verdict"] = "SYSTEM_PROMISE_CANDIDATE"
+    finding["evidence_status"] = status
+    return finding
+
+
 def _install_system_behavior_scenario_patch() -> None:
     try:
         from ai_test_asset_center import semantic_scenario_generator as _ssg
@@ -426,6 +506,91 @@ def _install_system_behavior_oracle_patch() -> None:
     _oe.OracleEngine.evaluate = _evaluate_with_system_behavior  # type: ignore[method-assign]
     _oe.EvidenceGraphBuilder.build = _build_with_system_behavior_evidence  # type: ignore[method-assign]
     _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED = True  # type: ignore[attr-defined]
+
+
+def _install_system_behavior_finding_patch() -> None:
+    try:
+        from ai_test_asset_center import v12_pipeline as _v12
+    except Exception:
+        return
+    if getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", False):
+        return
+    original_confirmed = getattr(_v12, "_confirmed_oracle_finding", None)
+    original_persist = getattr(_v12, "_persist_confirmed_findings", None)
+    if not callable(original_confirmed) or not callable(original_persist):
+        return
+
+    def _confirmed_oracle_finding_with_system_behavior(
+        scenario: Any,
+        trace: dict[str, Any],
+        oracle_result: Any,
+        evidence: Any,
+        *,
+        campaign_id: str,
+        discovery_round: int,
+        base_url: str,
+    ) -> dict[str, Any]:
+        finding = original_confirmed(
+            scenario,
+            trace,
+            oracle_result,
+            evidence,
+            campaign_id=campaign_id,
+            discovery_round=discovery_round,
+            base_url=base_url,
+        )
+        scenario_payload = _scenario_payload(scenario)
+        hints = _scenario_system_behavior_hints(scenario_payload)
+        if not hints and hasattr(evidence, "to_dict"):
+            try:
+                evidence_payload = evidence.to_dict()
+                if isinstance(evidence_payload, dict):
+                    hints = _scenario_system_behavior_hints(evidence_payload.get("scenario") if isinstance(evidence_payload.get("scenario"), dict) else {})
+            except Exception:
+                hints = {}
+        return _attach_system_behavior_to_finding(finding, hints, scenario_payload)
+
+    def _persist_confirmed_findings_with_system_behavior(root: Path, project: str, findings: list[dict[str, Any]]) -> int:
+        saved = int(original_persist(root, project, findings) or 0)
+        system_findings = {
+            str(item.get("evidence_id") or ""): item
+            for item in findings or []
+            if isinstance(item, dict)
+            and str(item.get("evidence_id") or "")
+            and isinstance(item.get("system_behavior_space_evidence"), dict)
+        }
+        if not system_findings:
+            return saved
+        try:
+            path = _v12._confirmed_findings_path(root, project)
+            payload = json.loads(path.read_text(encoding="utf-8") or "{}") if path.exists() else {}
+            ledger = payload if isinstance(payload, dict) else {}
+            changed = False
+            for evidence_id, finding in system_findings.items():
+                if evidence_id not in ledger or not isinstance(ledger.get(evidence_id), dict):
+                    continue
+                hints = dict(finding.get("system_behavior_space_evidence") or {})
+                regression_contract = dict(finding.get("regression_contract") or _system_behavior_regression_contract(hints))
+                ledger[evidence_id]["system_promise_id"] = str(hints.get("promise_id") or "")
+                ledger[evidence_id]["system_behavior_space_evidence"] = hints
+                ledger[evidence_id]["system_behavior_dimensions"] = list(regression_contract.get("dimensions") or [])
+                ledger[evidence_id]["system_behavior_surface_plan"] = list(regression_contract.get("surface_plan") or [])
+                ledger[evidence_id]["system_behavior_required_assets"] = list(regression_contract.get("required_assets") or [])
+                ledger[evidence_id]["regression_contract"] = regression_contract
+                ledger[evidence_id]["learning_signal"] = dict(finding.get("learning_signal") or {})
+                changed = True
+            if changed:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        except Exception:
+            return saved
+        return saved
+
+    _v12._ORIGINAL_CONFIRMED_ORACLE_FINDING_SYSTEM_BEHAVIOR = original_confirmed  # type: ignore[attr-defined]
+    _v12._ORIGINAL_PERSIST_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR = original_persist  # type: ignore[attr-defined]
+    _v12._confirmed_oracle_finding = _confirmed_oracle_finding_with_system_behavior  # type: ignore[assignment]
+    _v12._persist_confirmed_findings = _persist_confirmed_findings_with_system_behavior  # type: ignore[assignment]
+    _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = True  # type: ignore[attr-defined]
 
 
 def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> None:
@@ -487,6 +652,7 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
     _install_v12_behavior_space_context_patch()
     _install_system_behavior_scenario_patch()
     _install_system_behavior_oracle_patch()
+    _install_system_behavior_finding_patch()
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
 
@@ -562,6 +728,17 @@ def restore_system_behavior_space_patch() -> None:
         if callable(original_build):
             _oe.EvidenceGraphBuilder.build = original_build  # type: ignore[method-assign]
         _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED = False  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        from ai_test_asset_center import v12_pipeline as _v12
+        original_confirmed = getattr(_v12, "_ORIGINAL_CONFIRMED_ORACLE_FINDING_SYSTEM_BEHAVIOR", None)
+        original_persist = getattr(_v12, "_ORIGINAL_PERSIST_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR", None)
+        if callable(original_confirmed):
+            _v12._confirmed_oracle_finding = original_confirmed  # type: ignore[assignment]
+        if callable(original_persist):
+            _v12._persist_confirmed_findings = original_persist  # type: ignore[assignment]
+        _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = False  # type: ignore[attr-defined]
     except Exception:
         pass
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = False  # type: ignore[attr-defined]
