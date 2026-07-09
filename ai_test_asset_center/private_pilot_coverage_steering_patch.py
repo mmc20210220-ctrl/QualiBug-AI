@@ -166,6 +166,26 @@ def _steer_slices_by_coverage_gap(slices: list[dict[str, Any]], *, root: Path, p
     }
 
 
+def _attach_coverage_steering_result(result: dict[str, Any], diagnostic: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(result, dict) or not diagnostic:
+        return result
+    payload = {
+        **diagnostic,
+        "patch_source": PATCH_SOURCE,
+        "honesty_rule": "Coverage steering only reorders existing source-grounded behavior slices; it does not create findings or synthetic coverage.",
+    }
+    result["coverage_steering"] = payload
+    phases = result.get("phases") if isinstance(result.get("phases"), dict) else {}
+    incremental = phases.get("incremental_discovery") if isinstance(phases.get("incremental_discovery"), dict) else {}
+    incremental["coverage_steering"] = payload
+    phases["incremental_discovery"] = incremental
+    result["phases"] = phases
+    ledger = result.get("behavior_slice_ledger") if isinstance(result.get("behavior_slice_ledger"), dict) else {}
+    ledger["coverage_steering"] = payload
+    result["behavior_slice_ledger"] = ledger
+    return result
+
+
 def install_coverage_steering_patch(*, patch_source: str = PATCH_SOURCE) -> None:
     from ai_test_asset_center import v12_pipeline
 
@@ -176,12 +196,13 @@ def install_coverage_steering_patch(*, patch_source: str = PATCH_SOURCE) -> None
     original_schedule = getattr(v12_pipeline, "_schedule_behavior_slices")
 
     def _run_with_coverage_steering(project: str, root: Path, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        token = _COVERAGE_STEERING_CONTEXT.set({"project": str(project), "root": Path(root)})
+        context_payload: dict[str, Any] = {"project": str(project), "root": Path(root), "last_coverage_steering": {}}
+        token = _COVERAGE_STEERING_CONTEXT.set(context_payload)
         try:
             result = original_run(project, root, *args, **kwargs)
+            return _attach_coverage_steering_result(result, _as_dict(context_payload.get("last_coverage_steering")))
         finally:
             _COVERAGE_STEERING_CONTEXT.reset(token)
-        return result
 
     def _schedule_with_coverage_steering(slices: list[dict[str, Any]], settings: dict[str, int], history: list[dict[str, Any]] | None) -> dict[str, Any]:
         context = _COVERAGE_STEERING_CONTEXT.get() or {}
@@ -191,6 +212,7 @@ def install_coverage_steering_patch(*, patch_source: str = PATCH_SOURCE) -> None
         steered_slices = slices
         if project:
             steered_slices, diagnostic = _steer_slices_by_coverage_gap(slices, root=root, project=project)
+        context["last_coverage_steering"] = diagnostic
         selection = original_schedule(steered_slices, settings, history)
         if isinstance(selection, dict):
             selection["coverage_steering"] = diagnostic
