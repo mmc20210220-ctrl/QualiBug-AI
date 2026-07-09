@@ -490,6 +490,47 @@ def _build_verification_intent_from_dimensions(
     }
 
 
+def _universal_post_body(path: str) -> dict[str, Any]:
+    """Build a minimal, data-driven POST body from the API path structure.
+
+    No entity-type hardcoding — infers field names from the last path segment
+    and uses bindable {body_*} placeholders that the runtime seed resolver
+    replaces with real data at execution time.  Works for ANY industry:
+    /api/patients → {name, ...}; /api/shipments → {tracking, ...}; etc.
+    """
+    segments = [s for s in str(path or "").strip("/").split("/") if s and "{" not in s]
+    resource = segments[-1] if segments else "resource"
+    # Singularize common plural forms for the body key
+    if resource.endswith("ies"):
+        resource_key = resource[:-3] + "y"
+    elif resource.endswith("ses") or resource.endswith("xes") or resource.endswith("zes") or resource.endswith("ches") or resource.endswith("shes"):
+        resource_key = resource[:-2]
+    elif resource.endswith("s") and not resource.endswith("ss"):
+        resource_key = resource[:-1]
+    else:
+        resource_key = resource
+    # Build a minimal template — the runtime seed resolver fills in real values
+    body: dict[str, Any] = {}
+    body[f"{resource_key}_name"] = "{body_name}"
+    # Include an id reference if the path suggests a parent resource
+    if len(segments) >= 2:
+        parent = segments[-2]
+        if parent.endswith("s") and not parent.endswith("ss"):
+            parent = parent[:-1]
+        body[f"{parent}_id"] = "{body_parent_id}"
+    # Include common fields inferred from path context
+    for segment in segments:
+        lowered = segment.lower()
+        for hint, field in (
+            ("assign", "assigned_to"), ("approve", "approved"), ("review", "reviewer"),
+            ("submit", "submitted"), ("create", "created"), ("cancel", "cancelled"),
+        ):
+            if hint in lowered:
+                body[f"is_{hint}ed"] = False
+                break
+    return body
+
+
 def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], discovery_round: int) -> Any:
     hints = _system_behavior_hints(slice_meta)
     if not hints:
@@ -697,24 +738,35 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
             if ScenarioStep is not None:
                 for wr in write_routes[:2]:
                     if wr["method"] == "POST":
-                        # Use bindable seed data placeholders instead of hardcoded
-                        # fixture names.  At runtime, _resolve_seed_bindings queries
-                        # the real API for seed data and _replace resolves these.
-                        _post_body: dict[str, Any] = {"sku": "{body_sku}", "qty": "{body_qty}"}
-                        if "order" in wr["path"]:
-                            _post_body = {"items": [{"sku": "{body_sku}", "qty": 1}]}
-                        elif "refund" in wr["path"]:
-                            _post_body = {"orderId": "{body_order_id}", "reason": "qualibug test"}
-                        elif "payment" in wr["path"]:
-                            _post_body = {"orderId": "{body_order_id}"}
-                        elif "coupon" in wr["path"]:
-                            _post_body = {"code": "{body_code}", "orderId": "{body_order_id}"}
+                        # ── Data-driven POST body from API doc ──
+                        # Use the documented request example when available; fall
+                        # back to a minimal universal template with bindable
+                        # placeholders resolved at runtime.  No entity-type
+                        # hardcoding — every industry gets its own body shape.
+                        try:
+                            from ai_test_asset_center.auto_test_data_factory import (
+                                _markdown_request_example,
+                            )
+                            _doc_body = _markdown_request_example(
+                                "", wr["method"], wr["path"]
+                            )
+                        except Exception:
+                            _doc_body = None
+                        if isinstance(_doc_body, dict) and _doc_body:
+                            _post_body = dict(_doc_body)
+                        elif isinstance(_doc_body, list) and _doc_body:
+                            _post_body = _doc_body  # type: ignore[assignment]
+                        else:
+                            # Universal fallback: use the API-documented path to
+                            # infer a minimal body. The runtime seed resolver
+                            # replaces {body_*} placeholders with real data.
+                            _post_body = _universal_post_body(wr["path"])
                         existing_steps.append(ScenarioStep(
                             order=next_order, action="test_write_create_fixture",
                             api_method="POST", api_path=wr["path"],
                             expected_status=201, actor="readonly",
-                            body_template=_post_body,
-                            extract_from_response=["id", "sku", "order_id", "orderId"],
+                            body_template=_post_body if isinstance(_post_body, dict) else {},
+                            extract_from_response=["id"],
                         ))
                     elif wr["method"] == "DELETE":
                         safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]
@@ -725,11 +777,21 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
                         ))
                     elif wr["method"] in ("PUT", "PATCH"):
                         safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]
+                        try:
+                            from ai_test_asset_center.auto_test_data_factory import (
+                                _markdown_request_example,
+                            )
+                            _doc_body = _markdown_request_example(
+                                "", wr["method"], wr["path"]
+                            )
+                        except Exception:
+                            _doc_body = None
+                        _put_body = _doc_body if isinstance(_doc_body, dict) and _doc_body else {}
                         existing_steps.append(ScenarioStep(
                             order=next_order, action="test_write_update_fixture",
                             api_method=wr["method"], api_path=safe_path,
                             expected_status=200, actor="readonly",
-                            body_template={"qty": "{body_qty}", "sku": "{body_sku}"},
+                            body_template=_put_body,
                         ))
                     next_order += 1
                 item.steps = existing_steps
