@@ -45,11 +45,14 @@ def test_display_ready_patch_strips_fix_advice_from_technical_details() -> None:
             {"relevant_tables": [], "trace_id": ""},
             {"method": "GET", "path": "/api/orders/1"},
         )
+        boundary = details["product_responsibility_boundary"]
 
         assert "recommended_fix" not in details
         assert "possible_root_cause" not in details
         assert details["api_endpoint"]["path"] == "/api/orders/1"
-        assert details["product_responsibility_boundary"]["no_fix_advice"] is True
+        assert boundary["contract_version"] == "product_responsibility_boundary.v1"
+        assert boundary["no_fix_advice"] is True
+        assert boundary["customer_owns"]
         assert "regression_verification_obligations" in details
     finally:
         restore_display_ready_no_fix_advice_patch()
@@ -60,6 +63,8 @@ def test_display_ready_patch_strips_fix_advice_from_formatted_finding() -> None:
     install_display_ready_no_fix_advice_patch()
     try:
         formatted = formatter._format_single_finding(_sample_finding())
+        boundary = formatted["product_responsibility_boundary"]
+        technical_boundary = formatted["technical_details"]["product_responsibility_boundary"]
 
         assert "recommended_fix" not in formatted
         assert "regression_suggestions" not in formatted
@@ -67,8 +72,10 @@ def test_display_ready_patch_strips_fix_advice_from_formatted_finding() -> None:
         assert "possible_root_cause" not in formatted["technical_details"]
         assert formatted["expected_actual_comparison"]["difference"]
         assert formatted["raw_evidence"]["has_real_evidence"] is True
-        assert formatted["product_responsibility_boundary"]["no_fix_advice"] is True
-        assert formatted["technical_details"]["product_responsibility_boundary"]["no_fix_advice"] is True
+        assert boundary["contract_version"] == "product_responsibility_boundary.v1"
+        assert boundary["no_fix_advice"] is True
+        assert technical_boundary["contract_version"] == "product_responsibility_boundary.v1"
+        assert technical_boundary["no_fix_advice"] is True
         assert "regression_verification_obligations" in formatted["technical_details"]
     finally:
         restore_display_ready_no_fix_advice_patch()
