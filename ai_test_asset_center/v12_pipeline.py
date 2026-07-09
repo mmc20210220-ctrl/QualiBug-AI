@@ -2091,7 +2091,26 @@ def _resolve_seed_bindings(scenario: Any, base_url: str) -> dict[str, Any]:
                 except Exception:
                     pass
             items = usable or items
-        first = items[0] if items else None
+        # Cart items may be empty for new users — create one with a real SKU
+        if entity in ("cart", "cart_items", "cart_item") and (not isinstance(items, list) or not items):
+            try:
+                _sku = bindings.get("sku") or ""
+                if not _sku:
+                    _pr = urllib.request.Request(f"{base_url.rstrip('/')}/api/products", headers=headers, method="GET")
+                    _pd = json.loads(urllib.request.urlopen(_pr, timeout=5).read(4096))
+                    _pitems = _pd if isinstance(_pd, list) else _pd.get("items", _pd.get("data", []))
+                    if isinstance(_pitems, list) and _pitems and isinstance(_pitems[0], dict):
+                        _sku = _pitems[0].get("sku", "")
+                if _sku:
+                    _cart_body = json.dumps({"sku": _sku, "qty": 1}).encode("utf-8")
+                    _cart_headers = {**headers, "Content-Type": "application/json"}
+                    _cr = urllib.request.Request(f"{base_url.rstrip('/')}/api/cart/items", data=_cart_body, headers=_cart_headers, method="POST")
+                    _cdata = json.loads(urllib.request.urlopen(_cr, timeout=5).read(4096))
+                    if isinstance(_cdata, dict) and _cdata.get("id"):
+                        items = [_cdata]
+            except Exception:
+                pass
+        first = items[0] if isinstance(items, list) and items else None
         if isinstance(first, dict):
             id_field = _entity_id_field.get(entity, "id")
             real_id = first.get(id_field) or first.get("id") or first.get("sku")

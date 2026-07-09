@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 def compute_metrics(truth: list[dict], discovered: list[dict], matches: list[dict]) -> dict:
     known = len(truth)
@@ -223,7 +225,6 @@ def _categorize_false_positives(
 
 def _paths_overlap(path_a: str, path_b: str) -> bool:
     """Check if two API paths share the same structure (ignoring params)."""
-    import re
     norm_a = re.sub(r"/\d+", "/{id}", re.sub(r"/\{[^}]+\}", "/{id}", path_a.strip().lower().rstrip("/")))
     norm_b = re.sub(r"/\d+", "/{id}", re.sub(r"/\{[^}]+\}", "/{id}", path_b.strip().lower().rstrip("/")))
     if norm_a == norm_b:

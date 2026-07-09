@@ -217,7 +217,7 @@ def _extract_actor_from_finding(finding: dict[str, Any]) -> str:
             for role in role_group:
                 if role in title:
                     return role
-    return actor or "normal_user"
+    return actor or ""  # Return empty string when no actor is detectable
 
 
 def _normalize_method_path(method: str, path: str) -> str:
@@ -971,6 +971,11 @@ class LearningGenerator:
                     s.value: len([o for o in all_oracles if o.strategy == s])
                     for s in GenerationStrategy
                     if any(o.strategy == s for o in all_oracles)
+                },
+                "fixtures_by_strategy": {
+                    s.value: len([f for f in all_fixtures if f.strategy == s])
+                    for s in GenerationStrategy
+                    if any(f.strategy == s for f in all_fixtures)
                 },
             },
         )

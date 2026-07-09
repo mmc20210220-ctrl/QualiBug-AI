@@ -767,9 +767,14 @@ class CapabilityGapResolver:
             GapRootCause.WRITE_SANDBOX_MISSING: ["runtime_http_probes"],
             GapRootCause.CLEANUP_MISSING: ["runtime_http_probes"],
             GapRootCause.SNAPSHOT_MISSING: ["runtime_http_probes"],
+            GapRootCause.CONFIG_PLACEHOLDERS: ["runtime_http_probes"],
+            GapRootCause.DOCUMENT_GROUNDING: ["api_contract_acceptance"],
+            GapRootCause.INTERACTIVE_AUTH_BLOCKER: ["runtime_http_probes", "security_boundary_probes"],
+            GapRootCause.SAFETY_BOUNDARY: ["runtime_http_probes"],
             GapRootCause.NO_CREDENTIALS: ["runtime_http_probes", "security_boundary_probes"],
             GapRootCause.NO_SOURCE: ["api_contract_acceptance"],
             GapRootCause.NO_API_SPEC: ["api_contract_acceptance", "runtime_http_probes"],
+            GapRootCause.UNKNOWN: [],
         }
 
         blocked_caps = cause_to_cap.get(cause, [])
@@ -777,7 +782,7 @@ class CapabilityGapResolver:
             if any(cap in blocked_caps for cap in required_caps):
                 affected.add(family)
 
-        return sorted(affected) if affected else ["scenario_flow"]  # Default to most common
+        return sorted(affected) if affected else []
 
     @staticmethod
     def _capability_ids_for_cause(cause: GapRootCause) -> list[str]:
@@ -786,9 +791,21 @@ class CapabilityGapResolver:
             GapRootCause.MISSING_BASE_URL: ["runtime_http_probes", "security_boundary_probes"],
             GapRootCause.MISSING_AUTH: ["runtime_http_probes", "security_boundary_probes"],
             GapRootCause.MISSING_OPENAPI: ["api_contract_acceptance"],
+            GapRootCause.MISSING_TEST_ACCOUNTS: ["security_boundary_probes"],
+            GapRootCause.PRODUCTION_TARGET: ["runtime_http_probes", "security_boundary_probes"],
+            GapRootCause.SAFETY_BOUNDARY: ["runtime_http_probes"],
             GapRootCause.BROWSER_DISABLED: ["browser_ui_replay"],
             GapRootCause.TESTOPS_OFFLINE: ["differential_tests"],
             GapRootCause.WRITE_SANDBOX_MISSING: ["runtime_http_probes"],
+            GapRootCause.CLEANUP_MISSING: ["runtime_http_probes"],
+            GapRootCause.SNAPSHOT_MISSING: ["runtime_http_probes"],
+            GapRootCause.CONFIG_PLACEHOLDERS: ["runtime_http_probes"],
+            GapRootCause.DOCUMENT_GROUNDING: ["api_contract_acceptance"],
+            GapRootCause.INTERACTIVE_AUTH_BLOCKER: ["runtime_http_probes", "security_boundary_probes"],
+            GapRootCause.NO_CREDENTIALS: ["runtime_http_probes", "security_boundary_probes"],
+            GapRootCause.NO_SOURCE: ["api_contract_acceptance"],
+            GapRootCause.NO_API_SPEC: ["api_contract_acceptance", "runtime_http_probes"],
+            GapRootCause.UNKNOWN: [],
         }
         return mapping.get(cause, [])
 
