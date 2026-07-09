@@ -9,6 +9,42 @@ from ai_test_asset_center.risk_clue_pool import (
 from ai_test_asset_center.private_pilot_coverage_steering_patch import _steer_slices
 
 
+def _write_system_promise_history(tmp_path: Path, project: str) -> None:
+    history_path = tmp_path / "platform_outputs" / project / "regression_run" / "regression_run_history.json"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "items": [
+                        {
+                            "issue_id": "E-1",
+                            "regression_probe_id": "REG-1",
+                            "title": "客户原始标题不能进入平台学习",
+                            "status": "failed",
+                            "path": "/api/secret/orders/1",
+                            "regression_contract": {
+                                "contract_type": "system_behavior_promise_regression",
+                                "system_behavior_space": {
+                                    "promise_id": "promise_secret_customer_a",
+                                    "dimensions": ["money", "tenant", "ui_api_contract"],
+                                    "surface_plan": ["api", "db", "ui"],
+                                    "source_family": "money",
+                                },
+                                "promise_id": "promise_secret_customer_a",
+                                "dimensions": ["money", "tenant", "ui_api_contract"],
+                                "surface_plan": ["api", "db", "ui"],
+                            },
+                        }
+                    ]
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_risk_clue_pool_builds_project_and_platform_learning(tmp_path: Path) -> None:
     result = save_risk_clues(
         "customer_a",
@@ -98,39 +134,7 @@ def test_coverage_steering_uses_existing_risk_clue_learning(tmp_path: Path) -> N
 
 def test_risk_clue_pool_learns_structured_system_promise_regression_contract(tmp_path: Path) -> None:
     project = "customer_a"
-    history_path = tmp_path / "platform_outputs" / project / "regression_run" / "regression_run_history.json"
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    history_path.write_text(
-        json.dumps(
-            [
-                {
-                    "items": [
-                        {
-                            "issue_id": "E-1",
-                            "regression_probe_id": "REG-1",
-                            "title": "客户原始标题不能进入平台学习",
-                            "status": "failed",
-                            "path": "/api/secret/orders/1",
-                            "regression_contract": {
-                                "contract_type": "system_behavior_promise_regression",
-                                "system_behavior_space": {
-                                    "promise_id": "promise_secret_customer_a",
-                                    "dimensions": ["money", "tenant", "ui_api_contract"],
-                                    "surface_plan": ["api", "db", "ui"],
-                                    "source_family": "money",
-                                },
-                                "promise_id": "promise_secret_customer_a",
-                                "dimensions": ["money", "tenant", "ui_api_contract"],
-                                "surface_plan": ["api", "db", "ui"],
-                            },
-                        }
-                    ]
-                }
-            ],
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    _write_system_promise_history(tmp_path, project)
 
     save_risk_clues(project, tmp_path, [])
     project_learning = get_project_learning(project, tmp_path)
@@ -147,3 +151,30 @@ def test_risk_clue_pool_learns_structured_system_promise_regression_contract(tmp
     assert "/api/secret/orders" not in platform_text
     assert "客户原始标题" not in platform_text
     assert "system_promise_signal" in platform_text
+
+
+def test_coverage_steering_uses_structured_system_promise_learning(tmp_path: Path) -> None:
+    project = "customer_a"
+    _write_system_promise_history(tmp_path, project)
+    save_risk_clues(project, tmp_path, [])
+
+    slices = [
+        {"slice_id": "plain_state", "kind": "state_machine", "entity": "orders", "priority": 0.2},
+        {
+            "slice_id": "system_promise_money_tenant_ui",
+            "kind": "invariant",
+            "entity": "orders",
+            "priority": 0.2,
+            "_selection_origin": "system_behavior_space",
+            "_system_behavior_dimensions": ["money", "tenant", "ui_api_contract"],
+            "_system_behavior_surface_plan": ["api", "db", "ui"],
+        },
+    ]
+    ordered, diagnostic = _steer_slices(slices, root=tmp_path, project=project)
+
+    assert diagnostic["status"] == "applied"
+    assert diagnostic["system_behavior_learning_steered_slice_count"] == 1
+    assert ordered[0]["slice_id"] == "system_promise_money_tenant_ui"
+    assert ordered[0]["_learning_steering"]["system_behavior_slice"] is True
+    assert "money_quantity_conservation" in ordered[0]["_learning_steering"]["matched_families"]
+    assert ordered[0]["_learning_steering"]["surfaces"] == ["api", "db", "ui"]
