@@ -2940,52 +2940,154 @@ def why_high_value(risk_type: str) -> str:
     }.get(risk_type, "来自企业业务知识资产中的高风险规则")
 
 
+# Learned templates bind to OpenAPI by role — never emit synthetic mall IDs.
+# Tuple: template_id, title, probe_type, risk_type, severity, actor, method, role, expected_status, variants
 LEARNED_TEMPLATE_SPECS = [
-    ("STOCK_NEGATIVE_QUANTITY", "库存不能被扣成负数", "learned_stock_probe", "stock_consistency", "P0", "normal_user", "POST", "/orders", 409, "POST /orders", 2),
-    ("ORDER_DUPLICATE_SUBMIT", "重复提交不能生成多个订单", "learned_idempotency_probe", "idempotency", "P1", "normal_user", "POST", "/orders", 200, "POST /orders", 2),
-    ("IDEMPOTENCY_DUPLICATE_STOCK_DEDUCT", "重复提交不能重复扣减库存", "learned_stock_idempotency_probe", "stock_consistency", "P1", "normal_user", "POST", "/orders", 200, "POST /orders", 2),
-    ("STOCK_NOT_DECREASED", "下单成功后库存必须扣减", "learned_stock_probe", "stock_consistency", "P1", "normal_user", "POST", "/orders", 200, "POST /orders", 2),
-    ("STOCK_NOT_ROLLBACK", "取消订单后库存必须回滚", "learned_stock_probe", "stock_consistency", "P1", "normal_user", "POST", "/orders/{order_id}/cancel", 200, "POST /orders/{order_id}/cancel", 2),
-    ("ORDER_CREATE_MISSING", "订单创建成功后必须可查询", "learned_state_probe", "state_consistency", "P1", "normal_user", "POST", "/orders", 200, "POST /orders", 2),
-    ("ORDER_CANCEL_STATE", "订单取消后状态必须为 cancelled", "learned_state_probe", "state_flow", "P1", "normal_user", "POST", "/orders/{order_id}/cancel", 200, "POST /orders/{order_id}/cancel", 2),
-    ("IDOR_ORDER_ACCESS", "用户不能查看他人订单", "learned_idor_probe", "idor", "P0", "normal_user", "GET", "/orders/o900", 403, "GET /orders/{order_id}", 2),
-    ("IDOR_ORDER_CANCEL", "用户不能取消他人订单", "learned_idor_probe", "idor", "P1", "normal_user", "POST", "/orders/o900/cancel", 403, "POST /orders/{order_id}/cancel", 2),
-    ("IDOR_ADDRESS_MODIFY", "用户不能提交他人归属或跨租户订单数据", "learned_idor_probe", "idor", "P1", "normal_user", "POST", "/orders", 403, "POST /orders", 2),
-    ("TENANT_DATA_LEAK", "租户数据必须隔离", "learned_tenant_probe", "tenant_isolation", "P0", "normal_user", "GET", "/tenant/orders?tenant_id=tenant_b", 403, "GET /tenant/orders", 2),
-    ("AUTH_ROLE_DOWNGRADE_CACHE", "降权后缓存权限不能继续访问后台", "learned_permission_probe", "permission_bypass", "P1", "normal_user", "GET", "/admin/orders", 403, "GET /admin/orders", 1),
-    ("PAYMENT_STATUS_NOT_UPDATED", "支付成功后订单状态必须更新为 paid", "learned_payment_probe", "state_consistency", "P1", "normal_user", "POST", "/payments", 200, "POST /payments", 2),
-    ("PAYMENT_CANCELLED_ORDER_ALLOWED", "已取消订单不能继续支付", "learned_payment_probe", "state_flow", "P0", "normal_user", "POST", "/payments", 409, "POST /payments", 2),
-    ("ORDER_PAY_CANCELLED", "已取消订单不能被支付回调改为已支付", "learned_callback_probe", "state_flow", "P0", "system", "POST", "/payments/callback", 409, "POST /payments/callback", 2),
-    ("PAYMENT_DUPLICATE_CALLBACK", "支付回调必须幂等", "learned_callback_probe", "payment_callback", "P1", "system", "POST", "/payments/callback", 200, "POST /payments/callback", 2),
-    ("MONEY_PAY_TOTAL_DIFF", "支付回调金额必须等于订单金额", "learned_money_probe", "money_consistency", "P0", "system", "POST", "/payments/callback", 409, "POST /payments/callback", 2),
-    ("REFUND_UNPAID_ORDER", "未支付订单不能退款", "learned_refund_probe", "refund_abuse", "P1", "normal_user", "POST", "/refunds", 409, "POST /refunds", 2),
-    ("REFUND_DUPLICATE", "同一退款请求不能重复处理", "learned_refund_probe", "refund_abuse", "P1", "normal_user", "POST", "/refunds", 409, "POST /refunds", 2),
-    ("REFUND_OVER_AMOUNT", "退款金额不能超过已支付剩余金额", "learned_refund_probe", "money_consistency", "P0", "normal_user", "POST", "/refunds", 409, "POST /refunds", 2),
-    ("REFUND_STATE_INCONSISTENCY", "退款后订单状态和库存必须一致", "learned_refund_probe", "state_consistency", "P1", "normal_user", "POST", "/refunds", 200, "POST /refunds", 2),
-    ("COUPON_THRESHOLD_BYPASS", "不满足门槛不能使用优惠券", "learned_coupon_probe", "coupon_abuse", "P1", "normal_user", "POST", "/cart/apply-coupon", 400, "POST /cart/apply-coupon", 1),
-    ("MONEY_DISCOUNT_OVER_TOTAL", "优惠金额不能超过订单金额", "learned_money_probe", "money_consistency", "P0", "normal_user", "POST", "/cart/apply-coupon", 400, "POST /cart/apply-coupon", 1),
+    ("STOCK_NEGATIVE_QUANTITY", "容量/库存不足时不能创建", "learned_stock_probe", "stock_consistency", "P0", "normal_user", "POST", "capacity_create", 409, 2),
+    ("ORDER_DUPLICATE_SUBMIT", "重复提交不能生成多个业务单", "learned_idempotency_probe", "idempotency", "P1", "normal_user", "POST", "capacity_create", 200, 2),
+    ("IDEMPOTENCY_DUPLICATE_STOCK_DEDUCT", "重复提交不能重复扣减容量/库存", "learned_stock_idempotency_probe", "stock_consistency", "P1", "normal_user", "POST", "capacity_create", 200, 2),
+    ("STOCK_NOT_DECREASED", "创建成功后容量/库存必须扣减", "learned_stock_probe", "stock_consistency", "P1", "normal_user", "POST", "capacity_create", 200, 2),
+    ("STOCK_NOT_ROLLBACK", "取消后容量/库存必须回滚", "learned_stock_probe", "stock_consistency", "P1", "normal_user", "POST", "capacity_cancel", 200, 2),
+    ("ORDER_CREATE_MISSING", "创建成功后必须可查询", "learned_state_probe", "state_consistency", "P1", "normal_user", "POST", "capacity_create", 200, 2),
+    ("ORDER_CANCEL_STATE", "取消后状态必须进入终止态", "learned_state_probe", "state_flow", "P1", "normal_user", "POST", "capacity_cancel", 200, 2),
+    ("IDOR_ORDER_ACCESS", "用户不能查看他人资源", "learned_idor_probe", "idor", "P0", "normal_user", "GET", "owned_detail", 403, 2),
+    ("IDOR_ORDER_CANCEL", "用户不能越权取消他人资源", "learned_idor_probe", "idor", "P1", "normal_user", "POST", "capacity_cancel", 403, 2),
+    ("IDOR_ADDRESS_MODIFY", "用户创建时不能篡改租户或归属", "learned_idor_probe", "idor", "P1", "normal_user", "POST", "capacity_create", 403, 2),
+    ("TENANT_DATA_LEAK", "租户数据必须隔离", "learned_tenant_probe", "tenant_isolation", "P0", "normal_user", "GET", "tenant_list", 403, 2),
+    ("AUTH_ROLE_DOWNGRADE_CACHE", "低权限用户不能访问管理端", "learned_permission_probe", "permission_bypass", "P1", "normal_user", "GET", "admin_read", 403, 1),
+    ("PAYMENT_STATUS_NOT_UPDATED", "支付/结算成功后业务状态必须更新", "learned_payment_probe", "state_consistency", "P1", "normal_user", "POST", "payment_create", 200, 2),
+    ("PAYMENT_CANCELLED_ORDER_ALLOWED", "已终止业务单不能继续支付/结算", "learned_payment_probe", "state_flow", "P0", "normal_user", "POST", "payment_create", 409, 2),
+    ("ORDER_PAY_CANCELLED", "已终止业务单不能被回调改为已支付", "learned_callback_probe", "state_flow", "P0", "system", "POST", "payment_callback", 409, 2),
+    ("PAYMENT_DUPLICATE_CALLBACK", "支付/结算回调必须幂等", "learned_callback_probe", "payment_callback", "P1", "system", "POST", "payment_callback", 200, 2),
+    ("MONEY_PAY_TOTAL_DIFF", "回调金额必须匹配应付金额", "learned_money_probe", "money_consistency", "P0", "system", "POST", "payment_callback", 409, 2),
+    ("REFUND_UNPAID_ORDER", "未支付业务单不能退款", "learned_refund_probe", "refund_abuse", "P1", "normal_user", "POST", "refund_create", 409, 2),
+    ("REFUND_DUPLICATE", "同一退款请求不能重复处理", "learned_refund_probe", "refund_abuse", "P1", "normal_user", "POST", "refund_create", 409, 2),
+    ("REFUND_OVER_AMOUNT", "退款金额不能超过已支付剩余金额", "learned_refund_probe", "money_consistency", "P0", "normal_user", "POST", "refund_create", 409, 2),
+    ("REFUND_STATE_INCONSISTENCY", "退款后状态与库存/额度必须一致", "learned_refund_probe", "state_consistency", "P1", "normal_user", "POST", "refund_create", 200, 2),
+    ("COUPON_THRESHOLD_BYPASS", "不满足门槛不能使用权益/优惠", "learned_coupon_probe", "coupon_abuse", "P1", "normal_user", "POST", "benefit_apply", 400, 1),
+    ("MONEY_DISCOUNT_OVER_TOTAL", "优惠金额不能超过应付金额", "learned_money_probe", "money_consistency", "P0", "normal_user", "POST", "benefit_apply", 400, 1),
 ]
+
+_CAPACITY_HINTS = (
+    "order", "booking", "reservation", "enrollment", "appointment", "inventory",
+    "stock", "seat", "capacity", "ticket", "claim", "requisition", "prescription",
+    "订单", "预约", "选课", "库存", "名额",
+)
+_BENEFIT_HINTS = ("coupon", "voucher", "promo", "promotion", "benefit", "discount", "补贴", "优惠", "券")
+_PAYMENT_HINTS = ("payment", "pay", "settlement", "charge", "支付", "结算")
+_REFUND_HINTS = ("refund", "chargeback", "退款")
+_CALLBACK_HINTS = ("callback", "webhook", "notify", "回调", "通知")
+
+
+def normalize_synthetic_probe_path(path: str) -> str:
+    """Strip legacy mall concrete IDs back to OpenAPI-style placeholders."""
+    raw = str(path or "")
+    base, sep, query = raw.partition("?")
+    base = (
+        base.replace("/o900", "/{order_id}")
+        .replace("/p100", "/{product_id}")
+        .replace("/p200", "/{product_id}")
+        .replace("/alice", "/{user_id}")
+    )
+    return f"{base}{sep}{query}" if sep else base
+
+
+def _operation_match_text(op: dict) -> str:
+    return f"{op.get('path') or ''} {op.get('summary') or ''} {op.get('resource') or ''}".lower()
+
+
+def _operations_for_learned_role(operations: list[dict], role: str, method: str) -> list[dict]:
+    method_u = str(method or "").upper()
+    rows: list[dict] = []
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        op_method = str(op.get("method") or "").upper()
+        if method_u and op_method != method_u:
+            continue
+        path = str(op.get("path") or "")
+        if not path or path in {"/reset", "/health", "/openapi.json"}:
+            continue
+        text = _operation_match_text(op)
+        has_param = "{" in path and "}" in path
+        is_admin = any(tok in path.lower() for tok in ("/admin/", "/manage/", "/manager/", "/console/"))
+        if role == "capacity_create":
+            if has_param or not any(tok in text for tok in _CAPACITY_HINTS):
+                continue
+        elif role == "capacity_cancel":
+            if not any(tok in path.lower() for tok in ("/cancel", "/close", "/void", "/revoke", "/withdraw")):
+                continue
+            if not any(tok in text for tok in _CAPACITY_HINTS):
+                continue
+        elif role == "owned_detail":
+            if not has_param or op_method != "GET" or is_admin:
+                continue
+        elif role == "benefit_apply":
+            if not any(tok in text for tok in _BENEFIT_HINTS):
+                continue
+        elif role == "payment_create":
+            if any(tok in text for tok in _CALLBACK_HINTS) or not any(tok in text for tok in _PAYMENT_HINTS):
+                continue
+        elif role == "payment_callback":
+            if not (any(tok in text for tok in _PAYMENT_HINTS) and any(tok in text for tok in _CALLBACK_HINTS)):
+                continue
+        elif role == "refund_create":
+            if not any(tok in text for tok in _REFUND_HINTS):
+                continue
+        elif role == "admin_read":
+            if not is_admin or op_method != "GET":
+                continue
+        elif role == "tenant_list":
+            if "tenant" not in path.lower() and "tenant" not in text:
+                continue
+        else:
+            continue
+        rows.append(op)
+    # Prefer shorter/more specific collection paths first for stable binding.
+    return sorted(rows, key=lambda op: (len(str(op.get("path") or "")), str(op.get("path") or "")))
+
+
+def _openapi_paths(business_model: dict) -> set[str]:
+    return {
+        str(op.get("path") or "")
+        for op in (business_model.get("operations") or [])
+        if isinstance(op, dict) and op.get("path")
+    }
+
+
+def _path_available_in_model(path: str, paths: set[str]) -> bool:
+    if not path:
+        return False
+    candidates = {
+        path.split("?", 1)[0],
+        normalize_synthetic_probe_path(path).split("?", 1)[0],
+    }
+    return any(candidate in paths for candidate in candidates)
 
 
 def generate_feedback_learning_probes(business_model: dict) -> list[dict]:
     """Generate probes learned from prior miss analysis without reading hidden ground truth.
 
-    Phase4 treats the evaluator output as human/benchmark feedback: missed templates
-    are converted into reusable enterprise defect probes. These probes use only public
-    PRD/OpenAPI/account semantics at runtime and keep source=feedback_learning so the
-    report can distinguish learned strategy from benchmark-compatible demo probes.
+    Templates bind to real OpenAPI operations by semantic role. Synthetic mall IDs
+    like ``/orders/o900`` are never emitted into the probe path.
     """
-    paths = {op.get("path") for op in business_model.get("operations", [])}
-    def has_path(path: str) -> bool:
-        return path.split("?", 1)[0].replace("/o900", "/{order_id}") in paths or path.split("?", 1)[0] in paths
+    operations = [op for op in (business_model.get("operations") or []) if isinstance(op, dict)]
     probes: list[dict] = []
-    for template_id, title, probe_type, risk_type, severity, actor, method, path, expected_status, api_template, variants in LEARNED_TEMPLATE_SPECS:
-        if not has_path(api_template.split(" ", 1)[-1]) and not has_path(path):
+    for template_id, title, probe_type, risk_type, severity, actor, method, role, expected_status, variants in LEARNED_TEMPLATE_SPECS:
+        matched = _operations_for_learned_role(operations, role, method)
+        if not matched:
             continue
+        op = matched[0]
+        path = str(op.get("path") or "")
+        if role == "tenant_list" and "tenant_id=" not in path:
+            path = f"{path}{'&' if '?' in path else '?'}tenant_id=tenant_b"
+        api_template = f"{method} {str(op.get('path') or path).split('?')[0]}"
+        resource = str(op.get("resource") or path.strip("/").split("/")[0] or "resource")
+        bound_title = title if "{resource}" not in title else title.format(resource=resource)
         for idx in range(1, variants + 1):
             item = probe(
                 f"LEARN_{template_id}_V{idx}",
-                f"{title}（反馈学习变体 {idx}）",
+                f"{bound_title}（反馈学习变体 {idx}）",
                 probe_type,
                 risk_type,
                 severity,
@@ -2999,6 +3101,8 @@ def generate_feedback_learning_probes(business_model: dict) -> list[dict]:
             item["predicted_template_id"] = template_id
             item["learned_from"] = "phase3_missed_bug_analysis"
             item["learning_strategy"] = "template_level_probe_expansion"
+            item["learned_role"] = role
+            item["bound_operation"] = api_template
             item["variant_index"] = idx
             probes.append(item)
     return probes
@@ -3011,11 +3115,7 @@ def generate_adaptive_policy_probes(business_model: dict) -> list[dict]:
     truth files. It stores only template-level strategy and priority, so it can be
     reused in blind mode without exposing bug instances or enabled bug sets.
     """
-    paths = {op.get("path") for op in business_model.get("operations", [])}
-
-    def has_path(path: str) -> bool:
-        normalized = path.split("?", 1)[0].replace("/o900", "/{order_id}").replace("/p100", "/{product_id}")
-        return normalized in paths or path.split("?", 1)[0] in paths
+    paths = _openapi_paths(business_model)
 
     try:
         policy = build_learned_probe_policy(Path("."))
@@ -3025,7 +3125,11 @@ def generate_adaptive_policy_probes(business_model: dict) -> list[dict]:
     for row in policy.get("template_policies", []):
         if row.get("priority_score", 0) < 0.45:
             continue
-        if not has_path(row.get("api_template", " ").split(" ", 1)[-1]) and not has_path(row.get("path", "")):
+        raw_path = str(row.get("path") or (row.get("api_template") or " ").split(" ", 1)[-1])
+        path = normalize_synthetic_probe_path(raw_path)
+        api_template = str(row.get("api_template") or f"{row.get('method', 'GET')} {path.split('?')[0]}")
+        api_path = normalize_synthetic_probe_path(api_template.split(" ", 1)[-1])
+        if not _path_available_in_model(api_path, paths) and not _path_available_in_model(path, paths):
             continue
         variants = int(row.get("recommended_variants") or 1)
         for idx in range(1, variants + 1):
@@ -3037,9 +3141,9 @@ def generate_adaptive_policy_probes(business_model: dict) -> list[dict]:
                 row["severity"],
                 row["actor"],
                 row["method"],
-                row["path"],
+                path,
                 int(row["expected_status"]),
-                row["api_template"],
+                f"{row.get('method') or 'GET'} {path.split('?')[0]}",
                 source="adaptive_policy",
             )
             item["predicted_template_id"] = row["template_id"]
@@ -3059,13 +3163,7 @@ def generate_feedback_adjusted_policy_probes(business_model: dict) -> list[dict]
     level only, so blind discovery can use it without reading hidden ground truth,
     bug sets, or enabled bug switches.
     """
-    paths = {op.get("path") for op in business_model.get("operations", [])}
-
-    def has_path(path: str) -> bool:
-        if not path:
-            return False
-        normalized = path.split("?", 1)[0].replace("/o900", "/{order_id}").replace("/p100", "/{product_id}")
-        return normalized in paths or path.split("?", 1)[0] in paths
+    paths = _openapi_paths(business_model)
 
     policy_path = Path(os.environ.get("FEEDBACK_ADJUSTED_POLICY_PATH", "platform_workspace/enterprise_shop/defect_discovery/feedback_adjusted_probe_policy.json"))
     if not policy_path.exists():
@@ -3080,9 +3178,10 @@ def generate_feedback_adjusted_policy_probes(business_model: dict) -> list[dict]
     for row in policy.get("template_policies", []) or []:
         if float(row.get("priority_score") or 0) < 0.45:
             continue
-        api_template = row.get("api_template") or f"{row.get('method','GET')} {row.get('path','/')}"
-        path = str(row.get("path") or api_template.split(" ", 1)[-1])
-        if not has_path(api_template.split(" ", 1)[-1]) and not has_path(path):
+        raw_path = str(row.get("path") or (row.get("api_template") or f"{row.get('method','GET')} /").split(" ", 1)[-1])
+        path = normalize_synthetic_probe_path(raw_path)
+        api_template = f"{row.get('method') or 'GET'} {path.split('?')[0]}"
+        if not _path_available_in_model(api_template.split(" ", 1)[-1], paths) and not _path_available_in_model(path, paths):
             continue
         variants = max(1, min(5, int(row.get("recommended_variants") or 1)))
         for idx in range(1, variants + 1):
@@ -3961,52 +4060,81 @@ def execute_feedback_learning_probe(client: HttpClient, tokens: dict[str, str], 
         return client.request(method, path, token=tok, body=body)
 
     key = f"learn-{tid.lower()}-{variant}"
+    create_path = item.get("path") or "/orders"
     if tid == "STOCK_NEGATIVE_QUANTITY":
         request_body = {"product_id": "p100", "quantity": 999999, "idempotency_key": key}
-        evidence_response = req("POST", "/orders", token, request_body)
-        after = req("GET", "/products/p100", token)
-        failed = evidence_response["status_code"] < 400 or (after.get("body") or {}).get("stock", 0) < 0
-        actual = {"status_code": evidence_response["status_code"], "stock_after": (after.get("body") or {}).get("stock")}
+        evidence_response = req(item.get("method") or "POST", create_path, token, request_body)
+        if create_path.rstrip("/") == "/orders":
+            after = req("GET", "/products/p100", token)
+            failed = evidence_response["status_code"] < 400 or (after.get("body") or {}).get("stock", 0) < 0
+            actual = {"status_code": evidence_response["status_code"], "stock_after": (after.get("body") or {}).get("stock")}
+        else:
+            failed = evidence_response["status_code"] < 400
+            actual = evidence_response["status_code"]
     elif tid in {"ORDER_DUPLICATE_SUBMIT", "IDEMPOTENCY_DUPLICATE_ORDER"}:
         request_body = {"product_id": "p100", "quantity": 1, "idempotency_key": key}
-        first = req("POST", "/orders", token, request_body)
-        second = req("POST", "/orders", token, request_body)
+        first = req(item.get("method") or "POST", create_path, token, request_body)
+        second = req(item.get("method") or "POST", create_path, token, request_body)
         evidence_response = second
-        failed = first.get("body", {}).get("order_id") and second.get("body", {}).get("order_id") and first["body"].get("order_id") != second["body"].get("order_id")
-        actual = {"first_order_id": first.get("body", {}).get("order_id"), "second_order_id": second.get("body", {}).get("order_id")}
+        first_id = first.get("body", {}).get("order_id") or first.get("body", {}).get("id")
+        second_id = second.get("body", {}).get("order_id") or second.get("body", {}).get("id")
+        failed = bool(first_id and second_id and first_id != second_id)
+        actual = {"first_id": first_id, "second_id": second_id}
     elif tid == "IDEMPOTENCY_DUPLICATE_STOCK_DEDUCT":
-        before = req("GET", "/products/p100", token)
         request_body = {"product_id": "p100", "quantity": 1, "idempotency_key": key}
-        first = req("POST", "/orders", token, request_body)
-        second = req("POST", "/orders", token, request_body)
-        after = req("GET", "/products/p100", token)
-        evidence_response = after
-        failed = after["body"].get("stock", 0) <= before["body"].get("stock", 0) - 2 or (first.get("body", {}).get("order_id") and second.get("body", {}).get("order_id") and first["body"].get("order_id") != second["body"].get("order_id"))
-        actual = {"stock_before": before["body"].get("stock"), "stock_after": after["body"].get("stock"), "first_order_id": first.get("body", {}).get("order_id"), "second_order_id": second.get("body", {}).get("order_id")}
+        if create_path.rstrip("/") == "/orders":
+            before = req("GET", "/products/p100", token)
+            first = req("POST", "/orders", token, request_body)
+            second = req("POST", "/orders", token, request_body)
+            after = req("GET", "/products/p100", token)
+            evidence_response = after
+            failed = after["body"].get("stock", 0) <= before["body"].get("stock", 0) - 2 or (first.get("body", {}).get("order_id") and second.get("body", {}).get("order_id") and first["body"].get("order_id") != second["body"].get("order_id"))
+            actual = {"stock_before": before["body"].get("stock"), "stock_after": after["body"].get("stock"), "first_order_id": first.get("body", {}).get("order_id"), "second_order_id": second.get("body", {}).get("order_id")}
+        else:
+            first = req(item.get("method") or "POST", create_path, token, request_body)
+            second = req(item.get("method") or "POST", create_path, token, request_body)
+            evidence_response = second
+            first_id = first.get("body", {}).get("id") or first.get("body", {}).get("order_id")
+            second_id = second.get("body", {}).get("id") or second.get("body", {}).get("order_id")
+            failed = bool(first_id and second_id and first_id != second_id)
+            actual = {"first_id": first_id, "second_id": second_id}
     elif tid == "STOCK_NOT_DECREASED":
-        before = req("GET", "/products/p100", token)
         request_body = {"product_id": "p100", "quantity": 1, "idempotency_key": key}
-        order = req("POST", "/orders", token, request_body)
-        after = req("GET", "/products/p100", token)
-        evidence_response = after
-        failed = order["status_code"] < 400 and after["body"].get("stock") == before["body"].get("stock")
-        actual = {"stock_before": before["body"].get("stock"), "stock_after": after["body"].get("stock"), "order_status": order["status_code"]}
+        if create_path.rstrip("/") == "/orders":
+            before = req("GET", "/products/p100", token)
+            order = req("POST", "/orders", token, request_body)
+            after = req("GET", "/products/p100", token)
+            evidence_response = after
+            failed = order["status_code"] < 400 and after["body"].get("stock") == before["body"].get("stock")
+            actual = {"stock_before": before["body"].get("stock"), "stock_after": after["body"].get("stock"), "order_status": order["status_code"]}
+        else:
+            evidence_response = req(item.get("method") or "POST", create_path, token, request_body)
+            failed = evidence_response["status_code"] >= 400
+            actual = evidence_response["status_code"]
     elif tid == "STOCK_NOT_ROLLBACK":
-        before = req("GET", "/products/p100", token)
-        order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": key})
-        oid = order.get("body", {}).get("order_id")
-        cancel = req("POST", f"/orders/{oid}/cancel", token, {})
-        after = req("GET", "/products/p100", token)
-        evidence_response = cancel
-        failed = cancel["status_code"] < 400 and after["body"].get("stock") != before["body"].get("stock")
-        actual = {"stock_before": before["body"].get("stock"), "stock_after": after["body"].get("stock"), "cancel_status": cancel.get("body", {}).get("status")}
+        if (item.get("path") or "").startswith("/orders"):
+            before = req("GET", "/products/p100", token)
+            order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": key})
+            oid = order.get("body", {}).get("order_id")
+            cancel = req("POST", f"/orders/{oid}/cancel", token, {})
+            after = req("GET", "/products/p100", token)
+            evidence_response = cancel
+            failed = cancel["status_code"] < 400 and after["body"].get("stock") != before["body"].get("stock")
+            actual = {"stock_before": before["body"].get("stock"), "stock_after": after["body"].get("stock"), "cancel_status": cancel.get("body", {}).get("status")}
+        else:
+            evidence_response = req(item.get("method") or "POST", item.get("path") or create_path, token, {})
+            failed = evidence_response["status_code"] >= 400
+            actual = evidence_response["status_code"]
     elif tid == "ORDER_CREATE_MISSING":
         request_body = {"product_id": "p100", "quantity": 1, "idempotency_key": key}
-        order = req("POST", "/orders", token, request_body)
-        oid = order.get("body", {}).get("order_id", "missing")
-        evidence_response = req("GET", f"/orders/{oid}", token)
-        failed = order["status_code"] < 400 and evidence_response["status_code"] >= 400
-        actual = {"create_status": order["status_code"], "read_status": evidence_response["status_code"], "order_id": oid}
+        order = req(item.get("method") or "POST", create_path, token, request_body)
+        oid = order.get("body", {}).get("order_id") or order.get("body", {}).get("id") or "missing"
+        if create_path.rstrip("/") == "/orders":
+            evidence_response = req("GET", f"/orders/{oid}", token)
+        else:
+            evidence_response = order
+        failed = order["status_code"] < 400 and (create_path.rstrip("/") == "/orders" and evidence_response["status_code"] >= 400)
+        actual = {"create_status": order["status_code"], "read_status": evidence_response.get("status_code"), "id": oid}
     elif tid == "ORDER_CANCEL_STATE":
         order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": key})
         oid = order.get("body", {}).get("order_id")
@@ -4015,56 +4143,66 @@ def execute_feedback_learning_probe(client: HttpClient, tokens: dict[str, str], 
         failed = cancel["status_code"] < 400 and evidence_response.get("body", {}).get("status") != "cancelled"
         actual = {"cancel_status": cancel.get("body", {}).get("status"), "read_status": evidence_response.get("body", {}).get("status")}
     elif tid == "IDOR_ORDER_ACCESS":
-        evidence_response = req("GET", "/orders/o900", token)
+        evidence_response = req(item.get("method") or "GET", item.get("path") or "/orders/{order_id}", token)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid == "IDOR_ORDER_CANCEL":
-        evidence_response = req("POST", "/orders/o900/cancel", token, {})
+        evidence_response = req(item.get("method") or "POST", item.get("path") or "/orders/{order_id}/cancel", token, {})
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid == "IDOR_ADDRESS_MODIFY":
         request_body = {"product_id": "p200", "quantity": 1, "tenant_id": "tenant_b", "owner": "bob", "shipping_address_owner": "bob", "idempotency_key": key}
-        evidence_response = req("POST", "/orders", token, request_body)
+        evidence_response = req(item.get("method") or "POST", item.get("path") or "/orders", token, request_body)
         body = evidence_response.get("body", {})
         failed = evidence_response["status_code"] < 400 and (body.get("tenant_id") == "tenant_b" or body.get("owner") == "bob" or body.get("shipping_address_owner") == "bob")
         actual = {"status_code": evidence_response["status_code"], "body": body}
     elif tid in {"TENANT_DATA_LEAK"}:
-        evidence_response = req("GET", "/tenant/orders?tenant_id=tenant_b", token)
+        evidence_response = req(item.get("method") or "GET", item.get("path") or "/tenant/orders?tenant_id=tenant_b", token)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid in {"AUTH_ROLE_DOWNGRADE_CACHE"}:
-        evidence_response = req("GET", "/admin/orders", token)
+        evidence_response = req(item.get("method") or "GET", item.get("path") or "/admin/orders", token)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid == "AUTH_LOCKED_USER_BYPASS":
         request_body = {"username": os.environ.get("QUALIBUG_TEST_LOCKED_USER", "locked_user"),
                         "password": os.environ.get("QUALIBUG_TEST_LOCKED_PASS", "")}
-        evidence_response = req("POST", "/login", None, request_body)
+        evidence_response = req("POST", item.get("path") or "/login", None, request_body)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid == "AUTH_USER_WRITE_ADMIN":
         request_body = {"stock": 999}
-        evidence_response = req("POST", "/admin/products/p100", token, request_body)
+        evidence_response = req(item.get("method") or "POST", item.get("path") or "/admin/products/{product_id}", token, request_body)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
     elif tid == "AUTH_UNAUTH_ACCESS":
-        evidence_response = req("GET", "/admin/orders", None)
+        evidence_response = req(item.get("method") or "GET", item.get("path") or "/admin/orders", None)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
-    elif tid == "COUPON_DOUBLE_DISCOUNT":
-        request_body = {"coupon_id": "WELCOME20", "cart_amount": 120}
-        req("POST", "/cart/apply-coupon", token, request_body)
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
-        failed = evidence_response["status_code"] < 400
-        actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
-    elif tid == "COUPON_EXPIRED_ALLOWED":
-        request_body = {"coupon_id": "EXPIRED50", "cart_amount": 120}
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
-        failed = evidence_response["status_code"] < 400
+    elif tid in {"COUPON_DOUBLE_DISCOUNT", "COUPON_THRESHOLD_BYPASS", "COUPON_EXPIRED_ALLOWED", "MONEY_DISCOUNT_OVER_TOTAL"} or str(tid or "").startswith("COUPON_"):
+        benefit_path = item.get("path") or "/cart/apply-coupon"
+        if tid in {"COUPON_DOUBLE_DISCOUNT"} or "DOUBLE" in str(tid):
+            request_body = {"coupon_id": "WELCOME20", "cart_amount": 120, "benefit_id": "WELCOME20", "amount": 120}
+            req(item.get("method") or "POST", benefit_path, token, request_body)
+            evidence_response = req(item.get("method") or "POST", benefit_path, token, request_body)
+            failed = evidence_response["status_code"] < 400
+        elif tid in {"COUPON_EXPIRED_ALLOWED"} or "EXPIRED" in str(tid):
+            request_body = {"coupon_id": "EXPIRED50", "cart_amount": 120, "benefit_id": "EXPIRED50", "amount": 120}
+            evidence_response = req(item.get("method") or "POST", benefit_path, token, request_body)
+            failed = evidence_response["status_code"] < 400
+        elif tid in {"COUPON_THRESHOLD_BYPASS"} or "THRESHOLD" in str(tid):
+            request_body = {"coupon_id": "WELCOME20", "cart_amount": 1, "benefit_id": "WELCOME20", "amount": 1}
+            evidence_response = req(item.get("method") or "POST", benefit_path, token, request_body)
+            failed = evidence_response["status_code"] < 400
+        else:
+            request_body = {"coupon_id": "OVER999", "cart_amount": 10, "benefit_id": "OVER999", "amount": 10}
+            evidence_response = req(item.get("method") or "POST", benefit_path, token, request_body)
+            body = evidence_response.get("body", {})
+            failed = evidence_response["status_code"] < 400 and (body.get("payable_amount", 0) < 0)
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif tid == "COUPON_OWNERSHIP_BYPASS":
-        request_body = {"coupon_id": "BOBONLY", "cart_amount": 120}
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
+        request_body = {"coupon_id": "BOBONLY", "cart_amount": 120, "benefit_id": "BOBONLY", "amount": 120}
+        evidence_response = req(item.get("method") or "POST", item.get("path") or "/cart/apply-coupon", token, request_body)
         failed = evidence_response["status_code"] < 400
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif tid == "PAYMENT_AMOUNT_MISMATCH":
@@ -4083,19 +4221,31 @@ def execute_feedback_learning_probe(client: HttpClient, tokens: dict[str, str], 
         failed = float(second.get("body", {}).get("paid_amount", 0) or 0) > float(first.get("body", {}).get("paid_amount", 0) or 0)
         actual = {"first_paid": first.get("body", {}).get("paid_amount"), "second_paid": second.get("body", {}).get("paid_amount")}
     elif tid == "PAYMENT_STATUS_NOT_UPDATED":
-        order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": key})
-        oid = order.get("body", {}).get("order_id")
-        pay = req("POST", "/payments", token, {"order_id": oid, "amount": order.get("body", {}).get("total_amount", 0), "skip_status_update": True})
-        evidence_response = req("GET", f"/orders/{oid}", token)
-        failed = pay["status_code"] < 400 and evidence_response.get("body", {}).get("status") != "paid"
-        actual = {"pay_status": pay["status_code"], "order_status": evidence_response.get("body", {}).get("status")}
+        pay_path = item.get("path") or "/payments"
+        if pay_path.rstrip("/") == "/payments":
+            order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": key})
+            oid = order.get("body", {}).get("order_id")
+            pay = req("POST", "/payments", token, {"order_id": oid, "amount": order.get("body", {}).get("total_amount", 0), "skip_status_update": True})
+            evidence_response = req("GET", f"/orders/{oid}", token)
+            failed = pay["status_code"] < 400 and evidence_response.get("body", {}).get("status") != "paid"
+            actual = {"pay_status": pay["status_code"], "order_status": evidence_response.get("body", {}).get("status")}
+        else:
+            evidence_response = req(item.get("method") or "POST", pay_path, token, {"amount": 0.01, "idempotency_key": key})
+            failed = evidence_response["status_code"] < 400 and item.get("expected_status", 200) >= 400
+            actual = evidence_response["status_code"]
     elif tid == "PAYMENT_CANCELLED_ORDER_ALLOWED":
-        order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": key})
-        oid = order.get("body", {}).get("order_id")
-        req("POST", f"/orders/{oid}/cancel", token, {})
-        evidence_response = req("POST", "/payments", token, {"order_id": oid, "amount": order.get("body", {}).get("total_amount", 0)})
-        failed = evidence_response["status_code"] < 400
-        actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
+        pay_path = item.get("path") or "/payments"
+        if pay_path.rstrip("/") == "/payments":
+            order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": key})
+            oid = order.get("body", {}).get("order_id")
+            req("POST", f"/orders/{oid}/cancel", token, {})
+            evidence_response = req("POST", "/payments", token, {"order_id": oid, "amount": order.get("body", {}).get("total_amount", 0)})
+            failed = evidence_response["status_code"] < 400
+            actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
+        else:
+            evidence_response = req(item.get("method") or "POST", pay_path, token, {"amount": 0.01, "status": "cancelled", "idempotency_key": key})
+            failed = evidence_response["status_code"] < 400
+            actual = evidence_response["status_code"]
     elif tid == "ORDER_PAY_CANCELLED":
         order = req("POST", "/orders", tokens.get("normal_user"), {"product_id": "p100", "quantity": 1, "idempotency_key": key})
         oid = order.get("body", {}).get("order_id")
