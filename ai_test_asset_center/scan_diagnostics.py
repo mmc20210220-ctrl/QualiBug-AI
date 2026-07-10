@@ -23,8 +23,38 @@ class DiagCheck:
                 "suggestion": self.suggestion, "severity": self.severity}
 
 
-def _allow_internal_preflight() -> bool:
-    return os.environ.get("QUALIBUG_LOCAL_DEV_ACTOR", "0") == "1" or os.environ.get("QUALIBUG_SSRF_ALLOW_INTERNAL", "0") == "1"
+_NON_PRODUCTION_ENVIRONMENT_KINDS = {
+    "local", "development", "dev", "test", "testing", "qa", "sit", "uat",
+    "staging", "stage", "pre-release", "prerelease", "sandbox",
+}
+
+
+def _allow_internal_preflight(
+    config: dict[str, Any] | None = None,
+    base_url: str = "",
+) -> bool:
+    """Allow an internal target only through an explicit non-production grant."""
+
+    if (
+        os.environ.get("QUALIBUG_LOCAL_DEV_ACTOR", "0") == "1"
+        or os.environ.get("QUALIBUG_SSRF_ALLOW_INTERNAL", "0") == "1"
+    ):
+        return True
+    cfg = config if isinstance(config, dict) else {}
+    environment_kind = str(
+        cfg.get("environment_kind")
+        or cfg.get("environment_type")
+        or cfg.get("target_environment_kind")
+        or ""
+    ).strip().lower()
+    approved_base_url = str(cfg.get("approved_base_url") or "").strip().rstrip("/")
+    requested_base_url = str(base_url or cfg.get("api_base_url") or "").strip().rstrip("/")
+    return bool(
+        environment_kind in _NON_PRODUCTION_ENVIRONMENT_KINDS
+        and approved_base_url
+        and requested_base_url
+        and approved_base_url == requested_base_url
+    )
 
 
 def _ordered_test_credentials(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -47,7 +77,7 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
     # ── 1. API reachability ──
     if base_url:
         try:
-            resp = safe_urlopen(base_url, timeout=5, allow_internal=_allow_internal_preflight())
+            resp = safe_urlopen(base_url, timeout=5, allow_internal=_allow_internal_preflight(config, base_url))
             checks.append(DiagCheck("API可达性", True,
                 f"{base_url} 响应 HTTP {resp.status}"))
         except urllib.error.HTTPError as e:
@@ -93,7 +123,7 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
             ).encode()
             req = urllib.request.Request(f"{base_url}/api/auth/login", data=data,
                 headers={"Content-Type": "application/json"}, method="POST")
-            resp = safe_urlopen(req, timeout=5, allow_internal=_allow_internal_preflight())
+            resp = safe_urlopen(req, timeout=5, allow_internal=_allow_internal_preflight(config, base_url))
             token = json.loads(resp.read()).get("token", "")
             if token:
                 checks.append(DiagCheck(f"测试凭证({account_name})", True,
@@ -187,7 +217,7 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
         test_method = routes[0].split(" ", 1)[0] if routes else "GET"
         try:
             req = urllib.request.Request(f"{base_url}{test_route}", method=test_method, headers={"User-Agent": "QualiBug-Diag"})
-            resp = safe_urlopen(req, timeout=5, allow_internal=_allow_internal_preflight())
+            resp = safe_urlopen(req, timeout=5, allow_internal=_allow_internal_preflight(config, base_url))
             checks.append(DiagCheck("接口冒烟测试", True,
                 f"{test_method} {test_route} → HTTP {resp.status}"))
         except urllib.error.HTTPError as e:
