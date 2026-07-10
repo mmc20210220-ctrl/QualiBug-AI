@@ -1988,6 +1988,13 @@ def _record_pipeline_failure(result: dict[str, Any], exc: Exception) -> None:
         "detail": detail,
         "preserved_slice_count": len(slices),
     }
+    stage_status = result.setdefault("stage_status", {})
+    if isinstance(stage_status, dict):
+        stage_status["pipeline"] = "FAILED_SAFE"
+    stage_failures = result.setdefault("stage_failures", [])
+    failure_marker = f"pipeline:{type(exc).__name__}:{detail}"
+    if isinstance(stage_failures, list) and failure_marker not in stage_failures:
+        stage_failures.append(failure_marker)
     ledger = _dict(result.get("behavior_slice_ledger"))
     if slices and not ledger:
         pending_ids = [
