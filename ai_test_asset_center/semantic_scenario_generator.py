@@ -237,6 +237,8 @@ class SemanticScenarioGenerator:
             item = self._concurrency_slice(slice_meta, discovery_round)
         elif kind == "money":
             item = self._money_slice(slice_meta, discovery_round)
+        elif kind == "account_status":
+            item = self._account_status_slice(slice_meta, discovery_round)
         else:
             return None
         if item is None or allow_source_runtime:
@@ -1575,6 +1577,51 @@ class SemanticScenarioGenerator:
             source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
             behavior_slice_id=str(slice_meta.get("slice_id") or ""),
             behavior_slice_kind="permission",
+            discovery_round=discovery_round,
+            actor_token="",
+            selection_origin="supplementary_active_slice",
+        )
+
+    @staticmethod
+    def _account_status_slice(
+        slice_meta: dict[str, Any], discovery_round: int,
+    ) -> ExecutableScenario | None:
+        """Fresh login for DISABLED/LOCKED accounts — must be rejected (no token)."""
+        login_path = str(slice_meta.get("_login_path") or "").strip()
+        email = str(slice_meta.get("_account_status_email") or "").strip()
+        password = str(slice_meta.get("_account_status_password") or "").strip()
+        role = str(slice_meta.get("_account_status_role") or "").strip()
+        status = str(slice_meta.get("_account_status") or "").strip().upper()
+        if not login_path.startswith("/") or not email or not password:
+            return None
+        login_body = dict(slice_meta.get("_login_body") or {})
+        step = SemanticScenarioGenerator._build_login_step(
+            login_path, login_body, email, password, order=1,
+        )
+        if step is None:
+            return None
+        step.expected_status = 403
+        return ExecutableScenario(
+            id=SemanticScenarioGenerator._id("auth", "account_status", role, "POST", login_path),
+            title=f"[Account status probe] {status} account {email} must not login",
+            description=f"验证 {status} 账号 {email} 调用登录接口应被拒绝，不得返回有效 token",
+            category="authorization_access_control",
+            severity="P0",
+            entity="auth",
+            preconditions=[],
+            actors=[role],
+            steps=[step],
+            oracle_rules=[
+                "PermissionOracle.role_boundary_check",
+                f"account_status={status}",
+                "login_must_reject_disabled_or_locked",
+            ],
+            confidence=float(slice_meta.get("priority") or 0.95),
+            execution_policy="safe_read_only",
+            evidence_gaps=[],
+            source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="account_status",
             discovery_round=discovery_round,
             actor_token="",
             selection_origin="supplementary_active_slice",

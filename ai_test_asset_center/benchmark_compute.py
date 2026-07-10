@@ -179,16 +179,119 @@ _RISK_FAMILY_ONTOLOGY: dict[str, dict[str, Any]] = {
 }
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _read_json(path: Path) -> dict[str, Any] | list[Any]:
     if not path.exists():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8") or "null")
-        return data if isinstance(data, dict) else {}
+        return data if isinstance(data, (dict, list)) else {}
     except Exception as e:
         import sys
         print(f"[benchmark_compute] Failed to read {path}: {e}", file=sys.stderr)
         return {}
+
+
+def _load_truth_bugs(gt_path: Path) -> list[dict[str, Any]]:
+    """Load ground-truth bugs from dict or bare-list JSON (benchmark_mall format)."""
+    data = _read_json(gt_path)
+    if isinstance(data, list):
+        return [b for b in data if isinstance(b, dict)]
+    if isinstance(data, dict):
+        bugs = data.get("bugs", [])
+        if isinstance(bugs, list):
+            return [b for b in bugs if isinstance(b, dict)]
+    return []
+
+
+_API_PATH_RE = re.compile(r"/(?:api/)?[a-zA-Z0-9_{}:/.-]+")
+
+
+def _extract_api_paths(text: str) -> set[str]:
+    paths: set[str] = set()
+    for match in _API_PATH_RE.findall(str(text or "")):
+        cleaned = match.split("?")[0].rstrip("/").lower()
+        cleaned = re.sub(r":[a-zA-Z_][a-zA-Z0-9_]*", "/*", cleaned)
+        cleaned = re.sub(r"\{[^}]+\}", "/*", cleaned)
+        if cleaned.startswith("/"):
+            paths.add(cleaned)
+    return paths
+
+
+def _finding_text_blob(finding: dict[str, Any]) -> str:
+    parts = [
+        finding.get("title"), finding.get("description"), finding.get("summary"),
+        finding.get("category"), finding.get("defect_family"), finding.get("risk_type"),
+        finding.get("expected"), finding.get("actual"),
+    ]
+    repro = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
+    parts.extend([repro.get("method"), repro.get("path")])
+    return " ".join(str(p or "") for p in parts).lower()
+
+
+def _finding_paths(finding: dict[str, Any]) -> set[str]:
+    paths = set()
+    repro = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
+    if repro.get("path"):
+        paths |= _extract_api_paths(str(repro.get("path")))
+    key_method, key_path = _method_path_key(finding)
+    if key_path:
+        paths.add(key_path.lower())
+    paths |= _extract_api_paths(_finding_text_blob(finding))
+    return paths
+
+
+def _paths_overlap(left: set[str], right: set[str]) -> bool:
+    if not left or not right:
+        return False
+    if left & right:
+        return True
+    for a in left:
+        for b in right:
+            a_parts = a.split("/")
+            b_parts = b.split("/")
+            if len(a_parts) == len(b_parts) and all(
+                x == y or x in {"*", "/*"} or y in {"*", "/*"} for x, y in zip(a_parts, b_parts)
+            ):
+                return True
+    return False
+
+
+def _match_finding_to_gt(
+    finding: dict[str, Any],
+    truth_bugs: list[dict[str, Any]],
+    used_ids: set[str],
+) -> dict[str, Any] | None:
+    """Keyword + API-path + semantic match (post-scan scoring only — never fed into discovery)."""
+    blob = _finding_text_blob(finding)
+    f_paths = _finding_paths(finding)
+    best: tuple[float, dict[str, Any]] | None = None
+
+    for gt in truth_bugs:
+        gt_id = str(gt.get("bug_id") or gt.get("id") or "")
+        if not gt_id or gt_id in used_ids:
+            continue
+        score = 0.0
+        keywords = gt.get("match_keywords") if isinstance(gt.get("match_keywords"), list) else []
+        kw_hits = sum(1 for kw in keywords if str(kw).lower() in blob)
+        if keywords:
+            score += min(0.55, kw_hits * 0.12)
+        gt_paths = _extract_api_paths(str(gt.get("trigger") or ""))
+        gt_paths |= _extract_api_paths(" ".join(str(k) for k in keywords))
+        if _paths_overlap(f_paths, gt_paths):
+            score += 0.35
+        gt_title = str(gt.get("title") or "").lower()
+        if gt_title and any(tok in blob for tok in gt_title.split() if len(tok) >= 4):
+            score += 0.12
+        if score < 0.38:
+            continue
+        if best is None or score > best[0]:
+            best = (score, gt)
+
+    if best is None:
+        return None
+    matched = dict(best[1])
+    matched["__match_score"] = round(best[0], 4)
+    return matched
 
 
 def _safe_float(value: Any, fallback: float = 0.0) -> float:
@@ -459,8 +562,7 @@ def compute_benchmark(
             "coverage_matrix": _coverage_matrix(findings, candidates),
         }
 
-    truth_data = _read_json(gt_path)
-    truth_bugs = truth_data.get("bugs", [])
+    truth_bugs = _load_truth_bugs(gt_path)
     if not truth_bugs:
         return {
             "benchmark_active": False,
@@ -469,50 +571,40 @@ def compute_benchmark(
             "coverage_matrix": _coverage_matrix(findings, candidates),
         }
 
-    # ── Match findings against ground truth ──
-    all_findings = list(findings) + (list(candidates) if candidates else [])
-
-    # Build lookup: (method, path) → ground_truth_bug
-    gt_by_path: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for bug in truth_bugs:
-        trigger = bug.get("trigger", "")
-        method = bug.get("method", "GET").upper()
-        path = _method_path_key({"path": trigger, "method": method})[1]
-        key = (method, path)
-        gt_by_path.setdefault(key, []).append(bug)
-
-    # Also build by bug_id for exact matching
-    gt_by_id: dict[str, dict[str, Any]] = {}
-    for bug in truth_bugs:
-        bid = str(bug.get("bug_id") or bug.get("id") or "")
-        if bid:
-            gt_by_id[bid] = bug
+    # ── Match confirmed findings against ground truth (post-scan scoring only) ──
+    confirmed_findings = [
+        f for f in findings
+        if isinstance(f, dict) and (
+            f.get("gate_passed") is True
+            or str(f.get("customer_delivery_status") or "") == "defect"
+            or str(f.get("confirmation_status") or "") == "confirmed"
+        )
+    ]
+    all_findings = list(confirmed_findings) + [
+        c for c in (candidates or [])
+        if isinstance(c, dict) and c.get("gate_passed") is True
+    ]
 
     matched_gt_ids: set[str] = set()
     matched_pairs: list[dict[str, Any]] = []
     false_positives: list[dict[str, Any]] = []
 
-    for finding in all_findings:
-        key = _method_path_key(finding)
-        candidates_gt = gt_by_path.get(key, [])
-        matched = False
-        for gt in candidates_gt:
+    for finding in confirmed_findings:
+        gt = _match_finding_to_gt(finding, truth_bugs, matched_gt_ids)
+        if gt:
             gt_id = str(gt.get("bug_id") or gt.get("id") or "")
-            if gt_id in matched_gt_ids:
-                continue
             matched_gt_ids.add(gt_id)
             matched_pairs.append({
                 "finding_title": finding.get("title", ""),
                 "finding_severity": finding.get("severity", ""),
+                "match_score": gt.get("__match_score", 0),
                 "gt_bug_id": gt_id,
                 "gt_title": gt.get("title", ""),
                 "gt_severity": gt.get("severity", ""),
                 "gt_type": gt.get("type", ""),
                 "gt_risk_family": _risk_family_for_item(gt),
             })
-            matched = True
-            break
-        if not matched and finding.get("customer_delivery_status") == "defect":
+        elif finding.get("customer_delivery_status") == "defect" or finding.get("gate_passed") is True:
             false_positives.append(finding)
 
     total_gt = len(truth_bugs)

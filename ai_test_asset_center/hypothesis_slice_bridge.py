@@ -295,7 +295,11 @@ def hypotheses_to_slices(
         if kind == "permission":
             slice_row["_permission_method"] = method
             slice_row["_permission_path"] = path
-            slice_row["_permission_actor"] = "readonly"
+            slice_row["_permission_actor"] = _text(
+                hypothesis.get("actor_role")
+                or hypothesis.get("actor")
+                or hypothesis.get("required_role")
+            )
             slice_row["_permission_expected_permitted"] = []
         elif kind == "concurrency":
             slice_row["_concurrency_method"] = method

@@ -2511,13 +2511,43 @@ def _materialize_external_commercial_assets(
 
 
 def _load_schema_assets(root: Path, project: str) -> str:
-    directory = root / "platform_workspace" / _safe_project(project) / "input"
+    """Load project-scoped database schema for data-layer observation planning.
+
+    Checks, in order:
+    1. ``platform_workspace/<project>/input/*.sql`` (canonical workspace)
+    2. ``platform_inputs/<project>/schema.sql`` (ingested customer materials)
+    3. ``platform_inputs/<project>/DB_SCHEMA.md`` (markdown schema doc)
+    """
+    safe = _safe_project(project)
     chunks: list[str] = []
-    for path in sorted(directory.glob("*.sql")) if directory.exists() else []:
+    seen_hashes: set[str] = set()
+
+    def _ingest(path: Path) -> None:
+        if not path.is_file():
+            return
         try:
-            chunks.append(path.read_text(encoding="utf-8", errors="replace")[:1_000_000])
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
         except OSError:
-            continue
+            return
+        if not text:
+            return
+        digest = _sha256(text)
+        if digest in seen_hashes:
+            return
+        seen_hashes.add(digest)
+        chunks.append(text[:1_000_000])
+
+    workspace_sql = root / "platform_workspace" / safe / "input"
+    if workspace_sql.exists():
+        for path in sorted(workspace_sql.glob("*.sql")):
+            _ingest(path)
+
+    inputs_dir = root / "platform_inputs" / safe
+    _ingest(inputs_dir / "schema.sql")
+    db_schema_md = inputs_dir / "DB_SCHEMA.md"
+    if db_schema_md.exists():
+        _ingest(db_schema_md)
+
     return "\n\n".join(chunks)
 
 
@@ -4094,6 +4124,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     candidates = refreshed_candidates
     v12["external_findings"] = external_findings
     ui_execution = _as_dict(v12.get("ui_execution"))
+    p4_ui_evidence_bridge: dict[str, Any] = {"status": "not_requested"}
     try:
         evidence_bundle = _persist_execution_evidence(project, root, scan_id, campaign, runtime_contract, execution_status, v12)
 
@@ -4106,9 +4137,13 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                 har_enriched = bridge_browser_har_to_findings(
                     ui_execution, all_findings, root=root,
                 )
-                result["p4_ui_evidence_bridge"] = har_enriched.get("har_summary", {})
-            except Exception:
-                result["p4_ui_evidence_bridge"] = {"status": "bridge_skipped"}
+                p4_ui_evidence_bridge = _as_dict(har_enriched.get("har_summary"))
+            except Exception as exc:
+                p4_ui_evidence_bridge = {
+                    "status": "failed",
+                    "reason": f"har_bridge_error:{type(exc).__name__}",
+                    "error": str(exc)[:300],
+                }
 
     except Exception as exc:
         import sys
@@ -4283,6 +4318,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         },
         "findings": confirmed, "candidate_findings": candidates, "db_findings": [], "e2e_findings": [], "ui_findings": ui_findings, "ui_candidate_findings": ui_candidate_findings, "ui_high_confidence_candidates": ui_high_confidence_candidates, "external_findings": external_findings, "deep_findings": [], "spectrum": {},
         "ui_followup_assets": ui_followup_assets,
+        "p4_ui_evidence_bridge": p4_ui_evidence_bridge,
         "commercial_assets": commercial_assets,
         "external_reproduction_assets": external_reproduction_assets,
         "external_commercial_assets": external_commercial_assets,

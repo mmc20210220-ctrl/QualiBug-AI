@@ -97,6 +97,24 @@ def load_settings_accounts(root: Path, project: str) -> tuple[list[dict[str, str
     return accounts, login_path
 
 
+def _normalize_accounts_payload(raw: Any) -> list[dict[str, str]]:
+    """Normalize test_accounts.json whether stored as a list or name→account dict."""
+    if isinstance(raw, list):
+        return [dict(a) for a in raw if isinstance(a, dict)]
+    if isinstance(raw, dict):
+        rows: list[dict[str, str]] = []
+        for name, acct in raw.items():
+            if not isinstance(acct, dict):
+                continue
+            row = {str(k): str(v) for k, v in acct.items() if v is not None}
+            row.setdefault("name", str(name))
+            if not row.get("role"):
+                row["role"] = str(name)
+            rows.append(row)
+        return rows
+    return []
+
+
 def _load_test_accounts(root: Path, project: str) -> list[dict[str, str]]:
     """Read test_accounts.json from the project workspace, if present."""
     for base in (
@@ -106,7 +124,7 @@ def _load_test_accounts(root: Path, project: str) -> list[dict[str, str]]:
         path = base / "test_accounts.json"
         if path.exists():
             try:
-                return json.loads(path.read_text(encoding="utf-8"))
+                return _normalize_accounts_payload(json.loads(path.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, OSError):
                 pass
     return []
@@ -475,6 +493,61 @@ def _parse_documented_request_body(summary: str) -> dict[str, Any]:
     return {}
 
 
+def _account_status_token(account: dict[str, str]) -> str:
+    for key in ("status", "account_status", "state"):
+        value = str(account.get(key) or "").strip().upper()
+        if value:
+            return value
+    email = str(account.get("email") or account.get("name") or "").lower()
+    if "disabled" in email or "locked" in email:
+        return "DISABLED"
+    return ""
+
+
+def generate_account_status_slices(
+    actors: list[dict[str, str]],
+    login_path: str = "",
+    login_body: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Fresh-login probes for DISABLED/LOCKED accounts.
+
+    Catches bugs where suspended accounts still receive a valid token on login
+    (e.g. benchmark AUTH-001). Uses only credentials declared in test_accounts —
+    no hardcoded roles or endpoints.
+    """
+    if not actors or not login_path:
+        return []
+    slices: list[dict[str, Any]] = []
+    for actor in actors:
+        status = _account_status_token(actor)
+        if status not in {"DISABLED", "LOCKED"}:
+            continue
+        email = str(actor.get("email") or "").strip()
+        password = str(actor.get("password") or "").strip()
+        role = str(actor.get("role") or actor.get("name") or email).strip()
+        if not email or not password:
+            continue
+        slice_id = behavior_slice_id("account_status", "auth", role, "POST", login_path)
+        slices.append({
+            "slice_id": slice_id,
+            "entity": "auth",
+            "kind": "account_status",
+            "states": [],
+            "endpoints": [login_path],
+            "priority": 0.95,
+            "source_refs": [{"kind": "test_account", "quote": email}],
+            "evidence_gaps": [],
+            "_account_status": status,
+            "_account_status_email": email,
+            "_account_status_password": password,
+            "_account_status_role": role,
+            "_login_path": login_path,
+            "_login_body": dict(login_body or {}),
+            "_permission_oracle": "PermissionOracle",
+        })
+    return slices
+
+
 def generate_supplementary_slices(
     root: Path,
     project: str,
@@ -515,6 +588,8 @@ def generate_supplementary_slices(
     if actors:
         default_actor = next((a for a in actors if not _is_admin_like(a)), actors[0])
     all_slices: list[dict[str, Any]] = []
+    if login_path and actors:
+        all_slices.extend(generate_account_status_slices(actors, login_path=login_path, login_body=login_body_template))
     if actors and any(str(e.get("method") or "").upper() in _WRITE_METHODS for e in endpoints):
         all_slices.extend(generate_permission_slices(endpoints, actors, login_path=login_path, login_body=login_body_template))
     if len(actors) >= 2 and any(str(e.get("method") or "").upper() in _READ_METHODS for e in endpoints):

@@ -18,7 +18,7 @@ SOURCE_MANIFEST = {
 }
 
 
-def test_v12_requires_campaign_bound_execution_approval_before_target_traffic(tmp_path):
+def test_v12_authorizes_source_bound_nonproduction_without_per_probe_approval(tmp_path):
     result = run_v12_pipeline(
         project="enterprise-project",
         root=tmp_path,
@@ -29,12 +29,14 @@ def test_v12_requires_campaign_bound_execution_approval_before_target_traffic(tm
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "execution_mode": "approved_sandbox_write",
             "source_manifest": SOURCE_MANIFEST,
         },
     )
 
-    assert result["runtime_contract"]["status"] == "blocked"
-    assert result["runtime_contract"]["execution_approval"]["code"] == "EXECUTION_APPROVAL_MISSING"
+    assert result["runtime_contract"]["status"] == "approved"
+    assert result["runtime_contract"]["execution_approval"]["authorization_basis"] == "source_bound_nonproduction_campaign"
     assert result["phases"]["execution"]["status"] == "blocked"
+    assert result["phases"]["execution"]["reason"] == "test_account_token_missing"
     assert result["auto_har"]["status"] == "no_traffic"
     assert result["campaign"]["source_hash"] == SOURCE_MANIFEST["source_hash"]

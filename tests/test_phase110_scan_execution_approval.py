@@ -32,7 +32,7 @@ def test_scan_loads_registered_manifest_without_reuploading_source_text(tmp_path
     assert result["runtime_contract"]["source_manifest"]["source_version_id"] == manifest["source_version_id"]
 
 
-def test_scan_blocks_target_traffic_without_campaign_execution_approval(tmp_path):
+def test_scan_authorizes_nonproduction_without_per_probe_approval_but_requires_runtime_receipts(tmp_path):
     manifest = register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
 
     result = scan(
@@ -42,16 +42,17 @@ def test_scan_blocks_target_traffic_without_campaign_execution_approval(tmp_path
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "execution_mode": "approved_sandbox_write",
             "source_manifest": manifest,
         },
     )
 
     assert result["grade"] == "blocked"
-    assert result["runtime_contract"]["status"] == "blocked"
-    assert result["runtime_contract"]["execution_approval"]["code"] == "EXECUTION_APPROVAL_MISSING"
+    assert result["runtime_contract"]["status"] == "approved"
+    assert result["runtime_contract"]["execution_approval"]["authorization_basis"] == "source_bound_nonproduction_campaign"
     assert result["execution_status"] == "blocked"
     assert result["auto_har"]["status"] == "no_traffic"
-    assert result["release_gate"]["verdict"] == "fail"
+    assert result["release_gate"]["verdict"] == "not_ready"
 
 
 def test_scan_auto_issues_local_execution_approval_for_loopback_runtime(tmp_path, monkeypatch):

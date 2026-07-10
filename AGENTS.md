@@ -40,3 +40,10 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 7.测试项目测试bug不能造假数据给我，没有执行找出的bug不要给我，不能给我假数据
 8.首先我要的就是全行业不同软件系统都适用，只要违反这个原则都要优化
 9.我的产品前端服务端口是5174，后端服务端口是8088，不要搞错了
+
+## Non-Production Execution Contract
+
+- QualiBug automatically performs read and write probes against explicitly declared non-production targets (local, development, test, QA, SIT, UAT, staging, pre-release, and sandbox). A source-bound campaign does not require per-probe manual approval.
+- Production targets are a hard write boundary. Unknown or undeclared environment types are fail-closed for writes; never infer that an unknown target is safe.
+- Every write must pass through the governed sandbox executor and emit before/after observations, cleanup outcome, campaign/slice identity, target identity, and an audit receipt. Hidden seed/bootstrap writes outside this path are forbidden.
+- Read-only mode remains available as an operator kill-switch, but it must block writes before any request is sent and report the blocking reason visibly.

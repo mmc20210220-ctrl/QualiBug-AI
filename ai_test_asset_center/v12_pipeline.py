@@ -575,11 +575,13 @@ def _source_manifest_details(context: dict[str, Any], source_text: Any) -> tuple
 def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) -> dict[str, Any]:
     """Direct callers cannot bypass source, scope, environment, or hash approval."""
     manifest, source_issues = _source_manifest_details(context, source_text)
+    environment_ref = str(context.get("environment_ref") or context.get("target_environment") or "").strip()
     if not base_url:
         return {
             "status": "plan_only",
             "reason": "runtime_target_missing",
             "approved_base_url": "",
+            "environment_ref": environment_ref,
             "source_manifest": manifest,
             "source_issues": source_issues,
         }
@@ -592,13 +594,15 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "reason": "local_test_environment",
             "missing_requirements": [],
             "approved_base_url": str(base_url).rstrip("/"),
+            "environment_ref": environment_ref or "local",
+            "environment_kind": environment_ref or "local",
             "source_manifest": manifest,
             "source_issues": source_issues,
         }
     missing = list(source_issues)
     if not str(context.get("scope_id") or "").strip():
         missing.append("CAMPAIGN_SCOPE_MISSING")
-    if not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
+    if not environment_ref:
         missing.append("ENVIRONMENT_REFERENCE_MISSING")
     if missing:
         return {
@@ -606,6 +610,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "reason": "runtime_contract_missing",
             "missing_requirements": sorted(set(missing)),
             "approved_base_url": "",
+            "environment_ref": environment_ref,
             "source_manifest": manifest,
         }
     return {
@@ -613,55 +618,41 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         "reason": "",
         "missing_requirements": [],
         "approved_base_url": str(base_url).rstrip("/"),
+        "environment_ref": environment_ref,
+        "environment_kind": str(context.get("environment_kind") or context.get("environment_class") or environment_ref).strip(),
         "source_manifest": manifest,
     }
 
 
 def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCampaign, base_url: str, root: Path) -> dict[str, Any]:
-    """Verify an approval only after the canonical Campaign identity is known.
+    """Enforce the environment boundary after Campaign identity is known.
 
-    ``safe_read_only`` execution does NOT require an approval — it cannot
-    mutate the target.  ``approved_test_write`` is allowed when the
-    ``QUALIBUG_ALLOW_TEST_WRITE`` flag is set (customer test environment).
-    Only ``approved_sandbox_write`` needs an explicit approval.
+    A source-bound non-production campaign is authorized for automatic reads
+    and writes without per-probe approval. Production and unknown environments
+    are fail-closed for every write mode. ``execution_approval_id`` remains
+    accepted as audit metadata, but is not a runtime prerequisite.
     """
     if not base_url:
         return {"status": "not_required", "reason": "runtime_target_missing"}
     execution_mode = str(context.get("execution_mode") or "safe_read_only").strip()
-    # safe_read_only is inherently safe — no approval needed
     if execution_mode == "safe_read_only":
         return {"status": "approved", "execution_mode": execution_mode}
-    # approved_test_write: allowed when the env flag confirms a test environment
-    if execution_mode == "approved_test_write" and _is_test_write_allowed():
-        return {"status": "approved", "execution_mode": "approved_test_write",
-                "fixture_prefix": _test_write_fixture_prefix()}
+    from .sandbox_write_executor import is_production_environment, is_test_or_sandbox_environment
+
+    environment_ref = str(campaign.environment_ref or context.get("environment_ref") or context.get("target_environment") or "").strip()
+    if not environment_ref:
+        return {"status": "blocked", "code": "ENVIRONMENT_REFERENCE_MISSING", "execution_mode": execution_mode}
+    if is_production_environment(environment_ref):
+        return {"status": "blocked", "code": "PRODUCTION_WRITE_BLOCKED", "execution_mode": execution_mode}
+    if not is_test_or_sandbox_environment(environment_ref):
+        return {"status": "blocked", "code": "ENVIRONMENT_NOT_RECOGNIZED_NONPROD", "execution_mode": execution_mode}
     approval_id = str(context.get("execution_approval_id") or "").strip()
-    if not approval_id:
-        return {"status": "blocked", "code": "EXECUTION_APPROVAL_MISSING", "execution_mode": execution_mode}
-    try:
-        from .execution_approvals import verify_execution_approval
-        verdict = verify_execution_approval(
-            campaign.project_id,
-            approval_id,
-            root=root,
-            campaign_id=campaign.campaign_id,
-            scope_id=campaign.scope_id,
-            environment_ref=campaign.environment_ref,
-            source_hash=campaign.source_hash,
-            target_base_url=base_url,
-            execution_mode=execution_mode,
-        )
-    except Exception as exc:
-        return {"status": "blocked", "code": f"EXECUTION_APPROVAL_VERIFICATION_ERROR:{type(exc).__name__}", "execution_mode": execution_mode}
-    if verdict.get("valid") is not True:
-        return {"status": "blocked", "code": str(verdict.get("code") or "EXECUTION_APPROVAL_INVALID"), "execution_mode": execution_mode}
-    approval = _dict(verdict.get("approval"))
     return {
         "status": "approved",
         "approval_id": approval_id,
-        "approval_hash": str(approval.get("approval_hash") or ""),
         "execution_mode": execution_mode,
-        "expires_at_utc": str(approval.get("expires_at_utc") or ""),
+        "environment_ref": environment_ref,
+        "authorization_basis": "source_bound_nonproduction_campaign",
     }
 
 
@@ -1550,7 +1541,11 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             }
             approved_base_url = ""
         else:
-            runtime_contract = {**runtime_contract, "execution_approval": approval}
+            runtime_contract = {
+                **runtime_contract,
+                "execution_approval": approval,
+                "execution_mode": str(approval.get("execution_mode") or context.get("execution_mode") or "safe_read_only"),
+            }
         result["runtime_contract"] = runtime_contract
         ranked_behavior_slices = list(behavior_contract["slices"])
         # ── Supplementary coverage: inject actor-aware / data-isolation /
@@ -1873,25 +1868,20 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         _role_expected_override = 403
                     try:
                         scenario.actor_token = _token
-                        from .sandbox_write_executor import execute_with_sandbox_write, sandbox_write_enabled
+                        from .sandbox_write_executor import execute_with_sandbox_write
 
-                        if sandbox_write_enabled():
-                            trace = execute_with_sandbox_write(
-                                scenario,
-                                approved_base_url,
-                                root=root,
-                                project=project,
-                                runtime_contract=runtime_contract,
-                                campaign_id=str(campaign.campaign_id or ""),
-                                safety_boundary=_safety_boundary,
-                                execute_fn=lambda sc, bu, safety_boundary=None: _execute_scenario(
-                                    sc, bu, max_retries=2, safety_boundary=safety_boundary,
-                                ),
-                            )
-                        else:
-                            trace = _execute_scenario(
-                                scenario, approved_base_url, max_retries=2, safety_boundary=_safety_boundary,
-                            )
+                        trace = execute_with_sandbox_write(
+                            scenario,
+                            approved_base_url,
+                            root=root,
+                            project=project,
+                            runtime_contract=runtime_contract,
+                            campaign_id=str(campaign.campaign_id or ""),
+                            safety_boundary=_safety_boundary,
+                            execute_fn=lambda sc, bu, safety_boundary=None: _execute_scenario(
+                                sc, bu, max_retries=2, safety_boundary=safety_boundary,
+                            ),
+                        )
                         # Tag trace with role info for oracle
                         trace["actor_role"] = _role
                         # ── DISABLED/LOCKED account check ──
@@ -1930,7 +1920,12 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                                     })
                         traces.append((scenario, trace))
                         slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
-                        if slice_id:
+                        has_runtime_receipt = any(
+                            int(step.get("status") or _dict(step.get("response")).get("status_code") or 0) > 0
+                            for step in (trace.get("steps") or [])
+                            if isinstance(step, dict)
+                        )
+                        if slice_id and has_runtime_receipt:
                             attempted_slice_ids.add(slice_id)
                         for step in trace.get("steps", []):
                             if int(step.get("status") or 0) >= 500:
@@ -1959,9 +1954,23 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         failed += 1
                 # Restore original token after role loop
                 scenario.actor_token = _orig_token
+            real_trace_count = sum(
+                1
+                for _, trace in traces
+                if any(
+                    int(step.get("status") or _dict(step.get("response")).get("status_code") or 0) > 0
+                    for step in (trace.get("steps") or [])
+                    if isinstance(step, dict)
+                )
+            )
+            execution_phase_status = "completed" if real_trace_count > 0 else "blocked"
+            execution_reason = "" if real_trace_count > 0 else (
+                "test_account_token_missing" if not _role_tokens else "no_runtime_execution_receipts"
+            )
             result["phases"]["execution"] = {
-                "status": "completed",
-                "executed": len(traces),
+                "status": execution_phase_status,
+                "reason": execution_reason,
+                "executed": real_trace_count,
                 "failed": failed,
                 "planned_only": len(plan_only),
                 # 主链 5 × 主链 1: observability — how many scenarios were blocked
@@ -2182,155 +2191,14 @@ def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2,
     return {"scenario_id": "?", "steps": [], "errors": ["unreachable"], "duration_ms": 0}
 
 
-def _resolve_seed_bindings(scenario: Any, base_url: str) -> dict[str, Any]:
-    """Query the live API for real entity IDs and populate runtime bindings.
-
-    Paths like ``/api/orders/{id}`` need a real UUID to execute.  This
-    function discovers seed data from the running system and maps entity
-    types (id, sku, order_id, etc.) to concrete values.
-    """
-    if not base_url:
-        return {}
-    bindings: dict[str, Any] = {}
-    entity = str(getattr(scenario, "entity", "") or "").strip()
-    if not entity:
-        return bindings
-
-    # ── Entity-to-endpoint mapping ──
-    # For each entity name, try the list endpoint and extract the first ID.
-    _entity_list_endpoints: dict[str, str] = {
-        "order": "/api/orders",
-        "orders": "/api/orders",
-        "order_items": "/api/orders",
-        "order_item": "/api/orders",
-        "product": "/api/products",
-        "products": "/api/products",
-        "cart": "/api/cart/items",
-        "cart_items": "/api/cart/items",
-        "cart_item": "/api/cart/items",
-        "coupon": "/api/coupons",
-        "coupons": "/api/coupons",
-        "coupon_usage": "/api/coupons",
-        "auth": "/api/auth/me",
-        "user": "/api/auth/me",
-        "users": "/api/auth/me",
-        "report": "/api/reports/sales",
-        "reports": "/api/reports/sales",
-        # Entities without dedicated list endpoints — use related endpoints
-        "payment": "/api/orders",
-        "payments": "/api/orders",
-        "refund": "/api/orders",
-        "refunds": "/api/orders",
-        "inventory": "/api/products",
-        "inventory_locks": "/api/products",
-        "addresses": "/api/auth/me",
-        "audit_logs": "/api/orders",
-    }
-    # ID field names by entity
-    _entity_id_field: dict[str, str] = {
-        "order": "id", "orders": "id",
-        "product": "sku", "products": "sku",
-        "cart": "id", "cart_items": "id", "cart_item": "id",
-        "coupon": "id", "coupons": "id",
-        "auth": "id", "user": "id", "users": "id",
-    }
-
-    list_path = _entity_list_endpoints.get(entity, "")
-    if not list_path:
-        return bindings
-
-    token = str(getattr(scenario, "actor_token", "") or "")
-    headers = {"Accept": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    try:
-        req = urllib.request.Request(f"{base_url.rstrip('/')}{list_path}", headers=headers, method="GET")
-        resp = urllib.request.urlopen(req, timeout=5)
-        data = json.loads(resp.read(4096))
-    except Exception:
-        return bindings
-
-    # Extract first USABLE item's ID (filter by status for stateful entities)
-    items = data if isinstance(data, list) else data.get("items", data.get("records", data.get("data", [])))
-    if isinstance(items, list) and items:
-        # For orders, prefer PENDING_PAYMENT or PAID status (not CANCELLED/REFUNDED)
-        if entity in ("order", "orders"):
-            usable = [o for o in items if isinstance(o, dict) and o.get("status") in ("PENDING_PAYMENT", "PAID", "CREATED")]
-            if not usable:
-                # No payable order exists — create one
-                try:
-                    _sku = bindings.get("sku") or ""
-                    if not _sku:
-                        # Get a product SKU first
-                        _pr = urllib.request.Request(f"{base_url.rstrip('/')}/api/products", headers=headers, method="GET")
-                        _pd = json.loads(urllib.request.urlopen(_pr, timeout=5).read(4096))
-                        _pitems = _pd if isinstance(_pd, list) else _pd.get("items", _pd.get("data", []))
-                        if isinstance(_pitems, list) and _pitems and isinstance(_pitems[0], dict):
-                            _sku = _pitems[0].get("sku", "")
-                    if _sku:
-                        _create_body = json.dumps({"items": [{"sku": _sku, "qty": 1}]}).encode("utf-8")
-                        _create_headers = {**headers, "Content-Type": "application/json"}
-                        _cr = urllib.request.Request(f"{base_url.rstrip('/')}/api/orders", data=_create_body, headers=_create_headers, method="POST")
-                        _cdata = json.loads(urllib.request.urlopen(_cr, timeout=5).read(4096))
-                        if isinstance(_cdata, dict) and _cdata.get("id"):
-                            usable = [_cdata]
-                except Exception:
-                    pass
-            items = usable or items
-        # Cart items may be empty for new users — create one with a real SKU
-        if entity in ("cart", "cart_items", "cart_item") and (not isinstance(items, list) or not items):
-            try:
-                _sku = bindings.get("sku") or ""
-                if not _sku:
-                    _pr = urllib.request.Request(f"{base_url.rstrip('/')}/api/products", headers=headers, method="GET")
-                    _pd = json.loads(urllib.request.urlopen(_pr, timeout=5).read(4096))
-                    _pitems = _pd if isinstance(_pd, list) else _pd.get("items", _pd.get("data", []))
-                    if isinstance(_pitems, list) and _pitems and isinstance(_pitems[0], dict):
-                        _sku = _pitems[0].get("sku", "")
-                if _sku:
-                    _cart_body = json.dumps({"sku": _sku, "qty": 1}).encode("utf-8")
-                    _cart_headers = {**headers, "Content-Type": "application/json"}
-                    _cr = urllib.request.Request(f"{base_url.rstrip('/')}/api/cart/items", data=_cart_body, headers=_cart_headers, method="POST")
-                    _cdata = json.loads(urllib.request.urlopen(_cr, timeout=5).read(4096))
-                    if isinstance(_cdata, dict) and _cdata.get("id"):
-                        items = [_cdata]
-                        # Ensure the created item's ID is bound
-                        bindings["id"] = str(_cdata["id"])
-            except Exception:
-                pass
-        first = items[0] if isinstance(items, list) and items else None
-        if isinstance(first, dict):
-            id_field = _entity_id_field.get(entity, "id")
-            real_id = first.get(id_field) or first.get("id") or first.get("sku")
-            if real_id:
-                bindings["id"] = str(real_id)
-                bindings[id_field] = str(real_id)
-                # Also bind entity-specific params
-                if entity in ("product", "products"):
-                    bindings["sku"] = str(real_id)
-                elif entity in ("order", "orders"):
-                    bindings["order_id"] = str(real_id)
-
-    # ── Populate body templates for POST/PUT steps ──
-    if bindings.get("sku"):
-        bindings["body_sku"] = str(bindings["sku"])
-    if bindings.get("id"):
-        bindings["body_qty"] = 1
-    # Coupon code from seed data
-    if entity in ("coupon", "coupons", "coupon_usage") and isinstance(items, list) and items:
-        for item in items:
-            if isinstance(item, dict) and item.get("code"):
-                bindings["body_code"] = str(item["code"])
-                break
-
-    return bindings
-
-
 def __execute_scenario_once(scenario: Any, base_url: str,
                             safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
     trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}
-    bindings: dict[str, Any] = _resolve_seed_bindings(scenario, base_url)
+    # Runtime bindings are produced only by explicit, source-derived scenario
+    # steps (login/resolver/create). Never perform hidden seed reads or writes
+    # before authentication: those bypass the scenario evidence chain and make
+    # the executor industry-specific.
+    bindings: dict[str, Any] = {}
 
     # ── DB evidence: snapshot the data layer before/after write scenarios ──
     # Config-driven (QUALIBUG_DB_DSN); no per-project table hardcoding. The diff

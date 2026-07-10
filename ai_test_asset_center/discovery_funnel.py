@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .customer_delivery_gate import is_customer_deliverable_defect
+
 
 _STAGE_NAMES = (
     "candidate_generation",
@@ -52,20 +54,8 @@ def _stage(name: str, input_n: int, output_n: int) -> dict[str, Any]:
 
 
 def _is_validated_bug(finding: dict[str, Any]) -> bool:
-    """Customer-deliverable validated bug — never conflate with pending clues."""
-    delivery = str(finding.get("customer_delivery_status") or "").strip().lower()
-    if delivery and delivery != "defect":
-        return False
-    if finding.get("gate_passed") is True and str(finding.get("bug_status") or "") == "reproduced":
-        return True
-    eq = _as_dict(finding.get("evidence_quality"))
-    if str(eq.get("level") or "").lower() == "validated" and bool(eq.get("can_reproduce")):
-        return True
-    if str(finding.get("final_review_status") or "").upper() == "VALIDATED_CANDIDATE":
-        return True
-    if str(finding.get("business_evidence_status") or "").upper() == "VALIDATED":
-        return True
-    return False
+    """Use the formal customer-delivery gate as the single source of truth."""
+    return is_customer_deliverable_defect(finding)
 
 
 def _is_pending_finding(finding: dict[str, Any]) -> bool:
@@ -142,6 +132,13 @@ def _collect_blocking_reasons(
     if str(execution.get("status") or "") in {"blocked", "skipped", "plan_only"}:
         reason = str(execution.get("reason") or execution.get("status") or "execution_blocked")
         _bump(reason)
+    if _as_int(execution.get("executed")) == 0:
+        selected = _as_list(
+            _as_dict(_as_dict(v12_result.get("phases")).get("incremental_discovery")).get("selected_slice_ids")
+            or _as_dict(v12_result.get("behavior_slice_ledger")).get("selected_slice_ids")
+        )
+        if selected:
+            _bump(str(execution.get("reason") or "no_runtime_execution_receipts"))
 
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return [{"reason": reason, "count": count} for reason, count in ranked]

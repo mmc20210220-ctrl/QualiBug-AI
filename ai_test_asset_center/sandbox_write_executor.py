@@ -1,9 +1,8 @@
 """Sandbox write-probe executor — before/after snapshots, cleanup, audit.
 
-Activated only when QUALIBUG_ENABLE_SANDBOX_WRITE=1 AND runtime is approved
-AND the project declares a test/sandbox/staging environment AND a test-account
-token is available. Failures are recorded honestly (never silent, never fake
-completed cleanup).
+Enabled by default only for an approved, explicitly declared non-production
+environment with a test-account token. Production and unknown environments are
+fail-closed. Failures are recorded honestly (never silent, never fake cleanup).
 
 Design: wrap an already-planned scenario execution so the write itself still
 goes through the normal executor once — this module only adds GET(before),
@@ -204,6 +203,8 @@ def sandbox_write_allowed(
         return False, "write_probing_disabled_by_operator"
     if str(_as_dict(runtime_contract).get("status") or "") != "approved":
         return False, "runtime_contract_not_approved"
+    if _text(_as_dict(runtime_contract).get("execution_mode")).lower() == "safe_read_only":
+        return False, "execution_mode_read_only"
     if not _text(_as_dict(runtime_contract).get("approved_base_url")):
         return False, "approved_base_url_missing"
     env_kind = resolve_environment_kind(root, project, runtime_contract)
@@ -308,6 +309,29 @@ def _first_write_step(scenario: Any) -> tuple[str, str, Any] | None:
     return None
 
 
+def _blocked_write_trace(scenario: Any, reason: str, write_meta: tuple[str, str, Any]) -> dict[str, Any]:
+    method, path, body = write_meta
+    return {
+        "scenario_id": getattr(scenario, "id", "?"),
+        "steps": [{
+            "action": "write_blocked",
+            "method": method,
+            "path": path,
+            "status": 0,
+            "request": {"body_present": body not in (None, {}, [], "")},
+            "response": {"status_code": 0, "headers": {}, "body": {"error": reason}},
+            "skipped_reason": reason,
+            "execution_blocked": True,
+        }],
+        "errors": [reason],
+        "sandbox_write": {
+            "status": "blocked",
+            "reason": reason,
+            "cleanup": {"status": "not_applicable", "reason": reason},
+        },
+    }
+
+
 def _cleanup_after_write(
     *,
     method: str,
@@ -384,12 +408,12 @@ def execute_with_sandbox_write(
 ) -> dict[str, Any]:
     """Wrap ``execute_fn`` with before/after/cleanup when sandbox write is allowed.
 
-    When the switch is off or conditions fail, delegates to ``execute_fn`` unchanged
-    so behavior stays byte-compatible with the existing executor.
+    Read-only scenarios continue through the normal executor. A write scenario
+    that fails any gate is returned as blocked without firing the request.
     """
-    if not sandbox_write_enabled():
+    write_meta = _first_write_step(scenario)
+    if write_meta is None:
         return execute_fn(scenario, base_url, safety_boundary=safety_boundary)
-
     token = _text(getattr(scenario, "actor_token", "") or "")
     allowed, reason = sandbox_write_allowed(
         root=root,
@@ -397,32 +421,20 @@ def execute_with_sandbox_write(
         runtime_contract=runtime_contract,
         actor_token=token,
     )
-    write_meta = _first_write_step(scenario)
-    if not allowed or write_meta is None:
-        trace = execute_fn(scenario, base_url, safety_boundary=safety_boundary)
-        if sandbox_write_enabled() and write_meta is not None:
-            trace.setdefault("sandbox_write", {"status": "skipped", "reason": reason})
-        return trace
+    if not allowed:
+        return _blocked_write_trace(scenario, reason, write_meta)
 
     method, path, _body = write_meta
     if safety_boundary:
         excl = match_production_data_exclusion(safety_boundary, path, "")
         if excl:
-            trace = execute_fn(scenario, base_url, safety_boundary=safety_boundary)
+            trace = _blocked_write_trace(scenario, excl, write_meta)
             trace["production_data_blocked"] = True
             trace["production_data_block_reason"] = excl
-            trace["sandbox_write"] = {
-                "status": "blocked",
-                "reason": excl,
-                "cleanup": {"status": "not_applicable", "reason": excl},
-            }
             return trace
 
     # Upgrade policy marker for observability / ranking
-    try:
-        scenario.execution_policy = "approved_sandbox_write"
-    except Exception:
-        pass
+    scenario.execution_policy = "approved_sandbox_write"
 
     base = base_url.rstrip("/")
     observe_path = _collection_path(path)
@@ -467,11 +479,15 @@ def execute_with_sandbox_write(
         "cleanup_status": cleanup.get("status"),
         "campaign_id": campaign_id,
         "slice_id": _text(getattr(scenario, "behavior_slice_id", "") or ""),
+        "environment_kind": resolve_environment_kind(root, project, runtime_contract),
+        "approved_base_url": _text(runtime_contract.get("approved_base_url")),
     }
     audit_path = _append_audit(root, project, audit_record)
 
+    cleanup_status = _text(cleanup.get("status"))
+    write_status = "completed" if cleanup_status == "completed" else "cleanup_incomplete"
     trace["sandbox_write"] = {
-        "status": "completed",
+        "status": write_status,
         "before": {"status": before.get("status"), "ref": before_ref},
         "after": {"status": after.get("status"), "ref": after_ref},
         "cleanup": cleanup,
