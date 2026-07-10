@@ -55,6 +55,41 @@ def _tokens(text: str) -> set[str]:
     return {tok for tok in re.split(r"[^a-z0-9_\u4e00-\u9fff]+", text.lower()) if len(tok) >= 2}
 
 
+def _entity_variants(entity: str) -> set[str]:
+    """Singular/plural variants for generic entity→endpoint matching."""
+    raw = _text(entity).lower()
+    if not raw:
+        return set()
+    variants = {raw}
+    if raw.endswith("ies") and len(raw) > 4:
+        variants.add(raw[:-3] + "y")
+    elif raw.endswith("s") and len(raw) > 3 and not raw.endswith("ss"):
+        variants.add(raw[:-1])
+    elif not raw.endswith("s"):
+        variants.add(raw + "s")
+    return variants
+
+
+def _method_hint_from_hypothesis(hypothesis: dict[str, Any]) -> str:
+    for key in ("method", "http_method", "verb"):
+        method = _text(hypothesis.get(key)).upper()
+        if method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            return method
+    vm = hypothesis.get("verification_method")
+    if isinstance(vm, dict):
+        method = _text(vm.get("method") or vm.get("http_method")).upper()
+        if method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            return method
+    blob = " ".join(
+        _text(hypothesis.get(k))
+        for k in ("title", "description", "trigger", "expected_behavior")
+    ).upper()
+    for method in ("POST", "PATCH", "PUT", "DELETE", "GET"):
+        if re.search(rf"\b{method}\b", blob):
+            return method
+    return ""
+
+
 def _hypothesis_family(hypothesis: dict[str, Any]) -> str:
     for key in ("family", "category", "risk_type", "_reasoner_engine"):
         raw = _text(hypothesis.get(key)).lower()
@@ -75,7 +110,17 @@ def _oracle_binding(family: str) -> tuple[str, str, str]:
 
 def _endpoint_paths_from_hypothesis(hypothesis: dict[str, Any]) -> list[str]:
     paths: list[str] = []
-    for key in ("related_endpoints", "affected_endpoints", "endpoints"):
+    for key in (
+        "related_endpoints",
+        "affected_endpoints",
+        "endpoints",
+        "trigger",
+        "api_path",
+        "endpoint",
+        "route",
+        "path",
+        "url",
+    ):
         value = hypothesis.get(key)
         if isinstance(value, list):
             for item in value:
@@ -85,8 +130,14 @@ def _endpoint_paths_from_hypothesis(hypothesis: dict[str, Any]) -> list[str]:
                     path = _text(item.get("path") or item.get("api_path"))
                     if path.startswith("/"):
                         paths.append(path)
-        elif isinstance(value, str) and value.strip().startswith("/"):
-            paths.append(value.strip())
+        elif isinstance(value, str):
+            text = value.strip()
+            if text.startswith("/"):
+                paths.append(text)
+            else:
+                for match in re.findall(r"(/[A-Za-z0-9_:\-{}./]+)", text):
+                    if len(match) > 1 and not match.startswith("//"):
+                        paths.append(match)
     vm = hypothesis.get("verification_method")
     if isinstance(vm, dict):
         path = _text(vm.get("path") or vm.get("api_path") or vm.get("endpoint"))
@@ -159,12 +210,26 @@ def _bind_endpoint(
                     "entity": _text(ep.get("entity")) or _text(hypothesis.get("entity")) or "resource",
                 }
 
-    entity = _text(hypothesis.get("entity") or hypothesis.get("source_entity")).lower()
+    entity = _text(hypothesis.get("entity") or hypothesis.get("source_entity") or hypothesis.get("resource")).lower()
+    method_hint = _method_hint_from_hypothesis(hypothesis)
     if entity:
-        entity_matches = [ep for ep in catalog if _text(ep.get("entity")).lower() == entity]
+        variants = _entity_variants(entity)
+        entity_matches = [
+            ep for ep in catalog
+            if _text(ep.get("entity")).lower() in variants
+            or any(tok in variants for tok in _tokens(_text(ep.get("path"))))
+        ]
         if entity_matches:
-            # Prefer GET for observation-friendly binding when multiple methods exist
-            entity_matches.sort(key=lambda ep: (0 if _text(ep.get("method")).upper() == "GET" else 1, _text(ep.get("path"))))
+            def _entity_rank(ep: dict[str, Any]) -> tuple[int, int, str]:
+                method = _text(ep.get("method")).upper() or "GET"
+                method_penalty = 0
+                if method_hint:
+                    method_penalty = 0 if method == method_hint else 1
+                elif method in {"POST", "PUT", "PATCH", "DELETE"}:
+                    method_penalty = 1
+                return (method_penalty, 0 if method == "GET" else 1, _text(ep.get("path")))
+
+            entity_matches.sort(key=_entity_rank)
             ep = entity_matches[0]
             return {
                 "path": _text(ep.get("path")),
@@ -194,14 +259,39 @@ def _bind_endpoint(
         score = len(blob_tokens & ep_tokens)
         if score < 1:
             continue
+        method = _text(ep.get("method")).upper() or "GET"
+        if method_hint and method != method_hint:
+            score -= 1
         candidate = {
             "path": _text(ep.get("path")),
-            "method": _text(ep.get("method")).upper() or "GET",
+            "method": method,
             "entity": _text(ep.get("entity")) or "resource",
         }
         if best is None or score > best[0]:
             best = (score, candidate)
-    return best[1] if best else None
+    if best:
+        return best[1]
+
+    # Path-segment overlap: bind when hypothesis text shares a concrete API segment.
+    segment_best: tuple[int, dict[str, str]] | None = None
+    for ep in catalog:
+        path = _text(ep.get("path"))
+        segments = {seg for seg in path.strip("/").split("/") if seg and not seg.startswith(":") and not seg.startswith("{")}
+        if not segments:
+            continue
+        hits = len(blob_tokens & segments)
+        if hits < 1:
+            continue
+        method = _text(ep.get("method")).upper() or "GET"
+        rank = hits + (2 if method_hint and method == method_hint else 0)
+        candidate = {
+            "path": path,
+            "method": method,
+            "entity": _text(ep.get("entity")) or "resource",
+        }
+        if segment_best is None or rank > segment_best[0]:
+            segment_best = (rank, candidate)
+    return segment_best[1] if segment_best else None
 
 
 def _source_refs(hypothesis: dict[str, Any], origin: str) -> list[dict[str, str]]:

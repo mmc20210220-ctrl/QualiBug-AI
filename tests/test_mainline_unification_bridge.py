@@ -67,6 +67,37 @@ def test_hypotheses_to_slices_binds_real_endpoint_and_drops_unbound():
     )
 
 
+def test_hypotheses_to_slices_binds_via_trigger_and_entity_plural():
+    api_endpoints = [
+        {"entity": "refund", "action": "approve", "path": "/api/refunds/:id/approve", "method": "POST"},
+        {"entity": "order", "action": "list", "path": "/api/orders", "method": "GET"},
+    ]
+    hypotheses = [
+        {
+            "hypothesis_id": "hist_1",
+            "title": "退款重复审批",
+            "category": "concurrency",
+            "severity": "P1",
+            "entity": "refunds",
+            "trigger": "POST /api/refunds/{id}/approve",
+        },
+        {
+            "hypothesis_id": "hist_2",
+            "title": "普通用户越权查看订单",
+            "category": "permission",
+            "severity": "P0",
+            "description": "orders endpoint missing ownership check",
+            "method": "GET",
+        },
+    ]
+    slices, funnel = hypotheses_to_slices(hypotheses, api_endpoints=api_endpoints, origin="analyzer")
+    assert funnel["bound"] == 2
+    assert funnel["dropped_no_endpoint"] == 0
+    paths = {s["endpoints"][0] for s in slices}
+    assert "/api/refunds/:id/approve" in paths
+    assert "/api/orders" in paths
+
+
 def test_hypotheses_to_slices_empty_catalog_drops_all():
     hypotheses = [
         {

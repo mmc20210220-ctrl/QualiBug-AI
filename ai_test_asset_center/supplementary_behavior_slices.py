@@ -24,6 +24,9 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -598,3 +601,131 @@ def generate_supplementary_slices(
         all_slices.extend(generate_money_slices(endpoints, default_actor, login_path, login_body=login_body_template))
         all_slices.extend(generate_concurrency_slices(endpoints, default_actor, login_path, login_body=login_body_template))
     return all_slices
+
+
+def probe_disabled_account_logins(
+    root: Path,
+    project: str,
+    api_spec_text: str,
+    base_url: str,
+    *,
+    campaign_id: str = "",
+    discovery_round: int = 1,
+) -> list[dict[str, Any]]:
+    """Mandatory fresh-login probes for DISABLED/LOCKED test accounts.
+
+    Runs before the slice-budget queue so AUTH-class login bugs (e.g. suspended
+    accounts still receiving tokens) are never starved by probe_selection.
+    Fully config-driven — actors and login route from customer materials only.
+    """
+    if not str(base_url or "").strip() or not str(api_spec_text or "").strip():
+        return []
+    import re as _re
+
+    state_re = _re.compile(
+        r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", _re.I,
+    )
+    _entities, _states, endpoints = _api_facts(api_spec_text, state_re)
+    actors, settings_login = load_settings_accounts(root, project)
+    if not actors:
+        actors = _load_test_accounts(root, project)
+    if not actors:
+        actors = _parse_md_accounts(root, project)
+    auto_login_path, auto_login_body = _discover_login_endpoint(endpoints)
+    login_path = settings_login or auto_login_path
+    if not login_path or not actors:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for actor in actors:
+        status = _account_status_token(actor)
+        if status not in {"DISABLED", "LOCKED"}:
+            continue
+        email = str(actor.get("email") or "").strip()
+        password = str(actor.get("password") or "").strip()
+        role = str(actor.get("role") or actor.get("name") or email).strip()
+        if not email or not password:
+            continue
+        body = dict(auto_login_body or {})
+        for key in list(body.keys()):
+            low = str(key).lower()
+            if low in {"email", "username", "user", "account"}:
+                body[key] = email
+            elif low in {"password", "passwd", "pass"}:
+                body[key] = password
+        if not body:
+            body = {"email": email, "password": password}
+        url = base_url.rstrip("/") + login_path
+        method = "POST"
+        try:
+            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            request = urllib.request.Request(
+                url,
+                method=method,
+                data=payload,
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read(300_000).decode("utf-8", errors="replace")
+                http_status = int(response.status)
+                resp_body: Any
+                try:
+                    resp_body = json.loads(raw)
+                except Exception:
+                    resp_body = {"_raw": raw[:2000]}
+        except urllib.error.HTTPError as exc:
+            http_status = int(exc.code)
+            raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
+            try:
+                resp_body = json.loads(raw) if raw else {}
+            except Exception:
+                resp_body = {"_raw": raw[:2000]}
+        except Exception as exc:
+            continue
+        if not (200 <= http_status < 300):
+            continue
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        findings.append({
+            "severity": "P0",
+            "title": f"[账号状态登录绕过] {status} 账号 {email} 仍可登录获 token",
+            "category": "authorization_access_control",
+            "source": "disabled_account_login_probe",
+            "description": f"{status} 账号 {email} 调用 {method} {login_path} 返回 HTTP {http_status}，应拒绝登录",
+            "confidence_score": 0.98,
+            "behavior_slice_id": behavior_slice_id("account_status", "auth", role, method, login_path),
+            "discovery_round": discovery_round,
+            "campaign_id": campaign_id,
+            "execution_status": "executed",
+            "confirmation_status": "confirmed",
+            "gate_passed": True,
+            "customer_delivery_status": "defect",
+            "bug_status": "reproduced",
+            "expected": f"{status} 账号登录应返回 401/403",
+            "actual": f"HTTP {http_status}",
+            "method": method,
+            "path": login_path,
+            "evidence_id": f"EVID_LOGIN_{role}_{int(time.time())}",
+            "evidence": {
+                "request": f"{method} {login_path}",
+                "response": {"status_code": http_status, "body": resp_body},
+                "assertion": f"{status} account must not receive a valid login token",
+                "timestamp": ts,
+                "target": login_path,
+                "actor": role,
+                "reproduction_steps": [f"{method} {login_path} body={json.dumps(body, ensure_ascii=False)}"],
+            },
+            "raw_evidence": {
+                "account_status": status,
+                "email": email,
+                "request_raw": {"method": method, "path": login_path, "actor": role, "body": body},
+                "response_raw": {"status_code": http_status, "body": resp_body},
+                "timestamp": ts,
+            },
+            "reproduction": {
+                "method": method,
+                "path": login_path,
+                "actor": role,
+                "reproduction_steps": [f"{method} {login_path}"],
+            },
+        })
+    return findings

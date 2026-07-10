@@ -1541,10 +1541,18 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             }
             approved_base_url = ""
         else:
+            scenario_contract = _dict(context.get("runtime_scenario_contract"))
+            declared_actor = _dict(scenario_contract.get("actor"))
             runtime_contract = {
                 **runtime_contract,
                 "execution_approval": approval,
                 "execution_mode": str(approval.get("execution_mode") or context.get("execution_mode") or "safe_read_only"),
+                "actor_identity": str(
+                    declared_actor.get("id")
+                    or declared_actor.get("name")
+                    or scenario_contract.get("actor_id")
+                    or ""
+                ).strip(),
             }
         result["runtime_contract"] = runtime_contract
         ranked_behavior_slices = list(behavior_contract["slices"])
@@ -1580,6 +1588,22 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 _re_unify.I,
             )
             _entities, _states, _endpoints = _api_facts(graph_api_doc, _state_re)
+            try:
+                from .system_behavior_space import _merge_api_endpoints, _openapi_route_facts
+
+                _openapi_paths = [
+                    root / "platform_inputs" / project / "openapi.json",
+                    root / "platform_inputs" / project / "swagger.json",
+                    root / "platform_workspace" / project / "input" / "openapi.json",
+                ]
+                for _openapi_file in _openapi_paths:
+                    if _openapi_file.is_file():
+                        _extra = _openapi_route_facts(_openapi_file.read_text(encoding="utf-8", errors="replace"))
+                        if _extra:
+                            _endpoints = _merge_api_endpoints(_endpoints, _extra)
+                        break
+            except Exception:
+                pass
             _unify_stats: dict[str, Any] = {}
 
             if os.environ.get("QUALIBUG_UNIFY_ANALYZERS", "1") == "1":
@@ -1746,6 +1770,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 catalog = []
         fuzz_started = time.time()
         fuzzer_findings: list[dict[str, Any]] = []
+        fuzzer_execution_receipts: list[dict[str, Any]] = []
         if approved_base_url and selected_paths and selection["status"] == "planned":
             try:
                 from .parameter_fuzzer import ParameterFuzzer
@@ -1753,10 +1778,16 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 fuzzer = ParameterFuzzer(approved_base_url, allow_write=False)
                 _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text)
                 fuzzer_findings = fuzzer.fuzz_all(scoped_catalog, max_variants=6)
+                fuzzer_execution_receipts = list(fuzzer.execution_receipts)
+                fuzzer_receipt_paths = {
+                    str(receipt.get("path") or "")
+                    for receipt in fuzzer_execution_receipts
+                    if isinstance(receipt, dict) and int(receipt.get("status") or 0) > 0
+                }
                 attempted_slice_ids.update(
                     str(item.get("slice_id") or "")
                     for item in selection["selected"]
-                    if any(str(path) in selected_paths for path in item.get("endpoints", []))
+                    if any(str(path) in fuzzer_receipt_paths for path in item.get("endpoints", []))
                 )
                 for finding in fuzzer_findings:
                     if isinstance(finding, dict):
@@ -1771,6 +1802,11 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "status": "completed" if approved_base_url and selected_paths and selection["status"] == "planned" else "skipped",
             "reason": fuzzer_reason,
             "findings": len(fuzzer_findings),
+            "execution_receipts": len([
+                receipt
+                for receipt in fuzzer_execution_receipts
+                if isinstance(receipt, dict) and int(receipt.get("status") or 0) > 0
+            ]),
             "execution_policy": "documented_read_only_only",
             "slice_scoped": True,
             "duration_ms": int((time.time() - fuzz_started) * 1000),
@@ -1854,10 +1890,46 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 pass
             if not _role_tokens and runtime_token:
                 _role_tokens["default"] = runtime_token
+            try:
+                from .supplementary_behavior_slices import probe_disabled_account_logins
+
+                _probe_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+                for _login_finding in probe_disabled_account_logins(
+                    root,
+                    project,
+                    _probe_api_doc,
+                    approved_base_url,
+                    campaign_id=str(campaign.campaign_id or ""),
+                    discovery_round=int(settings["round_number"]),
+                ):
+                    result["findings"].append(_login_finding)
+                    _probe_sid = str(_login_finding.get("behavior_slice_id") or "").strip()
+                    if _probe_sid:
+                        attempted_slice_ids.add(_probe_sid)
+            except Exception:
+                pass
             for scenario in executable:
                 _orig_token = getattr(scenario, "actor_token", "") or ""
-                for _role, _token in (_role_tokens.items() if _role_tokens else [("default", "")]):
-                    if not _token:
+                _slice_kind = str(getattr(scenario, "behavior_slice_kind", "") or "").strip().lower()
+                _is_account_status = _slice_kind == "account_status"
+                _role_iter: list[tuple[str, str]]
+                if _is_account_status:
+                    # Fresh-login probes must not inherit a cached role token.
+                    _role_iter = [("account_status_probe", "")]
+                elif _role_tokens:
+                    _role_iter = list(_role_tokens.items())
+                else:
+                    _role_iter = [("default", "")]
+                for _role, _token in _role_iter:
+                    execution_mode = str(runtime_contract.get("execution_mode") or "safe_read_only").strip().lower()
+                    scenario_actor_identity = str(
+                        getattr(scenario, "actor_role", "")
+                        or getattr(scenario, "actor", "")
+                        or getattr(scenario, "actor_id", "")
+                        or runtime_contract.get("actor_identity")
+                        or ""
+                    ).strip()
+                    if not _token and execution_mode != "safe_read_only" and not scenario_actor_identity:
                         continue
                     # ── Role-aware expected status ──
                     # If the actor is disabled/locked, all endpoints should reject.
@@ -1867,7 +1939,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     if _account_status in ("DISABLED", "LOCKED"):
                         _role_expected_override = 403
                     try:
-                        scenario.actor_token = _token
+                        scenario.actor_token = "" if _is_account_status else _token
                         from .sandbox_write_executor import execute_with_sandbox_write
 
                         trace = execute_with_sandbox_write(
@@ -1889,8 +1961,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         # disabled/locked account is a confirmed violation.
                         if _account_status in ("DISABLED", "LOCKED"):
                             for step in trace.get("steps", []):
-                                st = int((step.get("response") or {}).get("status_code") or step.get("status") or 0) if isinstance(step, dict) else 0
+                                if not isinstance(step, dict):
+                                    continue
+                                st = int((step.get("response") or {}).get("status_code") or step.get("status") or 0)
                                 if 200 <= st < 300:
+                                    _step_method = str(step.get("method") or "").upper()
+                                    _step_path = str(step.get("path") or "")
+                                    _resp_body = (step.get("response") or {}).get("body", {}) if isinstance(step.get("response"), dict) else {}
+                                    _ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                                     result["findings"].append({
                                         "severity": "P0",
                                         "title": f"[账号状态绕过] DISABLED/LOCKED账号 {_role} 访问成功 HTTP {st}",
@@ -1906,12 +1984,33 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                                         "gate_passed": True,
                                         "customer_delivery_status": "defect",
                                         "bug_status": "reproduced",
-                                        "expected": f"DISABLED/LOCKED账号应被拒绝 (401/403)",
+                                        "expected": "DISABLED/LOCKED账号应被拒绝 (401/403)",
                                         "actual": f"HTTP {st}",
+                                        "method": _step_method,
+                                        "path": _step_path,
                                         "evidence_id": f"EVID_DISABLED_{_role}_{int(time.time())}",
-                                        "evidence": {"request": f"{_role} token", "assertion": "DISABLED/LOCKED account must be rejected", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                                        "raw_evidence": {"actor_role": _role, "account_status": _account_status},
-                                        "reproduction": {"method": str(step.get("method","")), "path": str(step.get("path",""))},
+                                        "evidence": {
+                                            "request": f"{_step_method} {_step_path}",
+                                            "response": {"status_code": st, "body": _resp_body},
+                                            "assertion": "DISABLED/LOCKED account must be rejected (401/403)",
+                                            "timestamp": _ts,
+                                            "target": _step_path,
+                                            "actor": _role,
+                                            "reproduction_steps": [f"{_step_method} {_step_path}"],
+                                        },
+                                        "raw_evidence": {
+                                            "actor_role": _role,
+                                            "account_status": _account_status,
+                                            "request_raw": {"method": _step_method, "path": _step_path, "actor": _role},
+                                            "response_raw": {"status_code": st, "body": _resp_body},
+                                            "timestamp": _ts,
+                                        },
+                                        "reproduction": {
+                                            "method": _step_method,
+                                            "path": _step_path,
+                                            "actor": _role,
+                                            "reproduction_steps": [f"{_step_method} {_step_path}"],
+                                        },
                                         "system_promise_id": f"AUTO-DISABLED-{_role}",
                                         "regression_contract": {"contract_type": "system_behavior_promise_regression", "promise_id": f"AUTO-DISABLED-{_role}", "dimensions": ["authorization_access_control"], "surface_plan": ["api", "auth"], "source_family": "authorization_access_control"},
                                         "system_behavior_dimensions": ["authorization_access_control"],
@@ -1965,7 +2064,18 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             )
             execution_phase_status = "completed" if real_trace_count > 0 else "blocked"
             execution_reason = "" if real_trace_count > 0 else (
-                "test_account_token_missing" if not _role_tokens else "no_runtime_execution_receipts"
+                "test_actor_identity_missing"
+                if not _role_tokens and not any(
+                    str(
+                        getattr(scenario, "actor_role", "")
+                        or getattr(scenario, "actor", "")
+                        or getattr(scenario, "actor_id", "")
+                        or runtime_contract.get("actor_identity")
+                        or ""
+                    ).strip()
+                    for scenario in executable
+                )
+                else "no_runtime_execution_receipts"
             )
             result["phases"]["execution"] = {
                 "status": execution_phase_status,
