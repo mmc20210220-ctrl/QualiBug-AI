@@ -401,26 +401,113 @@ def build_semantic_graph(operations: list[dict], prd: str) -> dict:
     }
 
 
+def _resource_tokens(name: str) -> set[str]:
+    raw = str(name or "").strip().lower().replace("-", "_")
+    if not raw:
+        return set()
+    parts = [p for p in raw.split("_") if p]
+    tokens = {raw, *parts}
+    # Light plural/singular bridging without industry-specific dictionaries.
+    for part in list(parts) + [raw]:
+        if part.endswith("ies") and len(part) > 3:
+            tokens.add(part[:-3] + "y")
+        elif part.endswith("ses") and len(part) > 3:
+            tokens.add(part[:-2])
+        elif part.endswith("s") and len(part) > 2:
+            tokens.add(part[:-1])
+        else:
+            tokens.add(part + "s")
+            if part.endswith("y") and len(part) > 1:
+                tokens.add(part[:-1] + "ies")
+    return {t for t in tokens if t}
+
+
+def _resource_in(name: str, families: set[str]) -> bool:
+    return bool(_resource_tokens(name) & {f.lower() for f in families})
+
+
+# Cross-industry role families. Membership is evidence of resource shape, not a
+# default industry assignment — relations only fire when both endpoints exist.
+_PAYMENT_LIKE = {
+    "payment", "payments", "settlement", "settlements", "transaction", "transactions",
+    "charge", "charges", "billing", "payout", "payouts",
+}
+_REFUND_LIKE = {"refund", "refunds", "chargeback", "chargebacks", "reversal", "reversals"}
+_INVENTORY_LIKE = {
+    "product", "products", "sku", "skus", "inventory", "stock", "material", "materials",
+    "item", "items", "goods", "asset", "assets", "seat", "seats", "bed", "beds",
+}
+_CART_LIKE = {"cart", "carts", "basket", "baskets", "wishlist", "wishlists"}
+_FULFILLMENT_PARENT_LIKE = {
+    "order", "orders", "purchase_order", "purchase_orders", "work_order", "work_orders",
+    "booking", "bookings", "reservation", "reservations", "enrollment", "enrollments",
+    "appointment", "appointments", "ticket", "tickets", "claim", "claims",
+    "invoice", "invoices", "loan", "loans", "shipment", "shipments",
+    "prescription", "prescriptions", "requisition", "requisitions",
+}
+_OWNERSHIP_PARENT_LIKE = {
+    "patient", "patients", "customer", "customers", "account", "accounts",
+    "tenant", "tenants", "student", "students", "user", "users", "member", "members",
+    "organization", "organizations", "lead", "leads",
+}
+_OWNED_RECORD_LIKE = {
+    "record", "records", "medical_record", "medical_records", "profile", "profiles",
+    "document", "documents", "note", "notes", "history", "histories",
+    "grade", "grades", "score", "scores", "case", "cases",
+}
+
+
 def infer_relation(src: str, dst: str, prd: str) -> str | None:
-    pair = f"{src}->{dst}"
-    known = {
-        "orders->products": "consumes_or_locks",
-        "orders->payments": "paid_by",
-        "orders->refunds": "refunded_by",
-        "orders->cart": "created_from",
-        "payments->refunds": "refund_depends_on_payment",
-        "cart->orders": "checkout_to_order",
-    }
-    if pair in known:
-        return known[pair]
-    text = prd.lower()
-    if src in text and dst in text:
-        if any(k in text for k in ["审批", "审核", "approve"]):
+    """Infer a directed business relation from resource roles + PRD co-occurrence.
+
+    Never invents ecommerce-only edges for unrelated systems: hardcoded
+    orders/cart/coupon pairs are replaced by cross-industry role families that
+    only activate when both resources are present in the graph.
+    """
+    src_l = str(src or "").strip().lower()
+    dst_l = str(dst or "").strip().lower()
+    if not src_l or not dst_l or src_l == dst_l:
+        return None
+
+    # Exact legacy ecommerce pairs remain valid when those resources exist,
+    # but are expressed via role families below rather than a closed mall map.
+    if _resource_in(src_l, _FULFILLMENT_PARENT_LIKE) and _resource_in(dst_l, _INVENTORY_LIKE):
+        return "consumes_or_locks"
+    if _resource_in(src_l, _FULFILLMENT_PARENT_LIKE) and _resource_in(dst_l, _PAYMENT_LIKE):
+        return "paid_by"
+    if _resource_in(src_l, _FULFILLMENT_PARENT_LIKE) and _resource_in(dst_l, _REFUND_LIKE):
+        return "refunded_by"
+    if _resource_in(src_l, _PAYMENT_LIKE) and _resource_in(dst_l, _REFUND_LIKE):
+        return "refund_depends_on_payment"
+    if _resource_in(src_l, _CART_LIKE) and _resource_in(dst_l, _FULFILLMENT_PARENT_LIKE):
+        return "checkout_to_order"
+    if _resource_in(src_l, _FULFILLMENT_PARENT_LIKE) and _resource_in(dst_l, _CART_LIKE):
+        return "created_from"
+    if _resource_in(src_l, _OWNERSHIP_PARENT_LIKE) and _resource_in(dst_l, _OWNED_RECORD_LIKE):
+        return "owns_or_scopes"
+    if _resource_in(src_l, _OWNED_RECORD_LIKE) and _resource_in(dst_l, _OWNERSHIP_PARENT_LIKE):
+        return "belongs_to"
+
+    # Morphological nesting: patients -> patient_records, course -> course_enrollments
+    src_tokens = _resource_tokens(src_l)
+    dst_tokens = _resource_tokens(dst_l)
+    if src_tokens & dst_tokens and (dst_l.startswith(src_l.rstrip("s") + "_") or src_l.startswith(dst_l.rstrip("s") + "_")):
+        if len(dst_l) >= len(src_l):
+            return "parent_child"
+        return "belongs_to"
+
+    text = (prd or "").lower()
+    if src_l in text and dst_l in text:
+        if any(k in text for k in ["审批", "审核", "approve", "workflow", "approval"]):
             return "workflow_related"
-        if any(k in text for k in ["金额", "费用", "amount", "balance"]):
+        if any(k in text for k in ["金额", "费用", "amount", "balance", "settlement", "ledger"]):
             return "financial_dependency"
-        if any(k in text for k in ["组织", "租户", "tenant"]):
+        if any(k in text for k in ["组织", "租户", "tenant", "organization", "scope"]):
             return "scope_dependency"
+        if any(k in text for k in ["归属", "负责", "owner", "ownership", "assigned"]):
+            return "ownership_related"
+        if any(k in text for k in ["依赖", "关联", "depends", "related", "reference"]):
+            return "referenced_dependency"
     return None
 
 
@@ -3007,17 +3094,11 @@ def parse_operation_ref(ref: str) -> tuple[str, str] | None:
 
 
 def read_path_for_resource(resource: str) -> str:
-    if resource == "orders":
-        return "/orders/o900"
-    if resource == "products":
-        return "/products/p100"
-    if resource == "payments":
-        return "/orders/o900"
-    if resource == "refunds":
-        return "/orders/o900"
-    if resource == "cart":
-        return "/products"
-    return f"/{resource}/o900"
+    """Build a generic detail read path for a resource — no synthetic mall IDs."""
+    name = str(resource or "").strip().strip("/")
+    if not name:
+        return "/"
+    return f"/{name}/{{id}}"
 
 
 def lineage_risk_type(field_family: str) -> str:
