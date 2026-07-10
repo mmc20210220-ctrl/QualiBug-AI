@@ -221,6 +221,10 @@ def test_v12_failure_preserves_grounded_candidate_pool_in_funnel() -> None:
 
     assert result["phases"]["pipeline"]["status"] == "FAILED_SAFE"
     assert result["phases"]["pipeline"]["preserved_slice_count"] == 2
+    assert result["stage_status"]["pipeline"] == "FAILED_SAFE"
+    assert result["stage_failures"] == [
+        "pipeline:RuntimeError:api_document_parse_failed:ScannerError"
+    ]
     assert result["behavior_slice_ledger"]["pending_slice_ids"] == [
         "slice-permission",
         "slice-state",
