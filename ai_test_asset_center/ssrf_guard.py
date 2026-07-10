@@ -106,10 +106,14 @@ def validate_url(url: str, *, allow_internal: bool | None = None) -> str:
 
 
 class _SsrfSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Redirect handler that re-validates every hop against SSRF rules."""
+    """Redirect handler that preserves the caller's target grant on every hop."""
+
+    def __init__(self, *, allow_internal: bool) -> None:
+        super().__init__()
+        self._allow_internal = bool(allow_internal)
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        validate_url(newurl, allow_internal=_allow_internal_default())
+        validate_url(newurl, allow_internal=self._allow_internal)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -138,5 +142,7 @@ def safe_urlopen(
         req = urllib.request.Request(
             url, data=data, headers=headers or {}, method=method,
         )
-    opener = urllib.request.build_opener(_SsrfSafeRedirectHandler)
+    opener = urllib.request.build_opener(
+        _SsrfSafeRedirectHandler(allow_internal=bool(allow_internal))
+    )
     return opener.open(req, timeout=timeout)
