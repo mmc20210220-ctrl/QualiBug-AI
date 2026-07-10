@@ -32,7 +32,9 @@ class ParameterFuzzer:
     VARIANT_VALUES = {
         "integer": ["-1", "0", "999999999"],
         "string": ["", "A" * 1024],
-        "any": ["", "0", "null"],
+        "any": ["", "0", "null", "-1"],
+        "quantity": ["-1", "0", "-10"],
+        "amount": ["-1", "0", "-0.01"],
     }
 
     def __init__(self, base_url: str, *, allow_write: bool = False) -> None:
@@ -41,6 +43,7 @@ class ParameterFuzzer:
         self._token = ""
         self._tokens: dict[str, str] = {}
         self._real_ids: dict[tuple[str, str], str] = {}
+        self.execution_receipts: list[dict[str, Any]] = []
 
     def login(self, email: str = "", password: str = "", login_path: str = "", body_template: dict[str, Any] | None = None) -> bool:
         """Authenticate only with caller-supplied, source-authorized credentials.
@@ -148,7 +151,13 @@ class ParameterFuzzer:
         for name in self._declared_params(route, query_only=False)[:3]:
             if name not in template:
                 continue
-            for value in self.VARIANT_VALUES["any"][:max(1, max_variants)]:
+            variants = self.VARIANT_VALUES["any"]
+            low_name = name.lower()
+            if any(token in low_name for token in ("qty", "quantity", "count", "stock")):
+                variants = self.VARIANT_VALUES["quantity"]
+            elif any(token in low_name for token in ("amount", "price", "balance", "total")):
+                variants = self.VARIANT_VALUES["amount"]
+            for value in variants[:max(1, max_variants)]:
                 body = dict(template)
                 body[name] = value
                 status, response, elapsed = self._call(str(route.get("method") or "POST").upper(), path, body, token=self._token)
@@ -217,16 +226,25 @@ class ParameterFuzzer:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         started = time.perf_counter()
+        def _record(status: int, response_body: Any, elapsed_ms: float) -> tuple[int, Any, float]:
+            self.execution_receipts.append({
+                "method": method,
+                "path": path,
+                "status": int(status),
+                "duration_ms": float(elapsed_ms),
+            })
+            return int(status), response_body, float(elapsed_ms)
+
         try:
             request = urllib.request.Request(url, data=data, method=method, headers=headers)
             with urllib.request.urlopen(request, timeout=10) as response:  # nosec B310 - explicit configured test target
                 raw = response.read(300_000).decode("utf-8", errors="replace")
-                return int(response.status), self._json_or_text(raw), (time.perf_counter() - started) * 1000
+                return _record(int(response.status), self._json_or_text(raw), (time.perf_counter() - started) * 1000)
         except urllib.error.HTTPError as exc:
             raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
-            return int(exc.code), self._json_or_text(raw), (time.perf_counter() - started) * 1000
+            return _record(int(exc.code), self._json_or_text(raw), (time.perf_counter() - started) * 1000)
         except Exception as exc:
-            return 0, {"error": str(exc)}, (time.perf_counter() - started) * 1000
+            return _record(0, {"error": str(exc)}, (time.perf_counter() - started) * 1000)
 
     @staticmethod
     def _json_or_text(value: str) -> Any:

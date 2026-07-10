@@ -4,17 +4,17 @@ import { BrandLogo } from './BrandLogo';
 import { buildProjectPath } from '../lib/project-navigation';
 
 const navItems = [
-  { to: 'dashboard', icon: 'overview', label: '风险总览', section: '风险监控' },
-  { to: 'findings', icon: 'bug', label: '行为验证', section: null, badgeKey: 'findings' },
-  { to: 'clues', icon: 'runtime', label: '待验证线索', section: null, badgeKey: 'clues' },
+  { to: 'dashboard', icon: 'overview', label: '成果总览', section: '客户成果' },
+  { to: 'findings', icon: 'bug', label: '缺陷清单', section: null, badgeKey: 'findings' },
   { to: 'evidence', icon: 'shield', label: '证据链', section: null },
-  { to: 'coverage', icon: 'matrix', label: '风险覆盖矩阵', section: null },
-  { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
-  { to: 'test-tasks', icon: 'campaign', label: '测试任务看板', section: null },
-  { to: 'settings', icon: 'settings', label: '项目设置', section: '产品主线' },
-  { to: 'materials', icon: 'knowledge', label: '企业资料', section: null },
-  { to: 'campaigns', icon: 'campaign', label: '运行中心', section: null },
   { to: 'release', icon: 'release', label: '发布门禁', section: null },
+  { to: 'campaigns', icon: 'campaign', label: '运行中心', section: '执行与治理' },
+  { to: 'coverage', icon: 'matrix', label: '覆盖矩阵', section: null },
+  { to: 'test-tasks', icon: 'campaign', label: '测试任务', section: null },
+  { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
+  { to: 'clues', icon: 'runtime', label: '待验证线索', section: null, badgeKey: 'clues' },
+  { to: 'settings', icon: 'settings', label: '项目设置', section: '接入配置' },
+  { to: 'materials', icon: 'knowledge', label: '企业资料', section: null },
   { to: 'products', icon: 'product', label: '产品矩阵', section: '商业化' },
 ];
 
@@ -55,16 +55,16 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
     sectionLabel: item.section && item.section !== navItems[index - 1]?.section ? item.section : null,
   }));
   const riskStateLabel = !project
-    ? '等待选择客户'
+    ? '请选择客户'
     : p0Count > 0
-      ? '存在阻断项'
+      ? '需先处理阻断'
       : (currentDefectCount || 0) > 0
-        ? '可进入闭环'
+        ? '可进入整改'
         : (shelfCount || 0) > 0
-          ? '已有历史货架'
+          ? '有历史结论'
           : (clueCount || 0) > 0
-            ? '待补证'
-            : '待首次检测';
+            ? '补证进行中'
+            : '等待首次检测';
 
   return (
     <>
@@ -78,23 +78,23 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
             ×
           </button>
-          <BrandLogo variant="full" size={38} dark subtitle="风险决策台" />
+          <BrandLogo variant="full" size={38} dark subtitle="客户成果台" />
         </div>
         <div className="side-project">
           <span className="side-project-label">当前客户</span>
           <b>{projectName}</b>
-          <small>围绕项目配置、资料导入、运行执行与结果回显，形成客户可感知的闭环。</small>
+          <small>一眼看清本轮结论、可交付缺陷与证据可信度——给决策者看的成果面。</small>
           <div className="side-project-metrics">
             <div className="side-project-metric">
-              <span>当前状态</span>
+              <span>状态</span>
               <strong>{riskStateLabel}</strong>
             </div>
             <div className="side-project-metric">
-              <span>本轮可交付</span>
+              <span>可交付</span>
               <strong>{currentDefectCount ?? 0}</strong>
             </div>
             <div className="side-project-metric">
-              <span>待验证</span>
+              <span>待补证</span>
               <strong>{clueCount ?? 0}</strong>
             </div>
           </div>
@@ -131,7 +131,8 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           );
         })}
         <div className="side-bottom">
-          <b>QualiBug AI</b> 风险决策台
+          <b>QualiBug AI</b>
+          真实执行 · 可验收结论
         </div>
       </aside>
     </>

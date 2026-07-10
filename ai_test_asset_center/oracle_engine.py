@@ -956,6 +956,41 @@ class OracleRegistry:
             if o and o not in matched: matched.append(o)
         return matched
 
+    def get_for_scenario(self, scenario: dict[str, Any]) -> list[BaseOracle]:
+        category = str(scenario.get("category") or "").strip().lower()
+        oracles = self.get_for_category(category)
+        seen = {o.name for o in oracles}
+        for rule in scenario.get("oracle_rules") or []:
+            oracle_name = str(rule or "").split(".", 1)[0].strip()
+            oracle = self._oracles.get(oracle_name)
+            if oracle and oracle.name not in seen:
+                oracles.append(oracle)
+                seen.add(oracle.name)
+        path_signal = " ".join(
+            str(step.get("api_path") or step.get("path") or "")
+            for step in (scenario.get("steps") or [])
+            if isinstance(step, dict)
+        ).lower()
+        path_signal += " " + " ".join(str(ep or "") for ep in scenario.get("endpoints") or []).lower()
+        entity = str(scenario.get("entity") or "").lower()
+        path_signal += f" {entity}"
+        keyword_oracles = (
+            ("inventory", "InventoryOracle"),
+            ("/pay", "MoneyOracle"),
+            ("/payment", "MoneyOracle"),
+            ("/refund", "MoneyOracle"),
+            ("/order", "StateOracle"),
+            ("/cart", "DataIntegrityOracle"),
+            ("coupon", "CouponOracle"),
+        )
+        for token, oracle_name in keyword_oracles:
+            if token in path_signal:
+                oracle = self._oracles.get(oracle_name)
+                if oracle and oracle.name not in seen:
+                    oracles.append(oracle)
+                    seen.add(oracle.name)
+        return oracles
+
     def auto_detect(self, prd_text: str, limit: int = 15) -> list[BaseOracle]:
         scored = []
         for o in self._oracles.values():
@@ -1003,7 +1038,7 @@ class OracleEngine:
         import logging
         _log = logging.getLogger("OracleEngine")
         results = []
-        oracles = self.registry.get_for_category(scenario.get("category", ""))
+        oracles = self.registry.get_for_scenario(scenario)
         if (
             str(scenario.get("entity", "") or "").strip().lower() == "coupon"
             or any(str(item or "").startswith("CouponOracle.") for item in scenario.get("oracle_rules", []) or [])

@@ -106,7 +106,7 @@ function commercialReleaseDetail(assets: CommercialAssets | null): string {
 }
 
 export function Findings() {
-  usePageTitle('行为验证');
+  usePageTitle('缺陷清单');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
@@ -173,36 +173,35 @@ export function Findings() {
     <div>
       <section className="customer-showcase findings-showcase mb-4">
         <div className="customer-showcase-main">
-          <span className="panel-kicker">客户缺陷闭环清单</span>
-          <h1>{confirmed.length > 0 ? `当前已确认 ${confirmed.length} 个可交付缺陷，等待客户修复后回归验证。` : '当前没有可交付缺陷。'}</h1>
-          <p>{confirmed.length > 0 ? `仅展示已执行、可复现且证据完整的缺陷。平台只提供事实证据和回归验证，不提供修复方案。当前重点涉及 ${topModules.length ? topModules.join('、') : '多个模块'}。` : clues.length > 0 ? `当前有 ${clues.length} 条内部线索正在补证，它们不会作为已确认缺陷交付。` : '当前项目尚未形成具备真实运行证据的已确认缺陷。'}</p>
-          <div className="page-summary-strip"><span className="summary-pill strong">可交付缺陷 {confirmed.length}</span><span className="summary-pill">P0 阻塞 {bySeverity.P0}</span><span className="summary-pill">P1 已确认 {bySeverity.P1}</span><span className="summary-pill">待补证线索 {clues.length}</span>{commercialOverall && <span className="summary-pill">发布门禁 {commercialReleaseLabel(commercialOverall)}</span>}<span className="summary-pill">交付安全 {handoffReady ? '是' : '否'}</span></div>
+          <span className="panel-kicker">客户缺陷清单</span>
+          <h1>{confirmed.length > 0 ? `已确认 ${confirmed.length} 个可交付缺陷` : '当前没有可交付缺陷'}</h1>
+          <p className="customer-showcase-headline">{confirmed.length > 0 ? '等待客户修复后，用真实回归验证是否闭环。' : clues.length > 0 ? '内部线索仍在补证，不会作为已确认缺陷交付。' : '尚未形成具备真实运行证据的已确认缺陷。'}</p>
+          <p>{confirmed.length > 0 ? `仅展示已执行、可复现且证据完整的结果。平台提供事实证据与回归验证，不提供修复方案。当前重点涉及 ${topModules.length ? topModules.join('、') : '多个模块'}。` : clues.length > 0 ? `当前有 ${clues.length} 条内部线索正在补证。` : '完成真实检测后，这里会展示可直接交给客户的缺陷结论。'}</p>
+          <div className="page-summary-strip"><span className="summary-pill strong">可交付 {confirmed.length}</span><span className="summary-pill">P0 阻塞 {bySeverity.P0}</span><span className="summary-pill">P1 已确认 {bySeverity.P1}</span><span className="summary-pill">待补证 {clues.length}</span>{commercialOverall && <span className="summary-pill">发布门禁 {commercialReleaseLabel(commercialOverall)}</span>}</div>
           <div className="customer-showcase-actions"><button className="btn btn-primary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button><button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={regressionRunning}>{regressionRunning ? 'Release 回归中' : '执行 Release 回归'}</button>{clues.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>查看内部线索</button>}{error && <button className="btn btn-secondary" onClick={refetch}>重新加载</button>}</div>
         </div>
         <div className="customer-showcase-side">
           {commercialOverall && (
             <div className={`customer-status-card ${commercialReleaseTone(commercialOverall)}`}>
-              <span>商业交付 Release Gate</span>
+              <span>发布门禁</span>
               <strong>{commercialReleaseLabel(commercialOverall)}</strong>
               <p>{commercialReleaseDetail(commercialAssets)}</p>
             </div>
           )}
           <div className={`customer-status-card ${handoffReady ? 'success' : commercialOverall === 'fail' ? 'danger' : 'warning'}`}>
-            <span>商业交付 Handoff</span>
+            <span>交付安全</span>
             <strong>{handoffLabel}</strong>
-            <p>{handoffReady ? '商业交付安全状态由后端 handoff 明确放行。' : '即使发布门禁通过，也必须等待 handoff 明确 safe_for_customer 后才能作为完整商业交付。'}</p>
+            <p>{handoffReady ? '商业交付已明确放行，可进入客户验收。' : '即使发布门禁通过，也必须等待交付安全明确放行后，才能作为完整商业交付。'}</p>
           </div>
           <div className={`customer-status-card ${bySeverity.P0 > 0 ? 'danger' : confirmed.length > 0 ? 'warning' : 'success'}`}>
             <span>闭环状态</span>
-            <strong>{bySeverity.P0 > 0 ? '存在 P0 阻塞事实' : confirmed.length > 0 ? '等待客户修复后回归' : '当前无需缺陷闭环'}</strong>
-            <p>{bySeverity.P0 > 0 ? `${bySeverity.P0} 个 P0 缺陷已确认；平台不提供修复方案，只在客户修复后验证是否闭环。` : confirmed.length > 0 ? `${validatedCount} 条缺陷已达到高质量证据标准，等待后续回归验证。` : '不要将未验证候选或模拟结果交给客户。'}</p>
+            <strong>{bySeverity.P0 > 0 ? '存在 P0 阻塞事实' : confirmed.length > 0 ? '等待修复后回归' : '当前无需缺陷闭环'}</strong>
+            <p>{bySeverity.P0 > 0 ? `${bySeverity.P0} 个 P0 缺陷已确认；平台不提供修复方案，只在客户修复后验证是否闭环。` : confirmed.length > 0 ? `${validatedCount} 条缺陷已达到高质量证据标准，等待后续回归验证。` : '不会将未验证候选或模拟结果交给客户。'}</p>
           </div>
           <div className="customer-status-meta">
             <span><em>证据模块</em><b>{topModules.length ? topModules.join('、') : '暂无'}</b></span>
             <span><em>证据达标</em><b>{validatedCount}/{confirmed.length}</b></span>
             <span><em>覆盖类型</em><b>{familyStats.size}</b></span>
-            {commercialOverall && <span><em>发布 verdict</em><b>{commercialOverall}</b></span>}
-            <span><em>handoff</em><b>{handoffReady ? 'safe' : 'not safe'}</b></span>
             {commercialGate && <span><em>门禁项</em><b>{commercialGate.blocking_check_count || 0}/{commercialGate.pending_check_count || 0}</b></span>}
           </div>
         </div>
@@ -216,12 +215,12 @@ export function Findings() {
         { label: '交付安全', value: handoffReady ? '已放行' : '未放行', tone: handoffReady ? 'success' : 'warning', note: handoffLabel },
         { label: '涉及模块', value: familyStats.size, tone: 'neutral', note: '已形成明确归类与证据定位' },
       ].map((item) => <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.value}</strong><small>{item.note}</small></article>)}</div>
-      <div className="page-header findings-page-header"><div><span className="panel-kicker">清单视图</span><h1>行为验证</h1><p>已确认缺陷只提供业务影响、事实证据、真实复验入口与回归执行动作；不提供修复建议或修复方案。</p></div><div className="findings-toolbar-note">当前展示 {getFilterDisplayName(filter)} 缺陷闭环项</div></div>
+      <div className="page-header findings-page-header"><div><span className="panel-kicker">清单视图</span><h1>缺陷清单</h1><p>已确认缺陷只提供业务影响、事实证据、真实复验入口与回归动作；不提供修复建议。</p></div><div className="findings-toolbar-note">当前展示 {getFilterDisplayName(filter)}</div></div>
       <div className="filters behavior-filters findings-filter-bar mb-4">{filters.map((item) => <button key={item.value} onClick={() => setFilter(item.value)} className={`filter${filter === item.value ? ' active' : ''}`}>{item.label}</button>)}</div></>}
 
       {loading && <div className="state-panel"><div className="spinner spinner-centered" /><p>正在整理可交付缺陷...</p></div>}
       {!loading && error && display.length === 0 && <section className="findings-empty-state danger"><span className="findings-empty-kicker">连接异常</span><h3>缺陷数据暂时不可用</h3><p>{error}</p><button className="btn btn-primary" onClick={refetch}>重新连接</button></section>}
-      {!loading && !error && display.length === 0 && <section className="findings-empty-state compact"><span className="findings-empty-kicker">当前结论</span><h3>{filter === 'all' ? '当前暂不向客户展示缺陷清单' : '当前没有对应风险'}</h3><p>{clues.length > 0 ? `本轮存在 ${clues.length} 条待验证线索，尚不足以进入客户交付。` : '系统尚未检测到具备真实运行证据的可交付缺陷。'}</p><div className="findings-repro-actions"><button className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>前往总览启动扫描</button>{clues.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>查看待验证线索</button>}</div></section>}
+      {!loading && !error && display.length === 0 && <section className="findings-empty-state compact"><span className="findings-empty-kicker">当前结论</span><h3>{filter === 'all' ? '当前暂不向客户展示缺陷清单' : '当前没有对应风险'}</h3><p>{clues.length > 0 ? `本轮存在 ${clues.length} 条待验证线索，尚不足以进入客户交付。` : '系统尚未检测到具备真实运行证据的可交付缺陷。'}</p><div className="findings-repro-actions"><button className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回成果总览</button>{clues.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>查看待验证线索</button>}</div></section>}
 
       {display.map((finding) => {
         const open = expandedId === finding.id;

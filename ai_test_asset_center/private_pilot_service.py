@@ -3063,6 +3063,8 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
                 )
         if parsed.path == "/api/tenants/create":
             return self._json({"ok": False, "error": "METHOD_NOT_ALLOWED", "message": "Use POST /api/tenants/create."}, 405)
+        if parsed.path == "/api/auth/password/reset":
+            return self._json({"ok": False, "error": "METHOD_NOT_ALLOWED", "message": "Use POST /api/auth/password/reset."}, 405)
         if parsed.path == "/api/connectors/list":
             from .enterprise_pilot_runtime import load_connector_registry
             registry = load_connector_registry(project, root)
@@ -3220,7 +3222,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         parsed = urlparse(self.path)
         root = self._root()
         # Auth & tenant routes — no actor required
-        if parsed.path in ("/api/auth/login", "/api/tenants/create"):
+        if parsed.path in ("/api/auth/login", "/api/tenants/create", "/api/auth/password/reset"):
             try:
                 body = self._body()
             except Exception:
@@ -3245,6 +3247,32 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     "tenant_id": auth_result["tenant_id"],
                     "role": auth_result.get("role") or "admin",
                 }, extra_headers={"Set-Cookie": f"qualibug_token={token}; {_cookie_flags}"})
+            if parsed.path == "/api/auth/password/reset":
+                tid = str(body.get("tenant_id") or body.get("workspace_id") or "").strip()
+                username = str(body.get("username") or "").strip()
+                new_password = str(body.get("new_password") or body.get("password") or "")
+                reset_result = db_persist.reset_tenant_password(
+                    root,
+                    tenant_id=tid,
+                    username=username,
+                    new_password=new_password,
+                )
+                if not reset_result.get("ok"):
+                    error = str(reset_result.get("error") or "RESET_DENIED")
+                    if error == "PASSWORD_TOO_SHORT":
+                        return self._json({"ok": False, "error": error, "message": "密码长度至少 8 位"}, 400)
+                    if error == "MISSING_FIELDS":
+                        return self._json({"ok": False, "error": error, "message": "请填写完整重置信息"}, 400)
+                    # Generic denial — do not reveal which field mismatched.
+                    return self._json(
+                        {"ok": False, "error": "RESET_DENIED", "message": "工作区或账号不匹配，无法重置密码"},
+                        403,
+                    )
+                return self._json({
+                    "ok": True,
+                    "tenant_id": reset_result["tenant_id"],
+                    "username": reset_result["username"],
+                })
             if parsed.path == "/api/tenants/create":
                 tid = str(body.get("tenant_id") or "").strip()
                 name = str(body.get("name") or "").strip()

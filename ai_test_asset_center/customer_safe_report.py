@@ -17,7 +17,7 @@ from typing import Any
 from ai_test_asset_center.version import PRODUCT_VERSION
 
 MOJIBAKE_MARKERS = ("鎵", "鐢", "鍒", "椤", "鏃", "瑕", "绉", "娴", "缃", "搴", "", "€")
-PRODUCT_BOUNDARY_TEXT = "QualiBug-AI 只提供缺陷事实、证据链、客户处理后的回归验证和发布状态；不提供修复建议、修复方案、修复代码或根因承诺。"
+PRODUCT_BOUNDARY_TEXT = "QualiBug-AI 只提供缺陷事实、可核验证据链、客户处理后的回归验证和发布状态；不作根因承诺。"
 
 
 def html_text(value: Any, limit: int = 300) -> str:
@@ -303,7 +303,6 @@ def commercial_handoff_message(assets: dict[str, Any]) -> str:
         return "后端 commercial_handoff.safe_for_customer 已明确放行，可进入客户验收。"
     return str(
         delivery.get("release_gate_block_reason")
-        or assets.get("release_gate_honesty_rule")
         or "发布门禁通过并不等同于商业交付安全；必须等待 commercial_handoff.safe_for_customer=true。"
     )
 
@@ -375,6 +374,7 @@ def render_release_gate_section(gate: dict[str, Any]) -> str:
   <p>阻塞项：{html_text(gate.get('blocking_check_count') or 0, 20)} · 待处理：{html_text(gate.get('pending_check_count') or 0, 20)} · 通过：{html_text(gate.get('pass_check_count') or 0, 20)}</p>
 </div>
 <table><tr><th>门禁项</th><th>状态</th><th>说明</th><th>来源</th></tr>{''.join(rows)}</table>
+<div class="notice">门禁聚合来源：{html_text(gate.get('source') or 'merged_release_gate', 200)}</div>
 <div class="notice warning">{html_text(gate.get('honesty_rule') or '门禁结论仅代表已执行和已持久化的证据，不证明未覆盖范围安全。', 500)}</div>
 """
 

@@ -29,6 +29,38 @@ def test_shared_placeholder_normalization_supports_common_path_styles() -> None:
     assert path_has_placeholders("/api/orders/${orderId}")
 
 
+def test_sku_binding_uses_product_catalog_fallback_and_field_aliases() -> None:
+    from ai_test_asset_center.real_id_resolver import (
+        alternate_collection_paths,
+        bind_entity_fields,
+        extract_fields_for_path,
+        param_field_candidates,
+    )
+
+    assert "sku" in param_field_candidates("sku")
+    assert "sku" in extract_fields_for_path("/api/inventory/:sku")
+    assert "/api/products" in alternate_collection_paths("/api/inventory/{sku}")
+    bindings = bind_entity_fields(
+        [{"sku": "SKU-PHONE-001", "title": "phone", "status": "ON_SALE"}],
+        "/api/inventory/{sku}",
+    )
+    assert bindings["sku"] == "SKU-PHONE-001"
+    assert bindings.get("id") == "SKU-PHONE-001"
+
+
+def test_resolve_entity_steps_include_sibling_catalog_for_inventory() -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    steps, probe = SemanticScenarioGenerator._resolve_entity_steps(
+        "/api/inventory/:sku", actor="buyer", start_order=2,
+    )
+    assert probe == "/api/inventory/{sku}"
+    assert steps
+    assert steps[0].api_path == "/api/inventory"
+    assert any(step.api_path == "/api/products" for step in steps)
+    assert "sku" in steps[0].extract_from_response
+
+
 def test_auto_fixture_uses_shared_placeholder_normalization_for_colon_paths() -> None:
     spec = {
         "openapi": "3.0.0",

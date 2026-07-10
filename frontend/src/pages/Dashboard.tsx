@@ -171,20 +171,20 @@ function releaseRecommendationLabel(value: string, fallback: string): string {
 }
 
 function getExecutiveHeadline(currentDefectCount: number, familyDefectCount: number, p0Count: number, highPriorityCount: number, clueCount: number, campaignStatus: string, deferredReason: string) {
-  if (campaignStatus === 'blocked') return `本轮 Campaign 已阻塞：${deferredReason || '缺少进入执行的必要合同'}。`;
-  if (campaignStatus === 'coverage_deferred') return `本轮覆盖已递延：${deferredReason || '自动执行边界已到达'}。`;
-  if (currentDefectCount > 0 && p0Count > 0) return familyDefectCount > currentDefectCount ? `本轮确认 ${currentDefectCount} 个可交付缺陷，累计货架 ${familyDefectCount} 个，其中 ${p0Count} 个会直接影响发布。` : `已确认 ${currentDefectCount} 个可交付缺陷，其中 ${p0Count} 个会直接影响发布。`;
-  if (currentDefectCount > 0) return familyDefectCount > currentDefectCount ? `本轮确认 ${currentDefectCount} 个可交付缺陷，累计货架 ${familyDefectCount} 个，可直接进入整改与验收闭环。` : `已确认 ${currentDefectCount} 个可交付缺陷，可直接进入整改与验收闭环。`;
-  if (clueCount > 0) return `本轮尚未形成可交付缺陷，内部仍有 ${clueCount} 条线索正在补证。`;
-  if (highPriorityCount === 0) return '当前未发现可交付缺陷，但仍需结合 Campaign 覆盖状态判断发布结论。';
-  return '当前没有形成客户可交付缺陷，建议继续进行真实场景扫描。';
+  if (campaignStatus === 'blocked') return `本轮检测已暂停：${deferredReason || '还需补齐进入执行的必要条件'}。`;
+  if (campaignStatus === 'coverage_deferred') return `本轮覆盖已到边界：${deferredReason || '剩余范围已明确递延'}。`;
+  if (currentDefectCount > 0 && p0Count > 0) return familyDefectCount > currentDefectCount ? `本轮确认 ${currentDefectCount} 个可交付缺陷，累计 ${familyDefectCount} 个，其中 ${p0Count} 个会直接影响发布。` : `已确认 ${currentDefectCount} 个可交付缺陷，其中 ${p0Count} 个会直接影响发布。`;
+  if (currentDefectCount > 0) return familyDefectCount > currentDefectCount ? `本轮确认 ${currentDefectCount} 个可交付缺陷，累计 ${familyDefectCount} 个，可直接进入整改与验收。` : `已确认 ${currentDefectCount} 个可交付缺陷，可直接进入整改与验收。`;
+  if (clueCount > 0) return `本轮尚未形成可交付缺陷，仍有 ${clueCount} 条线索在补证中。`;
+  if (highPriorityCount === 0) return '当前未发现可交付缺陷，可结合覆盖状态判断发布结论。';
+  return '当前没有形成客户可交付缺陷，建议继续真实场景检测。';
 }
 
 function getExecutiveDescription(currentDefectCount: number, familyDefectCount: number, clueCount: number, evidenceScore: number, modulesCount: number, campaignStatus: string, deferredReason: string, nextCampaignReason: string) {
   if (campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred') return campaignDetail(campaignStatus, deferredReason, nextCampaignReason);
-  if (currentDefectCount > 0) return familyDefectCount > currentDefectCount ? `本页显式区分本轮扫描与累计 defect shelf：本轮确认 ${currentDefectCount} 个缺陷，累计货架保留 ${familyDefectCount} 个历史可交付缺陷。当前已覆盖 ${modulesCount} 个业务模块，证据可信度 ${evidenceScore}%。` : `本页只展示已验证、可复现、具备原始证据的缺陷结果。当前已覆盖 ${modulesCount} 个业务模块，证据可信度 ${evidenceScore}%。`;
-  if (clueCount > 0) return '当前没有站得住的客户缺陷，说明系统仍处于补证阶段。本轮内部线索不会进入客户交付，待形成真实证据后再升级展示。';
-  return '当前结果代表本轮没有形成客户可交付缺陷。后续新增扫描结果后，这里会自动更新业务结论。';
+  if (currentDefectCount > 0) return familyDefectCount > currentDefectCount ? `本页只展示已验证、可复现、具备原始证据的结果。本轮 ${currentDefectCount} 个，累计保留 ${familyDefectCount} 个历史结论。已覆盖 ${modulesCount} 个业务模块，证据可信度 ${evidenceScore}%。` : `本页只展示已验证、可复现、具备原始证据的缺陷结果。已覆盖 ${modulesCount} 个业务模块，证据可信度 ${evidenceScore}%。`;
+  if (clueCount > 0) return '当前没有站得住的客户缺陷，说明系统仍在补证。内部线索不会进入客户交付，形成真实证据后再升级展示。';
+  return '当前结果代表本轮没有形成客户可交付缺陷。后续新增检测后，这里会自动更新业务结论。';
 }
 
 function getGatePatchStatus(record: JsonRecord): JsonRecord {
@@ -292,7 +292,7 @@ function mainChainReadyLabel(ready: boolean, hasContract: boolean): string {
 }
 
 export function Dashboard() {
-  usePageTitle('风险总览');
+  usePageTitle('成果总览');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { data, loading, error, refetch } = usePipelineData(project);
@@ -376,7 +376,7 @@ export function Dashboard() {
   }
 
   if (error && !data) return <StatePanel eyebrow="连接状态" title="后端暂时不可用" description={error} action={<button className="btn btn-primary" onClick={refetch}>重新连接</button>} />;
-  if (!project) return <StatePanel eyebrow="客户选择" title="请先选择客户项目" description="风险总览只展示真实项目数据。选择客户后，界面会按该项目的检测结果与证据链自动刷新。" />;
+  if (!project) return <StatePanel eyebrow="客户选择" title="请先选择客户项目" description="成果总览只展示真实项目数据。选择客户后，界面会按该项目的检测结果与证据链自动刷新。" />;
 
   const record = asRecord(data);
   const commercialAssets = getCommercialAssets(record);
@@ -832,51 +832,50 @@ export function Dashboard() {
   if (!hasMaterializedMetrics) {
     return (
       <div>
-        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 行为风险总览</h1><p>当前项目还没有形成真实风险数据或验证结果。</p></div></div>
+        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 成果总览</h1><p>当前项目还没有形成真实风险数据或验证结果。</p></div></div>
         <StatePanel eyebrow="结果状态" title="当前还没有形成可展示的真实指标" description="本项目暂未产生行为发现、执行探针或数据验证结果。运行检测后，页面会自动切换为真实业务视图。" />
       </div>
     );
   }
 
+  const heroPills = [
+    { label: `本轮缺陷 ${currentScanDefects}`, strong: true },
+    { label: `累计结论 ${familyShelfDefects}`, strong: false },
+    { label: `阻断发布 ${currentScanP0Count}`, strong: currentScanP0Count > 0 },
+    ...(regressionCovered > 0 || regressionSummary.suite_exists ? [{ label: `回归 ${regressionGateDisplay}`, strong: false }] : []),
+    ...(commercialAssets ? [{ label: commercialHandoffLabel(commercialAssets), strong: false }] : []),
+    { label: evidenceTrust > 0 ? `证据可信度 ${evidenceTrust}%` : evidenceNormalizationLabel(evidenceNormalizationSummary), strong: false },
+  ].slice(0, 5);
+
   return (
-    <div>
+    <div className="customer-results-page">
       <section className="customer-showcase mb-4">
         <div className="customer-showcase-main">
-          <span className="panel-kicker">客户成果</span>
-          <h1>{asText(record.project_name) || project} · {executiveHeadline}</h1>
+          <span className="panel-kicker">本轮客户成果</span>
+          <h1>{asText(record.project_name) || project}</h1>
+          <p className="customer-showcase-headline">{executiveHeadline}</p>
           <p>{executiveDescription}</p>
           <div className="page-summary-strip">
-            <span className="summary-pill strong">本轮缺陷 {currentScanDefects}</span>
-            <span className="summary-pill">缺陷货架 {familyShelfDefects}</span>
-            <span className="summary-pill">阻断发布 {currentScanP0Count}</span>
-            <span className="summary-pill">Campaign {campaignStatusLabel(campaignStatus)}</span>
-            <span className="summary-pill">覆盖缺口 {coverageGaps}</span>
-            {(regressionCovered > 0 || regressionSummary.suite_exists) && <span className="summary-pill">回归 {regressionGateDisplay}</span>}
-            {commercialAssets && <span className="summary-pill">商业交付 {commercialHandoffLabel(commercialAssets)}</span>}
-            <span className="summary-pill">{gatePatchLabel(gatePatchEnabled)}</span>
-            <span className="summary-pill">{mainChainReadyLabel(mainChainReady, hasMainChainContract)}</span>
-            <span className="summary-pill">{evidenceNormalizationLabel(evidenceNormalizationSummary)}</span>
+            {heroPills.map((pill) => (
+              <span key={pill.label} className={`summary-pill${pill.strong ? ' strong' : ''}`}>{pill.label}</span>
+            ))}
           </div>
           <div className="customer-showcase-actions">
-            <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>查看客户缺陷</button>
+            <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>查看缺陷清单</button>
             <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button>
-            <button className="btn btn-secondary" onClick={() => void handleRegressionRun('smoke')} disabled={regressionRunningMode !== ''}>{regressionRunningMode === 'smoke' ? 'Smoke 回归中' : '执行 Smoke 回归'}</button>
-            <button className="btn btn-secondary" onClick={() => void handleRegressionRun('release')} disabled={regressionRunningMode !== ''}>{regressionRunningMode === 'release' ? 'Release 回归中' : '执行 Release 回归'}</button>
             <button className="btn btn-secondary" onClick={handleExport}>导出成果摘要</button>
           </div>
         </div>
         <div className="customer-showcase-side">
           <div className={`customer-status-card ${campaignStatus === 'blocked' || currentScanP0Count > 0 || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? 'danger' : campaignStatus === 'coverage_deferred' || currentScanDefects > 0 ? 'warning' : 'success'}`}>
             <span>当前结论</span>
-            <strong>{hasMainChainContract && !mainChainReady ? '主链路未闭合' : evidenceBlockedItemCount > 0 ? '证据标准化未完成' : conclusion}</strong>
+            <strong>{hasMainChainContract && !mainChainReady ? '主链路未闭合' : evidenceBlockedItemCount > 0 ? '证据尚未齐备' : conclusion}</strong>
             <p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : conclusionDetail}</p>
           </div>
           <div className="customer-status-meta">
-            <span><em>最近扫描</em><b>{formatScanTime(asText(scanMeta.last_scan_at) || asText(record.updated_at))}</b></span>
+            <span><em>最近检测</em><b>{formatScanTime(asText(scanMeta.last_scan_at) || asText(record.updated_at))}</b></span>
             <span><em>证据达标</em><b>{deliveryReadiness}%</b></span>
-            <span><em>交付 Gate</em><b>{gatePatchLabel(gatePatchEnabled)}</b></span>
-            <span><em>主链路</em><b>{mainChainReadyLabel(mainChainReady, hasMainChainContract)}</b></span>
-            <span><em>证据标准化</em><b>{evidenceNormalizationLabel(evidenceNormalizationSummary)}</b></span>
+            <span><em>覆盖模块</em><b>{modulesCount || '—'}</b></span>
             {(regressionCovered > 0 || regressionSummary.suite_exists) && <span><em>回归状态</em><b>{regressionGateDisplay}</b></span>}
             <span><em>本轮说明</em><b>{asNum(scanMeta.run_count) ? `第 ${asNum(scanMeta.run_count)} 轮` : campaignStatus ? campaignStatusLabel(campaignStatus) : '首次结果'}</b></span>
           </div>
@@ -885,22 +884,15 @@ export function Dashboard() {
 
       <div className="customer-summary-grid mb-4">
         {[
-          { label: '本轮可交付', val: currentScanDefects, tone: 'primary', note: currentScanDefects > 0 ? `当前扫描确认 ${currentScanDefects} 条；累计货架 ${familyShelfDefects} 条` : governanceNeedsAction ? '未把未覆盖范围误判为无风险' : '当前没有 confirmed 缺陷' },
-          { label: '缺陷货架', val: familyShelfDefects, tone: familyShelfDefects > currentScanDefects ? 'warning' : 'neutral', note: familyShelfDefects > currentScanDefects ? `含历史延续 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条` : '当前与本轮结果一致' },
-          { label: '阻断发布', val: currentScanP0Count, tone: 'danger', note: currentScanP0Count > 0 ? '需要立即闭环' : governanceNeedsAction ? '需先补齐 Campaign 合同或范围' : '当前无阻断项' },
-          { label: '主链路', val: mainChainReadyLabel(mainChainReady, hasMainChainContract), tone: hasMainChainContract && !mainChainReady ? 'danger' : 'neutral', note: hasMainChainContract ? mainChainReady ? '六段链路已闭合' : `断在 ${firstBlockedStageLabel}` : '等待后端合同' },
-          { label: '证据字段', val: evidenceNormalizationLabel(evidenceNormalizationSummary), tone: evidenceBlockedItemCount > 0 ? 'danger' : 'neutral', note: evidenceMissingFields.length > 0 ? evidenceMissingFields.slice(0, 2).map(([field, count]) => `${evidenceMissingFieldLabel(field)}×${count}`).join('、') : '等待证据标准化报告' },
+          { label: '本轮可交付', val: currentScanDefects, tone: 'primary', note: currentScanDefects > 0 ? `当前确认 ${currentScanDefects} 条；累计 ${familyShelfDefects} 条` : governanceNeedsAction ? '未把未覆盖范围误判为无风险' : '当前没有已确认缺陷' },
+          { label: '累计结论', val: familyShelfDefects, tone: familyShelfDefects > currentScanDefects ? 'warning' : 'neutral', note: familyShelfDefects > currentScanDefects ? `含历史延续 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条` : '当前与本轮结果一致' },
+          { label: '阻断发布', val: currentScanP0Count, tone: 'danger', note: currentScanP0Count > 0 ? '需要立即闭环' : governanceNeedsAction ? '需先补齐执行条件' : '当前无阻断项' },
+          { label: '证据可信度', val: evidenceTrust > 0 ? `${evidenceTrust}%` : evidenceNormalizationLabel(evidenceNormalizationSummary), tone: evidenceBlockedItemCount > 0 ? 'danger' : evidenceTrust >= 80 ? 'success' : 'neutral', note: evidenceMissingFields.length > 0 ? evidenceMissingFields.slice(0, 2).map(([field, count]) => `${evidenceMissingFieldLabel(field)}×${count}`).join('、') : modulesCount > 0 ? `已覆盖 ${modulesCount} 个业务模块` : '等待证据报告' },
           ...(regressionCovered > 0 ? [{
             label: '回归闭环',
             val: regressionGate,
             tone: regressionFailed > 0 ? 'danger' : regressionPending > 0 ? 'warning' : 'success',
             note: regressionRunAt ? `${formatScanTime(regressionRunAt)} · 已覆盖 ${regressionCovered} 条` : `已覆盖 ${regressionCovered} 条客户缺陷`,
-          }] : []),
-          ...(regressionHistoryRunCount > 0 ? [{
-            label: '回归趋势',
-            val: regressionTrend,
-            tone: asText(regressionSummary.trend_direction) === 'regressing' ? 'danger' : asText(regressionSummary.trend_direction) === 'improving' ? 'success' : 'neutral',
-            note: regressionTrendSummary || `已沉淀 ${regressionHistoryRunCount} 轮回归`,
           }] : []),
           ...(releaseRecommendation ? [{
             label: '发布建议',
@@ -912,24 +904,24 @@ export function Dashboard() {
             label: '商业交付',
             val: deliveryPackageLabel(commercialAssets),
             tone: commercialAssets.delivery_package.status === 'created' ? 'success' : 'warning',
-            note: `${trackerSyncLabel(commercialAssets)} · 客户复验资产 ${commercialAssets.customer_ready_reproduction_count} 条`,
+            note: `${trackerSyncLabel(commercialAssets)} · 客户复验 ${commercialAssets.customer_ready_reproduction_count} 条`,
           }] : []),
           ...(benchmarkActive ? [{
-            label: 'Benchmark 召回率',
+            label: '检测召回率',
             val: `${Math.round(asNum(benchmarkMetrics.recall) * 100)}%`,
             tone: asNum(benchmarkMetrics.recall) >= 0.8 ? 'success' : asNum(benchmarkMetrics.recall) >= 0.5 ? 'warning' : 'danger',
             note: `精度 ${Math.round(asNum(benchmarkMetrics.precision) * 100)}% · F1 ${Math.round(asNum(benchmarkMetrics.f1_score) * 100)}%`,
-          }] : []),
-          ...(benchmarkActive ? [{
-            label: '证据完整率',
-            val: `${Math.round(asNum(benchmarkMetrics.evidence_completeness_rate) * 100)}%`,
-            tone: asNum(benchmarkMetrics.evidence_completeness_rate) >= 0.9 ? 'success' : 'warning',
-            note: `${asNum(benchmarkMetrics.evidence_complete_count)} / ${asNum(benchmarkMetrics.evidence_total_count)} 项具备完整证据`,
           }] : []),
         ].map((item) => (
           <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.val}</strong><small>{item.note}</small></article>
         ))}
       </div>
+
+      <section className="customer-value-grid mb-4">
+        <article className="customer-value-card"><span className="customer-value-kicker">发布建议</span><h2>{hasMainChainContract && !mainChainReady ? '暂不形成交付结论，先闭合主链路' : evidenceBlockedItemCount > 0 ? '暂不形成交付结论，先补齐证据' : campaignStatus === 'blocked' ? '暂不形成发布结论，先补齐执行条件' : campaignStatus === 'coverage_deferred' ? '先评审递延范围，再决定是否扩大检测' : currentScanP0Count > 0 ? '建议暂停发布，先处理阻断缺陷' : currentScanDefects > 0 ? '建议带着本轮缺陷清单推进整改验收' : '当前没有可交付缺陷，可继续观察后续轮次'}</h2><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : currentScanP0Count > 0 ? '当前存在会直接影响业务履约或发布安全的高风险缺陷。' : currentScanDefects > 0 ? '当前结果已经足以形成客户整改清单，不需要再从线索里筛。' : '本轮输出可以作为当前阶段的风险结论，但建议继续保持持续检测。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">客户价值</span><h2>{currentScanDefects > 0 ? `本轮交付 ${currentScanDefects} 个已验证缺陷，累计 ${familyShelfDefects} 个` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '本轮价值在于明确暴露可测试性边界' : '本轮价值在于给出明确风险结论'}</h2><p>{currentScanDefects > 0 ? `缺陷集中在 ${topFamilyLabel} 等方向，证据可信度 ${evidenceTrust}% ，其中 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条为历史延续，可直接进入修复与复验。` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '系统没有把缺少来源、环境、测试数据、真实执行或证据链闭合伪装成“通过”，可直接用于推动补齐条件。' : '当前没有把未补证线索冒充成客户缺陷，避免误导对结果质量的判断。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">交付边界</span><h2>{evidenceBlockedItemCount > 0 ? `证据仍有 ${evidenceBlockedItemCount} 项待补齐` : hasMainChainContract && !mainChainReady ? `主链路断在：${firstBlockedStageLabel}` : coverageGaps > 0 ? `当前有 ${coverageGaps} 项覆盖缺口` : clueCount > 0 ? `内部仍有 ${clueCount} 条待补证线索` : '当前没有待补证线索'}</h2><p>{evidenceBlockedItemCount > 0 ? evidenceDetail : hasMainChainContract && !mainChainReady ? firstBlockedNextAction : coverageGaps > 0 ? '覆盖缺口不会进入客户缺陷数量，需要通过新的资料、环境、数据或授权条件在后续检测中关闭。' : clueCount > 0 ? '这些线索不会进入客户成果展示，只作为内部继续采证与复验的运营池。' : '当前结果已经清晰收口，没有把内部线索混进客户视图。'}</p></article>
+      </section>
 
       <section className="customer-secondary-grid mb-4">
         <article className={`customer-secondary-card${hasDiscoveryFunnel ? '' : ' muted'}`}>
@@ -939,7 +931,7 @@ export function Dashboard() {
               <h3>
                 已验证 Bug {funnelValidated}
                 <span style={{ fontWeight: 400, fontSize: '0.85em', marginLeft: 8 }}>
-                  · 待确认发现 {funnelPending}（非已验证）· 候选 {funnelCandidates}
+                  · 待确认发现 {funnelPending} · 候选 {funnelCandidates}
                 </span>
               </h3>
               <p>{asText(discoveryFunnel.explanation) || '本轮漏斗已生成。'}</p>
@@ -973,24 +965,18 @@ export function Dashboard() {
           ) : (
             <>
               <h3>暂无漏斗数据</h3>
-              <p>完成一次扫描后，将展示五阶段转化、Top 阻断原因，以及已验证 Bug / 待确认发现的分层计数。不会填充假数字。</p>
+              <p>完成一次检测后，将展示转化路径与阻断原因。不会填充假数字。</p>
             </>
           )}
         </article>
       </section>
 
-      <section className="customer-value-grid mb-4">
-        <article className="customer-value-card"><span className="customer-value-kicker">发布建议</span><h2>{hasMainChainContract && !mainChainReady ? '暂不形成客户交付结论，先闭合主链路' : evidenceBlockedItemCount > 0 ? '暂不形成客户交付结论，先补齐证据字段' : campaignStatus === 'blocked' ? '暂不形成发布结论，先补齐执行合同' : campaignStatus === 'coverage_deferred' ? '先评审递延范围，再决定是否扩大 Campaign' : currentScanP0Count > 0 ? '建议暂停发布，先处理阻断缺陷' : currentScanDefects > 0 ? '建议带着本轮缺陷清单推进整改验收' : '当前没有可交付缺陷，可继续观察后续轮次'}</h2><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : currentScanP0Count > 0 ? '当前存在会直接影响业务履约或发布安全的高风险缺陷。' : currentScanDefects > 0 ? '当前扫描结果已经足以形成客户整改清单，不需要再从线索里筛。' : '本轮输出可以作为当前阶段的风险结论，但建议继续保持持续检测。'}</p></article>
-        <article className="customer-value-card"><span className="customer-value-kicker">客户价值</span><h2>{currentScanDefects > 0 ? `本轮交付 ${currentScanDefects} 个已验证缺陷，累计货架 ${familyShelfDefects} 个` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '本轮价值在于明确暴露可测试性边界' : '本轮价值在于给出明确风险结论'}</h2><p>{currentScanDefects > 0 ? `缺陷集中在 ${topFamilyLabel} 等方向，证据可信度 ${evidenceTrust}% ，其中 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条为历史延续货架，可直接进入修复与复验。` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '系统没有把缺少来源、环境、测试数据、真实执行、证据字段或证据链闭合伪装成“通过”，可直接用于推动补齐条件。' : '当前没有把未补证线索冒充成客户缺陷，避免误导客户对结果质量的判断。'}</p></article>
-        <article className="customer-value-card"><span className="customer-value-kicker">交付边界</span><h2>{evidenceBlockedItemCount > 0 ? `证据仍有 ${evidenceBlockedItemCount} 项阻断` : hasMainChainContract && !mainChainReady ? `主链路断在：${firstBlockedStageLabel}` : coverageGaps > 0 ? `当前有 ${coverageGaps} 项覆盖缺口` : clueCount > 0 ? `内部仍有 ${clueCount} 条待补证线索` : '当前没有待补证线索'}</h2><p>{evidenceBlockedItemCount > 0 ? evidenceDetail : hasMainChainContract && !mainChainReady ? firstBlockedNextAction : coverageGaps > 0 ? '覆盖缺口不会进入客户缺陷数量，需要通过新的资料、环境、数据或授权条件在后续 Campaign 中关闭。' : clueCount > 0 ? '这些线索不会进入客户成果展示，只作为内部继续采证与复验的运营池。' : '当前结果已经清晰收口，没有把内部线索混进客户视图。'}</p></article>
-      </section>
-
       {focusFindings.length === 0 && <div className="mb-4">{secondarySummarySection}</div>}
 
       <section className="customer-focus-section mb-4">
-        <div className="customer-section-head"><div><span className="panel-kicker">重点缺陷</span><h2>客户应该优先关注的结果</h2></div><button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看完整缺陷清单</button></div>
+        <div className="customer-section-head"><div><span className="panel-kicker">重点缺陷</span><h2>客户应优先关注的结果</h2></div><button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看完整清单</button></div>
         {focusFindings.length === 0 ? (
-          <section className="findings-empty-state compact"><span className="findings-empty-kicker">当前结论</span><h3>{hasMainChainContract && !mainChainReady ? '主链路未闭合' : evidenceBlockedItemCount > 0 ? '证据标准化未完成' : governanceNeedsAction ? campaignStatusLabel(campaignStatus) : '当前没有客户可交付缺陷'}</h3><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : governanceNeedsAction ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : clueCount > 0 ? `本轮仅有 ${clueCount} 条内部线索仍在补证，客户侧暂不展示。` : familyShelfDefects > 0 ? <>当前货架仍保留 {familyShelfDefects} 条历史缺陷，但本轮没有新增 confirmed 缺陷。</> : '当前没有 confirmed 缺陷，说明本轮结果未发现可交付问题。'}</p></section>
+          <section className="findings-empty-state compact"><span className="findings-empty-kicker">当前结论</span><h3>{hasMainChainContract && !mainChainReady ? '主链路未闭合' : evidenceBlockedItemCount > 0 ? '证据尚未齐备' : governanceNeedsAction ? campaignStatusLabel(campaignStatus) : '当前没有客户可交付缺陷'}</h3><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : governanceNeedsAction ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : clueCount > 0 ? `本轮仅有 ${clueCount} 条内部线索仍在补证，客户侧暂不展示。` : familyShelfDefects > 0 ? <>当前仍保留 {familyShelfDefects} 条历史结论，但本轮没有新增已确认缺陷。</> : '当前没有已确认缺陷，说明本轮结果未发现可交付问题。'}</p></section>
         ) : (
           <div className="customer-focus-list">
             {focusFindings.map((finding) => (

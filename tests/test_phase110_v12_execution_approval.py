@@ -37,6 +37,6 @@ def test_v12_authorizes_source_bound_nonproduction_without_per_probe_approval(tm
     assert result["runtime_contract"]["status"] == "approved"
     assert result["runtime_contract"]["execution_approval"]["authorization_basis"] == "source_bound_nonproduction_campaign"
     assert result["phases"]["execution"]["status"] == "blocked"
-    assert result["phases"]["execution"]["reason"] == "test_account_token_missing"
+    assert result["phases"]["execution"]["reason"] == "test_actor_identity_missing"
     assert result["auto_har"]["status"] == "no_traffic"
     assert result["campaign"]["source_hash"] == SOURCE_MANIFEST["source_hash"]

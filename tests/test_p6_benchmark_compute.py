@@ -33,7 +33,10 @@ def test_method_path_key_normalizes_path_params() -> None:
 
 def test_compute_benchmark_returns_empty_when_no_ground_truth(tmp_path: Path) -> None:
     result = compute_benchmark("test", [], root=tmp_path)
-    assert result == {}, f"Expected empty dict when no ground truth, got: {result}"
+    assert result["benchmark_active"] is False
+    assert result["ground_truth_available"] is False
+    assert "recall" not in result
+    assert result["coverage_matrix"]["covered_family_count"] == 0
 
 
 def test_compute_benchmark_with_ground_truth(tmp_path: Path) -> None:
@@ -97,7 +100,13 @@ def test_compute_benchmark_no_false_fabrication(tmp_path: Path) -> None:
     isolated = tmp_path / "nested" / "project_dir"
     isolated.mkdir(parents=True)
     result = compute_benchmark("empty", [], root=isolated)
-    assert result == {}
-    # Even with findings but no ground truth
+    assert result["benchmark_active"] is False
+    assert result["ground_truth_available"] is False
+    assert "recall" not in result
+    assert result["coverage_matrix"]["unclassified_signal_count"] == 0
+    # Even with unclassified findings, benchmark rates remain absent and the
+    # signal is reported only as an honest coverage-matrix remainder.
     result = compute_benchmark("empty", [{"title": "fake"}], root=isolated)
-    assert result == {}
+    assert result["benchmark_active"] is False
+    assert "recall" not in result
+    assert result["coverage_matrix"]["unclassified_signal_count"] == 1

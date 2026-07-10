@@ -13,7 +13,13 @@ from typing import Any
 
 from .auto_test_data_factory import _markdown_request_example
 from .business_state_graph import BusinessStateGraph, StateEdge, StateTransition, _api_facts, behavior_slice_id
-from .real_id_resolver import normalize_path_placeholders, path_has_placeholders, collection_path
+from .real_id_resolver import (
+    alternate_collection_paths,
+    extract_fields_for_path,
+    normalize_path_placeholders,
+    path_has_placeholders,
+    collection_path,
+)
 
 
 @dataclass
@@ -237,6 +243,8 @@ class SemanticScenarioGenerator:
             item = self._concurrency_slice(slice_meta, discovery_round)
         elif kind == "money":
             item = self._money_slice(slice_meta, discovery_round)
+        elif kind == "inventory":
+            item = self._inventory_slice(slice_meta, discovery_round)
         elif kind == "account_status":
             item = self._account_status_slice(slice_meta, discovery_round)
         else:
@@ -342,30 +350,45 @@ class SemanticScenarioGenerator:
         )
         if runtime_upgrade is not None:
             return runtime_upgrade
-        if not observation_path:
-            return None
         state_or_rule = states[0] if states else invariant[:120]
-        return ExecutableScenario(
-            id=self._id(entity, state_or_rule or "invariant"),
-            title=f"[来源约束不变量] {entity}: {state_or_rule}",
-            description=invariant[:300],
-            category="invariant",
-            severity="P1",
-            entity=entity,
-            preconditions=[f"需要 {entity} 的来源可追溯运行时样本"],
-            actors=["readonly"],
-            steps=[ScenarioStep(order=1, action="observe_bound_entity", api_method="GET", api_path=observation_path, expected_status=200, actor="readonly")],
-            expected_state=states[0] if states else "",
-            oracle_rules=["ConsistencyOracle.source_grounded_invariant", invariant[:300]],
-            confidence=max(float(slice_meta.get("priority") or 0.0), 0.55 if refs else 0.3),
-            execution_policy="safe_read_only",
-            evidence_gaps=[],
-            source_refs=refs,
-            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
-            behavior_slice_kind="invariant",
-            discovery_round=discovery_round,
-            selection_origin="active_slice_fallback_materialized",
-        )
+        steps: list[ScenarioStep] = []
+        observation_path = str(observation_path or "")
+        if observation_path and path_has_placeholders(normalize_path_placeholders(observation_path)):
+            resolve_steps, observation_path = self._resolve_entity_steps(
+                observation_path, actor="readonly", start_order=1,
+            )
+            steps.extend(resolve_steps)
+        if observation_path:
+            steps.append(ScenarioStep(
+                order=len(steps) + 1,
+                action="observe_bound_entity",
+                api_method="GET",
+                api_path=observation_path,
+                expected_status=200,
+                actor="readonly",
+            ))
+            return ExecutableScenario(
+                id=self._id(entity, state_or_rule or "invariant"),
+                title=f"[来源约束不变量] {entity}: {state_or_rule}",
+                description=invariant[:300],
+                category="invariant",
+                severity="P1",
+                entity=entity,
+                preconditions=[f"需要 {entity} 的来源可追溯运行时样本"],
+                actors=["readonly"],
+                steps=steps,
+                expected_state=states[0] if states else "",
+                oracle_rules=["ConsistencyOracle.source_grounded_invariant", invariant[:300]],
+                confidence=max(float(slice_meta.get("priority") or 0.0), 0.55 if refs else 0.3),
+                execution_policy="safe_read_only",
+                evidence_gaps=[],
+                source_refs=refs,
+                behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+                behavior_slice_kind="invariant",
+                discovery_round=discovery_round,
+                selection_origin="active_slice_fallback_materialized",
+            )
+        return None
 
     def _build_system_promise_invariant_scenario(
         self,
@@ -1394,7 +1417,7 @@ class SemanticScenarioGenerator:
         for path in candidates:
             if not path_has_placeholders(path):
                 return path
-        return ""
+        return candidates[0] if candidates else ""
 
     @staticmethod
     def _preferred_write_endpoint(api_doc: str, entity: str) -> str:
@@ -1469,6 +1492,44 @@ class SemanticScenarioGenerator:
     def _id(*parts: Any) -> str:
         return "SCN_SRC_" + hashlib.sha256("|".join(str(part or "") for part in parts).encode("utf-8")).hexdigest()[:16]
 
+    @staticmethod
+    def _resolve_entity_steps(
+        path: str,
+        *,
+        actor: str,
+        start_order: int = 1,
+    ) -> tuple[list[ScenarioStep], str]:
+        """Insert list-resolve steps so path placeholders can bind at runtime.
+
+        Uses structural collection path first, then sibling catalog fallbacks
+        (e.g. inventory/{sku} → products) when the collection itself is not
+        listable. Field extraction follows the path parameter name.
+        """
+        normalized = normalize_path_placeholders(path)
+        if not path_has_placeholders(normalized):
+            return [], path
+        extract_fields = extract_fields_for_path(normalized)
+        candidates: list[str] = []
+        primary = collection_path(normalized)
+        if primary and primary != "/" and not primary.endswith("/api"):
+            candidates.append(primary)
+        candidates.extend(alternate_collection_paths(normalized))
+        candidates = [item for item in dict.fromkeys(candidates) if item.startswith("/")]
+        if not candidates:
+            return [], normalized
+        steps: list[ScenarioStep] = []
+        for index, candidate in enumerate(candidates[:2]):
+            steps.append(ScenarioStep(
+                order=start_order + index,
+                action="resolve_entity_id" if index == 0 else f"resolve_entity_id_alt_{index}",
+                api_method="GET",
+                api_path=candidate,
+                extract_from_response=list(extract_fields),
+                expected_status=200,
+                actor=actor,
+            ))
+        return steps, normalized
+
     # ── Supplementary scenario builders for non-state-machine slice kinds ──
 
     @staticmethod
@@ -1494,7 +1555,15 @@ class SemanticScenarioGenerator:
         return out
 
     @staticmethod
-    def _build_login_step(login_path: str, body_template: dict[str, Any], identifier: str, password: str, order: int = 1) -> ScenarioStep | None:
+    def _build_login_step(
+        login_path: str,
+        body_template: dict[str, Any],
+        identifier: str,
+        password: str,
+        order: int = 1,
+        *,
+        actor: str = "readonly",
+    ) -> ScenarioStep | None:
         """Build a login step using the project-documented field names, not hardcoded {email,password}."""
         if not login_path.startswith("/") or not identifier:
             return None
@@ -1503,7 +1572,7 @@ class SemanticScenarioGenerator:
             api_method="POST", api_path=login_path,
             body_template=SemanticScenarioGenerator._fill_login_body(body_template, identifier, password),
             extract_from_response=["token"],
-            expected_status=200, actor="readonly",
+            expected_status=200, actor=actor or "readonly",
         )
 
     @staticmethod
@@ -1532,24 +1601,17 @@ class SemanticScenarioGenerator:
         login_path = str(slice_meta.get("_login_path") or "").strip()
         login_body = dict(slice_meta.get("_login_body") or {})
         step = SemanticScenarioGenerator._build_login_step(
-            login_path, login_body, email, password, order=1)
+            login_path, login_body, email, password, order=1, actor=actor_label)
         if step:
             steps.append(step)
         # If the target path contains a :param placeholder, insert a pre-step
         # that list-observes the collection endpoint to bind a real id at
         # runtime — otherwise the probe would send a literal :id to the server.
         probe_path = path
-        if path_has_placeholders(normalize_path_placeholders(path)):
-            coll = collection_path(normalize_path_placeholders(path))
-            if coll and coll != "/" and not coll.endswith("/api"):
-                steps.append(ScenarioStep(
-                    order=len(steps) + 1,
-                    action="resolve_entity_id",
-                    api_method="GET", api_path=coll,
-                    extract_from_response=["id"],
-                    expected_status=200, actor=actor_label,
-                ))
-                probe_path = normalize_path_placeholders(path)
+        resolve_steps, probe_path = SemanticScenarioGenerator._resolve_entity_steps(
+            path, actor=actor_label, start_order=len(steps) + 1,
+        )
+        steps.extend(resolve_steps)
         steps.append(ScenarioStep(
             order=len(steps) + 1,
             action=f"permission_probe_{actor_label}",
@@ -1633,8 +1695,9 @@ class SemanticScenarioGenerator:
     ) -> ExecutableScenario | None:
         """Build a cross-user isolation scenario.
 
-        UserA authenticates and reads an endpoint that lists UserB's resources.
-        The TenantIsolationOracle flags cross-user data in the response.
+        Owner authenticates and seeds an entity id; viewer then attempts to read
+        the owner's resource (path or ownership query param). TenantIsolationOracle
+        flags cross-user data leakage.
         """
         entity = str(slice_meta.get("entity") or "").strip()
         if not entity:
@@ -1642,44 +1705,77 @@ class SemanticScenarioGenerator:
         viewer_label = str(slice_meta.get("_isolation_viewer_role") or "").strip()
         viewer_email = str(slice_meta.get("_isolation_viewer_email") or "").strip()
         viewer_password = str(slice_meta.get("_isolation_viewer_password") or "").strip()
+        owner_label = str(slice_meta.get("_isolation_owner_role") or "").strip()
+        owner_email = str(slice_meta.get("_isolation_owner_email") or "").strip()
+        owner_password = str(slice_meta.get("_isolation_owner_password") or "").strip()
         path = str(slice_meta.get("_isolation_path") or "")
+        mode = str(slice_meta.get("_isolation_mode") or "path").strip().lower()
+        query_param = str(slice_meta.get("_isolation_query_param") or "").strip()
         if not viewer_label or not path.startswith("/"):
             return None
         steps: list[ScenarioStep] = []
         login_path = str(slice_meta.get("_login_path") or "").strip()
         login_body = dict(slice_meta.get("_login_body") or {})
-        step = SemanticScenarioGenerator._build_login_step(
-            login_path, login_body, viewer_email, viewer_password, order=1)
-        if step:
-            steps.append(step)
-        # Resolve entity id if path has placeholders
+        order = 1
+        if owner_email and owner_password and login_path:
+            owner_login = SemanticScenarioGenerator._build_login_step(
+                login_path, login_body, owner_email, owner_password, order=order, actor=owner_label or owner_email)
+            if owner_login:
+                owner_login.actor = owner_label or owner_email
+                steps.append(owner_login)
+                order += 1
+            if mode == "query_param" and query_param:
+                identity_path = str(slice_meta.get("_isolation_identity_path") or "").strip()
+                if identity_path.startswith("/"):
+                    steps.append(ScenarioStep(
+                        order=order,
+                        action="resolve_owner_identity",
+                        api_method="GET",
+                        api_path=identity_path,
+                        extract_from_response=["id", "userId", "user_id"],
+                        expected_status=200,
+                        actor=owner_label or owner_email,
+                    ))
+                    order += 1
+            elif path_has_placeholders(normalize_path_placeholders(path)):
+                resolve_steps, _ = SemanticScenarioGenerator._resolve_entity_steps(
+                    path, actor=owner_label or owner_email, start_order=order,
+                )
+                for resolve_step in resolve_steps:
+                    resolve_step.action = "resolve_owner_entity_id"
+                    steps.append(resolve_step)
+                    order += 1
+        viewer_login = SemanticScenarioGenerator._build_login_step(
+            login_path, login_body, viewer_email, viewer_password, order=order, actor=viewer_label)
+        if viewer_login:
+            viewer_login.actor = viewer_label
+            steps.append(viewer_login)
+            order += 1
         probe_path = path
-        if path_has_placeholders(normalize_path_placeholders(path)):
-            coll = collection_path(normalize_path_placeholders(path))
-            if coll and coll != "/" and not coll.endswith("/api"):
-                steps.append(ScenarioStep(
-                    order=len(steps) + 1,
-                    action="resolve_entity_id",
-                    api_method="GET", api_path=coll,
-                    extract_from_response=["id"],
-                    expected_status=200, actor=viewer_label,
-                ))
-                probe_path = normalize_path_placeholders(path)
+        expected_status = 403
+        if mode == "query_param" and query_param:
+            owner_binding = "id"
+            probe_path = f"{path}?{query_param}={{{owner_binding}}}"
+        elif path_has_placeholders(normalize_path_placeholders(path)):
+            probe_path = normalize_path_placeholders(path)
         steps.append(ScenarioStep(
-            order=len(steps) + 1,
+            order=order,
             action=f"isolation_probe_{viewer_label}",
-            api_method="GET", api_path=probe_path,
-            expected_status=200, actor=viewer_label,
+            api_method="GET",
+            api_path=probe_path,
+            expected_status=expected_status,
+            actor=viewer_label,
         ))
+        actors = [label for label in (viewer_label, owner_label) if label]
         return ExecutableScenario(
             id=SemanticScenarioGenerator._id(entity, "isolation", viewer_label, path),
-            title=f"[Data isolation probe] {viewer_label} → GET {path}",
-            description=f"验证用户 {viewer_label} 不应看到其他用户的私有数据",
+            title=f"[Data isolation probe] {viewer_label} → GET {probe_path}",
+            description=f"验证用户 {viewer_label} 不应访问其他用户的私有数据",
             category="isolation",
             severity="P1",
             entity=entity,
             preconditions=[],
-            actors=[viewer_label],
+            actors=actors,
             steps=steps,
             oracle_rules=["TenantIsolationOracle.cross_user_isolation"],
             confidence=float(slice_meta.get("priority") or 0.88),
@@ -1710,19 +1806,14 @@ class SemanticScenarioGenerator:
         login_body = dict(slice_meta.get("_login_body") or {})
         steps: list[ScenarioStep] = []
         step = SemanticScenarioGenerator._build_login_step(
-            login_path, login_body, email, password, order=1)
+            login_path, login_body, email, password, order=1, actor=actor_label)
         if step:
             steps.append(step)
         probe_path = path
-        if path_has_placeholders(normalize_path_placeholders(path)):
-            coll = collection_path(normalize_path_placeholders(path))
-            if coll and coll != "/" and not coll.endswith("/api"):
-                steps.append(ScenarioStep(
-                    order=len(steps) + 1, action="resolve_entity_id",
-                    api_method="GET", api_path=coll,
-                    extract_from_response=["id"], expected_status=200, actor=actor_label,
-                ))
-                probe_path = normalize_path_placeholders(path)
+        resolve_steps, probe_path = SemanticScenarioGenerator._resolve_entity_steps(
+            path, actor=actor_label, start_order=len(steps) + 1,
+        )
+        steps.extend(resolve_steps)
         base = len(steps)
         for i in (1, 2):
             steps.append(ScenarioStep(
@@ -1782,19 +1873,19 @@ class SemanticScenarioGenerator:
         probe_write = path
         steps: list[ScenarioStep] = []
         step = SemanticScenarioGenerator._build_login_step(
-            login_path, login_body, email, password, order=1)
+            login_path, login_body, email, password, order=1, actor=actor_label)
         if step:
+            step.actor = actor_label
             steps.append(step)
+        resolve_target = path if path_has_placeholders(normalize_path_placeholders(path)) else read_path
+        resolve_steps, normalized_target = SemanticScenarioGenerator._resolve_entity_steps(
+            resolve_target, actor=actor_label, start_order=len(steps) + 1,
+        )
+        steps.extend(resolve_steps)
+        if path_has_placeholders(normalize_path_placeholders(path)):
+            probe_write = normalized_target
         if path_has_placeholders(normalize_path_placeholders(read_path)):
-            coll = collection_path(normalize_path_placeholders(read_path))
-            if coll and coll != "/" and not coll.endswith("/api"):
-                steps.append(ScenarioStep(
-                    order=len(steps) + 1, action="resolve_entity_id",
-                    api_method="GET", api_path=coll,
-                    extract_from_response=["id"], expected_status=200, actor=actor_label,
-                ))
-                probe_read = normalize_path_placeholders(read_path)
-                probe_write = normalize_path_placeholders(path)
+            probe_read = normalize_path_placeholders(read_path)
         steps.append(ScenarioStep(
             order=len(steps) + 1, action="observe_money_endpoint",
             api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
@@ -1824,6 +1915,77 @@ class SemanticScenarioGenerator:
             source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
             behavior_slice_id=str(slice_meta.get("slice_id") or ""),
             behavior_slice_kind="money",
+            discovery_round=discovery_round,
+            actor_token="",
+            selection_origin="supplementary_active_slice",
+        )
+
+    @staticmethod
+    def _inventory_slice(
+        slice_meta: dict[str, Any], discovery_round: int,
+    ) -> ExecutableScenario | None:
+        """Build an inventory-integrity observation scenario."""
+        entity = str(slice_meta.get("entity") or "").strip()
+        method = str(slice_meta.get("_inventory_method") or "").upper()
+        path = str(slice_meta.get("_inventory_path") or "")
+        if not entity or not method or not path.startswith("/"):
+            return None
+        actor_label = str(slice_meta.get("_default_actor") or "readonly").strip() or "readonly"
+        email = str(slice_meta.get("_default_email") or "").strip()
+        password = str(slice_meta.get("_default_password") or "").strip()
+        login_path = str(slice_meta.get("_login_path") or "").strip()
+        login_body = dict(slice_meta.get("_login_body") or {})
+        read_path = _adjacent_read_for_entity(entity, path)
+        probe_read = read_path
+        probe_write = path
+        steps: list[ScenarioStep] = []
+        step = SemanticScenarioGenerator._build_login_step(
+            login_path, login_body, email, password, order=1, actor=actor_label)
+        if step:
+            step.actor = actor_label
+            steps.append(step)
+        resolve_target = path if path_has_placeholders(normalize_path_placeholders(path)) else read_path
+        resolve_steps, normalized_target = SemanticScenarioGenerator._resolve_entity_steps(
+            resolve_target, actor=actor_label, start_order=len(steps) + 1,
+        )
+        steps.extend(resolve_steps)
+        if path_has_placeholders(normalize_path_placeholders(path)):
+            probe_write = normalized_target
+        if path_has_placeholders(normalize_path_placeholders(read_path)):
+            probe_read = normalize_path_placeholders(read_path)
+            # Prefer sibling catalog for inventory observation when collection 404s.
+            alts = alternate_collection_paths(path)
+            if alts and not path_has_placeholders(alts[0]):
+                probe_read = alts[0]
+        steps.append(ScenarioStep(
+            order=len(steps) + 1, action="observe_inventory_endpoint",
+            api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
+        ))
+        steps.append(ScenarioStep(
+            order=len(steps) + 1, action=f"inventory_probe_{method}",
+            api_method=method, api_path=probe_write, expected_status=200, actor=actor_label,
+        ))
+        steps.append(ScenarioStep(
+            order=len(steps) + 1, action="observe_inventory_after",
+            api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
+        ))
+        return ExecutableScenario(
+            id=SemanticScenarioGenerator._id(entity, "inventory", method, path),
+            title=f"[Inventory integrity probe] {method} {path}",
+            description="验证库存预占/扣减/释放的非负性与一致性",
+            category="inventory",
+            severity="P1",
+            entity=entity,
+            preconditions=[],
+            actors=[actor_label],
+            steps=steps,
+            oracle_rules=["InventoryOracle.stock_integrity"],
+            confidence=float(slice_meta.get("priority") or 0.84),
+            execution_policy="approved_sandbox_write",
+            evidence_gaps=[],
+            source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="inventory",
             discovery_round=discovery_round,
             actor_token="",
             selection_origin="supplementary_active_slice",

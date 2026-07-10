@@ -78,8 +78,8 @@ elif MODE == "llm_throughput":
     # 不再手工设预算：每轮切片预算由 _auto_scale_slice_budget 跟随候选池自动伸缩。
     # 写探针也不再需要 QUALIBUG_ENABLE_SANDBOX_WRITE —— 非生产环境默认可写
     # （benchmark_mall 已在 real_project_config.json 声明 environment=test）。
-    # 仅为控制单次验证成本，把 scan 多轮驱动限到 2 轮。
-    os.environ.setdefault("QUALIBUG_SCAN_MAX_ROUNDS", "2")
+    # 跟随 auto_scale round_limit 抽干优化后的候选池（与 full 模式一致）。
+    os.environ.pop("QUALIBUG_SCAN_MAX_ROUNDS", None)
 elif MODE == "full":
     # 产品全量发现模式：分析器+LLM+自适应预算+非生产默认可写，不限制多轮。
     os.environ["QUALIBUG_UNIFY_ANALYZERS"] = "1"

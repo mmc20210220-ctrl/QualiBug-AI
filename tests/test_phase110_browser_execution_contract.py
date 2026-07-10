@@ -97,8 +97,9 @@ def test_execute_browser_plan_uses_auto_browser_setup_runtime(tmp_path, monkeypa
             state["context_closed"] = True
 
     class _Browser:
-        def new_context(self) -> _Context:
+        def new_context(self, **kwargs) -> _Context:
             state["context_created"] = True
+            state["context_options"] = kwargs
             return _Context()
 
         def close(self) -> None:

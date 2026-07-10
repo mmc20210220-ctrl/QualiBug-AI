@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from email.message import Message
+from pathlib import Path
 from types import SimpleNamespace
 
 from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
@@ -17,6 +18,7 @@ from ai_test_asset_center.v12_pipeline import (
     _auto_scale_slice_budget,
     _auto_scale_round_limit,
     _ABS_MAX_SLICE_BUDGET,
+    _optimize_behavior_slice_pool,
     _enrich_coupon_validation_scenarios,
     _rank_behavior_slices_for_selection,
     _runtime_contract,
@@ -601,8 +603,8 @@ def test_auto_scale_budget_follows_system_size():
     bounded by the absolute cost ceiling — no env tuning required."""
     assert _auto_scale_slice_budget(0) == 15
     assert _auto_scale_slice_budget(10) == 15          # small system -> floor
-    assert _auto_scale_slice_budget(60) == 20          # ceil(60/3)
-    assert _auto_scale_slice_budget(450) == 150        # ceil(450/3) == 150 (cap)
+    assert _auto_scale_slice_budget(60) == 30          # ceil(60/2)
+    assert _auto_scale_slice_budget(450) == 200        # ceil(450/2) == 225 -> cap 200
     assert _auto_scale_slice_budget(100000) == _ABS_MAX_SLICE_BUDGET
     # Monotonic non-decreasing with system size.
     prev = 0
@@ -616,7 +618,7 @@ def test_auto_scale_round_limit_drains_pool():
     """Round limit is sized so the pool can actually be drained at the budget."""
     assert _auto_scale_round_limit(0, 15) == 8          # default floor
     assert _auto_scale_round_limit(60, 20) == 8         # 3 rounds needed -> floor 8
-    assert _auto_scale_round_limit(450, 150) == 8       # 3 rounds -> floor 8
+    assert _auto_scale_round_limit(450, 200) == 8       # 3 rounds -> floor 8
     assert _auto_scale_round_limit(2000, 100) == 21     # ceil(2000/100)+1
 
 
@@ -693,6 +695,105 @@ def test_scheduler_prefers_new_executable_slice_over_previously_attempted_higher
     assert selection["status"] == "planned"
     assert selection["selection_mode"] == "next_unattempted_executable_after_history"
     assert selection["selected_slice_ids"] == ["BHV_dependency"]
+
+
+def test_optimize_behavior_slice_pool_collapses_llm_permission_duplicates():
+    slices = [
+        {
+            "slice_id": "BHV_perm_a",
+            "entity": "order",
+            "kind": "permission",
+            "priority": 0.4,
+            "_hypothesis_origin": "llm_reasoner",
+            "_permission_method": "GET",
+            "_permission_path": "/api/orders",
+            "endpoints": ["/api/orders"],
+        },
+        {
+            "slice_id": "BHV_perm_b",
+            "entity": "order",
+            "kind": "permission",
+            "priority": 0.9,
+            "_hypothesis_origin": "llm_reasoner",
+            "_permission_method": "GET",
+            "_permission_path": "/api/orders",
+            "endpoints": ["/api/orders"],
+        },
+        {
+            "slice_id": "BHV_hist",
+            "entity": "order",
+            "kind": "permission",
+            "priority": 0.2,
+            "_hypothesis_origin": "historical_bug",
+            "_historical_bug_id": "AUTH-002",
+            "_permission_method": "GET",
+            "_permission_path": "/api/orders",
+            "endpoints": ["/api/orders"],
+            "source_refs": [{"kind": "historical_bug", "quote": "cross-user order read"}],
+        },
+        {
+            "slice_id": "BHV_money",
+            "entity": "payment",
+            "kind": "money",
+            "priority": 0.8,
+            "endpoints": ["/api/payments/pay"],
+        },
+    ]
+    optimized, stats = _optimize_behavior_slice_pool(slices)
+    assert stats["collapsed_permission_isolation"] == 1
+    assert stats["protected"] == 2
+    assert len(optimized) == 3
+    kept_ids = {item["slice_id"] for item in optimized}
+    assert "BHV_hist" in kept_ids
+    assert "BHV_money" in kept_ids
+    assert "BHV_perm_b" in kept_ids
+
+
+def test_sandbox_write_allows_login_bound_scenarios_without_preflight_token(monkeypatch):
+    from types import SimpleNamespace
+
+    from ai_test_asset_center.sandbox_write_executor import _first_write_step, sandbox_write_allowed
+
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor.resolve_environment_kind", lambda *args, **kwargs: "test")
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor.is_test_or_sandbox_environment", lambda _kind: True)
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor.sandbox_write_enabled", lambda: True)
+
+    scenario = SimpleNamespace(
+        actor_role="",
+        actor="",
+        actor_id="",
+        actors=["buyer01"],
+        steps=[
+            SimpleNamespace(action="login", api_method="POST", api_path="/api/auth/login", body_template={"email": "a", "password": "b"}),
+            SimpleNamespace(action="money_probe", api_method="POST", api_path="/api/cart/items", body_template={"sku": "x", "qty": 1}),
+        ],
+        execution_policy="approved_sandbox_write",
+    )
+    write_meta = _first_write_step(scenario)
+    assert write_meta is not None
+    assert write_meta[1] == "/api/cart/items"
+    allowed, reason = sandbox_write_allowed(
+        root=Path("."),
+        project="demo",
+        runtime_contract={"status": "approved", "approved_base_url": "http://localhost:8080", "execution_mode": "approved_sandbox_write"},
+        actor_token="",
+        actor_identity="",
+        scenario=scenario,
+    )
+    assert allowed is True
+    assert reason == "approved"
+
+
+def test_rank_behavior_slices_prefers_account_status_and_money():
+    ranked = _rank_behavior_slices_for_selection(
+        [
+            {"slice_id": "BHV_transition", "entity": "order", "kind": "transition", "priority": 0.5, "source_refs": []},
+            {"slice_id": "BHV_money", "entity": "payment", "kind": "money", "priority": 0.5, "source_refs": []},
+            {"slice_id": "BHV_account", "entity": "user", "kind": "account_status", "priority": 0.5, "source_refs": []},
+        ],
+        [],
+    )
+    assert [item["slice_id"] for item in ranked[:3]] == ["BHV_account", "BHV_money", "BHV_transition"]
 
 
 def test_rank_behavior_slices_prefers_runtime_write_risk_over_observation_only():
@@ -1102,7 +1203,12 @@ def test_pipeline_preserves_original_markdown_doc_for_dependency_write_scenarios
                 ],
             }
         )
-        return {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": [], "duration_ms": 0}
+        return {
+            "scenario_id": getattr(scenario, "id", "?"),
+            "steps": [{"method": "GET", "path": "/source-derived-receipt", "status": 200}],
+            "errors": [],
+            "duration_ms": 0,
+        }
 
     monkeypatch.setattr(
         v12_pipeline_module,
@@ -1122,6 +1228,7 @@ def test_pipeline_preserves_original_markdown_doc_for_dependency_write_scenarios
         campaign_context={
             "scope_id": "dependency-runtime",
             "environment_ref": "approved-test",
+            "execution_mode": "approved_sandbox_write",
             "source_manifest": manifest,
         },
     )
@@ -1443,7 +1550,7 @@ def test_confirmed_oracle_finding_preserves_db_and_business_invariant_evidence_f
     assert finding["evidence_strength"] == "runtime_and_db"
 
 
-def test_pipeline_does_not_persist_history_when_execution_approval_is_missing(monkeypatch, tmp_path):
+def test_pipeline_records_blocked_cycle_without_marking_unexecuted_slices_attempted(monkeypatch, tmp_path):
     manifest = {
         "source_id": "uploaded:approval-gated-api",
         "source_hash": hashlib.sha256(API_SPEC.encode("utf-8")).hexdigest(),
@@ -1463,6 +1570,7 @@ def test_pipeline_does_not_persist_history_when_execution_approval_is_missing(mo
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "execution_mode": "approved_sandbox_write",
             "source_manifest": manifest,
         },
     )
@@ -1470,32 +1578,11 @@ def test_pipeline_does_not_persist_history_when_execution_approval_is_missing(mo
     ledger_path = tmp_path / "platform_workspace" / "generic-project" / "defect_discovery" / "v12_behavior_slice_ledger.json"
     campaign_dir = tmp_path / "platform_workspace" / "generic-project" / "defect_discovery" / "campaigns"
     assert blocked["phases"]["execution"]["status"] == "blocked"
-    assert blocked["runtime_contract"]["reason"] == "execution_approval_required"
-    assert not ledger_path.exists()
-    assert not campaign_dir.exists()
-
-    monkeypatch.setattr(
-        "ai_test_asset_center.v12_pipeline._execution_approval_contract",
-        lambda context, campaign, approved_base_url, root: {"status": "approved", "code": ""},
-    )
-    approved = run_v12_pipeline(
-        project="generic-project",
-        root=tmp_path,
-        prd_text=PRD,
-        api_spec_text=API_SPEC,
-        db_schema_text=DB_SCHEMA,
-        base_url="http://example.test",
-        campaign_context={
-            "scope_id": "case-lifecycle",
-            "environment_ref": "approved-test",
-            "source_manifest": manifest,
-            "execution_approval_id": "eap_test",
-        },
-    )
-
-    assert approved["campaign"]["campaign_mode"] == "created"
-    assert approved["behavior_slice_ledger"]["round"] == 1
-    assert approved["behavior_slice_ledger"]["selection_mode"] == "round_paging"
+    assert blocked["phases"]["execution"]["reason"] == "test_actor_identity_missing"
+    assert blocked["runtime_contract"]["status"] == "approved"
+    assert blocked["behavior_slice_ledger"]["attempted_slice_ids"] == []
+    assert ledger_path.exists()
+    assert campaign_dir.exists()
 
 
 def test_pipeline_ignores_persisted_slice_history_from_different_snapshot(tmp_path):

@@ -12,7 +12,7 @@ def _write_report(root: Path, project: str, payload: dict) -> None:
 
 def _write_scan_result(root: Path, project: str, payload: dict) -> None:
     out_dir = root / "platform_outputs" / project
-    out_dir.mkdir(parents=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "scan_result.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 

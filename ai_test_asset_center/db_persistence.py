@@ -216,6 +216,40 @@ def authenticate_tenant(root: Path, username_or_api_key: str, password: str = ""
             "role": row["role"] or "admin",
         }
 
+def reset_tenant_password(
+    root: Path,
+    *,
+    tenant_id: str,
+    username: str,
+    new_password: str,
+) -> dict:
+    """Reset a tenant password when workspace ID and username both match.
+
+    Without an email channel, identity is verified by the combination of
+    ``tenant_id`` + ``username``. Failures return a generic error so callers
+    cannot enumerate which field was wrong.
+    """
+    tid = str(tenant_id or "").strip()
+    user = str(username or "").strip()
+    secret = str(new_password or "")
+    if not tid or not user or not secret:
+        return {"ok": False, "error": "MISSING_FIELDS"}
+    if len(secret) < 8:
+        return {"ok": False, "error": "PASSWORD_TOO_SHORT"}
+    init_db(root)
+    with _conn(root) as db:
+        row = db.execute(
+            "SELECT id, username FROM tenants WHERE id = ? AND username = ?",
+            (tid, user),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": "RESET_DENIED"}
+        db.execute(
+            "UPDATE tenants SET password_hash = ? WHERE id = ? AND username = ?",
+            (_password_hash(secret), tid, user),
+        )
+        return {"ok": True, "tenant_id": tid, "username": user}
+
 def verify_api_key(root: Path, api_key: str) -> str | None:
     """Verify API key, return tenant_id if valid, None otherwise."""
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()

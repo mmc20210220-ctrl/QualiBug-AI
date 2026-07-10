@@ -71,6 +71,9 @@ def _is_pending_finding(finding: dict[str, Any]) -> bool:
         return True
     if finding.get("gate_passed") is False:
         return True
+    quality = _as_dict(finding.get("evidence_quality"))
+    if finding.get("gate_passed") and _as_int(quality.get("score")) < 90:
+        return True
     return False
 
 

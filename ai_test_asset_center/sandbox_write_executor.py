@@ -189,6 +189,8 @@ def sandbox_write_allowed(
     project: str,
     runtime_contract: dict[str, Any],
     actor_token: str,
+    actor_identity: str = "",
+    scenario: Any = None,
 ) -> tuple[bool, str]:
     """Gate for read+write probing.
 
@@ -216,8 +218,11 @@ def sandbox_write_allowed(
         return False, "environment_kind_undeclared"
     if not is_test_or_sandbox_environment(env_kind):
         return False, f"environment_not_recognized_nonprod:{env_kind}"
-    if not _text(actor_token):
-        return False, "test_account_token_missing"
+    identity = _text(actor_identity)
+    if not identity and scenario is not None:
+        identity = _scenario_declared_actor_identity(scenario)
+    if not _text(actor_token) and not identity:
+        return False, "test_actor_identity_missing"
     return True, "approved"
 
 
@@ -300,8 +305,32 @@ def _append_audit(root: Path, project: str, record: dict[str, Any]) -> Path:
     return path
 
 
+def _is_authentication_step(step: Any) -> bool:
+    action = _text(getattr(step, "action", "") or "").strip().lower()
+    if action == "login" or action.startswith("login_") or action.endswith("_login"):
+        return True
+    path = _text(getattr(step, "api_path", "") or "").strip().lower()
+    return path.endswith("/login") or "/auth/login" in path
+
+
+def _scenario_declared_actor_identity(scenario: Any) -> str:
+    for key in ("actor_role", "actor", "actor_id"):
+        value = _text(getattr(scenario, key, "") or "")
+        if value:
+            return value
+    actors = getattr(scenario, "actors", None) or []
+    if isinstance(actors, list):
+        for actor in actors:
+            label = _text(actor)
+            if label:
+                return label
+    return ""
+
+
 def _first_write_step(scenario: Any) -> tuple[str, str, Any] | None:
     for step in getattr(scenario, "steps", []) or []:
+        if _is_authentication_step(step):
+            continue
         method = _text(getattr(step, "api_method", "") or "").upper()
         path = _text(getattr(step, "api_path", "") or "")
         if method in _WRITE_METHODS and path.startswith("/"):
@@ -415,11 +444,19 @@ def execute_with_sandbox_write(
     if write_meta is None:
         return execute_fn(scenario, base_url, safety_boundary=safety_boundary)
     token = _text(getattr(scenario, "actor_token", "") or "")
+    actor_identity = _text(
+        getattr(scenario, "actor_role", "")
+        or getattr(scenario, "actor", "")
+        or getattr(scenario, "actor_id", "")
+        or runtime_contract.get("actor_identity")
+    )
     allowed, reason = sandbox_write_allowed(
         root=root,
         project=project,
         runtime_contract=runtime_contract,
         actor_token=token,
+        actor_identity=actor_identity,
+        scenario=scenario,
     )
     if not allowed:
         return _blocked_write_trace(scenario, reason, write_meta)

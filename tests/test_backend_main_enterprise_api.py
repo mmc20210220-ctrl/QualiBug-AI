@@ -123,7 +123,7 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
     assert approval.status_code == 200
     assert approval.json()["approval_id"].startswith("eap_")
 
-    no_approval_scan = client.post(
+    source_bound_scan = client.post(
         "/v1/scans",
         headers=_headers(),
         json={
@@ -134,10 +134,11 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
             "source_manifest": manifest,
         },
     )
-    assert no_approval_scan.status_code == 200
-    body = no_approval_scan.json()
+    assert source_bound_scan.status_code == 200
+    body = source_bound_scan.json()
     assert body["grade"] == "blocked"
-    assert body["runtime_contract"]["execution_approval"]["code"] == "EXECUTION_APPROVAL_MISSING"
+    assert body["runtime_contract"]["status"] == "approved"
+    assert body["runtime_contract"]["execution_approval"]["execution_mode"] == "safe_read_only"
     assert body["auto_har"]["status"] == "no_traffic"
 
 

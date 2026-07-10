@@ -50,11 +50,57 @@ Authorization: Bearer <token>
 {"status":"DISABLED"}
 ```
 
+## Inventory
+
+### GET /api/inventory/:sku
+
+查询 SKU 库存（available_qty / locked_qty）。
+
+### POST /api/inventory/reserve
+
+预占库存。
+
+请求：
+
+```json
+{"sku":"SKU-PHONE-001","qty":1,"orderId":"<order_id>"}
+```
+
+### POST /api/inventory/release
+
+释放预占库存。
+
+请求：
+
+```json
+{"sku":"SKU-PHONE-001","qty":1,"orderId":"<order_id>"}
+```
+
+### POST /api/inventory/consume
+
+扣减库存（支付成功后）。
+
+请求：
+
+```json
+{"sku":"SKU-PHONE-001","qty":1,"orderId":"<order_id>"}
+```
+
+### POST /api/inventory/admin/adjust
+
+管理员调整库存（应仅限管理员）。
+
+请求：
+
+```json
+{"sku":"SKU-PHONE-001","delta":10,"reason":"盘点调整"}
+```
+
 ## Product
 
 ### GET /api/products
 
-查询商品列表。
+查询商品列表（客户侧应只展示 ON_SALE 商品）。
 
 ### GET /api/products/:sku
 
@@ -68,6 +114,10 @@ Authorization: Bearer <token>
 
 后台修改商品。seller/admin 可用。
 
+### DELETE /api/products/admin/:sku
+
+后台删除/下架商品。seller/admin 可用。
+
 ## Cart
 
 ### POST /api/cart/items
@@ -78,6 +128,8 @@ Authorization: Bearer <token>
 {"sku":"SKU-PHONE-001","qty":1}
 ```
 
+`qty` 必须为正整数；负数或零应被拒绝。
+
 ### GET /api/cart/items
 
 查询当前用户购物车。
@@ -85,6 +137,10 @@ Authorization: Bearer <token>
 ### PATCH /api/cart/items/:id
 
 修改数量或选中状态。
+
+### DELETE /api/cart/items/:id
+
+删除购物车条目。
 
 ## Coupon
 
@@ -98,6 +154,16 @@ Authorization: Bearer <token>
 
 ```json
 {"code":"NEW100","items":[{"sku":"SKU-PHONE-001","qty":1,"price":6999}],"totalAmount":6999}
+```
+
+### POST /api/coupons/use
+
+核销优惠券（下单/支付时使用）。
+
+请求：
+
+```json
+{"code":"NEW100","orderId":"<order_id>"}
 ```
 
 ## Order
@@ -144,6 +210,14 @@ Authorization: Bearer <token>
 {"orderId":"<order_id>","amount":6899,"channel":"BALANCE","idempotencyKey":"abc-001"}
 ```
 
+### GET /api/payments/order/:orderId
+
+按订单 ID 查询支付记录。
+
+### POST /api/payments/admin/manual-success
+
+管理员手动标记支付成功（应仅限管理员）。
+
 ## Refund
 
 ### POST /api/refunds
@@ -153,6 +227,10 @@ Authorization: Bearer <token>
 ```json
 {"orderId":"<order_id>","amount":100,"reason":"不想要了"}
 ```
+
+### GET /api/refunds/:id
+
+查询退款单详情。
 
 ### POST /api/refunds/:id/approve
 
@@ -172,8 +250,40 @@ Authorization: Bearer <token>
 
 库存风险报表。
 
+### GET /api/reports/users
+
+用户维度报表（应校验权限）。
+
 ## User
 
 ### GET /api/users/addresses
 
 查询用户地址（应校验归属）。
+
+可选查询参数：
+
+- `userId` — 目标用户 ID；调用方只能查询自己的地址，跨用户查询应返回 403/404。
+
+### POST /api/users/addresses
+
+创建用户地址。
+
+请求：
+
+```json
+{"receiver":"张三","phone":"13800000000","province":"上海","city":"上海","detail":"浦东新区"}
+```
+
+### GET /api/users/admin/search
+
+管理员搜索用户（应仅限管理员）。
+
+### PATCH /api/users/admin/users/:id/balance
+
+管理员调整用户余额（应仅限管理员）。
+
+请求：
+
+```json
+{"delta":100,"reason":"补偿"}
+```

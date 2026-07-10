@@ -76,7 +76,7 @@ _RISK_FAMILY_ONTOLOGY: dict[str, dict[str, Any]] = {
     },
     "concurrency_race_condition": {
         "display_name": "并发竞态",
-        "aliases": ("concurrent", "race", "parallel", "lock", "atomic", "并发", "竞态", "锁", "原子"),
+        "aliases": ("concurrent", "concurrency", "race", "parallel", "lock", "atomic", "并发", "竞态", "锁", "原子"),
         "invariants": (
             "concurrent_mutations_must_preserve_invariants",
             "unique_resource_must_not_be_double_allocated",
@@ -334,6 +334,10 @@ def _explicit_family(item: dict[str, Any]) -> str:
         normalized = value.replace("-", "_").replace(" ", "_")
         if normalized in _RISK_FAMILY_ONTOLOGY:
             return normalized
+        for family, spec in _RISK_FAMILY_ONTOLOGY.items():
+            aliases = {str(alias or "").strip().lower() for alias in spec.get("aliases", ())}
+            if value and value in aliases:
+                return family
     return ""
 
 

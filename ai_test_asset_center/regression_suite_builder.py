@@ -458,8 +458,7 @@ def _select_modes(probes: list[dict[str, Any]], cfg: dict[str, Any], options: di
     max_smoke = int(options.get("max_smoke") or cfg.get("regression_smoke_max") or MODE_LIMITS["smoke"])
     max_release = int(options.get("max_release") or cfg.get("regression_release_max") or MODE_LIMITS["release"])
     max_full = int(options.get("max_full") or cfg.get("regression_full_max") or MODE_LIMITS["full"])
-    safe_only = not bool(options.get("allow_destructive_regression") or cfg.get("allow_destructive_tests"))
-    non_destructive = [p for p in probes if not (safe_only and p.get("destructive"))]
+    non_destructive = [p for p in probes if not p.get("destructive")]
     p0p1 = [p for p in non_destructive if p.get("severity") in {"P0", "P1"}]
     high = [p for p in non_destructive if p.get("risk_type") in HIGH_RISK_TYPES]
     smoke_candidates = []
@@ -469,11 +468,15 @@ def _select_modes(probes: list[dict[str, Any]], cfg: dict[str, Any], options: di
         if pid not in seen_ids:
             smoke_candidates.append(p)
             seen_ids.add(pid)
-    release_candidates = non_destructive
-    full_candidates = probes if bool(options.get("allow_destructive_regression") or cfg.get("allow_destructive_tests")) else non_destructive
+    # Release/full are manifests, not execution authorization. Keep every
+    # evidence-backed probe—including writes—so confirmed write defects never
+    # disappear from regression coverage. The runner must enforce the shared
+    # non-production write gate before sending a mutating request.
+    release_candidates = probes
+    full_candidates = probes
     return {
         "smoke": {"mode": "smoke", "description": "发布前快速回归，只覆盖 P0/P1、高风险、非破坏性探针。", "items": smoke_candidates[:max_smoke]},
-        "release": {"mode": "release", "description": "版本发布回归，覆盖高优先级和历史修复问题，默认跳过破坏性探针。", "items": release_candidates[:max_release]},
+        "release": {"mode": "release", "description": "版本发布回归，保留全部证据探针；写探针执行时强制经过非生产环境门控。", "items": release_candidates[:max_release]},
         "full": {"mode": "full", "description": "完整回归套件，覆盖所有已沉淀修复回归探针。", "items": full_candidates[:max_full]},
     }
 
@@ -576,6 +579,7 @@ def build_regression_suite(project_id: str = "real_project_demo", root: Path | N
             "fail_on_p0_p1_regression": True,
             "manual_review_on_p2_regression": True,
             "skip_destructive_by_default": not summary["allow_destructive_regression"],
+            "destructive_execution_requires_nonproduction_gate": True,
         },
         "expected_exit_codes": {
             "passed": 0,

@@ -32,10 +32,13 @@ from typing import Any
 
 from .business_state_graph import _api_facts, behavior_slice_id
 
+from .real_id_resolver import path_has_placeholders
+
 # ── Pure-data structures ────────────────────────────────────────────────
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_OWNERSHIP_QUERY_PARAMS = ("userId", "user_id", "ownerId", "owner_id", "accountId", "account_id")
 
 # Endpoints whose entity or path suggests authentication — money / concurrency
 # probes are semantically meaningless here (login is not a financial or
@@ -294,6 +297,7 @@ def generate_isolation_slices(
                 "_isolation_viewer_password": viewer.get("password", ""),
                 "_isolation_owner_role": owner_label,
                 "_isolation_owner_email": owner.get("email", ""),
+                "_isolation_owner_password": owner.get("password", ""),
                 "_isolation_path": path,
                 "_isolation_oracle": "TenantIsolationOracle",
                 "_login_path": login_path,
@@ -301,6 +305,58 @@ def generate_isolation_slices(
             })
             if len(slices) >= max_slices:
                 return slices
+    identity_path = next(
+        (
+            str(e.get("path") or "")
+            for e in endpoints
+            if str(e.get("method") or "").upper() in _READ_METHODS
+            and str(e.get("path") or "").rstrip("/").endswith("/me")
+        ),
+        "",
+    )
+    ownership_paths = sorted({
+        str(e.get("path") or "")
+        for e in endpoints
+        if str(e.get("method") or "").upper() in _READ_METHODS
+        and str(e.get("path") or "").startswith("/")
+        and not path_has_placeholders(str(e.get("path") or ""))
+        and any(token in str(e.get("path") or "").lower() for token in ("address", "order", "cart", "user", "account"))
+    })
+    for i, viewer in enumerate(actors):
+        owner = actors[(i + 1) % len(actors)]
+        viewer_label = (viewer.get("role") or viewer.get("email") or "").strip().lower()
+        owner_label = (owner.get("role") or owner.get("email") or "").strip().lower()
+        if viewer_label == owner_label:
+            continue
+        for path in ownership_paths[:2]:
+            for query_param in _OWNERSHIP_QUERY_PARAMS[:2]:
+                entity = _path_entity(path)
+                slice_id = behavior_slice_id("isolation", entity, viewer_label, f"{path}?{query_param}")
+                slices.append({
+                    "slice_id": slice_id,
+                    "entity": entity,
+                    "kind": "isolation",
+                    "states": [],
+                    "endpoints": [path],
+                    "priority": 0.86,
+                    "source_refs": [{"kind": "ownership_query_param", "quote": query_param}],
+                    "evidence_gaps": [],
+                    "_isolation_mode": "query_param",
+                    "_isolation_query_param": query_param,
+                    "_isolation_viewer_role": viewer_label,
+                    "_isolation_viewer_email": viewer.get("email", ""),
+                    "_isolation_viewer_password": viewer.get("password", ""),
+                    "_isolation_owner_role": owner_label,
+                    "_isolation_owner_email": owner.get("email", ""),
+                    "_isolation_owner_password": owner.get("password", ""),
+                    "_isolation_path": path,
+                    "_isolation_identity_path": identity_path,
+                    "_isolation_oracle": "TenantIsolationOracle",
+                    "_login_path": login_path,
+                    "_login_body": dict(login_body or {}),
+                })
+                if len(slices) >= max_slices:
+                    return slices
     return slices
 
 
@@ -347,6 +403,56 @@ def generate_concurrency_slices(
             "_concurrency_method": method,
             "_concurrency_path": path,
             "_concurrency_oracle": "ConcurrencyOracle",
+            "_login_path": login_path,
+            "_login_body": dict(login_body or {}),
+            "_default_actor": (da.get("role") or da.get("email") or "").strip().lower(),
+            "_default_email": da.get("email", ""),
+            "_default_password": da.get("password", ""),
+        })
+        if len(slices) >= max_slices:
+            break
+    return slices
+
+
+def generate_inventory_slices(
+    endpoints: list[dict[str, str]],
+    default_actor: dict[str, str] | None = None,
+    login_path: str = "",
+    max_slices: int = 5,
+    login_body: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Inventory-integrity slices for stock/reserve/consume endpoints."""
+    writes = [
+        e for e in endpoints
+        if str(e.get("method") or "").upper() in _WRITE_METHODS
+        and "inventory" in str(e.get("path") or "").lower()
+    ]
+    writes.sort(key=lambda e: str(e.get("path") or "").count("/"))
+    slices: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    da = default_actor or {}
+    for ep in writes:
+        method = str(ep.get("method") or "").upper()
+        path = str(ep.get("path") or "")
+        if not path or path in seen:
+            continue
+        if _is_auth_endpoint(ep):
+            continue
+        seen.add(path)
+        entity = str(ep.get("entity") or _path_entity(path))
+        slice_id = behavior_slice_id("inventory", entity, method, path)
+        slices.append({
+            "slice_id": slice_id,
+            "entity": entity,
+            "kind": "inventory",
+            "states": [],
+            "endpoints": [path],
+            "priority": 0.84,
+            "source_refs": [{"kind": "api_endpoint", "quote": path}],
+            "evidence_gaps": [],
+            "_inventory_method": method,
+            "_inventory_path": path,
+            "_inventory_oracle": "InventoryOracle",
             "_login_path": login_path,
             "_login_body": dict(login_body or {}),
             "_default_actor": (da.get("role") or da.get("email") or "").strip().lower(),
@@ -598,6 +704,7 @@ def generate_supplementary_slices(
     if len(actors) >= 2 and any(str(e.get("method") or "").upper() in _READ_METHODS for e in endpoints):
         all_slices.extend(generate_isolation_slices(endpoints, actors, login_path=login_path, login_body=login_body_template))
     if any(str(e.get("method") or "").upper() in _WRITE_METHODS for e in endpoints):
+        all_slices.extend(generate_inventory_slices(endpoints, default_actor, login_path, login_body=login_body_template))
         all_slices.extend(generate_money_slices(endpoints, default_actor, login_path, login_body=login_body_template))
         all_slices.extend(generate_concurrency_slices(endpoints, default_actor, login_path, login_body=login_body_template))
     try:

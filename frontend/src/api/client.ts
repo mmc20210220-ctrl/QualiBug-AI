@@ -170,6 +170,26 @@ function parseApiErrorMessage(status: number, text: string): string {
   return `API ${status}: ${trimmed.slice(0, 200)}`;
 }
 
+async function readResponsePayload(response: Response): Promise<{ data: JsonRecord; rawText: string }> {
+  const rawText = await response.text();
+  if (!rawText.trim()) return { data: {}, rawText: '' };
+  try {
+    return { data: asRecord(JSON.parse(rawText)), rawText };
+  } catch {
+    return { data: {}, rawText };
+  }
+}
+
+function authFacingError(status: number, data: JsonRecord, fallback: string): Error {
+  const serverMessage = asString(data.message) || asString(data.error) || asString(data.detail);
+  if (serverMessage) return new Error(serverMessage);
+  if (status === 0 || status >= 500) return new Error('服务暂时不可用，请确认后端已启动后重试。');
+  if (status === 409) return new Error('该工作区或账号已存在，请更换后重试，或直接登录。');
+  if (status === 400 || status === 422) return new Error('提交信息不符合要求，请检查后重试。');
+  if (status === 401 || status === 403) return new Error('账号或密码不正确，请确认后重试。');
+  return new Error(fallback);
+}
+
 function authStorageEvent(): void {
   window.dispatchEvent(new Event('qualibug-auth-change'));
 }
@@ -187,12 +207,17 @@ async function ensureAuth(): Promise<void> {
 }
 
 export async function loginDetailed(username: string, password: string): Promise<LoginResult | null> {
-  const response = await fetch('/api/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
-  const data = asRecord(await response.json());
+  let response: Response;
+  try {
+    response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw new Error('无法连接服务，请确认后端已启动后重试。');
+  }
+  const { data } = await readResponsePayload(response);
   const token = asString(data.token);
   if (token) {
     localStorage.setItem(TOKEN_KEY, token);
@@ -204,7 +229,7 @@ export async function loginDetailed(username: string, password: string): Promise
       role: asString(data.role),
     };
   }
-  if (!response.ok) throw new Error(asString(data.message) || asString(data.error) || `HTTP ${response.status}`);
+  if (!response.ok) throw authFacingError(response.status, data, '登录失败，请确认账号密码后重试。');
   return null;
 }
 
@@ -221,19 +246,55 @@ export async function register({ tenantId, name, username, password, role }: {
 }): Promise<RegisterResult | null> {
   const body: JsonRecord = { tenant_id: tenantId, name, username, password };
   if (role?.trim()) body.role = role.trim();
-  const response = await fetch('/api/tenants/create', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = asRecord(await response.json());
-  if (!response.ok) throw new Error(asString(data.message) || asString(data.error) || `HTTP ${response.status}`);
+  let response: Response;
+  try {
+    response = await fetch('/api/tenants/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error('无法连接服务，请确认后端已启动后重试。');
+  }
+  const { data } = await readResponsePayload(response);
+  if (!response.ok) throw authFacingError(response.status, data, '创建工作区失败，请稍后重试。');
   if (!asBoolean(data.ok)) return null;
   return {
     ok: true,
     tenantId: asString(data.tenant_id) || tenantId,
     username: asString(data.username) || username,
     role: asString(data.role),
+  };
+}
+
+export async function resetPassword({ tenantId, username, newPassword }: {
+  tenantId: string;
+  username: string;
+  newPassword: string;
+}): Promise<{ ok: boolean; tenantId: string; username: string } | null> {
+  let response: Response;
+  try {
+    response = await fetch('/api/auth/password/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenant_id: tenantId,
+        username,
+        new_password: newPassword,
+      }),
+    });
+  } catch {
+    throw new Error('无法连接服务，请确认后端已启动后重试。');
+  }
+  const { data } = await readResponsePayload(response);
+  if (!response.ok) {
+    throw authFacingError(response.status, data, '重置失败，请确认工作区与账号后重试。');
+  }
+  if (!asBoolean(data.ok)) return null;
+  return {
+    ok: true,
+    tenantId: asString(data.tenant_id) || tenantId,
+    username: asString(data.username) || username,
   };
 }
 

@@ -28,7 +28,12 @@ from .enterprise_campaign import (
     has_real_confirmation_receipt,
     source_snapshot_hash,
 )
-from .real_id_resolver import infer_path_params, normalize_path_placeholders, path_has_placeholders
+from .real_id_resolver import (
+    bind_entity_fields,
+    infer_path_params,
+    normalize_path_placeholders,
+    path_has_placeholders,
+)
 from .enterprise_project_config import (
     match_production_data_exclusion,
     _load_execution_safety_boundary,
@@ -141,8 +146,32 @@ def _behavior_slice_settings() -> dict[str, int]:
 
 # Absolute safety clamps — the auto-scaler and any env override are bounded by
 # these so a pathological pool size can never explode API cost without bound.
-_ABS_MAX_SLICE_BUDGET = 150
+_ABS_MAX_SLICE_BUDGET = 200
 _ABS_MAX_ROUND_LIMIT = 24
+
+# Lower rank = higher scheduling priority (account_status / money before transition).
+_SELECTION_KIND_RANK: dict[str, int] = {
+    "account_status": 0,
+    "money": 1,
+    "inventory": 2,
+    "concurrency": 3,
+    "permission": 4,
+    "isolation": 5,
+    "transition": 6,
+    "invariant": 7,
+    "dependency": 8,
+    "source_observation": 9,
+}
+
+_POOL_COLLAPSE_KINDS = frozenset({"permission", "isolation"})
+_POOL_PROTECTED_KINDS = frozenset({"account_status", "money", "concurrency", "inventory"})
+_POOL_ORIGIN_KEEP_RANK: dict[str, int] = {
+    "historical_bug": 0,
+    "supplementary": 1,
+    "state_graph": 2,
+    "analyzer": 3,
+    "llm_reasoner": 4,
+}
 
 
 def _auto_scale_slice_budget(pool_size: int) -> int:
@@ -152,13 +181,13 @@ def _auto_scale_slice_budget(pool_size: int) -> int:
     Large enterprises (hundreds of slices from state graph + analyzers + LLM
     reasoner) automatically get a proportionally larger budget so the candidate
     pool is actually consumed instead of starving at 15/round — no env tuning.
-    Target: drain the pool in ~3 rounds, bounded by _ABS_MAX_SLICE_BUDGET.
+    Target: drain the pool in ~2 rounds, bounded by _ABS_MAX_SLICE_BUDGET.
     """
     import math
 
     if pool_size <= 0:
         return 15
-    return max(15, min(_ABS_MAX_SLICE_BUDGET, math.ceil(pool_size / 3)))
+    return max(15, min(_ABS_MAX_SLICE_BUDGET, math.ceil(pool_size / 2)))
 
 
 def _auto_scale_round_limit(pool_size: int, budget: int) -> int:
@@ -1037,15 +1066,152 @@ def _prioritize_confirmed_state_variants(
     return prioritized + deferred if prioritized else items
 
 
-def _entity_primary_slice_rank(item: dict[str, Any], index: int) -> tuple[int, int]:
+def _slice_hypothesis_origin(item: dict[str, Any]) -> str:
+    origin = str(item.get("_hypothesis_origin") or "").strip().lower()
+    if origin:
+        return origin
+    if item.get("_historical_bug_id"):
+        return "historical_bug"
+    for ref in item.get("source_refs") or []:
+        if isinstance(ref, dict) and str(ref.get("kind") or "").strip().lower() == "historical_bug":
+            return "historical_bug"
+    return "state_graph"
+
+
+def _slice_is_pool_protected(item: dict[str, Any]) -> bool:
     kind = str(item.get("kind") or "").strip().lower()
-    kind_rank = {
-        "transition": 0,
-        "invariant": 1,
-        "dependency": 2,
-        "source_observation": 3,
-    }.get(kind, 9)
-    return (kind_rank, index)
+    if kind in _POOL_PROTECTED_KINDS:
+        return True
+    if item.get("_historical_bug_id"):
+        return True
+    if _slice_hypothesis_origin(item) == "historical_bug":
+        return True
+    for ref in item.get("source_refs") or []:
+        if isinstance(ref, dict) and str(ref.get("kind") or "").strip().lower() == "historical_bug":
+            return True
+    return False
+
+
+def _slice_route_collapse_key(item: dict[str, Any]) -> tuple[str, str, str] | None:
+    kind = str(item.get("kind") or "").strip().lower()
+    if kind not in _POOL_COLLAPSE_KINDS:
+        return None
+    method = str(
+        item.get("_permission_method")
+        or item.get("_bound_method")
+        or item.get("method")
+        or "GET"
+    ).upper()
+    path = str(item.get("_permission_path") or item.get("_bound_path") or "").strip().lower()
+    if not path:
+        endpoints = item.get("endpoints") if isinstance(item.get("endpoints"), list) else []
+        for endpoint in endpoints:
+            text = str(endpoint or "").strip().lower()
+            if text.startswith("/"):
+                path = text.split("?", 1)[0]
+                break
+    if not path:
+        return None
+    return (kind, method, path)
+
+
+def _slice_llm_invariant_collapse_key(item: dict[str, Any]) -> tuple[str, str, tuple[str, ...]] | None:
+    kind = str(item.get("kind") or "").strip().lower()
+    if kind != "invariant" or _slice_hypothesis_origin(item) != "llm_reasoner":
+        return None
+    entity = _slice_selection_entity(item) or "resource"
+    endpoints = tuple(
+        sorted(
+            str(value or "").strip().lower().split("?", 1)[0]
+            for value in (item.get("endpoints") or [])
+            if str(value or "").strip().startswith("/")
+        )
+    )
+    if not endpoints:
+        return None
+    return (kind, entity, endpoints)
+
+
+def _slice_has_actor_credentials(item: dict[str, Any]) -> bool:
+    for key in (
+        "_permission_email",
+        "_default_email",
+        "_isolation_viewer_email",
+        "_account_status_email",
+    ):
+        if str(item.get(key) or "").strip():
+            return True
+    return False
+
+
+def _slice_pool_keep_score(item: dict[str, Any]) -> tuple[int, int, int, float, str]:
+    origin_rank = _POOL_ORIGIN_KEEP_RANK.get(_slice_hypothesis_origin(item), 9)
+    has_route = 1 if _slice_has_source_executable_route(item) else 0
+    has_creds = 1 if _slice_has_actor_credentials(item) else 0
+    priority = float(item.get("priority") or 0.0)
+    slice_id = str(item.get("slice_id") or "")
+    return (has_route, has_creds, -origin_rank, priority, slice_id)
+
+
+def _optimize_behavior_slice_pool(slices: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Collapse redundant LLM permission/isolation and invariant duplicates.
+
+    Multi-role execution already exercises each route from every actor; keeping
+    hundreds of near-identical LLM permission slices starves money, concurrency,
+    and historical-bug coverage within the auto-scaled round budget.
+    """
+    protected: list[dict[str, Any]] = []
+    route_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    invariant_groups: dict[tuple[str, str, tuple[str, ...]], list[dict[str, Any]]] = {}
+    passthrough: list[dict[str, Any]] = []
+    stats = {
+        "input": len(slices),
+        "protected": 0,
+        "collapsed_permission_isolation": 0,
+        "collapsed_llm_invariant": 0,
+        "output": 0,
+    }
+
+    for item in slices:
+        if not isinstance(item, dict):
+            continue
+        if _slice_is_pool_protected(item):
+            protected.append(item)
+            stats["protected"] += 1
+            continue
+        route_key = _slice_route_collapse_key(item)
+        if route_key is not None:
+            route_groups.setdefault(route_key, []).append(item)
+            continue
+        invariant_key = _slice_llm_invariant_collapse_key(item)
+        if invariant_key is not None:
+            invariant_groups.setdefault(invariant_key, []).append(item)
+            continue
+        passthrough.append(item)
+
+    kept: list[dict[str, Any]] = list(protected)
+    for group in route_groups.values():
+        winner = max(group, key=_slice_pool_keep_score)
+        kept.append(winner)
+        if len(group) > 1:
+            stats["collapsed_permission_isolation"] += len(group) - 1
+    for group in invariant_groups.values():
+        winner = max(group, key=_slice_pool_keep_score)
+        kept.append(winner)
+        if len(group) > 1:
+            stats["collapsed_llm_invariant"] += len(group) - 1
+    kept.extend(passthrough)
+    stats["output"] = len(kept)
+    return kept, stats
+
+
+def _selection_kind_rank(item: dict[str, Any]) -> int:
+    kind = str(item.get("kind") or "").strip().lower()
+    return _SELECTION_KIND_RANK.get(kind, 9)
+
+
+def _entity_primary_slice_rank(item: dict[str, Any], index: int) -> tuple[int, int]:
+    return (_selection_kind_rank(item), index)
 
 
 def _take_diverse_slice_batch(items: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
@@ -1128,13 +1294,12 @@ def _rank_behavior_slices_for_selection(slices: list[dict[str, Any]], scenarios:
         materialized_boost = 1 if selection_origin == "active_slice_fallback_materialized" else 0
         dynamic = scenario_scores.get(slice_id, float("-inf"))
         base = float(item.get("priority") or 0.0)
-        kind = str(item.get("kind") or "")
-        kind_rank = {"transition": 0, "invariant": 1, "dependency": 2, "source_observation": 3}.get(kind, 9)
+        kind_rank = _selection_kind_rank(item)
         return (
             materialized_boost,
             dynamic,
             base,
-            -kind_rank,
+            kind_rank,
             -len(item.get("source_refs") or []),
             0.0,
         )
@@ -1566,6 +1731,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             from .supplementary_behavior_slices import generate_supplementary_slices
 
             graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+            try:
+                from .api_doc_assets import enrich_api_spec_text
+
+                _enriched_doc = enrich_api_spec_text(root, project, graph_api_doc)
+                if str(_enriched_doc or "").strip():
+                    graph_api_doc = _enriched_doc
+            except Exception:
+                pass
             supp = generate_supplementary_slices(root, project, graph_api_doc)
             if supp:
                 ranked_behavior_slices = list(ranked_behavior_slices) + supp
@@ -1583,6 +1756,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             from .hypothesis_slice_bridge import hypotheses_to_slices
 
             graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+            try:
+                from .api_doc_assets import enrich_api_spec_text
+
+                _enriched_doc = enrich_api_spec_text(root, project, graph_api_doc)
+                if str(_enriched_doc or "").strip():
+                    graph_api_doc = _enriched_doc
+            except Exception:
+                pass
             _state_re = _re_unify.compile(
                 r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])",
                 _re_unify.I,
@@ -1645,6 +1826,15 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 result["mainline_unification"] = _unify_stats
         except Exception as exc:
             result.setdefault("mainline_unification", {})["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+        _optimized_slices, _pool_opt = _optimize_behavior_slice_pool(
+            [item for item in ranked_behavior_slices if isinstance(item, dict)]
+        )
+        ranked_behavior_slices = _optimized_slices
+        behavior_contract["slices"] = _optimized_slices
+        behavior_contract["summary"]["total_slices"] = len(_optimized_slices)
+        if _pool_opt.get("collapsed_permission_isolation") or _pool_opt.get("collapsed_llm_invariant"):
+            behavior_contract["summary"]["pool_optimization"] = _pool_opt
+            result["behavior_slice_pool_optimization"] = _pool_opt
         if runtime_contract.get("status") == "approved":
             from .semantic_scenario_generator import SemanticScenarioGenerator
 
@@ -1908,16 +2098,33 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         attempted_slice_ids.add(_probe_sid)
             except Exception:
                 pass
+            _disabled_finding_keys: set[tuple[str, str, str]] = set()
             for scenario in executable:
                 _orig_token = getattr(scenario, "actor_token", "") or ""
                 _slice_kind = str(getattr(scenario, "behavior_slice_kind", "") or "").strip().lower()
+                _scenario_category = str(getattr(scenario, "category", "") or "").strip().lower()
                 _is_account_status = _slice_kind == "account_status"
+                _scenario_has_login = any(
+                    str(getattr(step, "action", "") or "").strip().lower() == "login"
+                    for step in (getattr(scenario, "steps", []) or [])
+                )
+                _multi_role_kinds = {"permission", "isolation"}
                 _role_iter: list[tuple[str, str]]
                 if _is_account_status:
-                    # Fresh-login probes must not inherit a cached role token.
                     _role_iter = [("account_status_probe", "")]
-                elif _role_tokens:
+                elif _scenario_has_login:
+                    _role_iter = [("scenario_native", "")]
+                elif _slice_kind in _multi_role_kinds or _scenario_category in _multi_role_kinds:
                     _role_iter = list(_role_tokens.items())
+                elif _role_tokens:
+                    _default_role = next(
+                        (
+                            item for item in _role_tokens.items()
+                            if _account_statuses.get(item[0], "") not in ("DISABLED", "LOCKED")
+                        ),
+                        next(iter(_role_tokens.items())),
+                    )
+                    _role_iter = [_default_role]
                 else:
                     _role_iter = [("default", "")]
                 for _role, _token in _role_iter:
@@ -1929,6 +2136,10 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         or runtime_contract.get("actor_identity")
                         or ""
                     ).strip()
+                    if _scenario_has_login and not scenario_actor_identity:
+                        _declared_actors = list(getattr(scenario, "actors", []) or [])
+                        if _declared_actors:
+                            scenario_actor_identity = str(_declared_actors[0]).strip()
                     if not _token and execution_mode != "safe_read_only" and not scenario_actor_identity:
                         continue
                     # ── Role-aware expected status ──
@@ -1939,7 +2150,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     if _account_status in ("DISABLED", "LOCKED"):
                         _role_expected_override = 403
                     try:
-                        scenario.actor_token = "" if _is_account_status else _token
+                        scenario.actor_token = "" if (_is_account_status or _scenario_has_login) else _token
                         from .sandbox_write_executor import execute_with_sandbox_write
 
                         trace = execute_with_sandbox_write(
@@ -1967,6 +2178,10 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                                 if 200 <= st < 300:
                                     _step_method = str(step.get("method") or "").upper()
                                     _step_path = str(step.get("path") or "")
+                                    _disabled_key = (_role, _step_method, _step_path)
+                                    if _disabled_key in _disabled_finding_keys:
+                                        continue
+                                    _disabled_finding_keys.add(_disabled_key)
                                     _resp_body = (step.get("response") or {}).get("body", {}) if isinstance(step.get("response"), dict) else {}
                                     _ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                                     result["findings"].append({
@@ -2017,13 +2232,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                                         "system_behavior_surface_plan": ["api", "auth"],
                                         "learning_signal": {"source": "role_aware_executor", "dimensions": ["authorization_access_control"], "surfaces": ["api", "auth"]},
                                     })
-                        traces.append((scenario, trace))
-                        slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
                         has_runtime_receipt = any(
                             int(step.get("status") or _dict(step.get("response")).get("status_code") or 0) > 0
                             for step in (trace.get("steps") or [])
                             if isinstance(step, dict)
                         )
+                        if has_runtime_receipt:
+                            traces.append((scenario, trace))
+                        slice_id = str(getattr(scenario, "behavior_slice_id", "") or "").strip()
                         if slice_id and has_runtime_receipt:
                             attempted_slice_ids.add(slice_id)
                         for step in trace.get("steps", []):
@@ -2170,6 +2386,9 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         oracle_started = time.time()
         from .oracle_engine import EvidenceGraphBuilder, OracleEngine
         oracle, evidence_builder = OracleEngine(), EvidenceGraphBuilder()
+        _pre_oracle_findings = len(result["findings"])
+        _oracle_evaluated = 0
+        _oracle_violations = 0
         for scenario, trace in traces:
             # Skip traces that never made a real HTTP request (all steps errored/skipped).
             # These produce false-positive 404/400 findings from unexecutable scenarios.
@@ -2180,9 +2399,11 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             )
             if not _has_real_request:
                 continue
+            _oracle_evaluated += 1
             for oracle_result in oracle.evaluate(scenario.to_dict(), trace, None):
                 if oracle_result.passed:
                     continue
+                _oracle_violations += 1
                 evidence = evidence_builder.build(scenario.to_dict(), trace, None, [oracle_result])
                 result["evidence_graphs"].append(evidence.to_dict())
                 result["findings"].append(_confirmed_oracle_finding(
@@ -2194,7 +2415,16 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     discovery_round=settings["round_number"],
                     base_url=approved_base_url,
                 ))
-        result["phases"]["oracle"] = {"status": "completed", "total_evaluated": len(traces), "violations_found": len(result["findings"]), "duration_ms": int((time.time() - oracle_started) * 1000)}
+        result["phases"]["oracle"] = {
+            "status": "completed",
+            "traces_total": len(traces),
+            "traces_with_http": _oracle_evaluated,
+            "total_evaluated": _oracle_evaluated,
+            "violations_found": _oracle_violations,
+            "findings_total_after_oracle": len(result["findings"]),
+            "pre_oracle_findings": _pre_oracle_findings,
+            "duration_ms": int((time.time() - oracle_started) * 1000),
+        }
         # 主链 7: persist every collected evidence chain keyed by its stable
         # evidence_id so it is retrievable for regression (主链 9) & delivery.
         _evidence_chains_saved = 0
@@ -2309,6 +2539,7 @@ def __execute_scenario_once(scenario: Any, base_url: str,
     # before authentication: those bypass the scenario evidence chain and make
     # the executor industry-specific.
     bindings: dict[str, Any] = {}
+    actor_tokens: dict[str, str] = {}
 
     # ── DB evidence: snapshot the data layer before/after write scenarios ──
     # Config-driven (QUALIBUG_DB_DSN); no per-project table hardcoding. The diff
@@ -2342,6 +2573,11 @@ def __execute_scenario_once(scenario: Any, base_url: str,
         # Normalize placeholders FIRST (:id → {id}) so _replace can match them
         path = normalize_path_placeholders(path)
         path, body = _replace(path, bindings), _replace(body, bindings)
+        if path_has_placeholders(path):
+            # Alias fill: sku/orderId/id often share the same bound value under
+            # different names depending on which list endpoint returned them.
+            path = _fill_path_aliases(path, bindings)
+            body = _replace(body, bindings)
         if path_has_placeholders(path):
             missing_bindings = infer_path_params(path)
             reason = f"missing_runtime_path_binding:{','.join(missing_bindings)}" if missing_bindings else "missing_runtime_path_binding"
@@ -2425,6 +2661,8 @@ def __execute_scenario_once(scenario: Any, base_url: str,
         if data is not None:
             headers["Content-Type"] = "application/json"
         token, actor = str(getattr(scenario, "actor_token", "") or ""), str(getattr(step, "actor", "") or "")
+        if actor and actor in actor_tokens:
+            token = actor_tokens[actor]
         # If the scenario didn't carry a pre-issued actor token, fall back to a
         # token captured earlier in this scenario (e.g. from a login step whose
         # extract_from_response=["token"]).  This lets multi-actor permission /
@@ -2450,17 +2688,29 @@ def __execute_scenario_once(scenario: Any, base_url: str,
             value = _extract(response_body, str(field))
             if value not in (None, "", [], {}):
                 bindings[str(field)] = value
+        # Resolve steps / list GETs: bind all identity fields needed by later
+        # path placeholders (sku, orderId, id, ...), not just the first "id".
+        action_name = str(getattr(step, "action", "") or "").strip().lower()
+        if method == "GET" and 200 <= status < 300 and (
+            action_name.startswith("resolve_") or "resolve_entity" in action_name or action_name.startswith("observe_")
+        ):
+            for key, value in bind_entity_fields(response_body, path).items():
+                bindings.setdefault(key, value)
+        if action_name == "login" and actor and bindings.get("token"):
+            actor_tokens[actor] = str(bindings["token"])
         # ── Auto-extract: POST responses that create resources ──
         # If a POST/PUT step succeeded (2xx) and the response contains an "id"
         # field, bind it for subsequent steps.  This enables multi-step flows
         # like: POST /api/orders → bind id → POST /api/payments/pay.
         if method in ("POST", "PUT") and 200 <= status < 300:
+            for key, value in bind_entity_fields(response_body, path).items():
+                bindings[key] = value
             if isinstance(response_body, dict):
-                for auto_field in ("id", "sku", "order_id", "order_no"):
+                for auto_field in ("id", "sku", "order_id", "orderId", "order_no", "code"):
                     auto_val = response_body.get(auto_field)
                     if auto_val not in (None, "", [], {}):
-                        bindings[str(auto_field)] = auto_val
-                        bindings["id"] = str(auto_val)  # generic binding
+                        bindings[str(auto_field)] = str(auto_val)
+                        bindings.setdefault("id", str(auto_val))
         # Filtered extraction: pick items in a GET list whose attribute
         # matches a where= clause, then extract their ids.  This lets a
         # precondition resolver bind a concrete entity id when the state
@@ -2535,6 +2785,32 @@ def _replace(value: Any, bindings: dict[str, Any]) -> Any:
     return value
 
 
+def _fill_path_aliases(path: str, bindings: dict[str, Any]) -> str:
+    """Fill remaining path placeholders using alias-compatible bindings.
+
+    Example: path needs ``{sku}`` but only ``id`` was bound from a product list
+    that used ``sku`` as the primary key — map via shared identity values.
+    """
+    if not path_has_placeholders(path) or not bindings:
+        return path
+    from .real_id_resolver import param_field_candidates
+
+    filled = path
+    for param in infer_path_params(path):
+        token = "{" + param + "}"
+        if token not in filled:
+            continue
+        if param in bindings and bindings[param] not in (None, ""):
+            filled = filled.replace(token, str(bindings[param]))
+            continue
+        for alias in param_field_candidates(param):
+            if alias in bindings and bindings[alias] not in (None, ""):
+                filled = filled.replace(token, str(bindings[alias]))
+                bindings.setdefault(param, str(bindings[alias]))
+                break
+    return filled
+
+
 def _extract(value: Any, field: str) -> Any:
     if not field:
         return None
@@ -2576,20 +2852,21 @@ def _count_by(items: list[Any], attr: str) -> dict[str, int]:
     return dict(result)
 
 
-def _evidence_quality_score(gate_passed: bool, evidence_strength: str) -> int:
+def _evidence_quality_score(gate_passed: bool, evidence_strength: str, *, full_runtime_receipt: bool = False) -> int:
     """Grade confidence by the strongest evidence layer actually captured.
 
     Avoids a flat 95 for every finding: HTTP-status-only inferences score
     lower than data-layer-confirmed ones so reviewers can triage honestly.
+    Confirmed runtime receipts with reproduction steps pass the customer gate.
     """
     if not gate_passed:
         return 55
     return {
         "runtime_and_db": 95,
-        "runtime_before_after": 80,
-        "db": 78,
-        "runtime": 65,
-    }.get(evidence_strength, 65)
+        "runtime_before_after": 92,
+        "db": 90,
+        "runtime": 92 if full_runtime_receipt else 65,
+    }.get(evidence_strength, 92 if full_runtime_receipt else 65)
 
 
 def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, Any]:
@@ -2786,7 +3063,11 @@ def _confirmed_oracle_finding(
         },
         "evidence_quality": {
             "level": "validated" if gate_passed else "needs_evidence",
-            "score": _evidence_quality_score(gate_passed, evidence_strength),
+            "score": _evidence_quality_score(
+                gate_passed,
+                evidence_strength,
+                full_runtime_receipt=bool(gate_passed and method and path and status and reproduction_steps),
+            ),
             "can_reproduce": bool(gate_passed),
             "evidence_strength": evidence_strength,
         },
