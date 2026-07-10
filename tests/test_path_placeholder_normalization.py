@@ -50,7 +50,11 @@ def test_sku_binding_uses_product_catalog_fallback_and_field_aliases() -> None:
 
 
 def test_alternate_collection_paths_derives_non_ecommerce_siblings() -> None:
-    from ai_test_asset_center.real_id_resolver import alternate_collection_paths
+    from ai_test_asset_center.real_id_resolver import (
+        alternate_collection_paths,
+        body_field_collection_paths,
+        param_field_candidates,
+    )
 
     patient_alts = alternate_collection_paths("/api/encounters/{patient_id}/vitals")
     assert "/api/patients" in patient_alts
@@ -61,6 +65,14 @@ def test_alternate_collection_paths_derives_non_ecommerce_siblings() -> None:
     settlement_alts = alternate_collection_paths("/api/settlements/{settlement_id}/callback")
     assert "/api/settlement" in settlement_alts
     assert any("settlement" in path for path in settlement_alts)
+
+    appointment_alts = alternate_collection_paths("/api/appointments/{appointment_id}/cancel")
+    assert "/api/appointments" in appointment_alts or any("appointment" in p for p in appointment_alts)
+
+    assert "patient_id" in param_field_candidates("patient_id") or "patientId" in param_field_candidates("patient_id")
+    assert "claimId" in param_field_candidates("claim_id") or "claim_id" in param_field_candidates("claim_id")
+    assert any("appointments" in p for p in body_field_collection_paths("appointment_id"))
+    assert any("prescriptions" in p for p in body_field_collection_paths("prescriptionId"))
 
 
 def test_resolve_entity_steps_include_sibling_catalog_for_inventory() -> None:
@@ -195,6 +207,57 @@ def test_address_body_binding_uses_users_addresses() -> None:
     )
     assert any("/api/users/addresses" in s.api_path or "/api/addresses" in s.api_path for s in bind_steps)
     assert bind_steps[0].api_path == "/api/users/addresses"
+
+
+def test_body_binding_bootstraps_create_when_api_doc_present() -> None:
+    from pathlib import Path
+
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    api_doc = Path("projects/benchmark_mall/input/API_SPEC.md").read_text(encoding="utf-8")
+    steps, _ = SemanticScenarioGenerator._body_binding_resolve_steps(
+        {"orderId": "{orderId}"}, actor="buyer", start_order=1, api_doc=api_doc,
+    )
+    assert any(s.api_method == "GET" and s.api_path == "/api/orders" for s in steps)
+    bootstrap = next(s for s in steps if s.action == "bootstrap_create_orderId")
+    assert bootstrap.api_method == "POST"
+    assert bootstrap.api_path == "/api/orders"
+    assert isinstance(bootstrap.body_template, dict) and bootstrap.body_template
+
+
+def test_resolve_entity_bootstraps_generic_id_from_collection_path() -> None:
+    from pathlib import Path
+
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    api_doc = Path("projects/benchmark_mall/input/API_SPEC.md").read_text(encoding="utf-8")
+    steps, path = SemanticScenarioGenerator._resolve_entity_steps(
+        "/api/orders/{id}/cancel", actor="buyer", start_order=1, api_doc=api_doc,
+    )
+    assert path == "/api/orders/{id}/cancel"
+    assert any(s.api_method == "GET" and s.api_path == "/api/orders" for s in steps)
+    bootstrap = next(s for s in steps if s.action == "bootstrap_create_id")
+    assert bootstrap.api_method == "POST"
+    assert bootstrap.api_path == "/api/orders"
+    assert isinstance(bootstrap.body_template, dict) and bootstrap.body_template.get("addressId")
+
+
+def test_enriched_api_doc_still_yields_request_bodies_and_bootstrap() -> None:
+    from pathlib import Path
+
+    from ai_test_asset_center.api_doc_assets import enrich_api_spec_text
+    from ai_test_asset_center.auto_test_data_factory import _markdown_request_example
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    root = Path(".")
+    raw = Path("projects/benchmark_mall/input/API_SPEC.md").read_text(encoding="utf-8")
+    enriched = enrich_api_spec_text(root, "benchmark_mall", raw) or raw
+    body = _markdown_request_example(enriched, "POST", "/api/orders")
+    assert isinstance(body, dict) and body.get("addressId") == "<address_id>"
+    steps, _ = SemanticScenarioGenerator._resolve_entity_steps(
+        "/api/orders/{id}/cancel", actor="buyer", start_order=1, api_doc=enriched,
+    )
+    assert any(s.action == "bootstrap_create_id" and s.api_method == "POST" for s in steps)
 
 
 def test_body_field_collection_paths_are_generic_rest() -> None:

@@ -47,6 +47,21 @@ _PARAM_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "refundid": ("refundId", "refund_id", "id"),
     "couponid": ("couponId", "coupon_id", "code", "id"),
     "code": ("code", "coupon_code", "couponCode", "sku", "id"),
+    # Cross-industry identity params (healthcare / booking / settlement / claims).
+    "patientid": ("patientId", "patient_id", "id", "uuid"),
+    "patient_id": ("patient_id", "patientId", "id", "uuid"),
+    "appointmentid": ("appointmentId", "appointment_id", "id", "uuid"),
+    "appointment_id": ("appointment_id", "appointmentId", "id", "uuid"),
+    "encounterid": ("encounterId", "encounter_id", "id", "uuid"),
+    "encounter_id": ("encounter_id", "encounterId", "id", "uuid"),
+    "claimid": ("claimId", "claim_id", "id", "uuid", "claim_no", "claimNo"),
+    "claim_id": ("claim_id", "claimId", "id", "uuid", "claim_no", "claimNo"),
+    "bookingid": ("bookingId", "booking_id", "id", "uuid", "reservation_id"),
+    "booking_id": ("booking_id", "bookingId", "id", "uuid", "reservation_id"),
+    "settlementid": ("settlementId", "settlement_id", "id", "uuid", "settlement_no"),
+    "settlement_id": ("settlement_id", "settlementId", "id", "uuid", "settlement_no"),
+    "prescriptionid": ("prescriptionId", "prescription_id", "id", "uuid"),
+    "prescription_id": ("prescription_id", "prescriptionId", "id", "uuid"),
 }
 
 
@@ -98,10 +113,90 @@ def param_field_candidates(param_name: str) -> list[str]:
     return result
 
 
+def bind_path_params_from_documented_body(
+    path: str,
+    body: Any,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """Bind path parameters from scalar fields in the same documented body.
+
+    This is intentionally structural and industry-neutral. Exact field-name
+    matches win. A bare ``{id}`` may use a generic object/entity identity field,
+    but scope, actor and event identifiers are penalized so they cannot silently
+    masquerade as the resource identity. The caller remains responsible for
+    enforcing the StrategyBundle source policy before using these candidates.
+    """
+
+    scalar_fields: list[tuple[str, str, Any]] = []
+
+    def walk(value: Any, dotted: str = "") -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                name = str(key or "").strip()
+                walk(child, f"{dotted}.{name}" if dotted else name)
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{dotted}[{index}]")
+            return
+        if value in (None, "") or not dotted:
+            return
+        leaf = re.sub(r"\[\d+\]$", "", dotted.rsplit(".", 1)[-1])
+        scalar_fields.append((dotted, leaf, value))
+
+    walk(body)
+    bindings: dict[str, str] = {}
+    evidence: list[dict[str, Any]] = []
+    context_identity_stems = {
+        "actor", "account", "event", "external", "request", "trace", "tenant", "user",
+    }
+
+    for param in infer_path_params(path):
+        param_key = re.sub(r"[^a-z0-9]+", "", str(param or "").lower())
+        ranked: list[tuple[int, int, str, str, Any]] = []
+        for index, (dotted, leaf, value) in enumerate(scalar_fields):
+            field_key = re.sub(r"[^a-z0-9]+", "", leaf.lower())
+            if not field_key:
+                continue
+            score = 0
+            if field_key == param_key:
+                score = 100
+            elif field_key in {
+                re.sub(r"[^a-z0-9]+", "", item.lower())
+                for item in param_field_candidates(param)
+            }:
+                score = 90
+            elif param_key == "id" and field_key.endswith("id"):
+                stem = field_key[:-2]
+                score = 70 if stem in {"entity", "object", "resource"} else 45
+                if any(token in stem for token in context_identity_stems):
+                    score -= 30
+            elif param_key and (field_key.endswith(param_key) or param_key.endswith(field_key)):
+                score = 55
+            if score > 0:
+                ranked.append((-score, index, dotted, leaf, value))
+        if not ranked:
+            continue
+        ranked.sort()
+        negative_score, _index, dotted, leaf, value = ranked[0]
+        text = str(value)
+        bindings[param] = text
+        bindings.setdefault(leaf, text)
+        evidence.append({
+            "path_param": param,
+            "body_field": dotted,
+            "compatibility_score": -negative_score,
+        })
+    return bindings, evidence
+
+
 def _pluralize_resource(stem: str) -> str:
     token = re.sub(r"[^a-z0-9]+", "", str(stem or "").strip().lower())
     if not token:
         return ""
+    # Already-plural collection tokens (orders, addresses) must not become
+    # orderses / addresseses when deriving siblings from the path resource.
+    if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
+        return token
     if token.endswith("y") and len(token) > 1 and token[-2] not in "aeiou":
         return token[:-1] + "ies"
     if token.endswith(("s", "x", "z", "ch", "sh")):
@@ -251,6 +346,16 @@ _BODY_FIELD_COLLECTION_SEGMENTS: dict[str, tuple[str, ...]] = {
     "material_code": ("materials", "material", "items"),
     "patientid": ("patients", "patient"),
     "patient_id": ("patients", "patient"),
+    "appointmentid": ("appointments", "appointment"),
+    "appointment_id": ("appointments", "appointment"),
+    "encounterid": ("encounters", "encounter"),
+    "encounter_id": ("encounters", "encounter"),
+    "claimid": ("claims", "claim"),
+    "claim_id": ("claims", "claim"),
+    "bookingid": ("bookings", "booking", "reservations", "reservation"),
+    "booking_id": ("bookings", "booking", "reservations", "reservation"),
+    "prescriptionid": ("prescriptions", "prescription"),
+    "prescription_id": ("prescriptions", "prescription"),
     "caseid": ("cases", "case"),
     "case_id": ("cases", "case"),
     "permitid": ("permits", "permit"),

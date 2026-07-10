@@ -452,8 +452,21 @@ def _apply_execution_budget_profile(vm: dict[str, Any], tier: str, settings: dic
 class AutonomousDiscoveryEngine:
     """自主发现引擎：文档 → 假设 → 探针 → 确认"""
 
-    def __init__(self, base_url: str | None = None):
-        self.base = str(base_url or os.environ.get("QUALIBUG_DEFAULT_BASE_URL") or "http://127.0.0.1:8000")
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        project_id: str | None = None,
+        root: Path | str | None = None,
+    ):
+        self.base = str(base_url or os.environ.get("QUALIBUG_DEFAULT_BASE_URL") or "http://127.0.0.1:8088")
+        self._project = str(
+            project_id
+            or os.environ.get("QUALIBUG_PROJECT_ID")
+            or os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID")
+            or "default_project"
+        ).strip() or "default_project"
+        self._root = Path(root or Path(__file__).resolve().parents[1]).resolve()
         self.client = _get_client()
         
         # Phase81: Read execution policy from Policy Registry (fallback to hardcoded defaults)
@@ -509,11 +522,16 @@ class AutonomousDiscoveryEngine:
         self._credential_manager = None    # EnterpriseCredentialManager (service×role)
         self._service_tokens: dict[str, dict[str, str]] = {}  # service → {role: token}
 
+        self._tokens_authentic: bool = False
+        self._auth_warnings: list[str] = []
+
         # Runtime auth is optional. In production mode discovery is dry/blocked.
         if not self._production_blocked:
             # Try multi-module credential manager first
             self._init_multi_module_auth()
-            if not self._service_tokens:
+            if self._service_tokens:
+                self._tokens_authentic = True
+            else:
                 # Fall back to legacy single-service
                 authenticated = self._login()
                 self._tokens_authentic = authenticated
@@ -523,7 +541,6 @@ class AutonomousDiscoveryEngine:
         # during every discovery run.
         self._har_entries: list[dict[str, Any]] = []
         self._har_error_patterns: list[dict[str, Any]] = []
-        self._tokens_authentic: bool = True  # False if login failed, synthetic tokens in use
         self._MAX_HAR_ENTRIES = 10000  # Prevent unbounded memory growth
 
     def _inject_context(self):
@@ -584,8 +601,10 @@ class AutonomousDiscoveryEngine:
                 if svc_count:
                     print(f"  [OK] Multi-module auth initialized: "
                           f"{svc_count} service(s) configured", flush=True)
-        except ImportError:
-            pass  # enterprise_credential_manager not available (standalone lib)
+        except ImportError as import_error:
+            warning = f"enterprise_credential_manager_unavailable:{import_error}"
+            self._auth_warnings.append(warning)
+            print(f"  [WARN] {warning}", flush=True)
 
     def _login(self):
         try:
@@ -603,30 +622,34 @@ class AutonomousDiscoveryEngine:
                 print(f"  [OK] Real admin token obtained from /api/auth/login", flush=True)
                 # Attempt viewer token — try same credentials with a different role
                 # If the system has role-specific endpoints, try to get a viewer token
-                try:
-                    viewer_user = os.environ.get("QUALIBUG_VIEWER_USER", "")
-                    viewer_pass = os.environ.get("QUALIBUG_VIEWER_PASS", "")
-                    vr = self._http("POST", "/api/auth/login",
-                                   data={"username": viewer_user, "password": viewer_pass},
-                                   no_auth=True)
-                    vtoken = (vr.get("data", {}) or {}).get("accessToken", "")
-                    if vtoken:
-                        self._tokens["viewer"] = vtoken
-                        print(f"  [OK] Real viewer token obtained", flush=True)
-                        return True
-                except Exception:
-                    pass
+                viewer_user = os.environ.get("QUALIBUG_VIEWER_USER", "")
+                viewer_pass = os.environ.get("QUALIBUG_VIEWER_PASS", "")
+                if viewer_user and viewer_pass:
+                    try:
+                        vr = self._http("POST", "/api/auth/login",
+                                       data={"username": viewer_user, "password": viewer_pass},
+                                       no_auth=True)
+                        vtoken = (vr.get("data", {}) or {}).get("accessToken", "")
+                        if vtoken:
+                            self._tokens["viewer"] = vtoken
+                            print(f"  [OK] Real viewer token obtained", flush=True)
+                            return True
+                        self._auth_warnings.append("viewer_login_returned_no_token")
+                    except Exception as viewer_error:
+                        warning = f"viewer_login_failed:{type(viewer_error).__name__}:{viewer_error}"
+                        self._auth_warnings.append(warning)
+                        print(f"  [WARN] {warning}", flush=True)
                 # Fallback 1: explicit viewer token from env var
                 env_viewer_token = os.environ.get("QUALIBUG_VIEWER_TOKEN", "").strip()
                 if env_viewer_token:
                     self._tokens["viewer"] = env_viewer_token
                     print(f"  [OK] Using QUALIBUG_VIEWER_TOKEN for viewer role", flush=True)
                 else:
-                    # Fallback 2: use admin token as approximate viewer
-                    # (note: this weakens role-differentiated testing)
-                    self._tokens["viewer"] = token
-                    print(f"  [INFO] Using admin token as viewer fallback "
-                          f"(set QUALIBUG_VIEWER_TOKEN for real role separation)", flush=True)
+                    self._auth_warnings.append("viewer_identity_missing")
+                    print(
+                        "  [WARN] Viewer identity missing; role-differential tests will be SKIPPED.",
+                        flush=True,
+                    )
                 return True
             # Real token not obtained — do NOT use synthetic tokens.
             # Without real auth, all permission/role tests are unreliable.
@@ -659,6 +682,13 @@ class AutonomousDiscoveryEngine:
             if not token and role in self._tokens:
                 # Legacy single-service
                 token = self._tokens[role]
+            if role == "viewer" and not token:
+                return {
+                    "_http": 0,
+                    "_error": "role_token_missing:viewer",
+                    "blocked_action": "http_request",
+                    "_request": {"method": method, "url": url, "role": role, "no_auth": no_auth},
+                }
             if token:
                 headers["Authorization"] = f"Bearer {token}"
         body_bytes = json.dumps(data).encode() if data else None
@@ -1181,18 +1211,39 @@ class AutonomousDiscoveryEngine:
 
     def _try_extract_id_from_list(self, list_path: str, param_name: str) -> str | None:
         """GET a list endpoint and extract the first entity's ID.
-        
+
+        Tries admin first, then other authenticated roles when admin gets
+        401/403/empty — cross-user fixtures often live under non-admin actors.
         Returns the ID string on success, None if unreachable or no entities found.
         """
-        try:
-            r = self._http("GET", list_path, role="admin")
-            if r.get("_http", 0) != 200:
-                return None
-            
-            body = {k: v for k, v in r.items() if not k.startswith("_")}
-            return extract_first_entity_id(body, param_name)
-        except Exception:
-            pass
+        roles: list[str] = []
+        for role in ("admin", "viewer", "normal_user", "buyer", "doctor", "nurse", "operator"):
+            if role not in roles:
+                roles.append(role)
+        for role in list(getattr(self, "_tokens", {}) or {}):
+            if role and role not in roles:
+                roles.append(str(role))
+        for svc_roles in (getattr(self, "_service_tokens", {}) or {}).values():
+            if not isinstance(svc_roles, dict):
+                continue
+            for role in svc_roles:
+                if role and role not in roles:
+                    roles.append(str(role))
+
+        for role in roles:
+            try:
+                r = self._http("GET", list_path, role=role)
+                status = int(r.get("_http", 0) or 0)
+                if status in {401, 403}:
+                    continue
+                if status != 200:
+                    continue
+                body = {k: v for k, v in r.items() if not k.startswith("_")}
+                entity_id = extract_first_entity_id(body, param_name)
+                if entity_id:
+                    return entity_id
+            except Exception:
+                continue
         return None
 
     def _generate_test_values(self, param_name: str, resolved: dict, route_map: dict) -> list[str]:
@@ -3033,7 +3084,7 @@ def run_discovery(prd_path: str = None, api_path: str = None,
     prd = Path(prd_path).read_text(encoding="utf-8") if prd_path and Path(prd_path).is_file() else ""
     api = Path(api_path).read_text(encoding="utf-8") if api_path and Path(api_path).is_file() else ""
 
-    engine = AutonomousDiscoveryEngine(base_url=base_url)
+    engine = AutonomousDiscoveryEngine(base_url=base_url, project_id=project_id, root=repo_root)
     return engine.discover(prd, api)
 
 

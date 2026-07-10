@@ -596,7 +596,23 @@ def infer_entity_dependencies(operations: list[dict]) -> list[dict]:
             dependencies.append({"resource": resource, "dependency": "create_then_read", "setup": f"{create_ops[0]['method']} {create_ops[0]['path']}", "assert": f"{read_ops[0]['method']} {read_ops[0]['path']}"})
         action_ops = [op for op in operations if op["resource"] == resource and op["operation"] not in {"read", "create_or_action", "authenticate"}]
         for action in action_ops:
-            dependencies.append({"resource": resource, "dependency": "state_action_requires_existing_resource", "setup": "create_or_seed_resource", "action": f"{action['method']} {action['path']}", "assert": "read_resource_and_related_objects"})
+            setup_ref = (
+                f"{create_ops[0]['method']} {create_ops[0]['path']}"
+                if create_ops
+                else "create_or_seed_resource"
+            )
+            assert_ref = (
+                f"{read_ops[0]['method']} {read_ops[0]['path']}"
+                if read_ops
+                else "read_resource_and_related_objects"
+            )
+            dependencies.append({
+                "resource": resource,
+                "dependency": "state_action_requires_existing_resource",
+                "setup": setup_ref,
+                "action": f"{action['method']} {action['path']}",
+                "assert": assert_ref,
+            })
     return dependencies
 
 
@@ -649,20 +665,87 @@ def scenario(scenario_id: str, title: str, scenario_type: str, ops: list[dict], 
 
 
 def cross_resource_scenarios(operations: list[dict], prd: str) -> list[dict]:
+    """Build cross-resource scenarios from OpenAPI role families — not mall path lists."""
     scenarios: list[dict] = []
-    ops_by_path = {op["path"]: op for op in operations}
-    def pick(paths: list[str]) -> list[dict]:
-        return [ops_by_path[p] for p in paths if p in ops_by_path]
+    by_resource: dict[str, list[dict]] = {}
+    for op in operations:
+        by_resource.setdefault(str(op.get("resource") or ""), []).append(op)
 
-    ecommerce_flow = pick(["/orders", "/payments", "/refunds"])
-    if len(ecommerce_flow) >= 2:
-        scenarios.append(scenario("SCN_ORDER_PAY_REFUND", "订单支付退款资金一致性", "cross_resource_financial", ecommerce_flow, ["money_consistency", "state_flow", "refund_abuse"]))
-    stock_flow = pick(["/products/{product_id}", "/orders", "/orders/{order_id}/cancel"])
+    def _ops_for_family(family: set[str], *, methods: set[str] | None = None, limit: int = 3) -> list[dict]:
+        matched: list[dict] = []
+        for resource, ops in by_resource.items():
+            if not _resource_in(resource, family):
+                continue
+            for op in ops:
+                if methods and str(op.get("method") or "").upper() not in methods:
+                    continue
+                matched.append(op)
+                if len(matched) >= limit:
+                    return matched
+        return matched
+
+    fulfillment = _ops_for_family(_FULFILLMENT_PARENT_LIKE, limit=4)
+    payment = _ops_for_family(_PAYMENT_LIKE, methods={"POST", "PUT", "PATCH"}, limit=3)
+    refund = _ops_for_family(_REFUND_LIKE, methods={"POST", "PUT", "PATCH"}, limit=2)
+    inventory = _ops_for_family(_INVENTORY_LIKE, limit=3)
+    ownership = _ops_for_family(_OWNERSHIP_PARENT_LIKE, limit=3)
+    owned = _ops_for_family(_OWNED_RECORD_LIKE, limit=3)
+
+    financial_flow = fulfillment[:2] + payment[:1] + refund[:1]
+    if len(financial_flow) >= 2 and fulfillment and (payment or refund):
+        scenarios.append(
+            scenario(
+                "SCN_FULFILLMENT_PAY_REFUND",
+                "履约单支付/结算与退款资金一致性",
+                "cross_resource_financial",
+                financial_flow[:4],
+                ["money_consistency", "state_flow", "refund_abuse"],
+            )
+        )
+
+    cancel_ops = [
+        op for op in fulfillment
+        if str(op.get("operation") or "") == "state_cancel"
+        or any(tok in str(op.get("path") or "").lower() for tok in ("cancel", "void", "close", "terminate"))
+    ]
+    stock_flow = inventory[:1] + fulfillment[:1] + cancel_ops[:1]
     if len(stock_flow) >= 2:
-        scenarios.append(scenario("SCN_STOCK_ORDER_CANCEL", "商品库存下单取消一致性", "cross_resource_quantity", stock_flow, ["quantity_consistency", "stock_consistency", "rollback_consistency"]))
-    tenant_flow = pick(["/tenant/orders", "/admin/orders"])
-    if tenant_flow:
-        scenarios.append(scenario("SCN_TENANT_ADMIN_SCOPE", "租户与后台数据范围隔离", "scope_and_permission", tenant_flow, ["tenant_isolation", "permission_bypass", "search_scope_leak"]))
+        scenarios.append(
+            scenario(
+                "SCN_CAPACITY_FULFILL_CANCEL",
+                "容量/库存与履约取消一致性",
+                "cross_resource_quantity",
+                stock_flow[:3],
+                ["quantity_consistency", "stock_consistency", "rollback_consistency"],
+            )
+        )
+
+    scope_flow = ownership[:2] + owned[:2]
+    if ownership and owned:
+        scenarios.append(
+            scenario(
+                "SCN_OWNER_SCOPE_ISOLATION",
+                "主体与从属记录数据范围隔离",
+                "scope_and_permission",
+                scope_flow[:4],
+                ["tenant_isolation", "permission_bypass", "search_scope_leak", "idor"],
+            )
+        )
+    elif any("tenant" in str(op.get("path") or "").lower() or "admin" in str(op.get("path") or "").lower() for op in operations):
+        tenant_ops = [
+            op for op in operations
+            if any(tok in str(op.get("path") or "").lower() for tok in ("tenant", "admin", "org"))
+        ][:3]
+        if tenant_ops:
+            scenarios.append(
+                scenario(
+                    "SCN_TENANT_ADMIN_SCOPE",
+                    "租户与后台数据范围隔离",
+                    "scope_and_permission",
+                    tenant_ops,
+                    ["tenant_isolation", "permission_bypass", "search_scope_leak"],
+                )
+            )
 
     approval_ops = [op for op in operations if "approval_bypass" in op.get("risk_hints", [])]
     export_ops = [op for op in operations if "export_permission" in op.get("risk_hints", [])]
@@ -1340,19 +1423,22 @@ def invariant_statement(risk: str, op: dict, roles: list[str], tenants: list[str
 
 
 def keyword_hits(domain: str, path: str) -> bool:
+    """Match domain keywords against path resource tokens (industry-agnostic)."""
+    path_l = str(path or "").lower()
     mapping = {
-        "permission": ["admin", "login"],
-        "idor": ["orders", "address"],
-        "tenant": ["tenant"],
-        "order": ["orders"],
-        "stock": ["products", "orders"],
-        "coupon": ["coupon", "cart"],
-        "payment": ["payment"],
-        "refund": ["refund"],
-        "idempotency": ["orders", "callback"],
-        "money": ["orders", "payment", "coupon"],
+        "permission": ["admin", "login", "role", "permission", "auth"],
+        "idor": ["{", "owner", "me", "self", "patient", "account", "member", "order", "booking", "claim", "record"],
+        "tenant": ["tenant", "org", "organization", "workspace"],
+        "order": list(_FULFILLMENT_PARENT_LIKE),
+        "stock": list(_INVENTORY_LIKE | _FULFILLMENT_PARENT_LIKE),
+        "coupon": ["coupon", "voucher", "promo", "benefit", "discount"],
+        "payment": list(_PAYMENT_LIKE),
+        "refund": list(_REFUND_LIKE),
+        "idempotency": list(_FULFILLMENT_PARENT_LIKE) + ["callback", "idempotency", "retry"],
+        "money": list(_PAYMENT_LIKE | _REFUND_LIKE | _FULFILLMENT_PARENT_LIKE) + ["coupon", "voucher", "ledger"],
     }
-    return any(word in path for word in mapping.get(domain, []))
+    tokens = mapping.get(domain, [])
+    return any(word in path_l for word in tokens)
 
 
 def build_invariants(rules: list[dict]) -> list[dict]:
@@ -1360,13 +1446,13 @@ def build_invariants(rules: list[dict]) -> list[dict]:
         "permission": "非授权角色不能访问管理或受保护资源",
         "idor": "用户只能访问和变更自己的业务对象",
         "tenant": "租户数据必须按 tenant_id 强隔离",
-        "order": "订单状态创建、取消、支付、退款必须可查询且一致",
-        "stock": "库存不能超卖，交易状态变化必须同步库存",
-        "coupon": "优惠券必须校验归属、有效期、门槛和使用次数",
-        "payment": "支付金额必须等于订单应付金额且状态流转合法",
-        "refund": "退款必须基于已支付订单且金额不能超过支付金额",
-        "idempotency": "重复请求不能重复创建订单、扣库存或入账",
-        "money": "金额计算不能为负，不能出现订单和支付不一致",
+        "order": "履约单状态创建、取消、支付、退款必须可查询且一致",
+        "stock": "容量/库存不能超卖，交易状态变化必须同步库存",
+        "coupon": "优惠/权益必须校验归属、有效期、门槛和使用次数",
+        "payment": "支付/结算金额必须等于应付金额且状态流转合法",
+        "refund": "退款必须基于已支付单据且金额不能超过支付金额",
+        "idempotency": "重复请求不能重复创建、扣减容量或入账",
+        "money": "金额计算不能为负，不能出现履约单和支付不一致",
     }
     return [{"invariant_id": f"INV_{r['domain'].upper()}", "domain": r["domain"], "statement": templates[r["domain"]], "paths": r["paths"]} for r in rules]
 
@@ -1632,12 +1718,12 @@ def upgrade_high_value_oracle_probes(probes: list[dict], business_model: dict) -
         if not op:
             upgraded.append(item)
             continue
-        steps = build_business_knowledge_steps(risk, op)
+        steps = build_business_knowledge_steps(risk, op, operations)
         fallback_op = None
         if not steps:
             fallback_op = find_oracle_fallback_operation(operations, risk)
             if fallback_op:
-                steps = build_business_knowledge_steps(risk, fallback_op)
+                steps = build_business_knowledge_steps(risk, fallback_op, operations)
         if not steps:
             upgraded.append(item)
             continue
@@ -1920,7 +2006,7 @@ def generate_business_knowledge_probes(business_model: dict) -> list[dict]:
             }
             probe_item["expected"] = knowledge_expected_statement(item["risk_type"], op)
             probe_item["bug_signal"] = knowledge_bug_signal(item["risk_type"])
-            knowledge_steps = build_business_knowledge_steps(item["risk_type"], op)
+            knowledge_steps = build_business_knowledge_steps(item["risk_type"], op, operations)
             if knowledge_steps:
                 probe_item["steps"] = knowledge_steps
                 probe_item["probe_type"] = "business_knowledge_journey_probe"
@@ -2638,13 +2724,49 @@ def generate_capability_gap_probes(business_model: dict, existing_probes: list[d
     return probes
 
 
-def build_business_knowledge_steps(risk_type: str, op: dict) -> list[dict]:
+def build_business_knowledge_steps(
+    risk_type: str,
+    op: dict,
+    operations: list[dict] | None = None,
+) -> list[dict]:
     method = op.get("method")
     path = op.get("path", "")
     concrete = concrete_path(path)
     text = f"{path} {op.get('summary', '')} {op.get('resource', '')}".lower()
     resource = str(op.get("resource") or "resource")
-    read_path = concrete if method == "GET" else read_path_for_resource(resource)
+    ops_ctx = operations if isinstance(operations, list) else None
+    if ops_ctx is None and isinstance(op.get("_operations_context"), list):
+        ops_ctx = op.get("_operations_context")
+    read_path = concrete if method == "GET" else read_path_for_resource(resource, operations=ops_ctx)
+    create_path = None
+    cancel_method = "POST"
+    cancel_path = None
+    if isinstance(ops_ctx, list):
+        for candidate in ops_ctx:
+            if str(candidate.get("resource") or "") != resource:
+                # Also allow fulfillment parent create/cancel when probing payment-like ops.
+                cand_resource = str(candidate.get("resource") or "")
+                if not (
+                    _resource_in(resource, _PAYMENT_LIKE)
+                    and _resource_in(cand_resource, _FULFILLMENT_PARENT_LIKE)
+                ):
+                    continue
+            cand_method = str(candidate.get("method") or "").upper()
+            cand_path = str(candidate.get("path") or "")
+            cand_op = str(candidate.get("operation") or "")
+            if create_path is None and cand_method == "POST" and (
+                cand_op in {"create_or_action", ""} or cand_op == "create_or_action"
+            ):
+                if cand_op in {"create_or_action"} or (
+                    cand_op == "" and not any(tok in cand_path.lower() for tok in ("cancel", "pay", "refund", "callback"))
+                ):
+                    create_path = concrete_path(cand_path)
+            if cancel_path is None and (
+                cand_op == "state_cancel"
+                or any(tok in cand_path.lower() for tok in ("cancel", "void", "close", "terminate"))
+            ):
+                cancel_method = cand_method or "POST"
+                cancel_path = concrete_path(cand_path)
     if risk_type in {"quantity_consistency", "stock_consistency"} and any(
         k in text for k in ["product", "stock", "inventory", "cart", "order", "booking", "seat", "capacity", "material", "预约", "库存", "名额"]
     ):
@@ -2683,11 +2805,16 @@ def build_business_knowledge_steps(risk_type: str, op: dict) -> list[dict]:
             step("submit_over_refund", method, concrete, body_hint="refund_over"),
             step("read_after_refund", "GET", read_path, body_hint="read"),
         ]
-    if risk_type == "state_flow" and any(k in text for k in ["payment", "pay", "callback", "settlement", "支付", "回调"]):
-        return [
-            step("attempt_payment_after_terminal_state", method, concrete, body_hint="payment"),
-            step("read_after_terminal_action", "GET", read_path, body_hint="read"),
-        ]
+    # Terminal-state mutation: create → cancel/close → attempt payment/settlement (not mall-only).
+    if risk_type == "state_flow" and any(k in text for k in ["payment", "pay", "callback", "settlement", "支付", "回调", "结算"]):
+        steps = []
+        if create_path:
+            steps.append(step("seed_fulfillment_resource", "POST", create_path, body_hint="create"))
+        if cancel_path:
+            steps.append(step("move_to_terminal_state", cancel_method, cancel_path, body_hint="cancel"))
+        steps.append(step("attempt_payment_after_terminal_state", method, concrete, body_hint="payment"))
+        steps.append(step("read_after_terminal_action", "GET", read_path, body_hint="read"))
+        return steps
     if risk_type == "state_consistency" and any(k in text for k in ["payment", "pay", "callback", "settlement", "支付", "回调"]):
         return [
             step("execute_state_sync_action", method, concrete, body_hint="payment"),
@@ -2705,8 +2832,9 @@ def build_business_knowledge_steps(risk_type: str, op: dict) -> list[dict]:
             step("repeat_business_state_action", method, concrete, body_hint="state"),
         ]
     if risk_type in {"state_flow", "state_consistency"} and method == "GET":
+        seed = create_path or (path if not has_path_param_like(path) else read_path_for_resource(resource, operations=ops_ctx))
         return [
-            step("execute_business_action_before_read", "POST", path if not has_path_param_like(path) else read_path_for_resource(resource), body_hint="create"),
+            step("execute_business_action_before_read", "POST", seed, body_hint="create"),
             step("read_business_state", method, concrete, body_hint="read"),
         ]
     if risk_type == "money_consistency" and method in {"POST", "PUT", "PATCH"}:
@@ -3210,6 +3338,7 @@ def generate_feedback_adjusted_policy_probes(business_model: dict) -> list[dict]
 def generate_journey_defect_probes(business_model: dict) -> list[dict]:
     probes: list[dict] = []
     seq = 1
+    operations = list(business_model.get("operations") or [])
     for dep in business_model.get("entity_dependencies", []):
         if dep.get("dependency") == "create_then_read":
             setup = parse_operation_ref(dep["setup"])
@@ -3233,6 +3362,19 @@ def generate_journey_defect_probes(business_model: dict) -> list[dict]:
         if dep.get("dependency") == "state_action_requires_existing_resource":
             action = parse_operation_ref(dep["action"])
             if action:
+                # Prefer documented create/setup path over invented POST /{resource}.
+                setup_ref = parse_operation_ref(str(dep.get("setup") or ""))
+                if not setup_ref:
+                    create_ops = [
+                        op for op in operations
+                        if str(op.get("resource") or "") == str(dep.get("resource") or "")
+                        and str(op.get("method") or "").upper() == "POST"
+                    ]
+                    if create_ops:
+                        setup_ref = (str(create_ops[0]["method"]).upper(), str(create_ops[0]["path"]))
+                seed_method = setup_ref[0] if setup_ref else "POST"
+                seed_path = concrete_path(setup_ref[1]) if setup_ref else f"/{dep['resource']}"
+                read_path = read_path_for_resource(dep["resource"], operations=operations)
                 probes.append(
                     journey_probe(
                         f"JOURNEY_STATE_ACTION_{seq:03d}",
@@ -3241,9 +3383,9 @@ def generate_journey_defect_probes(business_model: dict) -> list[dict]:
                         "state_flow",
                         "P1",
                         [
-                            step("seed_resource", "POST", f"/{dep['resource']}", body_hint="create"),
+                            step("seed_resource", seed_method, seed_path, body_hint="create"),
                             step("state_action", action[0], concrete_path(action[1]), body_hint="state"),
-                            step("read_after_action", "GET", read_path_for_resource(dep["resource"]), body_hint="read"),
+                            step("read_after_action", "GET", read_path, body_hint="read"),
                         ],
                         api_template=dep["action"],
                     )
@@ -3282,11 +3424,37 @@ def parse_operation_ref(ref: str) -> tuple[str, str] | None:
     return parts[0].upper(), parts[1]
 
 
-def read_path_for_resource(resource: str) -> str:
-    """Build a generic detail read path for a resource — no synthetic mall IDs."""
+def read_path_for_resource(resource: str, operations: list[dict] | None = None) -> str:
+    """Pick a documented GET detail path when available; else generic /{resource}/{id}."""
     name = str(resource or "").strip().strip("/")
     if not name:
         return "/"
+    ops = list(operations or [])
+    detail_candidates: list[str] = []
+    collection_candidates: list[str] = []
+    for op in ops:
+        if str(op.get("method") or "").upper() != "GET":
+            continue
+        if str(op.get("resource") or "") != name and name not in str(op.get("path") or ""):
+            continue
+        path = str(op.get("path") or "")
+        if not path:
+            continue
+        if "{" in path and "}" in path:
+            detail_candidates.append(path)
+        else:
+            collection_candidates.append(path)
+    if detail_candidates:
+        # Prefer paths whose final segment is a placeholder (true detail reads).
+        detail_candidates.sort(
+            key=lambda p: (
+                0 if p.rstrip("/").endswith("}") else 1,
+                len(p),
+            )
+        )
+        return concrete_path(detail_candidates[0])
+    if collection_candidates:
+        return concrete_path(collection_candidates[0])
     return f"/{name}/{{id}}"
 
 
