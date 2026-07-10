@@ -4058,6 +4058,19 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
 
         if base_url and not diagnostics_config.get("api_base_url"):
             diagnostics_config["api_base_url"] = base_url
+        # Preflight must consume the same exact target grant as the runtime
+        # executor. This permits an explicitly approved internal test target
+        # without weakening the production/unknown SSRF boundary.
+        if approved_base_url:
+            diagnostics_config["approved_base_url"] = approved_base_url
+        environment_kind = str(
+            context.get("environment_kind")
+            or context.get("environment_type")
+            or context.get("target_environment_kind")
+            or ""
+        ).strip()
+        if environment_kind:
+            diagnostics_config["environment_kind"] = environment_kind
         diagnostics = run_preflight(diagnostics_config, api_doc_text)
     except Exception as exc:
         diagnostics = {"ready": False, "checks": [], "summary": f"preflight_unavailable:{type(exc).__name__}"}
