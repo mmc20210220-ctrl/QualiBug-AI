@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -1713,63 +1714,161 @@ def apply_probe_budget_policy(probes: list[dict]) -> list[dict]:
 
 
 def generate_high_value_pattern_probes(business_model: dict) -> list[dict]:
-    """Generate blind-mode probes from public PRD/OpenAPI/account semantics.
+    """Generate blind-mode probes from public OpenAPI/PRD semantics.
 
-    These probes are intentionally not benchmark_compat probes. They represent a
-    reusable high-value bug pattern library: auth, IDOR, stock, coupon, payment,
-    refund, idempotency and state consistency. The generator only activates a
-    pattern when the public OpenAPI exposes the required endpoints.
+    Patterns activate only when matching endpoints exist. Paths and titles are
+    derived from the real operations — never from a hardcoded mall map of
+    ``/orders/o900`` or ``/cart/apply-coupon``.
     """
-    paths = {op.get("path") for op in business_model.get("operations", [])}
-    roles = set(business_model.get("roles", []))
+    operations = [op for op in (business_model.get("operations") or []) if isinstance(op, dict)]
     probes: list[dict] = []
+    seen: set[str] = set()
 
-    def has(path: str) -> bool:
-        return path in paths
+    def add(
+        probe_id: str,
+        title: str,
+        probe_type: str,
+        risk_type: str,
+        severity: str,
+        actor: str,
+        method: str,
+        path: str,
+        expected_status: int,
+        api_template: str | None = None,
+    ) -> None:
+        if probe_id in seen:
+            return
+        seen.add(probe_id)
+        probes.append(
+            probe(
+                probe_id,
+                title,
+                probe_type,
+                risk_type,
+                severity,
+                actor,
+                method,
+                path,
+                expected_status,
+                api_template or f"{method} {str(path).split('?')[0]}",
+                source="pattern_library",
+            )
+        )
 
-    def add(probe_id: str, title: str, probe_type: str, risk_type: str, severity: str, actor: str, method: str, path: str, expected_status: int, api_template: str | None = None) -> None:
-        probes.append(probe(probe_id, title, probe_type, risk_type, severity, actor, method, path, expected_status, api_template or f"{method} {path.split('?')[0]}", source="pattern_library"))
+    def _slug(path: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", str(path or "").strip("/")).strip("_").upper()
+        return (cleaned or "RESOURCE")[:48]
 
-    if has("/login"):
-        add("PATTERN_LOCKED_ACCOUNT_LOGIN", "锁定账号不得登录", "account_state_probe", "locked_account_bypass", "P1", "locked_user", "POST", "/login", 403, "POST /login")
-    if has("/admin/orders"):
-        add("PATTERN_ADMIN_READ_FORBIDDEN_TO_USER", "普通用户不得读取管理员订单", "permission_probe", "permission_bypass", "P0", "normal_user", "GET", "/admin/orders", 403, "GET /admin/orders")
-        add("PATTERN_ADMIN_READ_FORBIDDEN_TO_ANON", "未登录用户不得读取管理员订单", "auth_probe", "auth_bypass", "P0", "anonymous", "GET", "/admin/orders", 401, "GET /admin/orders")
-    if has("/admin/products/{product_id}"):
-        add("PATTERN_ADMIN_WRITE_FORBIDDEN_TO_USER", "普通用户不得修改管理员商品", "permission_probe", "privilege_escalation", "P0", "normal_user", "POST", "/admin/products/p100", 403, "POST /admin/products/{product_id}")
-        add("PATTERN_ADMIN_WRITE_FORBIDDEN_TO_ANON", "未登录用户不得修改管理员商品", "auth_probe", "auth_bypass", "P0", "anonymous", "POST", "/admin/products/p100", 401, "POST /admin/products/{product_id}")
-    if has("/orders/{order_id}"):
-        add("PATTERN_ORDER_IDOR_READ", "用户不得查看他人订单", "idor_probe", "idor", "P0", "normal_user", "GET", "/orders/o900", 403, "GET /orders/{order_id}")
-    if has("/orders/{order_id}/cancel"):
-        add("PATTERN_ORDER_IDOR_CANCEL", "用户不得取消他人订单", "idor_probe", "idor", "P1", "normal_user", "POST", "/orders/o900/cancel", 403, "POST /orders/{order_id}/cancel")
-        add("PATTERN_ORDER_CANCEL_STATE", "订单取消后状态和库存必须一致", "state_transition_probe", "state_flow", "P1", "normal_user", "POST", "/orders/o900/cancel", 200, "POST /orders/{order_id}/cancel")
-    if has("/tenant/orders"):
-        add("PATTERN_TENANT_ISOLATION", "租户用户不得读取其他租户订单", "tenant_probe", "tenant_isolation", "P0", "normal_user", "GET", "/tenant/orders?tenant_id=tenant_b", 403, "GET /tenant/orders")
-    if has("/orders"):
-        add("PATTERN_STOCK_OVERSELL", "库存不足不能创建订单", "stock_probe", "stock_consistency", "P0", "normal_user", "POST", "/orders", 409, "POST /orders")
-        add("PATTERN_STOCK_DEDUCT_ON_ORDER", "订单创建成功后库存必须扣减", "stock_probe", "stock_consistency", "P1", "normal_user", "POST", "/orders", 200, "POST /orders")
-        add("PATTERN_ORDER_CREATE_READ", "订单创建后必须可查询", "state_consistency_probe", "state_consistency", "P1", "normal_user", "POST", "/orders", 200, "POST /orders")
-        add("PATTERN_ORDER_IDEMPOTENCY", "同一幂等键不能创建多个订单", "idempotency_probe", "idempotency", "P1", "normal_user", "POST", "/orders", 200, "POST /orders")
-        add("PATTERN_ORDER_TENANT_TAMPER", "普通用户创建订单不能篡改租户或归属", "idor_probe", "idor", "P1", "normal_user", "POST", "/orders", 403, "POST /orders")
-    if has("/cart/apply-coupon"):
-        add("PATTERN_COUPON_REUSE", "同一优惠券不能重复抵扣", "coupon_probe", "coupon_abuse", "P1", "normal_user", "POST", "/cart/apply-coupon", 409, "POST /cart/apply-coupon")
-        add("PATTERN_COUPON_EXPIRED", "过期优惠券不能使用", "coupon_probe", "coupon_abuse", "P1", "normal_user", "POST", "/cart/apply-coupon", 400, "POST /cart/apply-coupon")
-        add("PATTERN_COUPON_THRESHOLD", "不满足门槛不能使用优惠券", "coupon_probe", "coupon_abuse", "P1", "normal_user", "POST", "/cart/apply-coupon", 400, "POST /cart/apply-coupon")
-        add("PATTERN_COUPON_OTHER_USER", "用户不能使用他人优惠券", "coupon_probe", "coupon_abuse", "P0", "normal_user", "POST", "/cart/apply-coupon", 403, "POST /cart/apply-coupon")
-        add("PATTERN_COUPON_OVER_DISCOUNT", "优惠金额不能超过订单金额", "money_probe", "money_consistency", "P0", "normal_user", "POST", "/cart/apply-coupon", 400, "POST /cart/apply-coupon")
-    if has("/payments"):
-        add("PATTERN_PAYMENT_AMOUNT_MATCH", "支付金额必须等于订单金额", "payment_probe", "money_consistency", "P0", "normal_user", "POST", "/payments", 409, "POST /payments")
-        add("PATTERN_PAYMENT_STATUS_UPDATE", "支付成功后订单状态必须更新", "payment_probe", "state_consistency", "P1", "normal_user", "POST", "/payments", 200, "POST /payments")
-        add("PATTERN_PAYMENT_CANCELLED_ORDER", "已取消订单不能支付", "payment_probe", "state_flow", "P0", "normal_user", "POST", "/payments", 409, "POST /payments")
-    if has("/payments/callback"):
-        add("PATTERN_PAYMENT_CALLBACK_IDEMPOTENT", "支付回调必须幂等", "payment_callback_probe", "idempotency", "P1", "system", "POST", "/payments/callback", 200, "POST /payments/callback")
-        add("PATTERN_PAYMENT_CALLBACK_AMOUNT", "支付回调金额必须等于订单金额", "payment_callback_probe", "money_consistency", "P0", "system", "POST", "/payments/callback", 409, "POST /payments/callback")
-        add("PATTERN_PAYMENT_CALLBACK_CANCELLED_ORDER", "已取消订单不能被支付回调改为已支付", "payment_callback_probe", "state_flow", "P0", "system", "POST", "/payments/callback", 409, "POST /payments/callback")
-    if has("/refunds"):
-        add("PATTERN_REFUND_DUPLICATE", "同一订单不能重复退款", "refund_probe", "refund_abuse", "P1", "normal_user", "POST", "/refunds", 409, "POST /refunds")
-        add("PATTERN_REFUND_UNPAID", "未支付订单不能退款", "refund_probe", "refund_abuse", "P1", "normal_user", "POST", "/refunds", 409, "POST /refunds")
-        add("PATTERN_REFUND_OVER_AMOUNT", "退款金额不能超过已支付金额", "refund_probe", "money_consistency", "P0", "normal_user", "POST", "/refunds", 409, "POST /refunds")
-        add("PATTERN_REFUND_STATE_STOCK", "退款后订单状态和库存必须一致", "refund_probe", "state_consistency", "P1", "normal_user", "POST", "/refunds", 200, "POST /refunds")
+    def _text(op: dict) -> str:
+        return f"{op.get('path') or ''} {op.get('summary') or ''} {op.get('resource') or ''}".lower()
+
+    login_ops = [
+        op for op in operations
+        if str(op.get("method") or "").upper() == "POST"
+        and any(tok in str(op.get("path") or "").lower() for tok in ("/login", "/auth/login", "/signin", "/sign-in"))
+    ]
+    for op in login_ops[:1]:
+        path = str(op.get("path"))
+        # Keep stable id for the common /login surface so executors stay compatible.
+        pid = "PATTERN_LOCKED_ACCOUNT_LOGIN" if path.rstrip("/") == "/login" else f"PATTERN_LOCKED_ACCOUNT_LOGIN_{_slug(path)}"
+        add(pid, "锁定账号不得登录", "account_state_probe", "locked_account_bypass", "P1", "locked_user", "POST", path, 403, f"POST {path}")
+
+    for op in operations:
+        method = str(op.get("method") or "").upper()
+        path = str(op.get("path") or "")
+        if not path or path in {"/reset", "/health", "/openapi.json"}:
+            continue
+        text = _text(op)
+        template = f"{method} {path}"
+        slug = _slug(path)
+        resource = str(op.get("resource") or path.strip("/").split("/")[0] or "resource")
+        is_admin = any(tok in path.lower() for tok in ("/admin/", "/manage/", "/manager/", "/console/"))
+        has_path_param = "{" in path and "}" in path
+        is_collection_post = method == "POST" and not has_path_param
+        is_terminal_action = method in {"POST", "PUT", "PATCH"} and any(
+            tok in path.lower() for tok in ("/cancel", "/close", "/void", "/revoke", "/reject", "/withdraw")
+        )
+        is_benefit = method in {"POST", "PUT", "PATCH"} and any(
+            tok in text for tok in ("coupon", "voucher", "promo", "promotion", "benefit", "discount", "补贴", "优惠", "券")
+        )
+        is_payment = method == "POST" and any(tok in text for tok in ("payment", "pay", "settlement", "charge", "支付", "结算"))
+        is_callback = is_payment and any(tok in text for tok in ("callback", "webhook", "notify", "回调", "通知"))
+        is_refund = method == "POST" and any(tok in text for tok in ("refund", "chargeback", "退款"))
+        is_capacity = is_collection_post and any(
+            tok in text
+            for tok in (
+                "order", "booking", "reservation", "enrollment", "appointment", "inventory",
+                "stock", "seat", "capacity", "订单", "预约", "选课", "库存", "名额",
+            )
+        )
+        is_tenant_surface = "tenant" in path.lower() or "tenant" in text
+
+        if is_admin and method == "GET":
+            pid_user = "PATTERN_ADMIN_READ_FORBIDDEN_TO_USER" if path == "/admin/orders" else f"PATTERN_ADMIN_READ_FORBIDDEN_TO_USER_{slug}"
+            pid_anon = "PATTERN_ADMIN_READ_FORBIDDEN_TO_ANON" if path == "/admin/orders" else f"PATTERN_ADMIN_READ_FORBIDDEN_TO_ANON_{slug}"
+            add(pid_user, f"普通用户不得读取管理端资源 {path}", "permission_probe", "permission_bypass", "P0", "normal_user", method, path, 403, template)
+            add(pid_anon, f"未登录用户不得读取管理端资源 {path}", "auth_probe", "auth_bypass", "P0", "anonymous", method, path, 401, template)
+        if is_admin and method in {"POST", "PUT", "PATCH", "DELETE"}:
+            pid_user = "PATTERN_ADMIN_WRITE_FORBIDDEN_TO_USER" if "/admin/products/" in path else f"PATTERN_ADMIN_WRITE_FORBIDDEN_TO_USER_{slug}"
+            pid_anon = "PATTERN_ADMIN_WRITE_FORBIDDEN_TO_ANON" if "/admin/products/" in path else f"PATTERN_ADMIN_WRITE_FORBIDDEN_TO_ANON_{slug}"
+            add(pid_user, f"普通用户不得修改管理端资源 {path}", "permission_probe", "privilege_escalation", "P0", "normal_user", method, path, 403, template)
+            add(pid_anon, f"未登录用户不得修改管理端资源 {path}", "auth_probe", "auth_bypass", "P0", "anonymous", method, path, 401, template)
+
+        if has_path_param and method == "GET" and not is_admin:
+            pid = "PATTERN_ORDER_IDOR_READ" if path == "/orders/{order_id}" else f"PATTERN_IDOR_READ_{slug}"
+            add(pid, f"用户不得查看他人{resource}", "idor_probe", "idor", "P0", "normal_user", method, path, 403, template)
+
+        if is_terminal_action and not is_admin:
+            pid_idor = "PATTERN_ORDER_IDOR_CANCEL" if path == "/orders/{order_id}/cancel" else f"PATTERN_IDOR_ACTION_{slug}"
+            pid_state = "PATTERN_ORDER_CANCEL_STATE" if path == "/orders/{order_id}/cancel" else f"PATTERN_STATE_ACTION_{slug}"
+            add(pid_idor, f"用户不得越权执行 {path}", "idor_probe", "idor", "P1", "normal_user", method, path, 403, template)
+            add(pid_state, f"终止/取消后状态必须一致 {path}", "state_transition_probe", "state_flow", "P1", "normal_user", method, path, 200, template)
+
+        if is_tenant_surface and method == "GET":
+            tenant_path = path if "tenant_id=" in path else (f"{path}{'&' if '?' in path else '?'}tenant_id=tenant_b")
+            pid = "PATTERN_TENANT_ISOLATION" if path.startswith("/tenant/orders") else f"PATTERN_TENANT_ISOLATION_{slug}"
+            add(pid, f"租户用户不得读取其他租户数据 {path}", "tenant_probe", "tenant_isolation", "P0", "normal_user", method, tenant_path, 403, template)
+
+        if is_capacity:
+            pid_over = "PATTERN_STOCK_OVERSELL" if path == "/orders" else f"PATTERN_CAPACITY_OVERSELL_{slug}"
+            pid_deduct = "PATTERN_STOCK_DEDUCT_ON_ORDER" if path == "/orders" else f"PATTERN_CAPACITY_DEDUCT_{slug}"
+            pid_read = "PATTERN_ORDER_CREATE_READ" if path == "/orders" else f"PATTERN_CREATE_READ_{slug}"
+            pid_idem = "PATTERN_ORDER_IDEMPOTENCY" if path == "/orders" else f"PATTERN_CREATE_IDEMPOTENCY_{slug}"
+            pid_tamper = "PATTERN_ORDER_TENANT_TAMPER" if path == "/orders" else f"PATTERN_CREATE_OWNER_TAMPER_{slug}"
+            add(pid_over, f"容量/库存不足时不能创建 {path}", "stock_probe", "stock_consistency", "P0", "normal_user", method, path, 409, template)
+            add(pid_deduct, f"创建成功后容量/库存必须扣减 {path}", "stock_probe", "stock_consistency", "P1", "normal_user", method, path, 200, template)
+            add(pid_read, f"创建后必须可查询 {path}", "state_consistency_probe", "state_consistency", "P1", "normal_user", method, path, 200, template)
+            add(pid_idem, f"同一幂等键不能重复创建 {path}", "idempotency_probe", "idempotency", "P1", "normal_user", method, path, 200, template)
+            add(pid_tamper, f"创建时不能篡改租户或归属 {path}", "idor_probe", "idor", "P1", "normal_user", method, path, 403, template)
+
+        if is_benefit:
+            # Prefer stable mall ids only for the classic cart coupon surface.
+            classic = path == "/cart/apply-coupon"
+            add("PATTERN_COUPON_REUSE" if classic else f"PATTERN_BENEFIT_REUSE_{slug}", "同一权益/优惠不能重复抵扣", "coupon_probe", "coupon_abuse", "P1", "normal_user", method, path, 409, template)
+            add("PATTERN_COUPON_EXPIRED" if classic else f"PATTERN_BENEFIT_EXPIRED_{slug}", "过期权益/优惠不能使用", "coupon_probe", "coupon_abuse", "P1", "normal_user", method, path, 400, template)
+            add("PATTERN_COUPON_THRESHOLD" if classic else f"PATTERN_BENEFIT_THRESHOLD_{slug}", "不满足门槛不能使用权益/优惠", "coupon_probe", "coupon_abuse", "P1", "normal_user", method, path, 400, template)
+            add("PATTERN_COUPON_OTHER_USER" if classic else f"PATTERN_BENEFIT_OTHER_USER_{slug}", "用户不能使用他人权益/优惠", "coupon_probe", "coupon_abuse", "P0", "normal_user", method, path, 403, template)
+            add("PATTERN_COUPON_OVER_DISCOUNT" if classic else f"PATTERN_BENEFIT_OVER_DISCOUNT_{slug}", "优惠金额不能超过应付金额", "money_probe", "money_consistency", "P0", "normal_user", method, path, 400, template)
+
+        if is_payment and not is_callback:
+            classic = path == "/payments"
+            add("PATTERN_PAYMENT_AMOUNT_MATCH" if classic else f"PATTERN_PAYMENT_AMOUNT_MATCH_{slug}", "支付/结算金额必须匹配应付金额", "payment_probe", "money_consistency", "P0", "normal_user", method, path, 409, template)
+            add("PATTERN_PAYMENT_STATUS_UPDATE" if classic else f"PATTERN_PAYMENT_STATUS_UPDATE_{slug}", "支付成功后业务状态必须更新", "payment_probe", "state_consistency", "P1", "normal_user", method, path, 200, template)
+            add("PATTERN_PAYMENT_CANCELLED_ORDER" if classic else f"PATTERN_PAYMENT_TERMINAL_STATE_{slug}", "已终止业务单不能再支付/结算", "payment_probe", "state_flow", "P0", "normal_user", method, path, 409, template)
+
+        if is_callback:
+            classic = path == "/payments/callback"
+            add("PATTERN_PAYMENT_CALLBACK_IDEMPOTENT" if classic else f"PATTERN_CALLBACK_IDEMPOTENT_{slug}", "支付/结算回调必须幂等", "payment_callback_probe", "idempotency", "P1", "system", method, path, 200, template)
+            add("PATTERN_PAYMENT_CALLBACK_AMOUNT" if classic else f"PATTERN_CALLBACK_AMOUNT_{slug}", "回调金额必须匹配应付金额", "payment_callback_probe", "money_consistency", "P0", "system", method, path, 409, template)
+            add("PATTERN_PAYMENT_CALLBACK_CANCELLED_ORDER" if classic else f"PATTERN_CALLBACK_TERMINAL_STATE_{slug}", "已终止业务单不能被回调改为已支付", "payment_callback_probe", "state_flow", "P0", "system", method, path, 409, template)
+
+        if is_refund:
+            classic = path == "/refunds"
+            add("PATTERN_REFUND_DUPLICATE" if classic else f"PATTERN_REFUND_DUPLICATE_{slug}", "同一业务单不能重复退款", "refund_probe", "refund_abuse", "P1", "normal_user", method, path, 409, template)
+            add("PATTERN_REFUND_UNPAID" if classic else f"PATTERN_REFUND_UNPAID_{slug}", "未支付业务单不能退款", "refund_probe", "refund_abuse", "P1", "normal_user", method, path, 409, template)
+            add("PATTERN_REFUND_OVER_AMOUNT" if classic else f"PATTERN_REFUND_OVER_AMOUNT_{slug}", "退款金额不能超过已支付金额", "refund_probe", "money_consistency", "P0", "normal_user", method, path, 409, template)
+            add("PATTERN_REFUND_STATE_STOCK" if classic else f"PATTERN_REFUND_STATE_{slug}", "退款后状态与库存/额度必须一致", "refund_probe", "state_consistency", "P1", "normal_user", method, path, 200, template)
+
     return probes
 
 
@@ -2544,10 +2643,13 @@ def build_business_knowledge_steps(risk_type: str, op: dict) -> list[dict]:
     path = op.get("path", "")
     concrete = concrete_path(path)
     text = f"{path} {op.get('summary', '')} {op.get('resource', '')}".lower()
-    if risk_type in {"quantity_consistency", "stock_consistency"} and any(k in text for k in ["product", "stock", "inventory", "cart", "order"]):
-        read_path = concrete if method == "GET" else "/products/p100"
+    resource = str(op.get("resource") or "resource")
+    read_path = concrete if method == "GET" else read_path_for_resource(resource)
+    if risk_type in {"quantity_consistency", "stock_consistency"} and any(
+        k in text for k in ["product", "stock", "inventory", "cart", "order", "booking", "seat", "capacity", "material", "预约", "库存", "名额"]
+    ):
         action_method = method if method in {"POST", "PUT", "PATCH"} else "POST"
-        action_path = concrete if method in {"POST", "PUT", "PATCH"} else "/orders"
+        action_path = concrete if method in {"POST", "PUT", "PATCH"} else path
         if risk_type == "stock_consistency":
             return [
                 step("read_stock_before", "GET", read_path, body_hint="read"),
@@ -2561,67 +2663,51 @@ def build_business_knowledge_steps(risk_type: str, op: dict) -> list[dict]:
             step("attempt_boundary_quantity_change", action_method, action_path, body_hint="quantity"),
             step("read_quantity_after", "GET", read_path, body_hint="read"),
         ]
-    if risk_type in {"coupon_abuse", "benefit_abuse"} and "cart/apply-coupon" in path:
+    if risk_type in {"coupon_abuse", "benefit_abuse"} and any(
+        k in text for k in ["coupon", "voucher", "promo", "benefit", "discount", "优惠", "券"]
+    ):
         return [
             step("apply_benefit_first_time", method, concrete, body_hint="coupon_valid"),
             step("apply_benefit_duplicate", method, concrete, body_hint="coupon_valid"),
             step("apply_abusive_benefit", method, concrete, body_hint="coupon_over_discount"),
         ]
-    if risk_type == "money_consistency" and "cart/apply-coupon" in path:
+    if risk_type == "money_consistency" and any(k in text for k in ["coupon", "voucher", "promo", "benefit", "discount", "优惠", "券"]):
         return [step("apply_abusive_benefit", method, concrete, body_hint="coupon_over_discount")]
-    if risk_type == "money_consistency" and any(k in text for k in ["payment", "pay"]):
+    if risk_type == "money_consistency" and any(k in text for k in ["payment", "pay", "settlement", "支付", "结算"]):
         return [
-            step("create_order_for_payment", "POST", "/orders", body_hint="create"),
             step("submit_mismatched_payment", method, concrete, body_hint="payment_mismatch"),
-            step("read_order_after_payment", "GET", "/orders/o900", body_hint="read"),
+            step("read_after_payment", "GET", read_path, body_hint="read"),
         ]
     if risk_type == "money_consistency" and "refund" in text:
         return [
-            step("create_order_for_refund", "POST", "/orders", body_hint="create"),
-            step("pay_order_for_refund", "POST", "/payments", body_hint="payment"),
             step("submit_over_refund", method, concrete, body_hint="refund_over"),
+            step("read_after_refund", "GET", read_path, body_hint="read"),
         ]
-    if risk_type == "state_flow" and any(k in text for k in ["payment", "pay", "callback"]):
+    if risk_type == "state_flow" and any(k in text for k in ["payment", "pay", "callback", "settlement", "支付", "回调"]):
         return [
-            step("create_order_before_terminal_state", "POST", "/orders", body_hint="create"),
-            step("cancel_order_before_payment", "POST", "/orders/o900/cancel", body_hint="state"),
-            step("attempt_payment_after_cancel", method, concrete, body_hint="payment"),
-            step("read_order_after_terminal_action", "GET", "/orders/o900", body_hint="read"),
+            step("attempt_payment_after_terminal_state", method, concrete, body_hint="payment"),
+            step("read_after_terminal_action", "GET", read_path, body_hint="read"),
         ]
-    if risk_type == "state_consistency" and any(k in text for k in ["payment", "pay", "callback"]):
+    if risk_type == "state_consistency" and any(k in text for k in ["payment", "pay", "callback", "settlement", "支付", "回调"]):
         return [
-            step("create_order_before_state_sync", "POST", "/orders", body_hint="create"),
             step("execute_state_sync_action", method, concrete, body_hint="payment"),
-            step("read_order_after_state_sync", "GET", "/orders/o900", body_hint="read"),
+            step("read_after_state_sync", "GET", read_path, body_hint="read"),
         ]
     if risk_type == "state_consistency" and "refund" in text:
         return [
-            step("create_order_before_refund_state", "POST", "/orders", body_hint="create"),
-            step("pay_order_before_refund_state", "POST", "/payments", body_hint="payment"),
             step("execute_refund_state_action", method, concrete, body_hint="refund"),
-            step("read_order_after_refund_state", "GET", "/orders/o900", body_hint="read"),
+            step("read_after_refund_state", "GET", read_path, body_hint="read"),
         ]
-    if risk_type in {"state_flow", "state_consistency"} and ("orders" in path or "order" in text):
-        if "cancel" in path:
-            return [
-                step("create_order_before_state_action", "POST", "/orders", body_hint="create"),
-                step("execute_state_action", method, concrete, body_hint="state"),
-                step("read_order_after_state_action", "GET", "/orders/o900", body_hint="read"),
-            ]
-        if method == "POST":
-            return [
-                step("execute_business_action", method, concrete, body_hint="create"),
-                step("read_business_state_after_action", "GET", "/orders/o900", body_hint="read"),
-            ]
-        if method == "GET":
-            return [
-                step("create_business_state_before_read", "POST", "/orders", body_hint="create"),
-                step("read_business_state", method, concrete, body_hint="read"),
-            ]
     if risk_type in {"state_flow", "state_consistency", "approval_bypass"} and method in {"POST", "PUT", "PATCH"}:
         return [
-            step("execute_business_state_action", method, concrete, body_hint="money"),
-            step("repeat_business_state_action", method, concrete, body_hint="money"),
+            step("execute_business_state_action", method, concrete, body_hint="state"),
+            step("read_business_state_after_action", "GET", read_path, body_hint="read"),
+            step("repeat_business_state_action", method, concrete, body_hint="state"),
+        ]
+    if risk_type in {"state_flow", "state_consistency"} and method == "GET":
+        return [
+            step("execute_business_action_before_read", "POST", path if not has_path_param_like(path) else read_path_for_resource(resource), body_hint="create"),
+            step("read_business_state", method, concrete, body_hint="read"),
         ]
     if risk_type == "money_consistency" and method in {"POST", "PUT", "PATCH"}:
         return [
@@ -2634,6 +2720,10 @@ def build_business_knowledge_steps(risk_type: str, op: dict) -> list[dict]:
             step("duplicate_submit", method, concrete, body_hint="create"),
         ]
     return []
+
+
+def has_path_param_like(path: str) -> bool:
+    return "{" in str(path or "") and "}" in str(path or "")
 
 
 def risk_operation_compatible(risk_type: str, op: dict) -> bool:
@@ -3130,9 +3220,19 @@ def journey_probe(probe_id: str, title: str, probe_type: str, risk_type: str, se
 
 
 def is_enterprise_bug_factory_demo(business_model: dict) -> bool:
-    paths = {op.get("path") for op in business_model.get("operations", [])}
+    """Hardcoded mall compat probes only for the explicit benchmark factory target.
+
+    A customer ecommerce OpenAPI that happens to expose /orders+/payments must
+    NOT inherit synthetic o900/p100 benchmark_compat probes.
+    """
+    paths = {str(op.get("path") or "") for op in business_model.get("operations", []) if isinstance(op, dict)}
     required = {"/orders", "/payments", "/refunds", "/cart/apply-coupon", "/admin/orders"}
-    return business_model.get("industry") == "ecommerce" and required.issubset(paths)
+    if not required.issubset(paths):
+        return False
+    project = str(business_model.get("project_id") or business_model.get("project") or "").lower()
+    if bool(business_model.get("benchmark_factory_demo")):
+        return True
+    return "benchmark_mall" in project
 
 
 def generate_generic_defect_probes(business_model: dict) -> list[dict]:
@@ -3204,13 +3304,8 @@ def generate_generic_defect_probes(business_model: dict) -> list[dict]:
 
 
 def concrete_path(path: str) -> str:
-    return (
-        path.replace("{order_id}", "o900")
-        .replace("{product_id}", "p100")
-        .replace("{id}", "o900")
-        .replace("{user_id}", "alice")
-        .replace("{tenant_id}", "tenant_b")
-    )
+    """Keep OpenAPI parameter placeholders — never invent mall IDs like o900/p100."""
+    return str(path or "")
 
 
 def generate_benchmark_compatibility_probes() -> list[dict]:
@@ -4099,29 +4194,59 @@ def execute_pattern_library_probe(client: HttpClient, tokens: dict[str, str], it
     def req(method: str, path: str, tok: str | None = token, body: dict | None = None) -> dict:
         return client.request(method, path, token=tok, body=body)
 
-    if pid == "PATTERN_LOCKED_ACCOUNT_LOGIN":
+    if pid == "PATTERN_LOCKED_ACCOUNT_LOGIN" or pid.startswith("PATTERN_LOCKED_ACCOUNT_LOGIN_"):
         request_body = {"username": os.environ.get("QUALIBUG_TEST_LOCKED_USER", "locked_user"),
                         "password": os.environ.get("QUALIBUG_TEST_LOCKED_PASS", "")}
-        evidence_response = req("POST", "/login", None, request_body)
+        evidence_response = req("POST", item.get("path") or "/login", None, request_body)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
-    elif pid in {"PATTERN_ADMIN_READ_FORBIDDEN_TO_USER", "PATTERN_ADMIN_READ_FORBIDDEN_TO_ANON", "PATTERN_ADMIN_WRITE_FORBIDDEN_TO_USER", "PATTERN_ADMIN_WRITE_FORBIDDEN_TO_ANON", "PATTERN_ORDER_IDOR_READ", "PATTERN_ORDER_IDOR_CANCEL", "PATTERN_TENANT_ISOLATION"}:
+    elif (
+        pid.startswith("PATTERN_ADMIN_")
+        or pid.startswith("PATTERN_ORDER_IDOR_")
+        or pid.startswith("PATTERN_IDOR_")
+        or pid.startswith("PATTERN_TENANT_ISOLATION")
+    ):
         request_body = {"stock": 999} if "WRITE" in pid else {}
         evidence_response = req(item["method"], item["path"], token if item["actor"] != "anonymous" else None, request_body if item["method"] != "GET" else None)
         failed = evidence_response["status_code"] < 400
         actual = evidence_response["status_code"]
-    elif pid == "PATTERN_ORDER_TENANT_TAMPER":
+    elif pid == "PATTERN_ORDER_TENANT_TAMPER" or pid.startswith("PATTERN_CREATE_OWNER_TAMPER_"):
         request_body = {"product_id": "p200", "quantity": 1, "tenant_id": "tenant_b", "owner": "bob"}
-        evidence_response = req("POST", "/orders", token, request_body)
+        evidence_response = req(item["method"], item["path"], token, request_body)
         body = evidence_response.get("body", {})
         failed = evidence_response["status_code"] < 400 and (body.get("tenant_id") == "tenant_b" or body.get("owner") == "bob")
         actual = {"status_code": evidence_response["status_code"], "body": body}
-    elif pid == "PATTERN_STOCK_OVERSELL":
+    elif pid == "PATTERN_STOCK_OVERSELL" or pid.startswith("PATTERN_CAPACITY_OVERSELL_"):
         request_body = {"product_id": "p100", "quantity": 999999, "idempotency_key": "pattern-oversell"}
-        evidence_response = req("POST", "/orders", token, request_body)
+        evidence_response = req(item["method"], item["path"], token, request_body)
         body = evidence_response.get("body", {})
         failed = evidence_response["status_code"] < 400 or body.get("status") == "created"
         actual = {"status_code": evidence_response["status_code"], "body": body}
+    elif pid.startswith("PATTERN_COUPON_") or pid.startswith("PATTERN_BENEFIT_"):
+        benefit_path = item.get("path") or "/cart/apply-coupon"
+        if pid.endswith("REUSE") or "REUSE" in pid:
+            request_body = {"coupon_id": "WELCOME20", "cart_amount": 120, "benefit_id": "WELCOME20", "amount": 120}
+            req(item["method"], benefit_path, token, request_body)
+            evidence_response = req(item["method"], benefit_path, token, request_body)
+            failed = evidence_response["status_code"] < 400
+        elif "EXPIRED" in pid:
+            request_body = {"coupon_id": "EXPIRED50", "cart_amount": 120, "benefit_id": "EXPIRED50", "amount": 120}
+            evidence_response = req(item["method"], benefit_path, token, request_body)
+            failed = evidence_response["status_code"] < 400
+        elif "THRESHOLD" in pid:
+            request_body = {"coupon_id": "WELCOME20", "cart_amount": 1, "benefit_id": "WELCOME20", "amount": 1}
+            evidence_response = req(item["method"], benefit_path, token, request_body)
+            failed = evidence_response["status_code"] < 400
+        elif "OTHER_USER" in pid:
+            request_body = {"coupon_id": "BOBONLY", "cart_amount": 120, "benefit_id": "BOBONLY", "amount": 120}
+            evidence_response = req(item["method"], benefit_path, token, request_body)
+            failed = evidence_response["status_code"] < 400
+        else:
+            request_body = {"coupon_id": "OVER999", "cart_amount": 10, "benefit_id": "OVER999", "amount": 10}
+            evidence_response = req(item["method"], benefit_path, token, request_body)
+            body = evidence_response.get("body", {})
+            failed = evidence_response["status_code"] < 400 and (body.get("payable_amount", 0) < 0)
+        actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_STOCK_DEDUCT_ON_ORDER":
         before = req("GET", "/products/p100", token)
         request_body = {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-stock-deduct"}
@@ -4153,43 +4278,16 @@ def execute_pattern_library_probe(client: HttpClient, tokens: dict[str, str], it
         evidence_response = cancel
         failed = cancel["body"].get("status") != "cancelled" or after["body"].get("stock") != before["body"].get("stock")
         actual = {"cancel_status": cancel["body"].get("status"), "stock_before": before["body"].get("stock"), "stock_after": after["body"].get("stock")}
-    elif pid == "PATTERN_COUPON_REUSE":
-        request_body = {"coupon_id": "WELCOME20", "cart_amount": 120}
-        req("POST", "/cart/apply-coupon", token, request_body)
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
-        failed = evidence_response["status_code"] < 400
-        actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
-    elif pid == "PATTERN_COUPON_EXPIRED":
-        request_body = {"coupon_id": "EXPIRED50", "cart_amount": 120}
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
-        failed = evidence_response["status_code"] < 400
-        actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
-    elif pid == "PATTERN_COUPON_THRESHOLD":
-        request_body = {"coupon_id": "WELCOME20", "cart_amount": 1}
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
-        failed = evidence_response["status_code"] < 400
-        actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
-    elif pid == "PATTERN_COUPON_OTHER_USER":
-        request_body = {"coupon_id": "BOBONLY", "cart_amount": 120}
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
-        failed = evidence_response["status_code"] < 400
-        actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
-    elif pid == "PATTERN_COUPON_OVER_DISCOUNT":
-        request_body = {"coupon_id": "OVER999", "cart_amount": 10}
-        evidence_response = req("POST", "/cart/apply-coupon", token, request_body)
-        body = evidence_response.get("body", {})
-        failed = evidence_response["status_code"] < 400 and (body.get("payable_amount", 0) < 0)
-        actual = {"status_code": evidence_response["status_code"], "body": body}
     elif pid == "PATTERN_PAYMENT_AMOUNT_MATCH":
         order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-pay-amount"})
         request_body = {"order_id": order["body"].get("order_id"), "amount": 0.01}
-        evidence_response = req("POST", "/payments", token, request_body)
+        evidence_response = req("POST", item.get("path") or "/payments", token, request_body)
         failed = evidence_response["status_code"] < 400
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_PAYMENT_STATUS_UPDATE":
         order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-pay-status"})
         oid = order["body"].get("order_id")
-        pay = req("POST", "/payments", token, {"order_id": oid, "amount": order["body"].get("total_amount", 0), "skip_status_update": True})
+        pay = req("POST", item.get("path") or "/payments", token, {"order_id": oid, "amount": order["body"].get("total_amount", 0), "skip_status_update": True})
         evidence_response = req("GET", f"/orders/{oid}", token)
         failed = pay["status_code"] < 400 and evidence_response["body"].get("status") != "paid"
         actual = {"pay_status": pay["status_code"], "order_status": evidence_response["body"].get("status")}
@@ -4197,28 +4295,28 @@ def execute_pattern_library_probe(client: HttpClient, tokens: dict[str, str], it
         order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-cancel-pay"})
         oid = order["body"].get("order_id")
         req("POST", f"/orders/{oid}/cancel", token, {})
-        evidence_response = req("POST", "/payments", token, {"order_id": oid, "amount": order["body"].get("total_amount", 0)})
+        evidence_response = req("POST", item.get("path") or "/payments", token, {"order_id": oid, "amount": order["body"].get("total_amount", 0)})
         failed = evidence_response["status_code"] < 400
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_PAYMENT_CALLBACK_IDEMPOTENT":
         order = req("POST", "/orders", tokens.get("normal_user"), {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-callback-idem"})
         oid = order["body"].get("order_id")
         body = {"order_id": oid, "amount": order["body"].get("total_amount", 0), "callback_id": "pattern-callback"}
-        first = req("POST", "/payments/callback", None, body)
-        second = req("POST", "/payments/callback", None, body)
+        first = req("POST", item.get("path") or "/payments/callback", None, body)
+        second = req("POST", item.get("path") or "/payments/callback", None, body)
         evidence_response = second
         failed = second["body"].get("paid_amount", 0) > first["body"].get("paid_amount", 0)
         actual = {"first_paid": first["body"].get("paid_amount"), "second_paid": second["body"].get("paid_amount")}
     elif pid == "PATTERN_PAYMENT_CALLBACK_AMOUNT":
         order = req("POST", "/orders", tokens.get("normal_user"), {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-callback-amount"})
-        evidence_response = req("POST", "/payments/callback", None, {"order_id": order["body"].get("order_id"), "amount": 0.01, "callback_id": "pattern-amount"})
+        evidence_response = req("POST", item.get("path") or "/payments/callback", None, {"order_id": order["body"].get("order_id"), "amount": 0.01, "callback_id": "pattern-amount"})
         failed = evidence_response["status_code"] < 400
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_PAYMENT_CALLBACK_CANCELLED_ORDER":
         order = req("POST", "/orders", tokens.get("normal_user"), {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-callback-cancel"})
         oid = order["body"].get("order_id")
         req("POST", f"/orders/{oid}/cancel", tokens.get("normal_user"), {})
-        evidence_response = req("POST", "/payments/callback", None, {"order_id": oid, "amount": order["body"].get("total_amount", 0), "callback_id": "pattern-cancelled-callback"})
+        evidence_response = req("POST", item.get("path") or "/payments/callback", None, {"order_id": oid, "amount": order["body"].get("total_amount", 0), "callback_id": "pattern-cancelled-callback"})
         failed = evidence_response["status_code"] < 400 or evidence_response["body"].get("status") == "paid"
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_REFUND_DUPLICATE":
@@ -4226,14 +4324,14 @@ def execute_pattern_library_probe(client: HttpClient, tokens: dict[str, str], it
         oid = order["body"].get("order_id")
         req("POST", "/payments", token, {"order_id": oid, "amount": order["body"].get("total_amount", 0)})
         refund_body = {"order_id": oid, "amount": 1.0, "refund_id": "pattern-refund"}
-        req("POST", "/refunds", token, refund_body)
-        evidence_response = req("POST", "/refunds", token, refund_body)
+        req("POST", item.get("path") or "/refunds", token, refund_body)
+        evidence_response = req("POST", item.get("path") or "/refunds", token, refund_body)
         failed = evidence_response["status_code"] < 400
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_REFUND_UNPAID":
         order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-refund-unpaid"})
         request_body = {"order_id": order["body"].get("order_id"), "amount": 1.0}
-        evidence_response = req("POST", "/refunds", token, request_body)
+        evidence_response = req("POST", item.get("path") or "/refunds", token, request_body)
         failed = evidence_response["status_code"] < 400
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_REFUND_OVER_AMOUNT":
@@ -4241,7 +4339,7 @@ def execute_pattern_library_probe(client: HttpClient, tokens: dict[str, str], it
         oid = order["body"].get("order_id")
         req("POST", "/payments", token, {"order_id": oid, "amount": order["body"].get("total_amount", 0)})
         request_body = {"order_id": oid, "amount": 999999.0}
-        evidence_response = req("POST", "/refunds", token, request_body)
+        evidence_response = req("POST", item.get("path") or "/refunds", token, request_body)
         failed = evidence_response["status_code"] < 400
         actual = {"status_code": evidence_response["status_code"], "body": evidence_response.get("body")}
     elif pid == "PATTERN_REFUND_STATE_STOCK":
@@ -4249,7 +4347,7 @@ def execute_pattern_library_probe(client: HttpClient, tokens: dict[str, str], it
         order = req("POST", "/orders", token, {"product_id": "p100", "quantity": 1, "idempotency_key": "pattern-refund-state"})
         oid = order["body"].get("order_id")
         req("POST", "/payments", token, {"order_id": oid, "amount": order["body"].get("total_amount", 0)})
-        refund = req("POST", "/refunds", token, {"order_id": oid, "amount": 1.0})
+        refund = req("POST", item.get("path") or "/refunds", token, {"order_id": oid, "amount": 1.0})
         after = req("GET", "/products/p100", token)
         evidence_response = refund
         failed = refund["body"].get("status") != "refunded" or after["body"].get("stock") != before["body"].get("stock")
