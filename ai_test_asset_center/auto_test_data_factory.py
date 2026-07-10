@@ -88,19 +88,35 @@ def load_openapi_from_input(input_dir: str | Path | None) -> dict[str, Any]:
         and not _contains_blocked_path(path, root)
     ]
     merged: dict[str, Any] = {}
+    parse_failures: list[dict[str, str]] = []
     from .universal_api_parser import parse_to_openapi
 
     for filename in candidates:
         try:
             result = parse_to_openapi(filename)
         except Exception as exc:
-            raise RuntimeError(
-                f"api_source_parse_failed:{filename.name}:{type(exc).__name__}"
-            ) from exc
+            # One malformed source must not erase valid endpoints parsed from
+            # the customer's other API assets. Preserve a structured,
+            # source-specific diagnostic so the degradation remains visible.
+            parse_failures.append({
+                "source": filename.name,
+                "code": "API_SOURCE_PARSE_FAILED",
+                "error_type": type(exc).__name__,
+            })
+            continue
         if not isinstance(result, dict):
-            raise TypeError(f"api_source_parser_returned_non_object:{filename.name}")
+            parse_failures.append({
+                "source": filename.name,
+                "code": "API_SOURCE_PARSER_RETURNED_NON_OBJECT",
+                "error_type": type(result).__name__,
+            })
+            continue
         if isinstance(result.get("paths"), dict) and result.get("paths"):
             merged = _merge_openapi_specs(merged, result)
+    if parse_failures:
+        diagnostics = merged.setdefault("x-qualibug-diagnostics", {})
+        if isinstance(diagnostics, dict):
+            diagnostics["api_source_parse_failures"] = parse_failures
     return merged
 
 
@@ -1217,6 +1233,16 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     cid = str(probe.get("candidate_id") or "probe")
     seed = re.sub(r"[^A-Za-z0-9_]+", "_", f"{cid}_{_now_seed()}")
     spec = load_openapi_from_input(input_dir or cfg.get("input_dir") or cfg.get("project_input_dir"))
+    api_document_parse_diagnostics: list[dict[str, str]] = []
+    source_diagnostics = spec.get("x-qualibug-diagnostics") if isinstance(spec, dict) else {}
+    if isinstance(source_diagnostics, dict):
+        for item in source_diagnostics.get("api_source_parse_failures") or []:
+            if isinstance(item, dict):
+                api_document_parse_diagnostics.append({
+                    "source": str(item.get("source") or "input_asset"),
+                    "code": str(item.get("code") or "API_SOURCE_PARSE_FAILED"),
+                    "error_type": str(item.get("error_type") or "unknown"),
+                })
     # Load raw API doc text for example extraction.  Check the config first,
     # then fall back to `api.md` on disk so md-only projects (benchmark) work.
     _api_doc_text = str(cfg.get("api_doc_text") or cfg.get("api_spec_text") or "").strip()
@@ -1236,11 +1262,24 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
         try:
             document_spec = parse_to_openapi(_api_doc_text)
         except Exception as exc:
-            raise RuntimeError(
-                f"api_document_parse_failed:{type(exc).__name__}"
-            ) from exc
+            # Inline API documentation enriches fixture planning, but a parser
+            # failure must not terminate all already-grounded candidates.
+            # The executor can still use structured sources, Markdown examples,
+            # configured bodies, or block only the affected probe if required
+            # data remains unavailable.
+            document_spec = {}
+            api_document_parse_diagnostics.append({
+                "source": "inline_api_document",
+                "code": "API_DOCUMENT_PARSE_FAILED",
+                "error_type": type(exc).__name__,
+            })
         if not isinstance(document_spec, dict):
-            raise TypeError("api_document_parser_returned_non_object")
+            api_document_parse_diagnostics.append({
+                "source": "inline_api_document",
+                "code": "API_DOCUMENT_PARSER_RETURNED_NON_OBJECT",
+                "error_type": type(document_spec).__name__,
+            })
+            document_spec = {}
         spec = _merge_openapi_specs(spec, document_spec)
     spec = _normalize_openapi_spec(spec)
 
@@ -1361,7 +1400,13 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
             "generated_by": "QualiBug auto_test_data_factory",
             "seed": seed,
             "primary_fixture_id": generated_id,
-            "input_openapi_used": bool(spec),
+            "input_openapi_used": bool(spec.get("paths")) if isinstance(spec, dict) else False,
+            "api_document_parse_status": (
+                "degraded"
+                if api_document_parse_diagnostics
+                else ("parsed" if _api_doc_text else "not_provided")
+            ),
+            "api_document_parse_diagnostics": api_document_parse_diagnostics,
             "schema_used": bool(schema),
             "mutation_applied": bool(mutation_application.get("applied")),
             "mutation_kind": mutation_application.get("mutation_kind"),
