@@ -3961,12 +3961,26 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     if not str(api_doc_text or "").strip():
         return {"success": False, "error": "api_doc_text, api_doc_path, or a registered source_manifest is required"}
 
+    # Merge Markdown/OpenAPI materials into one effective API catalog. When the
+    # caller declared a source_hash for the primary doc, refresh it to the
+    # post-merge digest so enrichment does not falsely trip SOURCE_HASH_MISMATCH.
+    _pre_enrich_hash = _sha256(api_doc_text)
     try:
         from .api_doc_assets import enrich_api_spec_text
 
         api_doc_text = enrich_api_spec_text(root, project, api_doc_text)
     except Exception:
         pass
+    _post_enrich_hash = _sha256(api_doc_text)
+    if _post_enrich_hash != _pre_enrich_hash:
+        declared = _as_dict(context.get("source_manifest"))
+        declared_hash = str(declared.get("source_hash") or "").strip().lower().removeprefix("sha256:").strip()
+        if declared_hash and declared_hash == _pre_enrich_hash:
+            context["source_manifest"] = {
+                **declared,
+                "source_hash": _post_enrich_hash,
+                "source_origin": str(declared.get("source_origin") or "declared_manifest") + "+api_doc_merge",
+            }
 
     started = time.time()
     manifest = _source_manifest(root, project, context, api_doc_path, api_doc_text)
