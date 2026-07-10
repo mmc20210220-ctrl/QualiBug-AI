@@ -1944,6 +1944,67 @@ def _knowledge_asset_planning_text(asset: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _publish_behavior_contract_snapshot(
+    result: dict[str, Any],
+    behavior_contract: dict[str, Any],
+    slices: list[dict[str, Any]],
+) -> int:
+    """Expose grounded candidates before preview, scheduling, or execution.
+
+    Later stages may fail on one customer document, fixture, or provider.  The
+    already-built candidate pool must remain observable so a failed run reports
+    where conversion stopped instead of collapsing the entire funnel to zero.
+    """
+
+    preserved = [dict(item) for item in slices if isinstance(item, dict)]
+    summary = _dict(behavior_contract.get("summary"))
+    coverage_gaps = [
+        dict(item)
+        for item in behavior_contract.get("coverage_gaps", [])
+        if isinstance(item, dict)
+    ]
+    result["behavior_slices"] = preserved
+    result["behavior_contract"] = {
+        "summary": {**summary, "total_slices": len(preserved)},
+        "coverage_gaps": coverage_gaps,
+    }
+    return len(preserved)
+
+
+def _record_pipeline_failure(result: dict[str, Any], exc: Exception) -> None:
+    """Fail safe while preserving every candidate produced before the error."""
+
+    detail = str(exc)[:500]
+    slices = [
+        item for item in result.get("behavior_slices", [])
+        if isinstance(item, dict)
+    ]
+    result["error"] = detail
+    phases = result.setdefault("phases", {})
+    phases["pipeline"] = {
+        "status": "FAILED_SAFE",
+        "reason": "pipeline_exception",
+        "error_type": type(exc).__name__,
+        "detail": detail,
+        "preserved_slice_count": len(slices),
+    }
+    ledger = _dict(result.get("behavior_slice_ledger"))
+    if slices and not ledger:
+        pending_ids = [
+            str(item.get("slice_id") or "")
+            for item in slices
+            if str(item.get("slice_id") or "").strip()
+        ]
+        result["behavior_slice_ledger"] = {
+            "total_slices": len(slices),
+            "selected_slice_ids": [],
+            "attempted_slice_ids": [],
+            "confirmed_slice_ids": [],
+            "pending_slice_ids": pending_ids,
+            "stop_reason": "pipeline_failed_before_selection",
+        }
+
+
 def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None) -> dict[str, Any]:
     global _v12_har_entries
     _v12_har_entries = []
@@ -2166,6 +2227,13 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         if _pool_opt.get("collapsed_permission_isolation") or _pool_opt.get("collapsed_llm_invariant"):
             behavior_contract["summary"]["pool_optimization"] = _pool_opt
             result["behavior_slice_pool_optimization"] = _pool_opt
+        # Persist the grounded pool before any preview/fixture/execution work.
+        # This is the diagnostic hand-off point from reasoning to execution.
+        _publish_behavior_contract_snapshot(
+            result,
+            behavior_contract,
+            ranked_behavior_slices,
+        )
         if runtime_contract.get("status") == "approved":
             from .semantic_scenario_generator import SemanticScenarioGenerator
 
@@ -2181,6 +2249,12 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 project=project,
             )
             ranked_behavior_slices = _rank_behavior_slices_for_selection(behavior_contract["slices"], preview_scenarios)
+            behavior_contract["slices"] = ranked_behavior_slices
+            _publish_behavior_contract_snapshot(
+                result,
+                behavior_contract,
+                ranked_behavior_slices,
+            )
         if campaign.status in {"coverage_deferred", "completed", "blocked"}:
             selection = _selection_result(status="stopped", stop_reason=f"campaign_{campaign.status}", selected=[], pending=ranked_behavior_slices, attempted=set(campaign.attempted_slice_ids), confirmed=set(campaign.confirmation_receipts), next_round=None, selection_mode="campaign_terminal")
         else:
@@ -2920,7 +2994,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             ledger_for_persistence = dict(result["behavior_slice_ledger"])
     except Exception as exc:
         logger.exception("run_v12_pipeline unexpected error")
-        result["error"] = str(exc)[:500]
+        _record_pipeline_failure(result, exc)
     if ledger_for_persistence is not None and not result.get("error"):
         try:
             _persist_slice_ledger(root, project, ledger_for_persistence)
