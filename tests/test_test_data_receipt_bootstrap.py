@@ -257,6 +257,68 @@ def test_auto_fixture_merges_structured_and_markdown_api_sources(tmp_path) -> No
     assert bundle["cleanup_requests"][0]["path"] == "/api/orders/{id}/cancel"
 
 
+def test_auto_fixture_keeps_probe_when_inline_api_document_parser_fails(monkeypatch) -> None:
+    from ai_test_asset_center import universal_api_parser
+
+    def fail_inline_document(value):
+        raise RuntimeError("malformed-customer-api-document")
+
+    monkeypatch.setattr(universal_api_parser, "parse_to_openapi", fail_inline_document)
+    bundle = build_auto_fixture_for_probe(
+        {
+            "candidate_id": "QBBOOT-PARSE-DEGRADED",
+            "risk_type": "anonymous_auth_boundary_probe",
+            "execution_policy": "read_only_safe",
+            "endpoint": {"method": "GET", "path": "/api/resources/{id}"},
+            "probe_plan": {"auth_boundary": {"actor": "anonymous"}},
+        },
+        config={
+            "qualibug_auto_create_test_data": True,
+            "api_doc_text": "# API\n\n### GET /api/resources/{id}\n",
+        },
+    )
+
+    receipt = bundle["receipt"]
+    assert receipt["api_document_parse_status"] == "degraded"
+    assert receipt["api_document_parse_diagnostics"] == [
+        {
+            "source": "inline_api_document",
+            "code": "API_DOCUMENT_PARSE_FAILED",
+            "error_type": "RuntimeError",
+        }
+    ]
+    assert bundle["candidate_id"] == "QBBOOT-PARSE-DEGRADED"
+    assert str(bundle["path_params"]["id"]).startswith("qb_auto_")
+
+
+def test_openapi_input_loader_isolates_one_malformed_source(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center import universal_api_parser
+    from ai_test_asset_center.auto_test_data_factory import load_openapi_from_input
+
+    bad = tmp_path / "api_broken.yaml"
+    good = tmp_path / "openapi.json"
+    bad.write_text("openapi: [broken", encoding="utf-8")
+    good.write_text(API_SPEC, encoding="utf-8")
+    real_parser = universal_api_parser.parse_to_openapi
+
+    def parse_with_one_failure(value):
+        if getattr(value, "name", "") == bad.name:
+            raise RuntimeError("source-parser-failed")
+        return real_parser(value)
+
+    monkeypatch.setattr(universal_api_parser, "parse_to_openapi", parse_with_one_failure)
+    spec = load_openapi_from_input(tmp_path)
+
+    assert "/api/orders" in spec["paths"]
+    assert spec["x-qualibug-diagnostics"]["api_source_parse_failures"] == [
+        {
+            "source": bad.name,
+            "code": "API_SOURCE_PARSE_FAILED",
+            "error_type": "RuntimeError",
+        }
+    ]
+
+
 def test_auto_fixture_never_uses_another_resource_cleanup_route(tmp_path) -> None:
     (tmp_path / "openapi.json").write_text(
         json.dumps(
