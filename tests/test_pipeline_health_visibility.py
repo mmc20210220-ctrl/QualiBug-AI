@@ -5,6 +5,10 @@ from ai_test_asset_center.discovery_funnel import (
     build_pipeline_health,
     reconcile_product_pipeline_health,
 )
+from ai_test_asset_center.v12_pipeline import (
+    _publish_behavior_contract_snapshot,
+    _record_pipeline_failure,
+)
 
 
 def test_pipeline_health_marks_failed_safe_when_execution_observability_gap():
@@ -182,3 +186,55 @@ def test_funnel_surfaces_unexecuted_and_binding_blockers():
     assert "missing_runtime_path_binding" in reasons
     assert funnel["pipeline_health"]["status"] in {"DEGRADED", "FAILED_SAFE"}
     assert funnel["pipeline_health"]["empty_findings_means_no_bugs"] is False
+
+def test_v12_failure_preserves_grounded_candidate_pool_in_funnel() -> None:
+    result = {
+        "phases": {},
+        "findings": [],
+        "behavior_slice_ledger": {},
+    }
+    slices = [
+        {
+            "slice_id": "slice-permission",
+            "kind": "permission",
+            "entity": "resource",
+            "endpoints": ["/api/resources/{id}"],
+        },
+        {
+            "slice_id": "slice-state",
+            "kind": "invariant",
+            "entity": "resource",
+            "endpoints": ["/api/resources/{id}"],
+        },
+    ]
+
+    assert _publish_behavior_contract_snapshot(
+        result,
+        {"summary": {}, "coverage_gaps": []},
+        slices,
+    ) == 2
+    _record_pipeline_failure(
+        result,
+        RuntimeError("api_document_parse_failed:ScannerError"),
+    )
+    funnel = build_funnel(result)
+
+    assert result["phases"]["pipeline"]["status"] == "FAILED_SAFE"
+    assert result["phases"]["pipeline"]["preserved_slice_count"] == 2
+    assert result["behavior_slice_ledger"]["pending_slice_ids"] == [
+        "slice-permission",
+        "slice-state",
+    ]
+    generation = next(
+        stage for stage in funnel["stages"]
+        if stage["name"] == "candidate_generation"
+    )
+    selection = next(
+        stage for stage in funnel["stages"]
+        if stage["name"] == "probe_selection"
+    )
+    assert generation["output"] == 2
+    assert selection["output"] == 0
+    assert funnel["pipeline_health"]["status"] == "FAILED_SAFE"
+    assert funnel["pipeline_health"]["empty_findings_means_no_bugs"] is False
+
