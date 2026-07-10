@@ -22,6 +22,7 @@ Architecture:
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -961,6 +962,49 @@ class ReasoningClient:
 
     def __init__(self, config: ReasoningConfig | None = None):
         self.config = config or ReasoningConfig.from_env()
+        self._usage_lock = threading.Lock()
+        self._usage_totals: dict[str, float] = {
+            "request_count": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "responses_with_cost": 0,
+        }
+
+    def usage_snapshot(self) -> dict[str, float]:
+        with self._usage_lock:
+            return dict(self._usage_totals)
+
+    def _record_usage(self, response_text: str) -> None:
+        try:
+            response = json.loads(response_text)
+        except (TypeError, json.JSONDecodeError):
+            return
+        usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+        completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+        total = usage.get("total_tokens", 0)
+        cost_value = usage.get("cost_usd", response.get("cost_usd") if isinstance(response, dict) else None)
+        with self._usage_lock:
+            self._usage_totals["request_count"] += 1
+            for key, value in (
+                ("prompt_tokens", prompt),
+                ("completion_tokens", completion),
+                ("total_tokens", total),
+            ):
+                try:
+                    self._usage_totals[key] += max(0, int(value or 0))
+                except (TypeError, ValueError):
+                    pass
+            if cost_value is not None:
+                try:
+                    cost = float(cost_value)
+                except (TypeError, ValueError):
+                    cost = -1.0
+                if cost >= 0:
+                    self._usage_totals["cost_usd"] += cost
+                    self._usage_totals["responses_with_cost"] += 1
 
     def reason(self, engine_type: EngineType, context: dict[str, str], *, use_layered: bool = False) -> dict[str, Any] | None:
         """Run LLM-powered reasoning. Returns parsed JSON result, or None if
@@ -1026,7 +1070,9 @@ class ReasoningClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
-                return resp.read().decode("utf-8")
+                response_text = resp.read().decode("utf-8")
+                self._record_usage(response_text)
+                return response_text
         except urllib.error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
             raise ReasoningClientError(f"LLM HTTP {exc.code}: {error_body[:500]}") from exc

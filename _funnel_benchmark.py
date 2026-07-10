@@ -107,6 +107,10 @@ else:
 # 靶场运行时（与 _e2e_benchmark.py 一致）
 os.environ.setdefault("QUALIBUG_JWT_SECRET", "dev-mode-only")
 os.environ["QUALIBUG_TARGET_BASE_URL"] = "http://localhost:8080"
+# The benchmark target is an explicitly declared local non-production system.
+# Permit diagnostic/preflight requests to that exact internal target; the
+# production/unknown write boundary remains enforced by the runtime contract.
+os.environ["QUALIBUG_SSRF_ALLOW_INTERNAL"] = "1"
 os.environ["QUALIBUG_DB_DSN"] = (
     "postgresql://benchmark_user:benchmark_pass@localhost:5432/benchmark_mall"
 )
@@ -149,6 +153,7 @@ source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
 context = {
     "scope_id": "benchmark_mall_local_scope",
     "environment_ref": "benchmark_mall_test",
+    "environment_kind": "test",
     "source_manifest": {
         "source_id": "benchmark_mall/API_SPEC.md",
         "source_hash": source_hash,
@@ -164,39 +169,74 @@ context = {
 from ai_test_asset_center.__main__ import scan  # noqa: E402
 
 started = time.time()
-result = scan(
-    project=PROJECT,
-    root=ROOT,
-    api_doc_text=api_doc_text,
-    base_url=BASE_URL,
-    ci_gate=False,
-    multi_layer=True,
-    save_report=True,
-    campaign_context=context,
-)
+_post_run_cleanup: dict = {}
+_post_run_cleanliness: dict = {}
+try:
+    result = scan(
+        project=PROJECT,
+        root=ROOT,
+        api_doc_text=api_doc_text,
+        base_url=BASE_URL,
+        ci_gate=False,
+        multi_layer=True,
+        save_report=True,
+        campaign_context=context,
+    )
+finally:
+    # A benchmark run is allowed to exercise stateful probes, but it must leave
+    # the target clean even when scan() raises.  The real reset script and its
+    # receipt are the only accepted proof; deleting the audit log is forbidden.
+    _post_run_cleanup = prepare_funnel_benchmark_target(
+        root=ROOT,
+        project=PROJECT,
+        target_base_url=BASE_URL,
+    )
+    _post_run_cleanliness = assert_benchmark_target_clean(
+        root=ROOT,
+        project=PROJECT,
+        target_base_url=BASE_URL,
+        reset_receipt_path=str(_post_run_cleanup.get("reset_receipt_path") or ""),
+    )
 elapsed = time.time() - started
 
 v12 = result.get("v12", {}) if isinstance(result, dict) else {}
 
-# 扫描后评分（仅测量召回，不参与发现过程）
-benchmark_metrics: dict = {}
-_gt_default = Path(
-    r"C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable"
-    r"\qualibug_enterprise_benchmark_v0_5_windows_native_stable\hidden_ground_truth\bugs.json"
+from ai_test_asset_center.customer_delivery_gate import is_customer_deliverable_defect
+
+# Runtime discovery must never load evaluator-private ground truth.  Persist a
+# completed-run envelope for the separate evaluator and remain NOT_MEASURED
+# until that evaluator emits an integrity-checked receipt.
+_formal_findings = [
+    finding
+    for finding in (result.get("findings") or [])
+    if isinstance(finding, dict) and is_customer_deliverable_defect(finding)
+]
+_campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
+_pipeline_health = (
+    result.get("pipeline_health") if isinstance(result.get("pipeline_health"), dict) else {}
 )
-_gt_path = Path(os.environ.get("QUALIBUG_BENCHMARK_GROUND_TRUTH", str(_gt_default)))
-if _gt_path.exists():
-    try:
-        from ai_test_asset_center.benchmark_compute import compute_benchmark
-        benchmark_metrics = compute_benchmark(
-            PROJECT,
-            result.get("findings") or [],
-            candidates=result.get("candidate_findings") or [],
-            root=ROOT,
-            ground_truth_path=str(_gt_path),
-        )
-    except Exception as exc:
-        benchmark_metrics = {"benchmark_active": False, "error": str(exc)[:200]}
+evaluation_submission = {
+    "schema_version": "discovery_evaluation_submission.v1",
+    "run_id": str(result.get("scan_id") or _campaign.get("campaign_id") or ""),
+    "policy_id": str(_campaign.get("policy_version") or "unversioned"),
+    "evaluation_mode": "replay",
+    "scan_result": {
+        "findings": list(result.get("findings") or []),
+        "candidate_findings": list(result.get("candidate_findings") or []),
+    },
+    "pipeline_health": dict(_pipeline_health),
+    "operational_metrics": {
+        "elapsed_seconds": round(elapsed, 3),
+        "total_findings": int(result.get("total_findings") or 0),
+        "total_candidates": int(result.get("total_candidates") or 0),
+        "formal_customer_deliverable_count": len(_formal_findings),
+        "discovery_funnel": result.get("discovery_funnel") or {},
+    },
+    "fixture_governance": {
+        "post_run_cleanup": _post_run_cleanup,
+        "post_run_cleanliness": _post_run_cleanliness,
+    },
+}
 
 summary = {
     "mode": MODE,
@@ -204,6 +244,8 @@ summary = {
     "unify_llm_reasoner": os.environ.get("QUALIBUG_UNIFY_LLM_REASONER", ""),
     "elapsed_sec": round(elapsed, 1),
     "prep": _prep,
+    "post_run_cleanup": _post_run_cleanup,
+    "post_run_cleanliness": _post_run_cleanliness,
     "success": result.get("success"),
     "grade": result.get("grade"),
     "execution_status": result.get("execution_status"),
@@ -211,26 +253,28 @@ summary = {
     "total_candidates": result.get("total_candidates"),
     "error": result.get("error"),
     "mainline_unification": v12.get("mainline_unification"),
-    "discovery_funnel": v12.get("discovery_funnel"),
+    "discovery_funnel": result.get("discovery_funnel"),
     "auto_scale": v12.get("auto_scale"),
     "behavior_slice_summary": (v12.get("behavior_contract") or {}).get("summary")
     if isinstance(v12.get("behavior_contract"), dict)
     else None,
     "multi_round_summary": v12.get("multi_round_summary"),
     "input_gaps": [g.get("code") for g in (result.get("input_gaps") or []) if isinstance(g, dict)],
-    "benchmark_recall": {
-        "ground_truth_bug_count": benchmark_metrics.get("ground_truth_bug_count"),
-        "true_positives": benchmark_metrics.get("true_positives"),
-        "false_negatives": benchmark_metrics.get("false_negatives"),
-        "recall": benchmark_metrics.get("recall"),
-        "precision": benchmark_metrics.get("precision"),
-        "f1_score": benchmark_metrics.get("f1_score"),
-        "missed_bug_ids_sample": (benchmark_metrics.get("missed_bug_ids") or [])[:20],
-    } if benchmark_metrics.get("benchmark_active") else benchmark_metrics,
+    "external_evaluation": {
+        "measurement_status": "NOT_MEASURED",
+        "reason": "external_evaluator_receipt_required",
+        "commercial_promotion_evidence": False,
+        "formal_customer_deliverable_count": len(_formal_findings),
+        "submission_file": f"{MODE}.evaluation_submission.json",
+    },
 }
 
 out_dir = ROOT / "_funnel_runs"
 out_dir.mkdir(exist_ok=True)
+(out_dir / f"{MODE}.evaluation_submission.json").write_text(
+    json.dumps(evaluation_submission, ensure_ascii=False, indent=2, default=str),
+    encoding="utf-8",
+)
 (out_dir / f"{MODE}.json").write_text(
     json.dumps({"summary": summary, "full_result": result}, ensure_ascii=False, indent=2, default=str),
     encoding="utf-8",

@@ -24,7 +24,7 @@ from .db_verifier import DBVerifier
 
 # ── 心跳 (供 Loop Watchdog 读取) ──────────────────────────
 DEFAULT_PROJECT_ID = os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project")
-DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8000")
+DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8088")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HEARTBEAT_FILE_TEMPLATE = "platform_outputs/{project_id}/.loop_heartbeat.json"
 _ACTIVE_PROJECT_ID = DEFAULT_PROJECT_ID
@@ -127,7 +127,7 @@ class DiscoverySweep:
         self.prd = _read_optional_text(prd_path)
         self.api = _read_optional_text(api_path)
         self.base_url = str(base_url or DEFAULT_BASE_URL)
-        self.engine = AutonomousDiscoveryEngine(base_url=self.base_url)
+        self.engine = AutonomousDiscoveryEngine(base_url=self.base_url, project_id=self.project_id)
         self.scenarios = ScenarioRunner(base_url=self.base_url)
         self.db = DBVerifier(project_id=self.project_id)
         self.rounds: list[SweepRound] = []

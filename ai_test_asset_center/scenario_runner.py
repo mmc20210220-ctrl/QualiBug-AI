@@ -25,7 +25,7 @@ class ScenarioResult:
 class ScenarioRunner:
     """业务流程编排 + 不变量验证"""
 
-    def __init__(self, base_url="http://127.0.0.1:8000/api"):
+    def __init__(self, base_url="http://127.0.0.1:8088/api"):
         self.base = base_url
         self.A = base64.b64encode(b"admin:ADMIN").decode()
         self.P = base64.b64encode(b"planner:PLANNER").decode()

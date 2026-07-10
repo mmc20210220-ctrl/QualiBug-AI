@@ -14,6 +14,7 @@ at a fixed "20 bug types" ceiling while still avoiding fake 99% claims.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -240,6 +241,46 @@ def _finding_paths(finding: dict[str, Any]) -> set[str]:
     return paths
 
 
+def _benchmark_evidence_identity(finding: dict[str, Any]) -> str:
+    """Collapse multiple Oracle labels over the same executed behavior trace."""
+
+    slice_id = str(finding.get("behavior_slice_id") or "").strip()
+    raw = finding.get("raw_evidence") if isinstance(finding.get("raw_evidence"), dict) else {}
+    request = raw.get("request_raw") if isinstance(raw.get("request_raw"), dict) else {}
+    reproduction = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
+    method = str(
+        request.get("method") or reproduction.get("method") or finding.get("method") or ""
+    ).strip().upper()
+    path = str(
+        request.get("path") or reproduction.get("path") or finding.get("path") or ""
+    ).strip().split("?", 1)[0].rstrip("/")
+    actor = str(request.get("actor") or finding.get("actor_role") or "").strip()
+    if slice_id:
+        return f"slice:{slice_id}:{method}:{path}:{actor}"
+    evidence_id = str(finding.get("evidence_id") or "").strip()
+    if evidence_id:
+        return f"evidence:{evidence_id}"
+    material = json.dumps(
+        {"method": method, "path": path, "actor": actor, "request": request.get("body")},
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return f"request:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
+
+
+def _deduplicate_benchmark_findings(findings: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for finding in findings:
+        identity = _benchmark_evidence_identity(finding)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(finding)
+    return unique, max(0, len(findings) - len(unique))
+
+
 def _paths_overlap(left: set[str], right: set[str]) -> bool:
     if not left or not right:
         return False
@@ -276,9 +317,15 @@ def _match_finding_to_gt(
         if keywords:
             score += min(0.55, kw_hits * 0.12)
         gt_paths = _extract_api_paths(str(gt.get("trigger") or ""))
+        gt_paths |= _extract_api_paths(str(gt.get("endpoint_hint") or gt.get("api_path") or ""))
+        for endpoint in gt.get("affected_endpoints") or gt.get("related_endpoints") or []:
+            if isinstance(endpoint, dict):
+                gt_paths |= _extract_api_paths(str(endpoint.get("path") or endpoint.get("api_path") or ""))
+            else:
+                gt_paths |= _extract_api_paths(str(endpoint))
         gt_paths |= _extract_api_paths(" ".join(str(k) for k in keywords))
         if _paths_overlap(f_paths, gt_paths):
-            score += 0.35
+            score += 0.45
         gt_title = str(gt.get("title") or "").lower()
         if gt_title and any(tok in blob for tok in gt_title.split() if len(tok) >= 4):
             score += 0.12
@@ -576,7 +623,7 @@ def compute_benchmark(
         }
 
     # ── Match confirmed findings against ground truth (post-scan scoring only) ──
-    confirmed_findings = [
+    raw_confirmed_findings = [
         f for f in findings
         if isinstance(f, dict) and (
             f.get("gate_passed") is True
@@ -584,6 +631,9 @@ def compute_benchmark(
             or str(f.get("confirmation_status") or "") == "confirmed"
         )
     ]
+    confirmed_findings, duplicate_findings_excluded = _deduplicate_benchmark_findings(
+        raw_confirmed_findings
+    )
     all_findings = list(confirmed_findings) + [
         c for c in (candidates or [])
         if isinstance(c, dict) and c.get("gate_passed") is True
@@ -659,6 +709,7 @@ def compute_benchmark(
         "ground_truth_source": str(gt_path),
         "ground_truth_bug_count": total_gt,
         "scan_findings_total": total_found,
+        "duplicate_findings_excluded": duplicate_findings_excluded,
         "true_positives": true_pos,
         "false_positives": false_pos,
         "false_negatives": false_neg,

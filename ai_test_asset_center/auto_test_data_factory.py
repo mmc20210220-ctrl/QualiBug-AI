@@ -16,6 +16,7 @@ import json
 import re
 import time
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -69,34 +70,53 @@ def load_openapi_from_input(input_dir: str | Path | None) -> dict[str, Any]:
     root = Path(input_dir).resolve()
     if not root.exists():
         return {}
-    # Detect and parse all supported formats via universal parser
-    for filename in root.iterdir():
-        if filename.suffix.lower() not in (".json", ".yaml", ".yml", ".har", ".proto", ".graphql", ".gql"):
-            continue
+    # Parse every API-shaped source deterministically and merge complementary
+    # paths.  Returning the first file silently discarded operations documented
+    # in a second OpenAPI/HAR/proto source, which is fatal for multi-source
+    # enterprise onboarding and cleanup planning.
+    supported = {".json", ".yaml", ".yml", ".md", ".har", ".proto", ".graphql", ".gql"}
+    structured = {".json", ".yaml", ".yml"}
+    candidates = [
+        path
+        for path in sorted(root.iterdir(), key=lambda item: item.name.lower())
+        if path.is_file()
+        and path.suffix.lower() in supported
+        and (
+            path.suffix.lower() not in structured | {".md"}
+            or any(token in path.stem.lower() for token in ("openapi", "swagger", "api"))
+        )
+        and not _contains_blocked_path(path, root)
+    ]
+    merged: dict[str, Any] = {}
+    from .universal_api_parser import parse_to_openapi
+
+    for filename in candidates:
         try:
-            from .universal_api_parser import parse_to_openapi
             result = parse_to_openapi(filename)
-            if result.get("paths"):
-                return result
-        except Exception:
-            pass
-    # Legacy fallback: try specific filenames
-    for name in ("openapi.json", "swagger.json"):
-        p = root / name
-        if p.exists():
-            try:
-                return json.loads(p.read_text(encoding="utf-8", errors="replace") or "{}")
-            except Exception:
-                return {}
-    for name in ("openapi.yaml", "openapi.yml", "swagger.yaml", "swagger.yml"):
-        p = root / name
-        if p.exists():
-            try:
-                import yaml
-                return yaml.safe_load(p.read_text(encoding="utf-8", errors="replace") or "{}") or {}
-            except Exception:
-                return {}
-    return {}
+        except Exception as exc:
+            raise RuntimeError(
+                f"api_source_parse_failed:{filename.name}:{type(exc).__name__}"
+            ) from exc
+        if not isinstance(result, dict):
+            raise TypeError(f"api_source_parser_returned_non_object:{filename.name}")
+        if isinstance(result.get("paths"), dict) and result.get("paths"):
+            merged = _merge_openapi_specs(merged, result)
+    return merged
+
+
+def _merge_openapi_specs(primary: dict[str, Any], supplement: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing OpenAPI facts from another source; primary facts win."""
+    if not isinstance(primary, dict) or not primary:
+        return dict(supplement or {}) if isinstance(supplement, dict) else {}
+    if not isinstance(supplement, dict) or not supplement:
+        return dict(primary)
+    merged: dict[str, Any] = dict(primary)
+    for key, value in supplement.items():
+        if key not in merged or merged[key] in (None, "", [], {}):
+            merged[key] = value
+        elif isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_openapi_specs(merged[key], value)
+    return merged
 
 def _normalize_openapi_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(spec, dict):
@@ -125,7 +145,10 @@ def _resolve_ref(ref: str, spec: dict[str, Any]) -> dict[str, Any]:
 
 def _canonical_suffix(path: str) -> str:
     p = normalize_path_placeholders(path)
-    p = re.sub(r"^/api/v\d+(?:/[^/]+)?", "", p)
+    # Strip only protocol/version scaffolding.  Removing one additional path
+    # segment erased the actual resource for normal ``/api/v1/orders`` APIs and
+    # allowed cleanup matching to drift to unrelated resources.
+    p = re.sub(r"^/api/v\d+", "", p)
     return p or str(path or "")
 
 
@@ -183,10 +206,23 @@ def _operation(spec: dict[str, Any], method: str, path: str) -> dict[str, Any]:
     paths = spec.get("paths") if isinstance(spec, dict) else {}
     if not isinstance(paths, dict):
         return {}
-    op = (paths.get(path) or {}).get(method.lower())
+    normalized_path = normalize_path_placeholders(str(path or ""))
+    op = (paths.get(normalized_path) or {}).get(method.lower())
     if isinstance(op, dict):
         return op
-    suffix = _canonical_suffix(path)
+    # Runtime paths include the first concrete OpenAPI server base path while
+    # ``spec.paths`` does not. Dematerialize it before any fuzzy suffix match;
+    # otherwise a server such as ``/api/v1/orders`` makes every request-body
+    # schema look absent at runtime.
+    server_base = normalize_path_placeholders(_spec_server_base_path(spec)).rstrip("/")
+    if server_base and (
+        normalized_path == server_base or normalized_path.startswith(server_base + "/")
+    ):
+        source_path = normalized_path[len(server_base):] or "/"
+        op = (paths.get(source_path) or {}).get(method.lower())
+        if isinstance(op, dict):
+            return op
+    suffix = _canonical_suffix(normalized_path)
     for candidate_path, ops in paths.items():
         if _canonical_suffix(str(candidate_path)) == suffix and isinstance(ops, dict):
             op = ops.get(method.lower())
@@ -442,6 +478,28 @@ def _score_related_path(target: str, candidate: str) -> int:
     return score
 
 
+def _resource_path_tokens(path: str) -> set[str]:
+    """Return source path resource tokens without protocol/role scaffolding."""
+    ignored = {
+        "api", "rest", "rpc", "v1", "v2", "v3", "v4", "admin", "internal",
+        "public", "private", "id", "uuid", "key", "code",
+    }
+    return {
+        token
+        for token in _path_tokens(path)
+        if token not in ignored and not re.fullmatch(r"v\d+", token)
+    }
+
+
+def _same_resource_surface(target_path: str, candidate_path: str) -> bool:
+    """Require a real resource relation before selecting a cleanup route."""
+    target_tokens = _resource_path_tokens(target_path)
+    candidate_tokens = _resource_path_tokens(candidate_path)
+    if not target_tokens or not candidate_tokens:
+        return False
+    return bool(target_tokens & candidate_tokens)
+
+
 def _find_create_endpoint(spec: dict[str, Any], target_path: str) -> str:
     best: tuple[int, str] = (0, "")
     target_collection = _collection_prefix(target_path)
@@ -482,6 +540,8 @@ def _find_delete_endpoint(spec: dict[str, Any], target_path: str) -> str:
             continue
         if not path_has_placeholders(str(p)):
             continue
+        if not _same_resource_surface(target_path, str(p)):
+            continue
         score = _score_related_path(target_path, str(p))
         if _canonical_suffix(str(p)) == _canonical_suffix(target_path):
             score += 40
@@ -498,6 +558,8 @@ def _find_patch_cleanup_endpoint(spec: dict[str, Any], target_path: str) -> str:
         if not isinstance(ops, dict) or "patch" not in ops:
             continue
         if not path_has_placeholders(str(p)):
+            continue
+        if not _same_resource_surface(target_path, str(p)):
             continue
         candidate = normalize_path_placeholders(str(p)).rstrip("/")
         score = _score_related_path(target_path, str(p))
@@ -522,6 +584,8 @@ def _find_cleanup_endpoint(spec: dict[str, Any], target_path: str) -> tuple[str,
     )
     for p, ops in _paths(spec).items():
         if not isinstance(ops, dict) or not path_has_placeholders(str(p)):
+            continue
+        if not _same_resource_surface(target_path, str(p)):
             continue
         if not cleanup_action_re.search(str(p)):
             continue
@@ -638,11 +702,31 @@ def _markdown_request_example(api_doc_text: str, method: str, path: str) -> dict
         if current_method != target_method or current_path != target_path:
             continue
         stripped = line.strip()
-        if stripped.startswith("响应"):
-            in_request_block = False
-        if stripped.startswith("请求") or stripped.lower().startswith("request body"):
+        if stripped.startswith("响应") or "响应：" in stripped or "响应:" in stripped:
+            # Keep scanning; response markers end the request block.
+            if stripped.startswith("响应"):
+                in_request_block = False
+        request_marker = ""
+        for prefix in ("请求：", "请求:", "请求", "Request Body:", "Request body:", "request body:"):
+            if stripped.startswith(prefix) or f" {prefix}" in f" {stripped}":
+                request_marker = prefix
+                break
+        if request_marker:
             in_request_block = True
-            continue
+            # Compact / enriched docs put JSON on the same line as 请求, sometimes
+            # after a short description: ``预占库存。 请求 {"sku":"X"}``.
+            inline = stripped
+            at = inline.find(request_marker)
+            if at >= 0:
+                inline = inline[at + len(request_marker):].strip()
+            if inline.startswith("{"):
+                try:
+                    parsed = json.loads(inline)
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    pass
+            if stripped.startswith(request_marker):
+                continue
         if in_request_block and stripped.startswith("```json"):
             in_json = True
             buffer = []
@@ -663,6 +747,77 @@ def _markdown_request_example(api_doc_text: str, method: str, path: str) -> dict
         if in_json:
             buffer.append(line)
     return {}
+
+
+def build_source_grounded_request_body(
+    api_doc_text: str,
+    method: str,
+    path: str,
+) -> dict[str, Any]:
+    """Build a deterministic request body and report its source provenance.
+
+    Exact examples win. When a structured OpenAPI document has no example, a
+    non-production test value is materialized from the documented schema. The
+    provenance is returned alongside the body so runtime binding policy can
+    distinguish an observed/example value from a schema-generated test value.
+    """
+
+    example = _markdown_request_example(api_doc_text, method, path)
+    if isinstance(example, dict) and example:
+        return {"body": example, "provenance": "documented_example"}
+
+    parsed = _parse_structured_api_document(str(api_doc_text or ""))
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("paths"), dict):
+        return {"body": {}, "provenance": "not_available"}
+    spec = _normalize_openapi_spec(parsed)
+    operation = _operation(spec, method, path)
+    if not operation:
+        return {"body": {}, "provenance": "not_available"}
+
+    content = (
+        ((operation.get("requestBody") or {}).get("content") or {}).get("application/json")
+        or {}
+    )
+    if not isinstance(content, dict):
+        return {"body": {}, "provenance": "not_available"}
+    content_example = content.get("example")
+    if isinstance(content_example, dict) and content_example:
+        return {"body": content_example, "provenance": "documented_example"}
+    examples = content.get("examples")
+    if isinstance(examples, dict):
+        for item in examples.values():
+            candidate = item.get("value") if isinstance(item, dict) else None
+            if isinstance(candidate, dict) and candidate:
+                return {"body": candidate, "provenance": "documented_example"}
+
+    schema = _schema_for_endpoint(spec, method, path)
+    if not schema:
+        return {"body": {}, "provenance": "not_available"}
+    schema_example = schema.get("example") if isinstance(schema, dict) else None
+    if isinstance(schema_example, dict) and schema_example:
+        return {"body": schema_example, "provenance": "documented_example"}
+    seed = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"qualibug-runtime:{str(method or '').upper()}:{normalize_path_placeholders(path)}",
+    ).hex[:12]
+    generated = _schema_value("request", schema, seed)
+    return {
+        "body": generated if isinstance(generated, dict) else {},
+        "provenance": "documented_schema_generated",
+    }
+
+
+@lru_cache(maxsize=16)
+def _parse_structured_api_document(api_doc_text: str) -> dict[str, Any]:
+    """Parse immutable API source once per process, keyed by exact content."""
+
+    try:
+        parsed = yaml.safe_load(str(api_doc_text or ""))
+    except yaml.YAMLError:
+        # Markdown / prose API docs are handled by the exact-example parser
+        # above and are not necessarily valid YAML documents.
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _request_example_body(api_doc_text: str, method: str, path: str, seed: str, generated_id: str) -> dict[str, Any]:
@@ -1071,15 +1226,22 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
         if _api_path.exists():
             try:
                 _api_doc_text = _api_path.read_text(encoding="utf-8", errors="replace").strip()
-            except Exception:
-                _api_doc_text = ""
-    if not spec and _api_doc_text:
-            try:
-                from .universal_api_parser import parse_to_openapi
+            except Exception as exc:
+                raise RuntimeError(
+                    f"api_markdown_read_failed:{_api_path.name}:{type(exc).__name__}"
+                ) from exc
+    if _api_doc_text:
+        from .universal_api_parser import parse_to_openapi
 
-                spec = parse_to_openapi(_api_doc_text)
-            except Exception:
-                spec = {}
+        try:
+            document_spec = parse_to_openapi(_api_doc_text)
+        except Exception as exc:
+            raise RuntimeError(
+                f"api_document_parse_failed:{type(exc).__name__}"
+            ) from exc
+        if not isinstance(document_spec, dict):
+            raise TypeError("api_document_parser_returned_non_object")
+        spec = _merge_openapi_specs(spec, document_spec)
     spec = _normalize_openapi_spec(spec)
 
     generated_id = f"qb_auto_{re.sub(r'[^a-z0-9_]+', '_', cid.lower()).strip('_')}_{uuid.uuid4().hex[:8]}"
@@ -1173,11 +1335,15 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
                 cleanup_request["body"] = _cleanup_transition_body(spec, cleanup_method, cleanup_path, seed, generated_id)
             cleanup_requests.append(cleanup_request)
         else:
-            # Fallback: mark that manual cleanup is required — never silently skip
+            # Keep the missing-cleanup obligation explicit.  Never fabricate a
+            # cleanup URL: guessed resource paths are unsafe and non-portable.
             cleanup_requests.append({
-                "method": "MANUAL", "path": f"/{entity_alias}/{{id}}",
+                "method": "MANUAL",
+                "path": "",
                 "purpose": "cleanup_qb_auto_fixture_manual_required",
-                "note": "No automatic cleanup endpoint found. Customer must manually clean up qb_auto_* test data."
+                "source_endpoint": path,
+                "reason": "documented_cleanup_endpoint_missing",
+                "note": "No automatic cleanup endpoint was found in the supplied API contract.",
             })
         cleanup_requests.extend(dependency_cleanup_requests if 'dependency_cleanup_requests' in locals() else [])
 

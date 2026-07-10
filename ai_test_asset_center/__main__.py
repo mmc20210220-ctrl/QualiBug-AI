@@ -3764,6 +3764,15 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
     if first_code in {"SOURCE_PROVENANCE_MISSING", "SOURCE_HASH_INVALID", "SOURCE_HASH_MISMATCH"}:
         release_gate = {**release_gate, "verdict": "fail", "status": "blocked"}
     preflight_guide = _scan_preflight_guide(context=context, base_url="", manifest={**manifest, "actual_hash": manifest.get("source_hash", "")}, runtime_contract=runtime_contract, test_data_plan=test_data_plan)
+    from .discovery_funnel import reconcile_product_pipeline_health
+
+    discovery_funnel = _as_dict(v12.get("discovery_funnel"))
+    pipeline_health = reconcile_product_pipeline_health(
+        _as_dict(discovery_funnel.get("pipeline_health")),
+        execution_status=execution_status,
+        preflight_diagnostics=diagnostics,
+    )
+    discovery_funnel["pipeline_health"] = pipeline_health
     result: dict[str, Any] = {
         "success": True, "scan_id": f"scan_{_safe_project(project)}_{int(started * 1000)}", "project": project,
         "grade": "blocked", "score": 0.0, "coverage": 0.0, "total_findings": 0, "total_candidates": 0,
@@ -4116,6 +4125,23 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             _max_rounds = max(1, min(_max_rounds, 24))
             _acc_findings: list[dict[str, Any]] = [f for f in (v12.get("findings") or []) if isinstance(f, dict)]
             _seen_keys = {(str(f.get("behavior_slice_id") or ""), str(f.get("title") or "")) for f in _acc_findings}
+            # Evidence graphs are the execution half of finding lineage. The old
+            # loop accumulated findings but replaced V12 with the final round,
+            # silently discarding earlier execution traces and making confirmed
+            # findings impossible to audit or cluster by causal failure.
+            _acc_evidence_graphs: list[dict[str, Any]] = [
+                item for item in (v12.get("evidence_graphs") or []) if isinstance(item, dict)
+            ]
+
+            def _evidence_graph_key(item: dict[str, Any]) -> tuple[str, str, str]:
+                _scenario = _as_dict(item.get("scenario"))
+                return (
+                    str(item.get("evidence_id") or ""),
+                    str(_scenario.get("id") or ""),
+                    str(_scenario.get("behavior_slice_id") or ""),
+                )
+
+            _seen_evidence_graph_keys = {_evidence_graph_key(item) for item in _acc_evidence_graphs}
             _rounds_run = 1
             while _rounds_run < _max_rounds:
                 _ledger = _as_dict(v12.get("behavior_slice_ledger"))
@@ -4138,13 +4164,26 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                         _seen_keys.add(_k)
                         _acc_findings.append(_f)
                         _new += 1
+                for _graph in (_next.get("evidence_graphs") or []):
+                    if not isinstance(_graph, dict):
+                        continue
+                    _graph_key = _evidence_graph_key(_graph)
+                    if _graph_key not in _seen_evidence_graph_keys:
+                        _seen_evidence_graph_keys.add(_graph_key)
+                        _acc_evidence_graphs.append(_graph)
                 v12 = _next
                 _rounds_run += 1
                 # Stop early if a round contributed nothing new AND has no next round.
                 if _new == 0 and _as_dict(_next.get("behavior_slice_ledger")).get("next_round") in (None, "", 0):
                     break
             v12["findings"] = _acc_findings
-            v12["multi_round_summary"] = {"rounds_run": _rounds_run, "max_rounds": _max_rounds, "accumulated_findings": len(_acc_findings)}
+            v12["evidence_graphs"] = _acc_evidence_graphs
+            v12["multi_round_summary"] = {
+                "rounds_run": _rounds_run,
+                "max_rounds": _max_rounds,
+                "accumulated_findings": len(_acc_findings),
+                "accumulated_evidence_graphs": len(_acc_evidence_graphs),
+            }
             runtime_contract = _as_dict(v12.get("runtime_contract")) or runtime_contract
             phases = _as_dict(v12.get("phases"))
             execution = _as_dict(phases.get("execution"))
@@ -4225,6 +4264,12 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         campaign=campaign,
         selected_slices=selected_slices,
         contract=_as_dict(context.get("test_data_contract")),
+        environment_kind=_first_text(
+            runtime_contract.get("environment_kind"),
+            runtime_contract.get("environment_type"),
+            context.get("environment_kind"),
+            context.get("target_environment"),
+        ),
     )
     ui_test_data_bootstrap: dict[str, Any] = {"status": "not_requested"}
     if test_data_bootstrap.get("status") != "ready":
@@ -4395,11 +4440,94 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         "benchmark_metrics": benchmark_metrics,
         "dedupe_report": dedupe_report,
         "discovery_verdict": _discovery_verdict(confirmed, db_verification),
-        "discovery_funnel": _as_dict(v12.get("discovery_funnel")),
-        "pipeline_health": _as_dict(_as_dict(v12.get("discovery_funnel")).get("pipeline_health")),
+        "discovery_funnel": discovery_funnel,
+        "pipeline_health": pipeline_health,
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
         "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution": ui_execution, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "external_signal_execution": external_signal_execution, "v12": v12,
     }
+    # Evidence-driven Harness evolution observability. This is derived only
+    # from the completed real V12 run and persists redacted lineage/status
+    # summaries; raw bodies, credentials, and benchmark ground truth are never
+    # copied into the evolution artifacts.
+    try:
+        from .discovery_trace_ledger import build_discovery_trace_ledger, persist_trace_ledger
+        from .discovery_weakness_miner import mine_discovery_weaknesses, persist_weakness_report
+        from .discovery_harness_proposer import propose_harness_candidates, persist_harness_proposals
+        from .enterprise_project_config import MultiServiceProject
+        from .policy_registry import get_policy_registry
+
+        _active_policy = get_policy_registry().get_active()
+        _policy_id = str(getattr(_active_policy, "policy_id", "") or getattr(_active_policy, "policy_version", "") or "unversioned-policy")
+        _industry = str(context.get("industry") or "").strip()
+        if not _industry:
+            _industry = str(MultiServiceProject(project, root).project_metadata().get("industry") or "").strip()
+        if not _industry:
+            _industry = "unclassified"
+        _target_id = str(
+            context.get("target_id")
+            or context.get("scope_id")
+            or context.get("environment_ref")
+            or project
+        ).strip()
+        _evaluation_mode = str(context.get("evaluation_mode") or "operational").strip()
+        _trace_ledger = build_discovery_trace_ledger(
+            v12,
+            run_id=scan_id,
+            policy_id=_policy_id,
+            target_id=_target_id,
+            project_id=project,
+            industry=_industry,
+            evaluation_mode=_evaluation_mode,
+        )
+        _weakness_report = mine_discovery_weaknesses([_trace_ledger])
+        if _active_policy is None:
+            raise RuntimeError("active policy is required for bounded Harness proposal generation")
+        _proposal_report = propose_harness_candidates(
+            _weakness_report,
+            _active_policy.strategy,
+        )
+        _evolution_root = root / "platform_outputs" / _safe_project(project) / "discovery_evolution"
+        _trace_path = persist_trace_ledger(_trace_ledger, _evolution_root / "trace_ledgers")
+        _weakness_path = persist_weakness_report(_weakness_report, _evolution_root / "weakness_reports")
+        _proposal_path = persist_harness_proposals(_proposal_report, _evolution_root / "harness_proposals")
+        result["discovery_evolution"] = {
+            "status": "observed",
+            "policy_id": _policy_id,
+            "industry": _industry,
+            "evaluation_mode": _evaluation_mode,
+            "trace_count": int(_trace_ledger.get("trace_count") or 0),
+            "outcome_counts": dict(_trace_ledger.get("outcome_counts") or {}),
+            "failure_signature_counts": dict(_trace_ledger.get("failure_signature_counts") or {}),
+            "weakness_pattern_count": int(_weakness_report.get("pattern_count") or 0),
+            "proposal_eligible_pattern_count": int(_weakness_report.get("proposal_eligible_pattern_count") or 0),
+            "selected_patterns_for_proposal": list(_weakness_report.get("selected_patterns_for_proposal") or []),
+            "harness_proposal_count": int(_proposal_report.get("proposal_count") or 0),
+            "blocked_proposal_pattern_count": int(_proposal_report.get("blocked_pattern_count") or 0),
+            "trace_ledger_ref": str(_trace_path.relative_to(root)).replace("\\", "/"),
+            "weakness_report_ref": str(_weakness_path.relative_to(root)).replace("\\", "/"),
+            "harness_proposals_ref": str(_proposal_path.relative_to(root)).replace("\\", "/"),
+        }
+    except Exception as evolution_error:
+        # This feature is not allowed to disappear silently. The scan remains
+        # inspectable, but Harness evolution is explicitly FAILED_SAFE and may
+        # not claim readiness or promote a policy from this run.
+        result["discovery_evolution"] = {
+            "status": "FAILED_SAFE",
+            "error_type": type(evolution_error).__name__,
+            "error": str(evolution_error)[:500],
+            "promotion_allowed": False,
+        }
+        coverage_gaps.append(
+            _gap(
+                "DISCOVERY_EVOLUTION_OBSERVABILITY_FAILED",
+                f"Trace ledger or weakness mining failed ({type(evolution_error).__name__}); policy promotion is blocked.",
+            )
+        )
+        import sys as _evolution_sys
+        print(
+            f"[scan] Discovery evolution observability failed: {evolution_error}",
+            file=_evolution_sys.stderr,
+        )
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"

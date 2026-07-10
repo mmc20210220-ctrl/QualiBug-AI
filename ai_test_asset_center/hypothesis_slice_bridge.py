@@ -169,6 +169,47 @@ def _endpoint_paths_from_hypothesis(hypothesis: dict[str, Any]) -> list[str]:
     return ordered
 
 
+def _binding_strategies() -> set[str]:
+    from .policy_wiring import get_policy_value
+
+    configured = get_policy_value(
+        "discovery",
+        "endpoint_binding_strategy",
+        ["source_operation_id", "method_path_shape"],
+    )
+    return {
+        _text(item).lower()
+        for item in (configured if isinstance(configured, list) else [])
+        if _text(item)
+    }
+
+
+def _operation_id_hint(hypothesis: dict[str, Any]) -> str:
+    for key in ("operation_id", "operationId", "source_operation_id", "interface_id"):
+        value = _text(hypothesis.get(key))
+        if value:
+            return value.lower()
+    return ""
+
+
+def _strategy_paths(hypothesis: dict[str, Any], strategies: set[str]) -> list[str]:
+    paths = list(_endpoint_paths_from_hypothesis(hypothesis))
+    extra_keys: list[str] = []
+    if "documented_example_binding" in strategies:
+        extra_keys.extend(("documented_example", "request_example", "api_example"))
+    if "observed_operation_binding" in strategies:
+        extra_keys.extend(("observed_operation", "observed_request", "prior_success_receipt"))
+    for key in extra_keys:
+        value = hypothesis.get(key)
+        rows = value if isinstance(value, list) else [value]
+        for row in rows:
+            if isinstance(row, dict):
+                path = _text(row.get("path") or row.get("api_path") or row.get("route"))
+                if path.startswith("/") and path not in paths:
+                    paths.append(path)
+    return paths
+
+
 def _bind_endpoint(
     hypothesis: dict[str, Any],
     api_endpoints: list[dict[str, Any]],
@@ -180,11 +221,26 @@ def _bind_endpoint(
     if not catalog:
         return None
 
-    hinted = _endpoint_paths_from_hypothesis(hypothesis)
+    strategies = _binding_strategies()
+    operation_hint = _operation_id_hint(hypothesis)
+    if "source_operation_id" in strategies and operation_hint:
+        for endpoint in catalog:
+            if _text(endpoint.get("operation_id") or endpoint.get("operationId")).lower() == operation_hint:
+                return {
+                    "path": _text(endpoint.get("path")),
+                    "method": _text(endpoint.get("method")).upper() or "GET",
+                    "entity": _text(endpoint.get("entity")) or _text(hypothesis.get("entity")) or "resource",
+                }
+
+    hinted = _strategy_paths(hypothesis, strategies)
     by_path = {_text(ep.get("path")): ep for ep in catalog}
 
     for path in hinted:
-        if path in by_path:
+        if path in by_path and (
+            "method_path_shape" in strategies
+            or "documented_example_binding" in strategies
+            or "observed_operation_binding" in strategies
+        ):
             ep = by_path[path]
             return {
                 "path": _text(ep.get("path")),
@@ -192,7 +248,7 @@ def _bind_endpoint(
                 "entity": _text(ep.get("entity")) or _text(hypothesis.get("entity")) or "resource",
             }
         # Prefix / structural match against catalog paths
-        for ep in catalog:
+        for ep in catalog if "method_path_shape" in strategies else []:
             catalog_path = _text(ep.get("path"))
             if catalog_path == path or catalog_path.rstrip("/") == path.rstrip("/"):
                 return {
@@ -212,6 +268,37 @@ def _bind_endpoint(
 
     entity = _text(hypothesis.get("entity") or hypothesis.get("source_entity") or hypothesis.get("resource")).lower()
     method_hint = _method_hint_from_hypothesis(hypothesis)
+    if "schema_parameter_compatibility" in strategies:
+        declared_parameters = hypothesis.get("parameters") or hypothesis.get("request_parameters") or {}
+        if isinstance(declared_parameters, dict):
+            parameter_names = {str(key).strip().lower() for key in declared_parameters if str(key).strip()}
+        elif isinstance(declared_parameters, list):
+            parameter_names = {
+                _text(item.get("name") if isinstance(item, dict) else item).lower()
+                for item in declared_parameters
+                if _text(item.get("name") if isinstance(item, dict) else item)
+            }
+        else:
+            parameter_names = set()
+        compatible: list[tuple[int, dict[str, Any]]] = []
+        for endpoint in catalog:
+            endpoint_parameters = endpoint.get("parameters") or []
+            endpoint_names = {
+                _text(item.get("name") if isinstance(item, dict) else item).lower()
+                for item in endpoint_parameters
+                if _text(item.get("name") if isinstance(item, dict) else item)
+            }
+            overlap = len(parameter_names & endpoint_names)
+            method = _text(endpoint.get("method")).upper() or "GET"
+            if overlap and (not method_hint or method == method_hint):
+                compatible.append((overlap, endpoint))
+        if compatible:
+            _, endpoint = max(compatible, key=lambda item: (item[0], _text(item[1].get("path"))))
+            return {
+                "path": _text(endpoint.get("path")),
+                "method": _text(endpoint.get("method")).upper() or "GET",
+                "entity": _text(endpoint.get("entity")) or entity or "resource",
+            }
     if entity:
         variants = _entity_variants(entity)
         entity_matches = [

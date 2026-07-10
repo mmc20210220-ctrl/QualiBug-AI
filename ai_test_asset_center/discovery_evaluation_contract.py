@@ -275,8 +275,6 @@ def build_runtime_view(manifest: EvaluationManifest, target_id: str) -> dict[str
             "target_id": target.target_id,
             "project_id": target.project_id,
             "industry": target.industry,
-            "split": target.split,
-            "expectation": target.expectation,
             "runtime": {
                 "environment_ref": target.environment_ref,
                 "environment_type": target.environment_type,
@@ -339,6 +337,11 @@ def _pipeline_health_status(pipeline_health: Any) -> tuple[str, str]:
     status = str(pipeline_health.get("status") or "").strip().upper()
     if not status:
         return "NOT_MEASURED", "pipeline_health_status_missing"
+    if status == "DEGRADED":
+        execution_status = str(pipeline_health.get("execution_status") or "").strip().lower()
+        if execution_status == "completed":
+            return "MEASURED", ""
+        return "NOT_MEASURED", "pipeline_health_degraded_without_completed_execution"
     if status != "OK":
         return "NOT_MEASURED", f"pipeline_health_{status.lower()}"
     return "MEASURED", ""
@@ -355,6 +358,7 @@ def evaluate_completed_scan(
     candidates: list[dict[str, Any]] | None,
     pipeline_health: dict[str, Any],
     operational_metrics: dict[str, Any],
+    fixture_governance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one completed scan without exposing hidden answers to runtime."""
 
@@ -434,8 +438,20 @@ def evaluate_completed_scan(
         "pipeline_health": dict(pipeline_health),
         "metrics": metrics,
         "operational_metrics": dict(operational_metrics),
+        "fixture_governance": dict(fixture_governance or {}),
     }
+    receipt["receipt_fingerprint"] = _sha256_bytes(_canonical_json(receipt))
     return receipt
+
+
+def _assert_receipt_integrity(receipt: dict[str, Any], *, target_id: str) -> None:
+    claimed = _required_text(receipt.get("receipt_fingerprint"), f"{target_id}.receipt_fingerprint")
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_fingerprint"}
+    actual = _sha256_bytes(_canonical_json(unsigned))
+    if claimed != actual:
+        raise EvaluationContractError(
+            f"target fingerprints differ or receipt integrity failed for target: {target_id}"
+        )
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -491,6 +507,103 @@ def _aggregate_seeded(receipts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+_REQUIRED_OPERATIONAL_FIELDS = (
+    "wall_clock_seconds",
+    "estimated_cost_usd",
+    "request_count",
+    "production_http_requests",
+    "cleanup_failures",
+    "safety_incidents",
+    "dirty_test_environments",
+    "execution_success_rate",
+    "engine_success_rate",
+    "duplicate_rate",
+)
+
+
+def _finite_number(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise EvaluationContractError(f"{field_name} must be numeric, not boolean")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise EvaluationContractError(f"{field_name} must be numeric") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise EvaluationContractError(f"{field_name} must be finite and non-negative")
+    return parsed
+
+
+def _aggregate_operational(receipts: list[dict[str, Any]]) -> dict[str, Any]:
+    missing: list[dict[str, Any]] = []
+    normalized: list[dict[str, float]] = []
+    for receipt in receipts:
+        raw = receipt.get("operational_metrics")
+        raw = raw if isinstance(raw, dict) else {}
+        missing_fields = [field for field in _REQUIRED_OPERATIONAL_FIELDS if field not in raw]
+        if missing_fields:
+            missing.append({"target_id": receipt.get("target_id"), "fields": missing_fields})
+            continue
+        row = {
+            field: _finite_number(raw[field], f"{receipt.get('target_id')}.operational_metrics.{field}")
+            for field in _REQUIRED_OPERATIONAL_FIELDS
+        }
+        for rate_field in ("execution_success_rate", "engine_success_rate", "duplicate_rate"):
+            if row[rate_field] > 1:
+                raise EvaluationContractError(f"{receipt.get('target_id')}.{rate_field} must be between 0 and 1")
+        normalized.append(row)
+
+    complete = bool(receipts) and not missing and len(normalized) == len(receipts)
+    seeded_true_positives = sum(
+        int((item.get("metrics") or {}).get("true_positives") or 0)
+        for item in receipts
+        if item.get("expectation") == "seeded_defects" and item.get("measurement_status") == "MEASURED"
+    )
+    total_cost = sum(item["estimated_cost_usd"] for item in normalized) if complete else None
+    return {
+        "complete": complete,
+        "missing_fields": missing,
+        "total_wall_clock_seconds": round(sum(item["wall_clock_seconds"] for item in normalized), 4) if complete else None,
+        "total_estimated_cost_usd": round(float(total_cost), 6) if total_cost is not None else None,
+        "total_request_count": int(sum(item["request_count"] for item in normalized)) if complete else None,
+        "production_http_requests": int(sum(item["production_http_requests"] for item in normalized)) if complete else None,
+        "cleanup_failures": int(sum(item["cleanup_failures"] for item in normalized)) if complete else None,
+        "safety_incidents": int(sum(item["safety_incidents"] for item in normalized)) if complete else None,
+        "dirty_test_environments": int(sum(item["dirty_test_environments"] for item in normalized)) if complete else None,
+        "execution_success_rate": _mean(item["execution_success_rate"] for item in normalized) if complete else None,
+        "engine_success_rate": _mean(item["engine_success_rate"] for item in normalized) if complete else None,
+        "duplicate_rate": _mean(item["duplicate_rate"] for item in normalized) if complete else None,
+        "cost_per_true_positive_usd": (
+            round(float(total_cost) / seeded_true_positives, 6)
+            if total_cost is not None and seeded_true_positives > 0
+            else None
+        ),
+    }
+
+
+def _aggregate_evidence_quality(receipts: list[dict[str, Any]]) -> dict[str, Any]:
+    measured = [
+        item
+        for item in receipts
+        if item.get("expectation") == "seeded_defects" and item.get("measurement_status") == "MEASURED"
+    ]
+    evidence_complete = sum(int((item.get("metrics") or {}).get("evidence_complete_count") or 0) for item in measured)
+    evidence_total = sum(int((item.get("metrics") or {}).get("evidence_total_count") or 0) for item in measured)
+    reproduction_success = sum(
+        int((item.get("metrics") or {}).get("reproduction_success_count") or 0) for item in measured
+    )
+    reproduction_total = sum(
+        int((item.get("metrics") or {}).get("reproduction_total_count") or 0) for item in measured
+    )
+    return {
+        "evidence_complete_count": evidence_complete,
+        "evidence_total_count": evidence_total,
+        "evidence_completeness_rate": _ratio(evidence_complete, evidence_total),
+        "reproduction_success_count": reproduction_success,
+        "reproduction_total_count": reproduction_total,
+        "reproduction_success_rate": _ratio(reproduction_success, reproduction_total),
+    }
+
+
 def aggregate_evaluation_receipts(
     manifest: EvaluationManifest,
     receipts: list[dict[str, Any]],
@@ -518,11 +631,23 @@ def aggregate_evaluation_receipts(
         if receipt.get("dataset_manifest_fingerprint") != manifest.manifest_fingerprint:
             raise EvaluationContractError("evaluation receipt manifest fingerprint does not match frozen manifest")
         target_id = _required_text(receipt.get("target_id"), "receipt.target_id")
+        _assert_receipt_integrity(receipt, target_id=target_id)
         if target_id in by_target:
             raise EvaluationContractError(f"duplicate evaluation receipt for target: {target_id}")
         target = manifest.target(target_id)
-        if receipt.get("runtime_fingerprint") != manifest.target_fingerprints[target.target_id]["runtime_fingerprint"]:
-            raise EvaluationContractError(f"runtime fingerprint drift for target: {target_id}")
+        expected_fingerprints = manifest.target_fingerprints[target.target_id]
+        for field in (
+            "runtime_fingerprint",
+            "input_fingerprint",
+            "fixture_fingerprint",
+            "context_fingerprint",
+        ):
+            if receipt.get(field) != expected_fingerprints[field]:
+                raise EvaluationContractError(f"{field} drift for target: {target_id}")
+        if receipt.get("environment_ref") != target.environment_ref:
+            raise EvaluationContractError(f"environment_ref drift for target: {target_id}")
+        if receipt.get("environment_type") != target.environment_type:
+            raise EvaluationContractError(f"environment_type drift for target: {target_id}")
         by_target[target_id] = receipt
 
     missing_target_ids = [item.target_id for item in manifest.targets if item.target_id not in by_target]
@@ -557,7 +682,15 @@ def aggregate_evaluation_receipts(
         if row.get("micro_recall") is not None
     ]
     shape = assess_commercial_dataset_shape(manifest)
+    degraded_targets = [
+        str(item.get("target_id") or "")
+        for item in receipts
+        if str(_as_dict(item.get("pipeline_health"), "pipeline_health").get("status") or "").strip().upper()
+        == "DEGRADED"
+    ]
     evaluation_complete = not missing_target_ids and not not_measured
+    operational = _aggregate_operational(receipts)
+    evidence_quality = _aggregate_evidence_quality(receipts)
     clean_fp = sum(
         int((item.get("metrics") or {}).get("customer_deliverable_false_positives") or 0)
         for item in clean
@@ -576,11 +709,15 @@ def aggregate_evaluation_receipts(
         "claim_status": "MEASURED" if evaluation_complete else "NOT_MEASURED",
         "evaluation_complete": evaluation_complete,
         "commercial_shape": shape,
-        "commercial_promotion_evidence_ready": evaluation_complete and bool(shape["commercial_shape_ready"]),
+        "commercial_promotion_evidence_ready": (
+            evaluation_complete and bool(shape["commercial_shape_ready"]) and bool(operational["complete"])
+        ),
         "expected_target_count": len(manifest.targets),
         "evaluated_target_count": len(by_target),
         "missing_target_ids": missing_target_ids,
         "not_measured_targets": not_measured,
+        "pipeline_degraded_target_ids": degraded_targets,
+        "pipeline_degraded_target_count": len(degraded_targets),
         "held_in": _aggregate_seeded(held_in),
         "held_out": _aggregate_seeded(held_out),
         "held_out_industries": industry_metrics,
@@ -591,8 +728,249 @@ def aggregate_evaluation_receipts(
             "customer_deliverable_false_positives": clean_fp,
             "critical_high_false_positives": clean_high_fp,
         },
+        "evidence_quality": evidence_quality,
+        "operational": operational,
         "run_ids": [str(item.get("run_id") or "") for item in receipts],
         "target_receipts": receipts,
+    }
+
+
+def _assert_report(
+    manifest: EvaluationManifest,
+    report: dict[str, Any],
+    *,
+    evaluation_mode: str,
+) -> None:
+    if not isinstance(report, dict) or report.get("schema_version") != REPORT_SCHEMA:
+        raise EvaluationContractError("paired evaluation requires current-schema reports")
+    if report.get("dataset_id") != manifest.dataset_id or report.get("dataset_version") != manifest.dataset_version:
+        raise EvaluationContractError("paired evaluation report dataset identity mismatch")
+    if report.get("dataset_manifest_fingerprint") != manifest.manifest_fingerprint:
+        raise EvaluationContractError("paired evaluation report manifest fingerprint mismatch")
+    if report.get("evaluation_mode") != evaluation_mode:
+        raise EvaluationContractError(
+            f"expected {evaluation_mode} evaluation report, got {report.get('evaluation_mode')!r}"
+        )
+    if report.get("evaluation_complete") is not True:
+        raise EvaluationContractError(f"{evaluation_mode} evaluation report is incomplete")
+
+
+def _report_target_fingerprints(report: dict[str, Any]) -> dict[str, tuple[str, str, str, str]]:
+    result: dict[str, tuple[str, str, str, str]] = {}
+    for receipt in report.get("target_receipts") or []:
+        if not isinstance(receipt, dict):
+            raise EvaluationContractError("target receipt must be an object")
+        target_id = _required_text(receipt.get("target_id"), "target_receipt.target_id")
+        _assert_receipt_integrity(receipt, target_id=target_id)
+        result[target_id] = (
+            _required_text(receipt.get("runtime_fingerprint"), f"{target_id}.runtime_fingerprint"),
+            _required_text(receipt.get("input_fingerprint"), f"{target_id}.input_fingerprint"),
+            _required_text(receipt.get("fixture_fingerprint"), f"{target_id}.fixture_fingerprint"),
+            _required_text(receipt.get("context_fingerprint"), f"{target_id}.context_fingerprint"),
+        )
+    return result
+
+
+def build_paired_evaluation_evidence(
+    manifest: EvaluationManifest,
+    *,
+    champion_replay: dict[str, Any],
+    challenger_replay: dict[str, Any],
+    champion_shadow: dict[str, Any],
+    challenger_shadow: dict[str, Any],
+) -> dict[str, Any]:
+    """Prove four real, dataset-identical runs before policy promotion."""
+
+    reports = (
+        (champion_replay, "replay"),
+        (challenger_replay, "replay"),
+        (champion_shadow, "shadow"),
+        (challenger_shadow, "shadow"),
+    )
+    for report, mode in reports:
+        _assert_report(manifest, report, evaluation_mode=mode)
+        if report.get("commercial_promotion_evidence_ready") is not True:
+            raise EvaluationContractError(f"{mode} report lacks commercial promotion evidence")
+
+    champion_policy_ids = {champion_replay.get("policy_id"), champion_shadow.get("policy_id")}
+    challenger_policy_ids = {challenger_replay.get("policy_id"), challenger_shadow.get("policy_id")}
+    if len(champion_policy_ids) != 1 or "" in champion_policy_ids or None in champion_policy_ids:
+        raise EvaluationContractError("champion replay and shadow reports must use one policy_id")
+    if len(challenger_policy_ids) != 1 or "" in challenger_policy_ids or None in challenger_policy_ids:
+        raise EvaluationContractError("challenger replay and shadow reports must use one policy_id")
+    if champion_policy_ids == challenger_policy_ids:
+        raise EvaluationContractError("champion and challenger policy_id values must differ")
+
+    fingerprints = [_report_target_fingerprints(report) for report, _ in reports]
+    if any(item != fingerprints[0] for item in fingerprints[1:]):
+        raise EvaluationContractError("champion/challenger replay/shadow target fingerprints differ")
+    expected_target_ids = {item.target_id for item in manifest.targets}
+    if set(fingerprints[0]) != expected_target_ids:
+        raise EvaluationContractError("paired reports do not cover the exact frozen target set")
+
+    combined = {
+        key: _sha256_bytes(_canonical_json({target_id: value[index] for target_id, value in fingerprints[0].items()}))
+        for index, key in enumerate(
+            ("same_runtime_fingerprint", "same_input_fingerprint", "same_fixture_fingerprint", "same_context_artifact_id")
+        )
+    }
+    environments = {
+        item.target_id: {"environment_ref": item.environment_ref, "environment_type": item.environment_type}
+        for item in manifest.targets
+    }
+    replay_run_ids = tuple(
+        str(item)
+        for item in (champion_replay.get("run_ids") or []) + (challenger_replay.get("run_ids") or [])
+        if str(item).strip()
+    )
+    shadow_run_ids = tuple(
+        str(item)
+        for item in (champion_shadow.get("run_ids") or []) + (challenger_shadow.get("run_ids") or [])
+        if str(item).strip()
+    )
+    paired_target_count = len(manifest.targets)
+    expected_run_count = paired_target_count * 2
+    return {
+        "replay_executed": len(replay_run_ids) == expected_run_count,
+        "shadow_executed": len(shadow_run_ids) == expected_run_count,
+        "held_in_executed": any(item.split == "held_in" for item in manifest.targets),
+        "held_out_executed": any(item.split == "held_out" for item in manifest.targets),
+        "clean_executed": any(item.expectation == "clean" for item in manifest.targets),
+        "dataset_version": manifest.dataset_version,
+        "dataset_manifest_fingerprint": manifest.manifest_fingerprint,
+        "replay_run_ids": replay_run_ids,
+        "shadow_run_ids": shadow_run_ids,
+        "paired_target_count": paired_target_count,
+        **combined,
+        "same_environment_id": _sha256_bytes(_canonical_json(environments)),
+        "target_receipt_fingerprints": tuple(
+            f"{target_id}:" + _sha256_bytes(
+                _canonical_json(
+                    [
+                        next(
+                            str(receipt.get("receipt_fingerprint") or "")
+                            for receipt in report.get("target_receipts") or []
+                            if receipt.get("target_id") == target_id
+                        )
+                        for report, _ in reports
+                    ]
+                )
+            )
+            for target_id in sorted(fingerprints[0])
+        ),
+    }
+
+
+def policy_metrics_from_evaluation_reports(
+    replay_report: dict[str, Any],
+    shadow_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Flatten the SSOT reports into the strict policy-promotion metric schema."""
+
+    if replay_report.get("evaluation_mode") != "replay" or shadow_report.get("evaluation_mode") != "shadow":
+        raise EvaluationContractError("policy metrics require one replay and one shadow report")
+    if replay_report.get("policy_id") != shadow_report.get("policy_id"):
+        raise EvaluationContractError("replay and shadow reports must belong to the same policy")
+    if replay_report.get("dataset_manifest_fingerprint") != shadow_report.get("dataset_manifest_fingerprint"):
+        raise EvaluationContractError("replay and shadow reports must use the same frozen dataset")
+
+    replay_held_in = replay_report.get("held_in") or {}
+    replay_held_out = replay_report.get("held_out") or {}
+    shadow_held_in = shadow_report.get("held_in") or {}
+    shadow_held_out = shadow_report.get("held_out") or {}
+    replay_clean = replay_report.get("clean") or {}
+    shadow_clean = shadow_report.get("clean") or {}
+    replay_quality = replay_report.get("evidence_quality") or {}
+    shadow_quality = shadow_report.get("evidence_quality") or {}
+    replay_operational = replay_report.get("operational") or {}
+    shadow_operational = shadow_report.get("operational") or {}
+
+    def _minimum_rate(first: Any, second: Any) -> float:
+        values = [float(value) for value in (first, second) if value is not None]
+        return min(values) if values else 0.0
+
+    replay_tp = int(replay_held_in.get("true_positives") or 0) + int(replay_held_out.get("true_positives") or 0)
+    replay_fp = int(replay_held_in.get("false_positives") or 0) + int(replay_held_out.get("false_positives") or 0)
+    replay_fn = int(replay_held_in.get("false_negatives") or 0) + int(replay_held_out.get("false_negatives") or 0)
+    total_cost = sum(
+        float(value)
+        for value in (
+            replay_operational.get("total_estimated_cost_usd"),
+            shadow_operational.get("total_estimated_cost_usd"),
+        )
+        if value is not None
+    )
+    total_wall_clock = sum(
+        float(value)
+        for value in (
+            replay_operational.get("total_wall_clock_seconds"),
+            shadow_operational.get("total_wall_clock_seconds"),
+        )
+        if value is not None
+    )
+    clean_fp = max(
+        int(replay_clean.get("customer_deliverable_false_positives") or 0),
+        int(shadow_clean.get("customer_deliverable_false_positives") or 0),
+    )
+    clean_high_fp = max(
+        int(replay_clean.get("critical_high_false_positives") or 0),
+        int(shadow_clean.get("critical_high_false_positives") or 0),
+    )
+    return {
+        "evaluation_complete": bool(replay_report.get("evaluation_complete") and shadow_report.get("evaluation_complete")),
+        "commercial_shape_ready": bool(
+            (replay_report.get("commercial_shape") or {}).get("commercial_shape_ready")
+            and (shadow_report.get("commercial_shape") or {}).get("commercial_shape_ready")
+        ),
+        "operational_metrics_complete": bool(replay_operational.get("complete") and shadow_operational.get("complete")),
+        "sample_count": int(replay_report.get("evaluated_target_count") or 0) + int(shadow_report.get("evaluated_target_count") or 0),
+        "confirmed_bugs": replay_tp,
+        "total_bugs": replay_tp + replay_fp,
+        "true_positives": replay_tp,
+        "false_positives": replay_fp + clean_fp,
+        "false_negatives": replay_fn,
+        "held_in_recall": float(replay_held_in.get("micro_recall") or 0),
+        "held_in_precision": float(replay_held_in.get("micro_precision") or 0),
+        "held_in_f1": float(replay_held_in.get("micro_f1") or 0),
+        "held_out_recall": float(replay_held_out.get("micro_recall") or 0),
+        "held_out_precision": float(replay_held_out.get("micro_precision") or 0),
+        "held_out_f1": float(replay_held_out.get("micro_f1") or 0),
+        "shadow_held_in_f1": float(shadow_held_in.get("micro_f1") or 0),
+        "shadow_held_out_f1": float(shadow_held_out.get("micro_f1") or 0),
+        "macro_industry_recall": float(replay_report.get("held_out_macro_industry_recall") or 0),
+        "min_industry_recall": float(replay_report.get("held_out_min_industry_recall") or 0),
+        "unique_industry_count": len(replay_report.get("held_out_industries") or {}),
+        "clean_false_positives": clean_fp,
+        "clean_critical_high_false_positives": clean_high_fp,
+        "evidence_quality_score": _minimum_rate(
+            replay_quality.get("evidence_completeness_rate"), shadow_quality.get("evidence_completeness_rate")
+        ),
+        "reproducibility_rate": _minimum_rate(
+            replay_quality.get("reproduction_success_rate"), shadow_quality.get("reproduction_success_rate")
+        ),
+        "engine_success_rate": _minimum_rate(
+            replay_operational.get("engine_success_rate"), shadow_operational.get("engine_success_rate")
+        ),
+        "execution_success_rate": _minimum_rate(
+            replay_operational.get("execution_success_rate"), shadow_operational.get("execution_success_rate")
+        ),
+        "duplicate_rate": max(
+            float(replay_operational.get("duplicate_rate") or 0),
+            float(shadow_operational.get("duplicate_rate") or 0),
+        ),
+        "production_http_requests": int(replay_operational.get("production_http_requests") or 0)
+        + int(shadow_operational.get("production_http_requests") or 0),
+        "cleanup_failures": int(replay_operational.get("cleanup_failures") or 0)
+        + int(shadow_operational.get("cleanup_failures") or 0),
+        "safety_incidents": int(replay_operational.get("safety_incidents") or 0)
+        + int(shadow_operational.get("safety_incidents") or 0),
+        "dirty_test_environments": int(replay_operational.get("dirty_test_environments") or 0)
+        + int(shadow_operational.get("dirty_test_environments") or 0),
+        "pipeline_degraded_targets": int(replay_report.get("pipeline_degraded_target_count") or 0)
+        + int(shadow_report.get("pipeline_degraded_target_count") or 0),
+        "total_cost_usd": round(total_cost, 6),
+        "cost_per_true_positive_usd": round(total_cost / replay_tp, 6) if replay_tp > 0 else 0.0,
+        "wall_clock_seconds": round(total_wall_clock, 4),
     }
 
 
@@ -618,3 +996,23 @@ def persist_evaluation_receipt(receipt: dict[str, Any], output_root: Path | str)
     temporary.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary, path)
     return path
+
+
+def persist_evaluation_report(report: dict[str, Any], path: Path | str) -> Path:
+    """Persist an immutable aggregate report at an evaluator-owned path."""
+
+    if report.get("schema_version") != REPORT_SCHEMA:
+        raise EvaluationContractError("cannot persist a report with an unsupported schema")
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        existing = json.loads(destination.read_text(encoding="utf-8"))
+        if _canonical_json(existing) != _canonical_json(report):
+            raise EvaluationContractError(
+                f"immutable evaluation report already exists with different content: {destination}"
+            )
+        return destination
+    temporary = destination.with_suffix(destination.suffix + f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, destination)
+    return destination

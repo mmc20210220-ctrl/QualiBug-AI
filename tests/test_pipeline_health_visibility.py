@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from ai_test_asset_center.discovery_funnel import build_funnel, build_pipeline_health
+from ai_test_asset_center.discovery_funnel import (
+    build_funnel,
+    build_pipeline_health,
+    reconcile_product_pipeline_health,
+)
 
 
 def test_pipeline_health_marks_failed_safe_when_execution_observability_gap():
@@ -34,6 +38,35 @@ def test_pipeline_health_marks_blocked_when_no_execution_receipts():
     })
     assert health["status"] == "BLOCKED"
     assert health["empty_findings_means_no_bugs"] is False
+
+
+def test_product_health_never_reports_ok_when_preflight_blocked_execution() -> None:
+    health = reconcile_product_pipeline_health(
+        {"status": "OK", "empty_findings_means_no_bugs": True},
+        execution_status="not_executed",
+        preflight_diagnostics={
+            "ready": False,
+            "all_checks_passed": False,
+            "errors": 1,
+        },
+    )
+
+    assert health["status"] == "BLOCKED"
+    assert health["empty_findings_means_no_bugs"] is False
+    assert health["execution_reason"] == "preflight_not_ready"
+    assert health["preflight"]["errors"] == 1
+
+
+def test_product_health_degrades_completed_run_when_preflight_failed() -> None:
+    health = reconcile_product_pipeline_health(
+        {"status": "OK", "empty_findings_means_no_bugs": True},
+        execution_status="completed",
+        preflight_diagnostics={"ready": False, "errors": 2},
+    )
+
+    assert health["status"] == "DEGRADED"
+    assert health["empty_findings_means_no_bugs"] is False
+    assert health["execution_reason"] == "preflight_health_failed"
 
 
 def test_build_funnel_embeds_pipeline_health_and_warns_on_zero_bugs():

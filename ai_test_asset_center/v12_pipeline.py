@@ -15,6 +15,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -30,6 +31,7 @@ from .enterprise_campaign import (
 )
 from .real_id_resolver import (
     bind_entity_fields,
+    bind_path_params_from_documented_body,
     infer_path_params,
     normalize_path_placeholders,
     path_has_placeholders,
@@ -848,6 +850,12 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
     verification_text = context.get("_source_verification_text", source_text)
     manifest, source_issues = _source_manifest_details(context, verification_text)
     environment_ref = str(context.get("environment_ref") or context.get("target_environment") or "").strip()
+    environment_kind = str(
+        context.get("environment_kind")
+        or context.get("environment_class")
+        or context.get("target_environment")
+        or ""
+    ).strip()
     if not base_url:
         return {
             "status": "plan_only",
@@ -867,7 +875,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "missing_requirements": [],
             "approved_base_url": str(base_url).rstrip("/"),
             "environment_ref": environment_ref or "local",
-            "environment_kind": environment_ref or "local",
+            "environment_kind": environment_kind or "local",
             "source_manifest": manifest,
             "source_issues": source_issues,
         }
@@ -891,7 +899,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         "missing_requirements": [],
         "approved_base_url": str(base_url).rstrip("/"),
         "environment_ref": environment_ref,
-        "environment_kind": str(context.get("environment_kind") or context.get("environment_class") or environment_ref).strip(),
+        "environment_kind": environment_kind,
         "source_manifest": manifest,
     }
 
@@ -909,14 +917,32 @@ def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCa
     execution_mode = str(context.get("execution_mode") or "safe_read_only").strip()
     if execution_mode == "safe_read_only":
         return {"status": "approved", "execution_mode": execution_mode}
-    from .sandbox_write_executor import is_production_environment, is_test_or_sandbox_environment
+    from .sandbox_write_executor import (
+        is_production_environment,
+        is_test_or_sandbox_environment,
+        resolve_environment_kind,
+    )
 
-    environment_ref = str(campaign.environment_ref or context.get("environment_ref") or context.get("target_environment") or "").strip()
+    environment_ref = str(campaign.environment_ref or context.get("environment_ref") or "").strip()
+    environment_kind = str(
+        context.get("environment_kind")
+        or context.get("environment_class")
+        or context.get("target_environment")
+        or ""
+    ).strip()
+    if not environment_kind:
+        # Fall back to project-declared environment (real_project_config) and
+        # environment_ref tokens such as ``benchmark_mall_test``.
+        environment_kind = resolve_environment_kind(
+            root,
+            str(getattr(campaign, "project_id", "") or context.get("project") or ""),
+            {**dict(context or {}), "environment_ref": environment_ref},
+        )
     if not environment_ref:
         return {"status": "blocked", "code": "ENVIRONMENT_REFERENCE_MISSING", "execution_mode": execution_mode}
-    if is_production_environment(environment_ref):
+    if is_production_environment(environment_kind):
         return {"status": "blocked", "code": "PRODUCTION_WRITE_BLOCKED", "execution_mode": execution_mode}
-    if not is_test_or_sandbox_environment(environment_ref):
+    if not is_test_or_sandbox_environment(environment_kind):
         return {"status": "blocked", "code": "ENVIRONMENT_NOT_RECOGNIZED_NONPROD", "execution_mode": execution_mode}
     approval_id = str(context.get("execution_approval_id") or "").strip()
     return {
@@ -924,6 +950,7 @@ def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCa
         "approval_id": approval_id,
         "execution_mode": execution_mode,
         "environment_ref": environment_ref,
+        "environment_kind": environment_kind,
         "authorization_basis": "source_bound_nonproduction_campaign",
     }
 
@@ -1530,6 +1557,48 @@ def _take_diverse_slice_batch(items: list[dict[str, Any]], budget: int) -> list[
 
 
 def _rank_behavior_slices_for_selection(slices: list[dict[str, Any]], scenarios: list[Any] | None = None) -> list[dict[str, Any]]:
+    from .policy_wiring import get_policy_value
+
+    configured_signals = get_policy_value(
+        "discovery",
+        "candidate_ranking_signals",
+        ["source_strength", "endpoint_executability", "evidence_gap", "historical_yield"],
+    )
+    ranking_signals = [
+        str(item).strip()
+        for item in (configured_signals if isinstance(configured_signals, list) else [])
+        if str(item).strip()
+    ]
+
+    def numeric(value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return parsed if math.isfinite(parsed) else 0.0
+
+    def policy_signal(item: dict[str, Any], signal: str, dynamic: float) -> float:
+        if signal == "source_strength":
+            return float(len(item.get("source_refs") or []))
+        if signal == "endpoint_executability":
+            return 1.0 if item.get("endpoints") else 0.0
+        if signal == "evidence_gap":
+            return float(len(item.get("evidence_gaps") or []))
+        if signal == "historical_yield":
+            return numeric(item.get("historical_yield"))
+        if signal == "weakness_recurrence":
+            return numeric(item.get("weakness_recurrence"))
+        if signal == "cross_industry_recurrence":
+            return numeric(item.get("cross_industry_recurrence"))
+        if signal == "runtime_executability":
+            explicit = item.get("runtime_executability")
+            return numeric(explicit) if explicit is not None else (1.0 if math.isfinite(dynamic) else 0.0)
+        if signal == "cleanup_risk":
+            return -numeric(item.get("cleanup_risk"))
+        if signal == "evidence_completion_probability":
+            return numeric(item.get("evidence_completion_probability"))
+        return 0.0
+
     scenario_scores: dict[str, float] = {}
     scenario_families: dict[str, str] = {}
     scenario_selection_origins: dict[str, str] = {}
@@ -1545,20 +1614,21 @@ def _rank_behavior_slices_for_selection(slices: list[dict[str, Any]], scenarios:
         if selection_origin:
             scenario_selection_origins[slice_id] = selection_origin
 
-    def sort_key(item: dict[str, Any]) -> tuple[int, float, float, int, str, str]:
+    def sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
         slice_id = str(item.get("slice_id") or "")
         selection_origin = str(item.get("_selection_origin") or "").strip().lower()
         materialized_boost = 1 if selection_origin == "active_slice_fallback_materialized" else 0
         dynamic = scenario_scores.get(slice_id, float("-inf"))
         base = float(item.get("priority") or 0.0)
         kind_rank = _selection_kind_rank(item)
+        policy_scores = tuple(policy_signal(item, signal, dynamic) for signal in ranking_signals)
         return (
             materialized_boost,
             dynamic,
+            *policy_scores,
             base,
             kind_rank,
             -len(item.get("source_refs") or []),
-            0.0,
         )
 
     ranked = []
@@ -1572,17 +1642,20 @@ def _rank_behavior_slices_for_selection(slices: list[dict[str, Any]], scenarios:
         if slice_id and slice_id in scenario_selection_origins:
             normalized["_selection_origin"] = scenario_selection_origins[slice_id]
         ranked.append(normalized)
-    ranked.sort(
-        key=lambda item: (
-            -sort_key(item)[0],
-            -sort_key(item)[1],
-            -sort_key(item)[2],
-            sort_key(item)[3],
-            sort_key(item)[4],
+    def descending_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+        values = sort_key(item)
+        numeric_prefix = values[: 2 + len(ranking_signals) + 1]
+        kind_rank = values[-2]
+        source_ref_rank = values[-1]
+        return (
+            *(-numeric(value) for value in numeric_prefix),
+            kind_rank,
+            source_ref_rank,
             str(item.get("entity") or ""),
             str(item.get("slice_id") or ""),
         )
-    )
+
+    ranked.sort(key=descending_sort_key)
     return ranked
 
 
@@ -2493,8 +2566,12 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                             safety_boundary=_safety_boundary,
                             observer_token=str(_orig_token or _token or ""),
                             documented_routes=catalog,
-                            execute_fn=lambda sc, bu, safety_boundary=None: _execute_scenario(
-                                sc, bu, max_retries=2, safety_boundary=safety_boundary,
+                            execute_fn=lambda sc, bu, safety_boundary=None, write_observer=None: _execute_scenario(
+                                sc,
+                                bu,
+                                max_retries=2,
+                                safety_boundary=safety_boundary,
+                                write_observer=write_observer,
                             ),
                         )
                         # Tag trace with role info for oracle
@@ -2620,6 +2697,13 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 )
             )
             execution_telemetry = _summarize_execution_skip_telemetry(attempted_traces)
+            observed_http_request_count = sum(
+                1
+                for _, trace in attempted_traces
+                for step in (trace.get("steps") or [])
+                if isinstance(step, dict)
+                and int(step.get("status") or _dict(step.get("response")).get("status_code") or 0) > 0
+            )
             execution_phase_status = "completed" if real_trace_count > 0 else "blocked"
             execution_reason = "" if real_trace_count > 0 else (
                 "test_actor_identity_missing"
@@ -2644,6 +2728,8 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 "generated_scenarios": len(scenarios),
                 "executable_scenarios": len(executable),
                 "scenario_attempts": len(attempted_traces),
+                "observed_http_request_count": observed_http_request_count,
+                "production_http_requests": 0,
                 "attempts_without_http": int(execution_telemetry.get("scenarios_blocked") or 0),
                 "planned_only": len(plan_only),
                 # 主链 5 × 主链 1: observability — how many scenarios were blocked
@@ -2877,13 +2963,32 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
 # (single source of truth shared with regression_runner) and is imported above.
 
 
-def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2,
-                      safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
-    for attempt in range(max_retries + 1):
+def _execute_scenario(
+    scenario: Any,
+    base_url: str,
+    max_retries: int = 2,
+    safety_boundary: dict[str, Any] | None = None,
+    write_observer: Any = None,
+) -> dict[str, Any]:
+    # Retrying an entire write scenario can duplicate already-accepted writes.
+    # Read-only scenarios retain bounded retry behavior; write scenarios execute
+    # once and surface the original failure.
+    has_write = any(
+        str(getattr(step, "api_method", "") or "").upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and str(getattr(step, "action", "") or "").strip().lower() != "login"
+        for step in (getattr(scenario, "steps", []) or [])
+    )
+    attempt_limit = 0 if has_write else max(0, int(max_retries or 0))
+    for attempt in range(attempt_limit + 1):
         try:
-            return __execute_scenario_once(scenario, base_url, safety_boundary=safety_boundary)
+            return __execute_scenario_once(
+                scenario,
+                base_url,
+                safety_boundary=safety_boundary,
+                write_observer=write_observer,
+            )
         except Exception as exc:
-            if attempt < max_retries:
+            if attempt < attempt_limit:
                 time.sleep(0.5 * (attempt + 1))
                 continue
             return {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": [f"failed_after_retries:{exc}"], "duration_ms": 0}
@@ -2903,13 +3008,27 @@ def _resolve_get_candidates(path: str) -> list[str]:
     return list(dict.fromkeys(item for item in candidates if item.startswith("/")))
 
 
+def _encoded_request_url(base_url: str, path: str) -> str:
+    """Percent-encode non-ASCII route/query text without changing separators."""
+
+    raw_path, separator, raw_query = str(path or "").partition("?")
+    encoded_path = urllib.parse.quote(raw_path, safe="/%:@-._~!$&'()*+,;=")
+    encoded_query = urllib.parse.quote(raw_query, safe="=&;%:@/?-._~!$'()*+,") if separator else ""
+    suffix = f"?{encoded_query}" if separator else ""
+    return base_url.rstrip("/") + encoded_path + suffix
+
+
 def _body_has_unbound_placeholders(body: Any) -> list[str]:
     text = json.dumps(body, ensure_ascii=False) if body else ""
     return list(dict.fromkeys(re.findall(r"\{([A-Za-z_]\w*)\}", text)))
 
 
-def __execute_scenario_once(scenario: Any, base_url: str,
-                            safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
+def __execute_scenario_once(
+    scenario: Any,
+    base_url: str,
+    safety_boundary: dict[str, Any] | None = None,
+    write_observer: Any = None,
+) -> dict[str, Any]:
     trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}
     # Runtime bindings are produced only by explicit, source-derived scenario
     # steps (login/resolver/create). Never perform hidden seed reads or writes
@@ -2950,6 +3069,38 @@ def __execute_scenario_once(scenario: Any, base_url: str,
         # Normalize placeholders FIRST (:id → {id}) so _replace can match them
         path = normalize_path_placeholders(path)
         path, body = _replace(path, bindings), _replace(body, bindings)
+        if path_has_placeholders(path) and body and method not in {"GET", "HEAD"}:
+            from .policy_wiring import get_policy_value
+
+            allowed_binding_sources = {
+                str(item).strip()
+                for item in (
+                    get_policy_value("execution", "runtime_binding_sources", []) or []
+                )
+                if str(item).strip()
+            }
+            body_provenance = str(getattr(step, "body_provenance", "") or "").strip()
+            required_source = {
+                "documented_example": "documented_example",
+                "documented_schema_generated": "documented_schema_generated_value",
+            }.get(body_provenance, "")
+            if required_source and required_source in allowed_binding_sources:
+                candidate_bindings, binding_evidence = bind_path_params_from_documented_body(
+                    path,
+                    body,
+                )
+                for key, value in candidate_bindings.items():
+                    bindings.setdefault(key, value)
+                if binding_evidence:
+                    trace.setdefault("runtime_binding_events", []).extend([
+                        {
+                            **item,
+                            "source": required_source,
+                            "body_provenance": body_provenance,
+                        }
+                        for item in binding_evidence
+                    ])
+                    path, body = _replace(path, bindings), _replace(body, bindings)
         if path_has_placeholders(path):
             # Alias fill: sku/orderId/id often share the same bound value under
             # different names depending on which list endpoint returned them.
@@ -3069,17 +3220,29 @@ def __execute_scenario_once(scenario: Any, base_url: str,
             token = str(bindings["token"])
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        started = time.time()
         action_name = str(getattr(step, "action", "") or "").strip().lower()
+        write_event_id: Any = None
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and action_name != "login" and write_observer is not None:
+            write_event_id = write_observer(
+                "before",
+                {
+                    "action": action_name,
+                    "method": method,
+                    "path": path,
+                    "body": body,
+                    "token": token,
+                },
+            )
+        started = time.time()
         resolve_attempt_paths = (
             _resolve_get_candidates(path)
             if method == "GET" and action_name.startswith("resolve_")
             else [path]
         )
         status, response_body, response_headers = 0, {}, {}
-        url = base_url.rstrip("/") + path
+        url = _encoded_request_url(base_url, path)
         for attempt_path in resolve_attempt_paths:
-            url = base_url.rstrip("/") + attempt_path
+            url = _encoded_request_url(base_url, attempt_path)
             try:
                 request = urllib.request.Request(url, method=method, data=data, headers=headers)
                 with urllib.request.urlopen(request, timeout=10) as response:
@@ -3125,6 +3288,19 @@ def __execute_scenario_once(scenario: Any, base_url: str,
                 path = attempt_path
                 break
         _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
+        if write_event_id is not None and write_observer is not None:
+            write_observer(
+                "after",
+                {
+                    "event_id": write_event_id,
+                    "action": action_name,
+                    "method": method,
+                    "path": path,
+                    "status": status,
+                    "response_body": response_body,
+                    "token": token,
+                },
+            )
         for field in getattr(step, "extract_from_response", []) or []:
             value = _extract(response_body, str(field))
             if value not in (None, "", [], {}):
@@ -3210,6 +3386,19 @@ def __execute_scenario_once(scenario: Any, base_url: str,
         except Exception as _db_exc:
             trace["db_evidence"] = {"status": "unavailable", "reason": f"db_snapshot_verify_failed:{type(_db_exc).__name__}"}
 
+    trace["runtime_binding_summary"] = {
+        "event_count": len(trace.get("runtime_binding_events") or []),
+        "sources": sorted({
+            str(item.get("source") or "")
+            for item in (trace.get("runtime_binding_events") or [])
+            if isinstance(item, dict) and str(item.get("source") or "")
+        }),
+        "bound_path_params": sorted({
+            str(item.get("path_param") or "")
+            for item in (trace.get("runtime_binding_events") or [])
+            if isinstance(item, dict) and str(item.get("path_param") or "")
+        }),
+    }
     return trace
 
 
@@ -3468,11 +3657,42 @@ def _status_confirmation_gap(
     validation = trace.get("request_contract_validation")
     if isinstance(validation, dict) and validation.get("valid_success_control") is True:
         return ""
+    if _trace_has_valid_success_control(trace, step):
+        return ""
     # A 4xx can be caused by missing fixtures, stale identities, incomplete
     # payloads or credentials. It remains a real observation, but without a
     # successful control proving the request contract it is not a customer
     # deliverable defect.
     return "VALID_SUCCESS_CONTROL_REQUIRED"
+
+
+def _trace_has_valid_success_control(trace: dict[str, Any], failing_step: dict[str, Any]) -> bool:
+    """True only when the same endpoint contract already succeeded in-trace."""
+    steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
+    failing_id = id(failing_step)
+    failing_method = str(failing_step.get("method") or "").upper()
+    failing_path = str(failing_step.get("path") or "").split("?", 1)[0]
+    if not failing_method or not failing_path:
+        return False
+    for item in steps:
+        if not isinstance(item, dict) or id(item) == failing_id:
+            continue
+        status = int(
+            (item.get("response") or {}).get("status_code")
+            if isinstance(item.get("response"), dict)
+            else item.get("status")
+            or 0
+        )
+        if not (200 <= status < 300):
+            continue
+        method = str(item.get("method") or "").upper()
+        path = str(item.get("path") or "").split("?", 1)[0]
+        # A successful bootstrap on another endpoint proves only that some
+        # authentication and fixture operation worked. It does not prove the
+        # failing endpoint's payload, permissions or state preconditions.
+        if method == failing_method and path == failing_path:
+            return True
+    return False
 
 
 def _trace_before_after_snapshot(trace: dict[str, Any]) -> dict[str, Any]:

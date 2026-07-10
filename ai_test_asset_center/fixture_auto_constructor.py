@@ -443,7 +443,7 @@ class FixtureAutoConstructor:
             return [template_map.get(r, r) for r in result]
         return result
 
-def to_curl_commands(self, plan: FixturePlan, base_url: str = "http://127.0.0.1:8000/api") -> list[str]:
+def to_curl_commands(self, plan: FixturePlan, base_url: str = "http://127.0.0.1:8088/api") -> list[str]:
         """Generate curl commands for creating the fixture objects."""
         commands = []
         for obj in plan.objects:

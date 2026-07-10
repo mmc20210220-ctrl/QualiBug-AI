@@ -53,6 +53,13 @@ def test_cleanliness_guard_archives_fully_clean_prior_audit(tmp_path: Path) -> N
 
     assert result["status"] == "clean_all_prior_writes_cleaned"
     assert Path(result["archived_audit"]).is_file()
+    assert len(result["archived_audit_sha256"]) == 64
+    assert not path.exists()
+    assert assert_benchmark_target_clean(
+        root=tmp_path,
+        project="benchmark",
+        target_base_url="http://127.0.0.1:8080",
+    )["status"] == "clean_no_prior_write_audit"
 
 
 def test_cleanliness_guard_verifies_and_archives_reset_receipt(tmp_path: Path) -> None:
@@ -94,3 +101,5 @@ def test_cleanliness_guard_verifies_and_archives_reset_receipt(tmp_path: Path) -
     assert result["incomplete_cleanup_count"] == 1
     assert Path(result["archived_audit"]).is_file()
     assert Path(result["archived_receipt"]).is_file()
+    assert len(result["archived_audit_sha256"]) == 64
+    assert not path.exists()

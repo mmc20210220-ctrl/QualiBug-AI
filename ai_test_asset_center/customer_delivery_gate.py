@@ -9,6 +9,7 @@ else remains an internal clue until more evidence is collected.
 """
 
 from typing import Any
+import copy
 
 CUSTOMER_READY_MIN_EVIDENCE_SCORE = 90
 _ALLOWED_FINAL_REVIEW_STATUSES = {"PENDING_REVIEW", "VALIDATED_CANDIDATE", "CUSTOMER_READY"}
@@ -82,6 +83,21 @@ REJECTION_REASON_EXPLANATIONS: dict[str, dict[str, str]] = {
         "label": "缺少客户可核验证据",
         "detail": "请求、响应、失败断言、时间戳或真实证据标记不完整。",
         "next_action": "补齐 request_raw、response_raw、expected/actual 断言和 timestamp。",
+    },
+    "CLEANUP_NOT_SUCCEEDED": {
+        "label": "写探测清理未成功",
+        "detail": "受治理写探测声明了 cleanup，但清理没有成功完成，当前结果不能进入客户缺陷清单。",
+        "next_action": "恢复测试环境、完成补偿清理并生成新的 cleanup 审计收据后重新评估。",
+    },
+    "CLEANUP_EVIDENCE_MISSING": {
+        "label": "缺少写探测清理证据",
+        "detail": "结果来自写方法，但证据链没有声明 cleanup 结果或显式只读语义，不能证明受治理写生命周期完整。",
+        "next_action": "由 sandbox executor 绑定 cleanup 状态、收据和审计记录；只读 POST 必须显式标记 read_only。",
+    },
+    "CLEANUP_RECEIPT_MISSING": {
+        "label": "缺少清理审计收据",
+        "detail": "写探测 cleanup 已声明完成，但没有绑定不可变 cleanup receipt。",
+        "next_action": "补齐 sandbox executor cleanup receipt，并将其绑定到 finding 证据链。",
     },
     "BLOCKED_AUTH_BLOCKED": {
         "label": "认证或权限配置阻断",
@@ -230,6 +246,61 @@ def has_customer_replay_asset(item: dict[str, Any]) -> bool:
     )
 
 
+def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
+    """Fail closed when a write-shaped finding omits its cleanup contract."""
+
+    evidence = _dict(item.get("evidence"))
+    raw_evidence = _dict(item.get("raw_evidence"))
+    sandbox_write = _dict(raw_evidence.get("sandbox_write"))
+    cleanup = {
+        **_dict(sandbox_write.get("cleanup")),
+        **_dict(evidence.get("cleanup")),
+    }
+    reproduction = _dict(item.get("reproduction"))
+    request_raw = _dict(raw_evidence.get("request_raw"))
+    method = _text(
+        reproduction.get("method")
+        or item.get("repro_method")
+        or request_raw.get("method")
+    ).upper()
+    path = _lower(
+        reproduction.get("path")
+        or item.get("repro_path")
+        or request_raw.get("path")
+        or evidence.get("request")
+        or ""
+    )
+    execution_semantics = _lower(
+        evidence.get("execution_semantics")
+        or raw_evidence.get("execution_semantics")
+        or item.get("execution_semantics")
+        or item.get("execution_policy")
+    )
+    explicit_read_only = execution_semantics in {
+        "read_only", "safe_read_only", "query_only",
+    }
+    auth_step = path.endswith("/login") or "/auth/login" in path or path.rstrip("/").endswith("/auth")
+    if not cleanup:
+        # Auth/login POSTs are identity steps, not governed resource writes.
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and not explicit_read_only and not auth_step:
+            return ["CLEANUP_EVIDENCE_MISSING"]
+        return []
+    status = _lower(cleanup.get("status"))
+    if status == "not_required":
+        strategy = _lower(cleanup.get("strategy") or cleanup.get("reason"))
+        rejection_proved_unchanged = strategy in {
+            "rejected_write_observer_unchanged",
+            "setup_rejected_observer_unchanged",
+        }
+        if not explicit_read_only and not rejection_proved_unchanged:
+            return ["CLEANUP_NOT_SUCCEEDED"]
+    elif status not in {"completed", "success", "succeeded", "read_only"}:
+        return ["CLEANUP_NOT_SUCCEEDED"]
+    if status not in {"not_required", "read_only"} and not _text(cleanup.get("receipt_ref")):
+        return ["CLEANUP_RECEIPT_MISSING"]
+    return []
+
+
 def customer_delivery_rejection_reasons(item: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
     if not isinstance(item, dict):
@@ -272,6 +343,7 @@ def customer_delivery_rejection_reasons(item: dict[str, Any]) -> list[str]:
         reasons.append("MISSING_REAL_REPLAY_ASSET")
     if not has_customer_facing_hard_evidence(item):
         reasons.append("MISSING_CUSTOMER_FACING_HARD_EVIDENCE")
+    reasons.extend(governed_cleanup_rejection_reasons(item))
     return reasons
 
 
@@ -325,3 +397,71 @@ def split_customer_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[di
                 ],
             })
     return defects, clues
+
+
+def apply_governed_campaign_cleanup(
+    items: list[dict[str, Any]],
+    cleanup_receipt: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Re-adjudicate only findings blocked solely by per-scenario cleanup.
+
+    A controller-level reset is valid cleanup when it ran after the scan,
+    emitted an audit receipt, and proved the environment clean. All original
+    scenario cleanup evidence remains attached for traceability.
+    """
+
+    if not isinstance(cleanup_receipt, dict):
+        raise ValueError("campaign cleanup receipt must be an object")
+    if cleanup_receipt.get("status") != "SUCCEEDED":
+        raise ValueError("campaign cleanup receipt must have SUCCEEDED status")
+    if cleanup_receipt.get("dirty_environment") is not False:
+        raise ValueError("campaign cleanup receipt must prove a clean environment")
+    audit_receipt_id = _text(cleanup_receipt.get("audit_receipt_id"))
+    observation_ref = _text(cleanup_receipt.get("after_cleanup_observation_ref"))
+    if not audit_receipt_id or not observation_ref:
+        raise ValueError("campaign cleanup receipt requires audit and after-observation references")
+
+    eligible_cleanup_reasons = {
+        "CLEANUP_NOT_SUCCEEDED",
+        "CLEANUP_RECEIPT_MISSING",
+        "CLEANUP_EVIDENCE_MISSING",
+    }
+    readjudicated: list[dict[str, Any]] = []
+    untouched: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        reasons = set(customer_delivery_rejection_reasons(item))
+        if not reasons or not reasons.issubset(eligible_cleanup_reasons):
+            untouched.append(copy.deepcopy(item))
+            continue
+        updated = copy.deepcopy(item)
+        evidence = _dict(updated.get("evidence"))
+        raw_evidence = _dict(updated.get("raw_evidence"))
+        sandbox_write = _dict(raw_evidence.get("sandbox_write"))
+        original_cleanup = copy.deepcopy(
+            _dict(evidence.get("cleanup")) or _dict(sandbox_write.get("cleanup"))
+        )
+        cleanup = {
+            "status": "completed",
+            "receipt_ref": audit_receipt_id,
+            "after_observation_ref": observation_ref,
+            "scope": "governed_campaign_cleanup",
+        }
+        evidence["cleanup"] = cleanup
+        evidence["scenario_cleanup_before_campaign_reset"] = original_cleanup
+        sandbox_write["cleanup"] = cleanup
+        sandbox_write["scenario_cleanup_before_campaign_reset"] = original_cleanup
+        raw_evidence["sandbox_write"] = sandbox_write
+        updated["evidence"] = evidence
+        updated["raw_evidence"] = raw_evidence
+        updated["campaign_cleanup_receipt"] = {
+            "audit_receipt_id": audit_receipt_id,
+            "after_cleanup_observation_ref": observation_ref,
+        }
+        if is_customer_deliverable_defect(updated):
+            readjudicated.append(updated)
+        else:
+            untouched.append(updated)
+    defects, residual_clues = split_customer_delivery_tracks(readjudicated + untouched)
+    return defects, residual_clues

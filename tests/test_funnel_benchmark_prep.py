@@ -128,3 +128,14 @@ def test_prepare_funnel_benchmark_target_resets_db_then_refreshes_tokens(tmp_pat
     assert Path(result["reset_receipt_path"]).is_file()
     assert result["reset_receipt"]["schema_version"] == "benchmark_target_reset.v1"
     assert result["reset_receipt"]["status"] == "completed"
+
+
+def test_funnel_runtime_never_loads_or_scores_evaluator_private_ground_truth() -> None:
+    runner = Path(__file__).resolve().parents[1] / "_funnel_benchmark.py"
+    source = runner.read_text(encoding="utf-8")
+
+    assert "benchmark_compute" not in source
+    assert "QUALIBUG_BENCHMARK_GROUND_TRUTH" not in source
+    assert "discovery_evaluation_submission.v1" in source
+    assert '"measurement_status": "NOT_MEASURED"' in source
+    assert "external_evaluator_receipt_required" in source

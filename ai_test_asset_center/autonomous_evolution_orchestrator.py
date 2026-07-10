@@ -366,12 +366,11 @@ class EvolutionOrchestrator:
         challenger_result: dict,
         evaluation_evidence: dict,
     ) -> dict:
-        """Apply the strict observed-evidence promotion gate.
+        """Evaluate supplied metrics without activating a policy.
 
-        This is intentionally separate from candidate generation.  A policy
-        can only be activated after paired replay + shadow data has been
-        persisted by the caller.  Missing data returns HOLD, never a best-effort
-        promotion.
+        Mapping inputs are useful for diagnostics but are not independently
+        authenticated artifacts. Activation is therefore reserved for
+        ``evaluate_and_promote_observed_candidate``.
         """
         from .policy_evaluation_gate import PolicyPromotionGate
 
@@ -381,17 +380,81 @@ class EvolutionOrchestrator:
         if candidate is None:
             raise ValueError(f"Policy {candidate_policy_id} not found")
         candidate.evaluation_summary = decision
-        if not decision["promote"]:
-            # Candidate remains inspectable but is never silently made active.
-            candidate.status = "candidate"
-            self.registry._save()
-            return {**decision, "policy_id": candidate_policy_id, "status": "candidate"}
+        candidate.status = "candidate"
+        self.registry._save()
+        if decision["promote"]:
+            decision = {
+                **decision,
+                "promote": False,
+                "reason": "BLOCKED_UNAUTHENTICATED_METRIC_INPUT_USE_OBSERVED_RUNNER",
+                "diagnostic_gate_would_promote": True,
+            }
+        return {**decision, "policy_id": candidate_policy_id, "status": "candidate"}
 
-        # Registry deliberately requires candidate -> champion -> active.
+    def evaluate_and_promote_observed_candidate(
+        self,
+        *,
+        candidate_policy_id: str,
+        manifest_path: str,
+        output_root: str,
+        fixture_controller: object,
+        scan_executor: object,
+        evaluation_id: str | None = None,
+    ) -> dict:
+        """Execute the evaluator-owned four-pass contract, then apply its gate.
+
+        The registry remains unchanged while replay/shadow runs execute. Only a
+        measured, non-regressive decision from ``DiscoveryPolicyEvaluationRunner``
+        is eligible for the existing candidate -> champion -> active transition.
+        """
+        from .discovery_policy_evaluation_runner import DiscoveryPolicyEvaluationRunner
+
+        candidate = self.registry._policies.get(candidate_policy_id)
+        if candidate is None:
+            raise ValueError(f"Policy {candidate_policy_id} not found")
+        champion = self.registry.get_active()
+        if champion is None:
+            raise RuntimeError("No active champion policy is available for observed evaluation")
+        runner = DiscoveryPolicyEvaluationRunner(
+            manifest_path,
+            output_root=output_root,
+            fixture_controller=fixture_controller,
+            scan_executor=scan_executor,
+        )
+        comparison = runner.run(
+            champion=champion,
+            challenger=candidate,
+            evaluation_id=evaluation_id,
+        )
+        decision = comparison["promotion_decision"]
+        comparison_path = Path(comparison["comparison_ref"])
+        candidate.evaluation_summary = {
+            "schema_version": comparison["schema_version"],
+            "comparison_ref": comparison["comparison_ref"],
+            "comparison_file_sha256": hashlib.sha256(comparison_path.read_bytes()).hexdigest(),
+            "dataset_manifest_fingerprint": comparison["dataset_manifest_fingerprint"],
+            "strategy_fingerprint": comparison["challenger"]["strategy_fingerprint"],
+            "observed_execution": comparison["observed_execution"],
+            "estimated_metrics_used": comparison["estimated_metrics_used"],
+            **decision,
+        }
+        self.registry._save()
+        if not decision["promote"]:
+            return {
+                **comparison,
+                "activation_performed": False,
+                "active_policy_id": champion.policy_id,
+                "candidate_status": candidate.status,
+            }
+
         self.registry.promote(candidate_policy_id, decision["reason"])
         promoted = self.registry.promote(candidate_policy_id, decision["reason"])
-        return {**decision, "policy_id": candidate_policy_id, "status": promoted.status,
-                "active_policy_id": self.registry._active_policy_id}
+        return {
+            **comparison,
+            "activation_performed": True,
+            "active_policy_id": promoted.policy_id,
+            "candidate_status": promoted.status,
+        }
 
     def evaluate_candidate(
         self, champion_result: dict, challenger_result: dict
@@ -507,21 +570,24 @@ def run_evolution_orchestrated(
 
         # A candidate must be evaluated by a separate replay/shadow gate before
         # promotion.  Never promote a policy merely because the generation code ran.
-        # Persist a strict evaluation request.  Historical benchmark analysis may
-        # inform operators, but it cannot activate a policy because it does not
-        # prove paired replay/shadow execution.
-        try:
-            from .replay_benchmark_runner import ReplayBenchmarkRunner
-            benchmark = ReplayBenchmarkRunner(project_id).evaluate_policy(candidate, active_strategy)
-        except Exception as exc:
-            benchmark = {"evaluated": False, "reason": f"benchmark unavailable: {exc}"}
+        # Persist a strict evaluation request. Historical metric estimation is
+        # deliberately excluded because it cannot prove policy execution.
+        evaluation_request = {
+            "schema_version": "qualibug.discovery-policy-evaluation-request.v1",
+            "status": "AWAITING_OBSERVED_REPLAY_SHADOW",
+            "runner": "DiscoveryPolicyEvaluationRunner",
+            "requires_evaluator_private_manifest": True,
+            "requires_governed_fixture_controller": True,
+            "requires_observed_scan_executor": True,
+            "estimated_metrics_allowed": False,
+        }
         evolution_report.setdefault("candidates", []).append({
             "policy_id": candidate_record.policy_id,
             "version": candidate_record.policy_version,
             "status": "candidate",
             "changes": candidate.__dict__,
             "reason": "awaiting paired replay and shadow evaluation",
-            "benchmark": benchmark,
+            "evaluation_request": evaluation_request,
             "promotion_block": "PolicyPromotionGate requires observed replay/shadow evidence",
         })
         evolution_report["cycles_completed"] += 1

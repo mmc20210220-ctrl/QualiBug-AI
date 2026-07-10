@@ -36,6 +36,7 @@ class ScenarioStep:
     extract_where: dict[str, Any] = field(default_factory=dict)
     expected_status: int = 0
     actor: str = ""
+    body_provenance: str = ""
 
 
 @dataclass
@@ -87,6 +88,7 @@ class ExecutableScenario:
                     "extract_where": step.extract_where,
                     "expected": step.expected_status,
                     "actor": step.actor,
+                    "body_provenance": step.body_provenance,
                 }
                 for step in self.steps
             ],
@@ -358,7 +360,7 @@ class SemanticScenarioGenerator:
         observation_path = str(observation_path or "")
         if observation_path and path_has_placeholders(normalize_path_placeholders(observation_path)):
             resolve_steps, observation_path = self._resolve_entity_steps(
-                observation_path, actor="readonly", start_order=1,
+                observation_path, actor="readonly", start_order=1, api_doc=api_doc,
             )
             steps.extend(resolve_steps)
         if observation_path:
@@ -772,7 +774,7 @@ class SemanticScenarioGenerator:
             cpath, cmethod = create_ep
             cbody = self._runtime_body_template(api_doc, cmethod, cpath)
             bind_steps, _ = self._body_binding_resolve_steps(
-                cbody, actor=role or "readonly", start_order=order,
+                cbody, actor=role or "readonly", start_order=order, api_doc=api_doc,
             )
             steps.extend(bind_steps)
             order += len(bind_steps)
@@ -792,7 +794,7 @@ class SemanticScenarioGenerator:
             # No create route — try list-resolve so later {id} paths can still bind.
             if path_has_placeholders(normalize_path_placeholders(transition.api_endpoint)):
                 resolve_steps, _ = self._resolve_entity_steps(
-                    transition.api_endpoint, actor=role or "readonly", start_order=order,
+                    transition.api_endpoint, actor=role or "readonly", start_order=order, api_doc=api_doc,
                 )
                 steps.extend(resolve_steps)
                 order += len(resolve_steps)
@@ -805,7 +807,7 @@ class SemanticScenarioGenerator:
         action_body = self._action_body_for(transition.api_endpoint, method, endpoints, api_doc)
         if action_body:
             bind_steps, _ = self._body_binding_resolve_steps(
-                action_body, actor=role or "readonly", start_order=order,
+                action_body, actor=role or "readonly", start_order=order, api_doc=api_doc,
             )
             steps.extend(bind_steps)
             order += len(bind_steps)
@@ -815,7 +817,7 @@ class SemanticScenarioGenerator:
             for s in steps
         ):
             resolve_steps, action_path = self._resolve_entity_steps(
-                action_path, actor=role or "readonly", start_order=order,
+                action_path, actor=role or "readonly", start_order=order, api_doc=api_doc,
             )
             steps.extend(resolve_steps)
             order += len(resolve_steps)
@@ -1012,14 +1014,55 @@ class SemanticScenarioGenerator:
     @staticmethod
     def _runtime_body_template(api_doc: str, method: str, path: str) -> dict[str, Any]:
         """Build a write-probe body from the API doc with bindable ``{field}`` placeholders."""
-        normalized_path = normalize_path_placeholders(path)
-        example = _markdown_request_example(api_doc, method, normalized_path) if api_doc else {}
+        body, _provenance = SemanticScenarioGenerator._runtime_body_template_with_provenance(
+            api_doc, method, path,
+        )
+        return body
+
+    @staticmethod
+    def _runtime_body_template_with_provenance(
+        api_doc: str,
+        method: str,
+        path: str,
+    ) -> tuple[dict[str, Any], str]:
+        from .auto_test_data_factory import build_source_grounded_request_body
+
+        if not str(api_doc or "").strip():
+            return {}, "not_available"
+        result = build_source_grounded_request_body(
+            api_doc,
+            method,
+            normalize_path_placeholders(path),
+        )
+        example = result.get("body") if isinstance(result, dict) else {}
+        provenance = str((result or {}).get("provenance") or "not_available")
         if not isinstance(example, dict) or not example:
-            example = _markdown_request_example(api_doc, method, path) if api_doc else {}
-        if not isinstance(example, dict) or not example:
-            return {}
+            return {}, provenance
         bindable = SemanticScenarioGenerator._convert_doc_body_to_bindings(example)
-        return bindable if isinstance(bindable, dict) else {}
+        return (bindable if isinstance(bindable, dict) else {}), provenance
+
+    @staticmethod
+    def _bootstrap_create_body(api_doc: str, create_path: str) -> dict[str, Any]:
+        """Build a create body for identity bootstrap.
+
+        Drops top-level demo string literals (coupon codes, free-text reasons)
+        that are usually optional in API examples and often exhaust after the
+        first successful create. Keeps arrays/objects, numbers, booleans, and
+        ``{placeholder}`` bindings required for identity materialization.
+        """
+        raw = SemanticScenarioGenerator._runtime_body_template(api_doc, "POST", create_path)
+        if not isinstance(raw, dict) or not raw:
+            return {}
+        minimized: dict[str, Any] = {}
+        for key, value in raw.items():
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith("{") and stripped.endswith("}") and len(stripped) > 2:
+                    minimized[key] = value
+                # Skip bare demo strings at the top level.
+                continue
+            minimized[key] = value
+        return minimized if minimized else dict(raw)
 
     @staticmethod
     def _body_binding_resolve_steps(
@@ -1028,11 +1071,14 @@ class SemanticScenarioGenerator:
         actor: str,
         start_order: int,
         api_prefix: str = "/api",
+        api_doc: str = "",
     ) -> tuple[list[ScenarioStep], int]:
         """Insert list-resolve steps for body placeholders not satisfied by path resolve.
 
         Uses documented/derived collection paths directly (e.g. ``/api/users/addresses``)
         instead of expanding nested admin/search alternates that crowd out the real list.
+        When the API doc is available, also append a bootstrap POST create so empty
+        freshly-seeded databases can still materialize identity bindings.
         """
         from .real_id_resolver import param_field_candidates
 
@@ -1045,7 +1091,8 @@ class SemanticScenarioGenerator:
                 *param_field_candidates(field),
                 "id", "uuid", "code", "sku",
             ]))
-            for collection in body_field_collection_paths(field, api_prefix=api_prefix):
+            collections = body_field_collection_paths(field, api_prefix=api_prefix)
+            for collection in collections:
                 if not collection.startswith("/") or collection in seen_paths:
                     continue
                 seen_paths.add(collection)
@@ -1060,7 +1107,47 @@ class SemanticScenarioGenerator:
                 ))
                 order += 1
                 if len(steps) >= 3:
-                    return steps, order
+                    break
+            # Bootstrap create when a collection POST body is documented and does
+            # not recursively require the same field (e.g. orderId → POST /orders
+            # needs addressId, not orderId). GET resolve and POST create share the
+            # same path; do not gate create on seen_paths (that only dedupes GETs).
+            if api_doc and collections:
+                create_path = collections[0]
+                create_body = SemanticScenarioGenerator._bootstrap_create_body(
+                    api_doc, create_path,
+                )
+                nested_fields = set(extract_body_binding_fields(create_body))
+                if (
+                    isinstance(create_body, dict)
+                    and create_body
+                    and field not in nested_fields
+                    and not any(
+                        getattr(step, "action", "") == f"bootstrap_create_{field}"
+                        for step in steps
+                    )
+                ):
+                    nested_steps, order = SemanticScenarioGenerator._body_binding_resolve_steps(
+                        create_body,
+                        actor=actor,
+                        start_order=order,
+                        api_prefix=api_prefix,
+                        api_doc="",  # nested: resolve only, avoid deep create chains
+                    )
+                    steps.extend(nested_steps)
+                    steps.append(ScenarioStep(
+                        order=order,
+                        action=f"bootstrap_create_{field}",
+                        api_method="POST",
+                        api_path=create_path,
+                        body_template=dict(create_body),
+                        extract_from_response=list(extract_fields),
+                        expected_status=201,
+                        actor=actor,
+                    ))
+                    order += 1
+            if order - start_order >= 5:
+                break
         return steps, order
 
     @staticmethod
@@ -1074,9 +1161,11 @@ class SemanticScenarioGenerator:
         expected_status: int,
         api_doc: str,
     ) -> None:
-        body = SemanticScenarioGenerator._runtime_body_template(api_doc, method, path)
+        body, body_provenance = SemanticScenarioGenerator._runtime_body_template_with_provenance(
+            api_doc, method, path,
+        )
         binding_steps, _ = SemanticScenarioGenerator._body_binding_resolve_steps(
-            body, actor=actor, start_order=len(steps) + 1,
+            body, actor=actor, start_order=len(steps) + 1, api_doc=api_doc,
         )
         steps.extend(binding_steps)
         steps.append(ScenarioStep(
@@ -1085,6 +1174,7 @@ class SemanticScenarioGenerator:
             api_method=method,
             api_path=path,
             body_template=body,
+            body_provenance=body_provenance,
             expected_status=expected_status,
             actor=actor,
         ))
@@ -1273,7 +1363,7 @@ class SemanticScenarioGenerator:
             oracle_rules.insert(0, f"CouponOracle.{rule_key}")
         body = write_step.body_template if isinstance(write_step.body_template, dict) else {}
         bind_steps, _ = self._body_binding_resolve_steps(
-            body, actor="readonly", start_order=1,
+            body, actor="readonly", start_order=1, api_doc=api_doc,
         )
         if validation_only:
             for index, step in enumerate(bind_steps):
@@ -1690,6 +1780,7 @@ class SemanticScenarioGenerator:
         *,
         actor: str,
         start_order: int = 1,
+        api_doc: str = "",
     ) -> tuple[list[ScenarioStep], str]:
         """Insert list-resolve steps so path placeholders can bind at runtime.
 
@@ -1697,7 +1788,8 @@ class SemanticScenarioGenerator:
         (e.g. inventory/{sku} → products) when the collection itself is not
         listable. Nested admin write collections are deprioritized in favor of
         ``search`` / identity (``/me``) siblings. Field extraction follows the
-        path parameter name.
+        path parameter name. When ``api_doc`` is provided, also bootstrap-create
+        missing entities so freshly reset databases can still bind identities.
         """
         normalized = normalize_path_placeholders(path)
         if not path_has_placeholders(normalized):
@@ -1772,8 +1864,12 @@ class SemanticScenarioGenerator:
                     param_stems.add(f"{stem}s")
             if primary_last not in param_stems and "/admin/" not in primary.lower():
                 ranked = [primary] + [item for item in ranked if item != primary]
+        from .policy_wiring import get_policy_value
+
+        attempt_limit = int(get_policy_value("execution", "precondition_resolution_attempts", 2) or 2)
+        attempt_limit = max(1, min(attempt_limit, 5))
         steps: list[ScenarioStep] = []
-        for index, candidate in enumerate(ranked[:3]):
+        for index, candidate in enumerate(ranked[:attempt_limit]):
             steps.append(ScenarioStep(
                 order=start_order + index,
                 action="resolve_entity_id" if index == 0 else f"resolve_entity_id_alt_{index}",
@@ -1783,6 +1879,45 @@ class SemanticScenarioGenerator:
                 expected_status=200,
                 actor=actor,
             ))
+        order = start_order + len(steps)
+        # Bootstrap-create for path params when lists may be empty after DB reset.
+        if api_doc:
+            for param in infer_path_params(normalized):
+                collections = body_field_collection_paths(param)
+                if not collections:
+                    # Generic ``{id}`` has no body-field collection mapping; use
+                    # the structural parent (``/api/orders/{id}/cancel`` → POST
+                    # ``/api/orders``) so freshly reset DBs can still bind.
+                    primary = collection_path(normalized)
+                    if primary and primary.startswith("/") and primary != "/":
+                        collections = [primary]
+                if not collections:
+                    continue
+                create_path = collections[0]
+                create_body = SemanticScenarioGenerator._bootstrap_create_body(
+                    api_doc, create_path,
+                )
+                nested = set(extract_body_binding_fields(create_body))
+                if not isinstance(create_body, dict) or not create_body:
+                    continue
+                if param in nested or any(p.lower() == param.lower() for p in nested):
+                    continue
+                bind_steps, order = SemanticScenarioGenerator._body_binding_resolve_steps(
+                    create_body, actor=actor, start_order=order, api_doc="",
+                )
+                steps.extend(bind_steps)
+                steps.append(ScenarioStep(
+                    order=order,
+                    action=f"bootstrap_create_{param}",
+                    api_method="POST",
+                    api_path=create_path,
+                    body_template=dict(create_body),
+                    extract_from_response=list(extract_fields),
+                    expected_status=201,
+                    actor=actor,
+                ))
+                order += 1
+                break
         return steps, normalized
 
     # ── Supplementary scenario builders for non-state-machine slice kinds ──
@@ -1864,7 +1999,7 @@ class SemanticScenarioGenerator:
         # runtime — otherwise the probe would send a literal :id to the server.
         probe_path = path
         resolve_steps, probe_path = SemanticScenarioGenerator._resolve_entity_steps(
-            path, actor=actor_label, start_order=len(steps) + 1,
+            path, actor=actor_label, start_order=len(steps) + 1, api_doc=api_doc,
         )
         steps.extend(resolve_steps)
         SemanticScenarioGenerator._append_write_probe_step(
@@ -1996,7 +2131,7 @@ class SemanticScenarioGenerator:
                     order += 1
             elif path_has_placeholders(normalize_path_placeholders(path)):
                 resolve_steps, _ = SemanticScenarioGenerator._resolve_entity_steps(
-                    path, actor=owner_label or owner_email, start_order=order,
+                    path, actor=owner_label or owner_email, start_order=order, api_doc=api_doc,
                 )
                 for resolve_step in resolve_steps:
                     resolve_step.action = "resolve_owner_entity_id"
@@ -2068,12 +2203,14 @@ class SemanticScenarioGenerator:
             steps.append(step)
         probe_path = path
         resolve_steps, probe_path = SemanticScenarioGenerator._resolve_entity_steps(
-            path, actor=actor_label, start_order=len(steps) + 1,
+            path, actor=actor_label, start_order=len(steps) + 1, api_doc=api_doc,
         )
         steps.extend(resolve_steps)
-        probe_body = SemanticScenarioGenerator._runtime_body_template(api_doc, method, probe_path)
+        probe_body, body_provenance = SemanticScenarioGenerator._runtime_body_template_with_provenance(
+            api_doc, method, probe_path,
+        )
         binding_steps, _ = SemanticScenarioGenerator._body_binding_resolve_steps(
-            probe_body, actor=actor_label, start_order=len(steps) + 1,
+            probe_body, actor=actor_label, start_order=len(steps) + 1, api_doc=api_doc,
         )
         steps.extend(binding_steps)
         base = len(steps)
@@ -2083,6 +2220,7 @@ class SemanticScenarioGenerator:
                 action=f"concurrent_{method}_{i}",
                 api_method=method, api_path=probe_path,
                 body_template=dict(probe_body),
+                body_provenance=body_provenance,
                 expected_status=(200 if i == 1 else 409),
                 actor=actor_label,
             ))
@@ -2142,7 +2280,7 @@ class SemanticScenarioGenerator:
             steps.append(step)
         resolve_target = path if path_has_placeholders(normalize_path_placeholders(path)) else read_path
         resolve_steps, normalized_target = SemanticScenarioGenerator._resolve_entity_steps(
-            resolve_target, actor=actor_label, start_order=len(steps) + 1,
+            resolve_target, actor=actor_label, start_order=len(steps) + 1, api_doc=api_doc,
         )
         steps.extend(resolve_steps)
         if path_has_placeholders(normalize_path_placeholders(path)):
@@ -2217,7 +2355,7 @@ class SemanticScenarioGenerator:
             steps.append(step)
         resolve_target = path if path_has_placeholders(normalize_path_placeholders(path)) else read_path
         resolve_steps, normalized_target = SemanticScenarioGenerator._resolve_entity_steps(
-            resolve_target, actor=actor_label, start_order=len(steps) + 1,
+            resolve_target, actor=actor_label, start_order=len(steps) + 1, api_doc=api_doc,
         )
         steps.extend(resolve_steps)
         if path_has_placeholders(normalize_path_placeholders(path)):

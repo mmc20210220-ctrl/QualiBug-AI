@@ -180,6 +180,38 @@ def test_expected_success_4xx_can_confirm_after_valid_control():
     assert finding["customer_delivery_status"] == "defect"
 
 
+def test_expected_success_4xx_rejects_bootstrap_on_different_endpoint_as_control():
+    trace = {
+        "steps": [
+            {
+                "action": "bootstrap_create_orderId",
+                "method": "POST",
+                "path": "/api/orders",
+                "status": 200,
+                "response": {"status_code": 200, "body": {"id": "ord-1"}},
+                "expected_status": 200,
+            },
+            {
+                "action": "cancel",
+                "method": "POST",
+                "path": "/api/orders/ord-1/cancel",
+                "status": 403,
+                "response": {"status_code": 403, "body": {"error": "forbidden"}},
+                "expected_status": 200,
+            },
+        ]
+    }
+    finding = _confirmed_oracle_finding(
+        _make_scenario(), trace, _make_oracle_result(violated_rule="expected_status_mismatch", severity="P1"),
+        _make_evidence(confirm=True),
+        campaign_id="c1", discovery_round=1, base_url="http://x",
+    )
+    assert finding["gate_passed"] is False
+    assert finding["confirmation_status"] == "candidate"
+    assert finding["customer_delivery_status"] == "candidate"
+    assert finding["evidence_status"]["missing_requirements"] == ["VALID_SUCCESS_CONTROL_REQUIRED"]
+
+
 def test_protocol_dedupe_collapses_dynamic_ids_but_preserves_business_values():
     def finding(resource_id: str, amount: int) -> dict:
         return {

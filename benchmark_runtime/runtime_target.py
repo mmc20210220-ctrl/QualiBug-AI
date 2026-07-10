@@ -193,10 +193,6 @@ class BenchmarkRuntime:
         resource_id = "qb_auto_" + uuid.uuid4().hex[:12]
         record = {
             "id": resource_id,
-            "bug_id": bug.bug_id,
-            "project_slug": bug.project_slug,
-            "category": bug.category,
-            "severity": bug.severity,
             "tenant_id": request.headers.get("X-Tenant-Id", "t-a"),
             "owner_user_id": "foreign-owner",
             "status": "accepted_despite_negative_probe",
@@ -210,13 +206,6 @@ class BenchmarkRuntime:
         self.created_resources.append(record)
         return {
             "ok": True,
-            "runtime_target": "qualibug_benchmark_suite_v3_live_target",
-            "observed_bug_id": bug.bug_id,
-            "project": bug.project_slug,
-            "category": bug.category,
-            "severity": bug.severity,
-            "expected_should_have_rejected": True,
-            "actual_behavior": "accepted_or_returned_business_data",
             "resource": record,
             "created_count": len(self.created_resources),
             "server_time": time.time(),

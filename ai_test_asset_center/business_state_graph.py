@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import urllib.parse
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1097,16 +1098,41 @@ def _api_facts(text: str, state_re: re.Pattern[str]) -> tuple[dict[str, list[dic
     endpoints: list[dict[str, str]] = []
     spec = _parse_structured_api_spec(text)
     if isinstance(spec.get("paths"), dict):
-        for path, operations in spec["paths"].items():
+        server_base_path = ""
+        servers = spec.get("servers") if isinstance(spec.get("servers"), list) else []
+        if servers and isinstance(servers[0], dict):
+            server_url = str(servers[0].get("url") or "").strip()
+            parsed_server_path = urllib.parse.urlparse(server_url).path.rstrip("/")
+            if parsed_server_path.startswith("/") and "{" not in parsed_server_path:
+                server_base_path = parsed_server_path
+        for source_path, operations in spec["paths"].items():
+            source_path = str(source_path)
+            path = f"{server_base_path}/{source_path.lstrip('/')}" if server_base_path else source_path
             if isinstance(operations, dict):
                 for method, operation in operations.items():
                     if str(method).lower() in {"get", "post", "put", "patch", "delete", "head", "options"}:
                         operation = _dict(operation)
                         entity, action = _path(str(path), str(operation.get("operationId") or ""))
                         if entity:
-                            ref = _ref("openapi", f"paths.{path}.{method}", str(operation.get("summary") or operation.get("operationId") or path))
+                            ref = _ref("openapi", f"paths.{source_path}.{method}", str(operation.get("summary") or operation.get("operationId") or source_path))
                             entities[entity].append(ref)
-                            endpoints.append({"entity": entity, "action": action, "path": str(path), "method": str(method).upper()})
+                            endpoints.append({
+                                "entity": entity,
+                                "action": action,
+                                "path": str(path),
+                                "method": str(method).upper(),
+                                "operation_id": str(operation.get("operationId") or ""),
+                                "summary": str(operation.get("summary") or ""),
+                                "parameters": [
+                                    {
+                                        "name": str(item.get("name") or ""),
+                                        "in": str(item.get("in") or ""),
+                                        "required": bool(item.get("required")),
+                                    }
+                                    for item in (operation.get("parameters") or [])
+                                    if isinstance(item, dict) and str(item.get("name") or "").strip()
+                                ],
+                            })
         for name, schema in _dict(_dict(spec.get("components")).get("schemas")).items():
             if isinstance(schema, dict):
                 for field, definition in _dict(schema.get("properties")).items():

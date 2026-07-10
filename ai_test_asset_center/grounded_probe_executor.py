@@ -1951,16 +1951,15 @@ def _auto_fixture_bundle(config: dict[str, Any], probe: dict[str, Any]) -> dict[
     cache = config.setdefault("_auto_fixture_runtime", {})
     if cid in cache and isinstance(cache[cid], dict):
         return cache[cid]
-    try:
-        from .auto_test_data_factory import build_auto_fixture_for_probe
+    from .auto_test_data_factory import build_auto_fixture_for_probe
 
-        bundle = build_auto_fixture_for_probe(
-            probe,
-            input_dir=config.get("input_dir") or config.get("project_input_dir"),
-            config=config,
-        )
-    except Exception as exc:  # pragma: no cover - defensive runtime guard
-        bundle = {"error": f"auto_fixture_generation_failed:{type(exc).__name__}:{exc}"}
+    bundle = build_auto_fixture_for_probe(
+        probe,
+        input_dir=config.get("input_dir") or config.get("project_input_dir"),
+        config=config,
+    )
+    if not isinstance(bundle, dict):
+        raise TypeError(f"auto_fixture_bundle_must_be_object:{cid or 'unknown_candidate'}")
     cache[cid] = bundle
     return bundle
 
@@ -3078,6 +3077,10 @@ def _auto_fixture_requests(config: dict[str, Any], probe: dict[str, Any], key: s
     if not _auto_fixture_enabled(config):
         return []
     bundle = _auto_fixture_bundle(config, probe)
+    if str(bundle.get("error") or "").strip():
+        raise RuntimeError(
+            f"auto_fixture_generation_failed:{probe.get('candidate_id') or 'unknown_candidate'}:{bundle.get('error')}"
+        )
     raw = bundle.get(key) if isinstance(bundle, dict) else []
     return [r for r in (raw if isinstance(raw, list) else []) if isinstance(r, dict)][:5]
 
@@ -3238,6 +3241,21 @@ def _render_runtime_target_body(
 
 def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe: dict[str, Any], key: str, timeout: float) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
+    allowed_routes_value = config.get("fixture_allowed_routes")
+    allowed_routes: set[tuple[str, str]] | None = None
+    if allowed_routes_value is not None:
+        if not isinstance(allowed_routes_value, list):
+            raise TypeError("fixture_allowed_routes_must_be_list")
+        allowed_routes = {
+            (
+                str(route.get("method") or "").upper(),
+                normalize_path_placeholders(str(route.get("path") or "")).split("?", 1)[0],
+            )
+            for route in allowed_routes_value
+            if isinstance(route, dict)
+            and str(route.get("method") or "").strip()
+            and str(route.get("path") or "").strip().startswith("/")
+        }
     initial_items = _auto_fixture_requests(config, probe, key)
     for index in range(len(initial_items)):
         current_items = _auto_fixture_requests(config, probe, key)
@@ -3257,6 +3275,25 @@ def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe:
         path_candidates = [str(item.get("path") or "").strip()]
         if isinstance(item.get("path_candidates"), list):
             path_candidates.extend(str(candidate or "").strip() for candidate in item.get("path_candidates") if str(candidate or "").strip())
+        if allowed_routes is not None:
+            path_candidates = [
+                candidate
+                for candidate in path_candidates
+                if (
+                    method,
+                    normalize_path_placeholders(candidate).split("?", 1)[0],
+                ) in allowed_routes
+            ]
+            if not path_candidates:
+                receipts.append(
+                    {
+                        "status": "blocked",
+                        "reason": "auto_fixture_path_not_source_documented",
+                        "method": method,
+                        "path": item.get("path"),
+                    }
+                )
+                continue
         tried_paths: list[str] = []
         response: dict[str, Any] = {}
         request_path = ""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,12 +20,41 @@ def _parse_utc(value: Any) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _archive_audit(root: Path, project: str, audit_path: Path, stamp: datetime) -> Path:
+def _archive_audit(
+    root: Path,
+    project: str,
+    audit_path: Path,
+    stamp: datetime,
+    *,
+    expected_content: str,
+) -> tuple[Path, str]:
+    """Atomically retire the active audit after its contents were evaluated.
+
+    Keeping a copied audit in the active location makes the next campaign treat
+    already-reset writes as current dirty state.  The evaluated audit therefore
+    has exactly one terminal location: the immutable archive.  A content change
+    between evaluation and retirement fails closed instead of silently archiving
+    unverified concurrent writes.
+    """
     archive_dir = root / "_funnel_runs" / "benchmark_audit_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
     archived = archive_dir / f"{project}_{stamp.strftime('%Y%m%dT%H%M%SZ')}_sandbox_write_audit.jsonl"
-    shutil.copy2(audit_path, archived)
-    return archived
+    current_content = audit_path.read_text(encoding="utf-8")
+    if current_content != expected_content:
+        raise RuntimeError(f"benchmark_write_audit_changed_during_cleanliness_check:{audit_path}")
+    if archived.exists():
+        archived_content = archived.read_text(encoding="utf-8")
+        if archived_content != expected_content:
+            raise RuntimeError(f"benchmark_write_audit_archive_collision:{archived}")
+        audit_path.unlink()
+    else:
+        audit_path.replace(archived)
+    if audit_path.exists():
+        raise RuntimeError(f"benchmark_write_audit_retirement_failed:{audit_path}")
+    archived_content = archived.read_text(encoding="utf-8")
+    if archived_content != expected_content:
+        raise RuntimeError(f"benchmark_write_audit_archive_verification_failed:{archived}")
+    return archived, sha256(archived.read_bytes()).hexdigest()
 
 
 def assert_benchmark_target_clean(
@@ -40,8 +70,9 @@ def assert_benchmark_target_clean(
     if not audit_path.is_file():
         return {"status": "clean_no_prior_write_audit", "audit_path": str(audit_path)}
 
+    audit_content = audit_path.read_text(encoding="utf-8")
     rows: list[dict[str, Any]] = []
-    for line_number, line in enumerate(audit_path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(audit_content.splitlines(), start=1):
         if not line.strip():
             continue
         try:
@@ -54,12 +85,19 @@ def assert_benchmark_target_clean(
     incomplete = [row for row in rows if str(row.get("cleanup_status") or "").strip().lower() != "completed"]
     if not incomplete:
         latest_audit = max((_parse_utc(row.get("timestamp")) for row in rows), default=datetime.now(timezone.utc))
-        archived_audit = _archive_audit(root, project, audit_path, latest_audit)
+        archived_audit, archived_sha256 = _archive_audit(
+            root,
+            project,
+            audit_path,
+            latest_audit,
+            expected_content=audit_content,
+        )
         return {
             "status": "clean_all_prior_writes_cleaned",
             "audit_path": str(audit_path),
             "write_count": len(rows),
             "archived_audit": str(archived_audit),
+            "archived_audit_sha256": archived_sha256,
         }
 
     receipt_path = Path(str(reset_receipt_path or "").strip()) if str(reset_receipt_path or "").strip() else None
@@ -97,15 +135,23 @@ def assert_benchmark_target_clean(
         )
 
     stamp = reset_at.strftime("%Y%m%dT%H%M%SZ")
-    archived_audit = _archive_audit(root, project, audit_path, reset_at)
-    archive_dir = archived_audit.parent
+    archive_dir = root / "_funnel_runs" / "benchmark_audit_archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
     archived_receipt = archive_dir / f"{project}_{stamp}_target_reset_receipt.json"
     shutil.copy2(receipt_path, archived_receipt)
+    archived_audit, archived_sha256 = _archive_audit(
+        root,
+        project,
+        audit_path,
+        reset_at,
+        expected_content=audit_content,
+    )
     return {
         "status": "clean_reset_receipt_verified",
         "write_count": len(rows),
         "incomplete_cleanup_count": len(incomplete),
         "reset_receipt_id": str(receipt.get("receipt_id")),
         "archived_audit": str(archived_audit),
+        "archived_audit_sha256": archived_sha256,
         "archived_receipt": str(archived_receipt),
     }

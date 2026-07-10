@@ -200,7 +200,7 @@ def _pytest_regression(findings: list[dict[str, Any]], base_url: str) -> str:
     return "\n".join(lines)
 
 
-def extract_validated_findings(result: dict[str, Any], *, base_url: str = "http://127.0.0.1:8000") -> list[dict[str, Any]]:
+def extract_validated_findings(result: dict[str, Any], *, base_url: str = "http://127.0.0.1:8088") -> list[dict[str, Any]]:
     discovery = result.get("discovery_result") if isinstance(result.get("discovery_result"), dict) else result
     findings = discovery.get("findings") if isinstance(discovery.get("findings"), list) else []
     items: list[dict[str, Any]] = []
@@ -324,7 +324,7 @@ def build_customer_bug_report(
     output_dir: str | Path,
     *,
     project_id: str = "real_project_demo",
-    base_url: str = "http://127.0.0.1:8000",
+    base_url: str = "http://127.0.0.1:8088",
 ) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)

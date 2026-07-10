@@ -136,6 +136,10 @@ class BusinessEvidenceEnricher:
             if cleanup_status in {"completed", "verified"}:
                 draft.cleanup_status = "COMPLETED"
                 draft.cleanup_evidence_ref = _text(cleanup.get("receipt_ref") or cleanup.get("evidence_ref"))
+            elif cleanup_status in {"not_reversible", "not_applicable", "n/a", "not_required"}:
+                # Action-style writes do not create a deletable resource
+                # (not_required). Irreversible creates stay not_reversible.
+                draft.cleanup_status = "NOT_APPLICABLE"
             else:
                 draft.cleanup_status = "PENDING"
                 _add_missing(draft, "CLEANUP_PENDING")

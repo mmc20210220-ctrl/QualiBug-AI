@@ -768,6 +768,7 @@ def _enrich_system_behavior_scenario(
                                 _post_body if isinstance(_post_body, dict) else {},
                                 actor="readonly",
                                 start_order=next_order,
+                                api_doc=api_doc,
                             )
                             for _bs in _bind_steps:
                                 existing_steps.append(_bs)

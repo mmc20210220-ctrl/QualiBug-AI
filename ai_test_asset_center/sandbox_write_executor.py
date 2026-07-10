@@ -4,12 +4,14 @@ Enabled by default only for an approved, explicitly declared non-production
 environment with a test-account token. Production and unknown environments are
 fail-closed. Failures are recorded honestly (never silent, never fake cleanup).
 
-Design: wrap an already-planned scenario execution so the write itself still
+Design: every non-authentication write emits its own before/after observation,
 goes through the normal executor once — this module only adds GET(before),
-GET(after), cleanup, and audit around that single write.
+cleanup outcome, and audit receipt. Multi-write execution fails closed when the
+normal executor cannot expose the required per-write hook.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -178,10 +180,18 @@ def resolve_environment_kind(
     if kind:
         return kind
     rc = _as_dict(runtime_contract)
-    for key in ("environment_kind", "environment_ref", "target_environment", "environment"):
+    # Identity and classification are separate facts. A URL belongs in
+    # ``environment_ref`` and must never be interpreted as the safety class.
+    for key in ("environment_kind", "environment_type", "target_environment", "environment_class", "environment"):
         value = _text(rc.get(key)).lower()
         if value:
             return value
+    # Legacy configurations sometimes stored a literal class token (for
+    # example ``qa``) in environment_ref. Preserve only that narrow case; an
+    # opaque identity or URL remains unknown and therefore fail-closed.
+    legacy_ref = _text(rc.get("environment_ref")).lower()
+    if is_production_environment(legacy_ref) or is_test_or_sandbox_environment(legacy_ref):
+        return legacy_ref
     return ""
 
 
@@ -338,12 +348,100 @@ def _append_audit(root: Path, project: str, record: dict[str, Any]) -> Path:
     return path
 
 
+def execute_governed_control_write(
+    *,
+    root: Path,
+    project: str,
+    base_url: str,
+    runtime_contract: dict[str, Any],
+    campaign_id: str,
+    operation_phase: str,
+    actor_identity: str,
+    actor_token: str,
+    method: str,
+    path: str,
+    body: Any,
+    observation_path: str,
+) -> dict[str, Any]:
+    """Execute one explicitly declared non-production control write.
+
+    Evaluation fixture reset endpoints use this path so setup and cleanup are
+    independently governed and auditable around the product scan. The function
+    never guesses a route and never returns success without a real 2xx receipt.
+    """
+
+    method = _text(method).upper()
+    path = normalize_path_placeholders(_text(path)).split("?", 1)[0]
+    observation_path = normalize_path_placeholders(_text(observation_path)).split("?", 1)[0]
+    phase = _text(operation_phase)
+    if method not in _WRITE_METHODS:
+        raise ValueError("governed control write method must be POST, PUT, PATCH, or DELETE")
+    if not path.startswith("/") or path_has_placeholders(path):
+        raise ValueError("governed control write path must be one concrete declared path")
+    if not observation_path.startswith("/") or path_has_placeholders(observation_path):
+        raise ValueError("governed control observation path must be one concrete declared path")
+    if not phase:
+        raise ValueError("governed control write requires operation_phase")
+
+    allowed, reason = sandbox_write_allowed(
+        root=root,
+        project=project,
+        runtime_contract=runtime_contract,
+        actor_token=actor_token,
+        actor_identity=actor_identity,
+    )
+    base = _text(base_url).rstrip("/")
+    before = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
+    write = _http_request(method, base + path, token=actor_token, body=body) if allowed else {}
+    after = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
+    accepted = allowed and 200 <= int(write.get("status") or 0) < 300
+    record = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "actor_role": actor_identity,
+        "method": method,
+        "path": path,
+        "before_ref": f"control_before:{observation_path}:{before.get('status', 0)}",
+        "after_ref": f"control_after:{observation_path}:{after.get('status', 0)}",
+        "cleanup_status": "completed" if accepted and "cleanup" in phase.lower() else "not_applicable",
+        "cleanup_reason": "" if accepted else reason if not allowed else "control_write_not_accepted",
+        "operation_phase": phase,
+        "operation_accepted": accepted,
+        "campaign_id": campaign_id,
+        "slice_id": "evaluation_fixture_control",
+        "environment_kind": resolve_environment_kind(root, project, runtime_contract),
+        "approved_base_url": _text(runtime_contract.get("approved_base_url")),
+        "http_status": int(write.get("status") or 0),
+    }
+    audit_path = _append_audit(root, project, record)
+    return {
+        "status": "executed" if accepted else "blocked" if not allowed else "failed",
+        "reason": "accepted" if accepted else record["cleanup_reason"],
+        "accepted": accepted,
+        "method": method,
+        "path": path,
+        "before": before,
+        "write": write,
+        "after": after,
+        "before_ref": record["before_ref"],
+        "after_ref": record["after_ref"],
+        "audit_path": str(audit_path),
+        "audit_record": record,
+        "production_http_requests": 0,
+    }
+
+
 def _is_authentication_step(step: Any) -> bool:
     action = _text(getattr(step, "action", "") or "").strip().lower()
     if action == "login" or action.startswith("login_") or action.endswith("_login"):
         return True
     path = _text(getattr(step, "api_path", "") or "").strip().lower()
     return path.endswith("/login") or "/auth/login" in path
+
+
+def _is_fixture_bootstrap_step(step: Any) -> bool:
+    """Identity bootstrap POSTs are fixtures, not the scenario's primary write."""
+    action = _text(getattr(step, "action", "") or "").strip().lower()
+    return action.startswith("bootstrap_create_")
 
 
 def _scenario_declared_actor_identity(scenario: Any) -> str:
@@ -362,13 +460,34 @@ def _scenario_declared_actor_identity(scenario: Any) -> str:
 
 def _first_write_step(scenario: Any) -> tuple[str, str, Any] | None:
     for step in getattr(scenario, "steps", []) or []:
-        if _is_authentication_step(step):
+        if _is_authentication_step(step) or _is_fixture_bootstrap_step(step):
             continue
         method = _text(getattr(step, "api_method", "") or "").upper()
         path = _text(getattr(step, "api_path", "") or "")
         if method in _WRITE_METHODS and path.startswith("/"):
             return method, path, getattr(step, "body_template", None)
     return None
+
+
+def _scenario_write_steps(scenario: Any) -> list[tuple[str, str, Any]]:
+    """Return every source-declared non-authentication write in execution order."""
+    writes: list[tuple[str, str, Any]] = []
+    for step in getattr(scenario, "steps", []) or []:
+        if _is_authentication_step(step):
+            continue
+        method = _text(getattr(step, "api_method", "") or "").upper()
+        path = _text(getattr(step, "api_path", "") or "")
+        if method in _WRITE_METHODS and path.startswith("/"):
+            writes.append((method, path, getattr(step, "body_template", None)))
+    return writes
+
+
+def _execute_fn_accepts_write_observer(execute_fn: Callable[..., dict[str, Any]]) -> bool:
+    try:
+        parameters = inspect.signature(execute_fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.name == "write_observer" for parameter in parameters)
 
 
 def _documented_observation_path(
@@ -386,7 +505,7 @@ def _documented_observation_path(
     for index, step in enumerate(getattr(scenario, "steps", []) or []):
         method = _text(getattr(step, "api_method", "") or "").upper()
         path = normalize_path_placeholders(_text(getattr(step, "api_path", "") or "")).split("?", 1)[0]
-        if method in _WRITE_METHODS and not _is_authentication_step(step):
+        if method in _WRITE_METHODS and not _is_authentication_step(step) and not _is_fixture_bootstrap_step(step):
             break
         if method not in {"GET", "HEAD"} or not path.startswith("/"):
             continue
@@ -405,10 +524,10 @@ def _documented_observation_path(
             continue
         route_collection = documented_collection_path(path) or path
         if path_has_placeholders(path):
-            if route_collection != write_collection:
-                continue
-            path = route_collection
-        if path_has_placeholders(path):
+            # A documented detail route such as ``GET /items/{id}`` does not
+            # prove that ``GET /items`` exists.  Before a create we do not yet
+            # have the server identity, so fail observably instead of inventing
+            # a collection endpoint from the detail template.
             continue
         if path == write_collection:
             relation_rank = 0
@@ -425,6 +544,173 @@ def _documented_observation_path(
         return ""
     candidates.sort(key=lambda item: (item[0], item[1], item[2]))
     return candidates[0][2]
+
+
+def execute_governed_fixture_lifecycle(
+    *,
+    root: Path,
+    project: str,
+    base_url: str,
+    runtime_contract: dict[str, Any],
+    campaign_id: str,
+    slice_id: str,
+    actor_identity: str,
+    actor_token: str,
+    observation_path: str,
+    setup_execute_fn: Callable[[], list[dict[str, Any]]],
+    cleanup_execute_fn: Callable[[], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Execute a disposable fixture lifecycle behind the write safety gate.
+
+    The fixture planner owns request rendering and response-id binding.  This
+    wrapper owns the non-production decision, before/after observations,
+    cleanup outcome, campaign/slice/target identity and durable audit.  Both
+    callbacks are invoked only after the shared write gate succeeds.
+    """
+    allowed, reason = sandbox_write_allowed(
+        root=root,
+        project=project,
+        runtime_contract=runtime_contract,
+        actor_token=actor_token,
+        actor_identity=actor_identity,
+    )
+    if not allowed:
+        return {
+            "status": "blocked",
+            "reason": reason,
+            "setup_receipts": [],
+            "cleanup_receipts": [],
+            "audit_path": "",
+        }
+
+    base = base_url.rstrip("/")
+    documented_observer = normalize_path_placeholders(observation_path).split("?", 1)[0]
+    if not documented_observer.startswith("/") or path_has_placeholders(documented_observer):
+        documented_observer = ""
+
+    def observe() -> dict[str, Any]:
+        if not documented_observer:
+            return {
+                "status": 0,
+                "body": {},
+                "headers": {},
+                "error": "documented_observer_missing",
+            }
+        return _http_request("GET", base + documented_observer, token=actor_token)
+
+    before = observe()
+    setup_receipts = list(setup_execute_fn() or [])
+    after_setup = observe()
+    setup_ok = _fixture_receipts_accepted(setup_receipts)
+    setup_attempted = any(
+        isinstance(receipt, dict) and receipt.get("status") == "executed"
+        for receipt in setup_receipts
+    )
+    setup_accepted_any = any(
+        isinstance(receipt, dict) and receipt.get("accepted") is True
+        for receipt in setup_receipts
+    )
+    setup_statuses = [
+        int(_as_dict(receipt.get("response")).get("status_code") or 0)
+        for receipt in setup_receipts
+        if isinstance(receipt, dict) and receipt.get("status") == "executed"
+    ]
+    unchanged_observer = (
+        200 <= int(before.get("status") or 0) < 300
+        and 200 <= int(after_setup.get("status") or 0) < 300
+        and before.get("body") == after_setup.get("body")
+    )
+    rejected_without_observed_mutation = (
+        setup_attempted
+        and not setup_accepted_any
+        and bool(setup_statuses)
+        and all(400 <= status < 500 for status in setup_statuses)
+        and unchanged_observer
+    )
+    # A partially accepted setup can already have created state.  Always run
+    # the source-planned cleanup after any executed setup attempt so a later
+    # failed fixture request cannot strand disposable data. A fully rejected
+    # 4xx setup may skip cleanup only when a documented observer proves state
+    # remained unchanged.
+    cleanup_needed = setup_attempted and not rejected_without_observed_mutation
+    cleanup_receipts = list(cleanup_execute_fn() or []) if cleanup_needed else []
+    after_cleanup = observe()
+    cleanup_ok = setup_ok and _fixture_receipts_accepted(cleanup_receipts)
+    cleanup_status = "completed" if cleanup_ok else (
+        "not_required" if rejected_without_observed_mutation else (
+            "failed" if setup_attempted else "not_applicable"
+        )
+    )
+    cleanup_reason = "" if cleanup_ok else (
+        "setup_rejected_observer_unchanged" if rejected_without_observed_mutation else (
+            "fixture_cleanup_not_accepted" if setup_attempted else "fixture_setup_not_accepted"
+        )
+    )
+
+    observer_ref = documented_observer or "documented_observer_missing"
+    before_ref = f"sandbox_before:{observer_ref}:{before.get('status')}"
+    after_setup_ref = f"sandbox_after_setup:{observer_ref}:{after_setup.get('status')}"
+    after_cleanup_ref = f"sandbox_after_cleanup:{observer_ref}:{after_cleanup.get('status')}"
+    audit_records: list[dict[str, Any]] = []
+
+    for phase, receipts, phase_before_ref, phase_after_ref in (
+        ("fixture_setup", setup_receipts, before_ref, after_setup_ref),
+        ("fixture_cleanup", cleanup_receipts, after_setup_ref, after_cleanup_ref),
+    ):
+        for receipt in receipts:
+            if not isinstance(receipt, dict):
+                continue
+            accepted = receipt.get("accepted") is True
+            audit_records.append(
+                {
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "actor_role": actor_identity,
+                    "method": _text(receipt.get("method")).upper(),
+                    "path": _text(receipt.get("path")),
+                    "before_ref": phase_before_ref,
+                    "after_ref": phase_after_ref,
+                    "cleanup_status": cleanup_status if phase == "fixture_setup" else (
+                        "completed" if accepted else "failed"
+                    ),
+                    "cleanup_reason": cleanup_reason if phase == "fixture_setup" else (
+                        "" if accepted else "fixture_cleanup_operation_not_accepted"
+                    ),
+                    "operation_phase": phase,
+                    "operation_accepted": accepted,
+                    "campaign_id": campaign_id,
+                    "slice_id": slice_id,
+                    "environment_kind": resolve_environment_kind(root, project, runtime_contract),
+                    "approved_base_url": _text(runtime_contract.get("approved_base_url")),
+                }
+            )
+
+    audit_path = ""
+    for record in audit_records:
+        audit_path = str(_append_audit(root, project, record))
+    return {
+        "status": "completed" if cleanup_ok else "cleanup_incomplete",
+        "reason": "fixture_lifecycle_completed" if cleanup_ok else cleanup_reason,
+        "setup_receipts": setup_receipts,
+        "cleanup_receipts": cleanup_receipts,
+        "before": before,
+        "after_setup": after_setup,
+        "after_cleanup": after_cleanup,
+        "cleanup": {"status": cleanup_status, "reason": cleanup_reason},
+        "audit_path": audit_path,
+        "audit_records": audit_records,
+    }
+
+
+def _fixture_receipts_accepted(receipts: list[dict[str, Any]]) -> bool:
+    """Require every planned fixture write to have an accepted HTTP result."""
+    if not receipts:
+        return False
+    return all(
+        isinstance(receipt, dict)
+        and receipt.get("status") == "executed"
+        and receipt.get("accepted") is True
+        for receipt in receipts
+    )
 
 
 def _blocked_write_trace(scenario: Any, reason: str, write_meta: tuple[str, str, Any]) -> dict[str, Any]:
@@ -477,6 +763,30 @@ def _documented_delete_cleanup_path(
     return sorted(set(candidates), key=lambda item: (item.count("/"), item))[0] if candidates else ""
 
 
+def _is_action_style_write_path(path: str) -> bool:
+    """True when the write targets an existing resource action, not a create.
+
+    Industry-generic: collection POST ``/api/orders`` creates; nested action
+    ``/api/orders/{id}/cancel`` mutates an existing entity and does not create a
+    new deletable resource identity even if the response echoes ``id``.
+    """
+    normalized = normalize_path_placeholders(_text(path)).split("?", 1)[0]
+    parts = [p for p in normalized.strip("/").split("/") if p]
+    if len(parts) < 3:
+        return False
+    # Identity segment then trailing action verb(s).
+    for index, part in enumerate(parts):
+        if part.startswith("{") and part.endswith("}") and index < len(parts) - 1:
+            return True
+        # Concrete id already bound: UUID / numeric / opaque token mid-path.
+        if index < len(parts) - 1 and (
+            re.fullmatch(r"[0-9a-fA-F-]{8,}", part)
+            or re.fullmatch(r"\d+", part)
+        ):
+            return True
+    return False
+
+
 def _cleanup_after_write(
     *,
     method: str,
@@ -486,27 +796,48 @@ def _cleanup_after_write(
     before_body: Any,
     write_body: Any,
     documented_routes: list[dict[str, Any]] | None = None,
+    retry_count: int = 0,
 ) -> dict[str, Any]:
-    """Honest cleanup — never report completed on failure."""
+    """Honest cleanup — never report completed on missing cleanup evidence."""
     base = base_url.rstrip("/")
+    retry_count = max(0, min(int(retry_count or 0), 3))
+
+    def _cleanup_request(method_name: str, url: str, *, body: Any = None) -> tuple[dict[str, Any], int]:
+        receipt: dict[str, Any] = {}
+        for attempt in range(retry_count + 1):
+            receipt = _http_request(method_name, url, token=token, body=body)
+            status_code = int(receipt.get("status") or 0)
+            if 200 <= status_code < 300 or (method_name == "DELETE" and status_code == 404):
+                return receipt, attempt + 1
+        return receipt, retry_count + 1
+
     if method == "POST":
+        if _is_action_style_write_path(path):
+            return {
+                "status": "not_reversible",
+                "strategy": "action_post_on_existing_resource",
+                "receipt_ref": path,
+                "warning": "action_style_write_no_created_resource",
+            }
         resource_id = _extract_resource_id(write_body, path)
         if not resource_id:
+            # Action-style POST (validate/pay/reserve) with no created identity.
             return {
-                "status": "failed",
-                "strategy": "delete_created_resource",
-                "receipt_ref": "",
-                "error": "created_resource_id_missing",
+                "status": "not_reversible",
+                "strategy": "action_post_no_created_resource",
+                "receipt_ref": path,
+                "warning": "created_resource_id_missing",
             }
         delete_path = _documented_delete_cleanup_path(path, resource_id, documented_routes)
         if not delete_path:
+            # Create succeeded but source docs declare no DELETE cleanup route.
             return {
-                "status": "failed",
+                "status": "not_reversible",
                 "strategy": "delete_created_resource",
-                "receipt_ref": "",
-                "error": "documented_cleanup_route_missing",
+                "receipt_ref": path,
+                "warning": "documented_cleanup_route_missing",
             }
-        receipt = _http_request("DELETE", base + delete_path, token=token)
+        receipt, attempts = _cleanup_request("DELETE", base + delete_path)
         status = int(receipt.get("status") or 0)
         ok = 200 <= status < 300 or status in {204, 404}
         result = {
@@ -514,6 +845,7 @@ def _cleanup_after_write(
             "strategy": "delete_created_resource",
             "receipt_ref": delete_path,
             "receipt": {"status": status},
+            "attempts": attempts,
         }
         if not ok:
             result["error"] = f"cleanup_delete_http_{status}"
@@ -526,7 +858,7 @@ def _cleanup_after_write(
                 "receipt_ref": path,
                 "error": "before_snapshot_not_restorable",
             }
-        receipt = _http_request(method, base + path, token=token, body=before_body)
+        receipt, attempts = _cleanup_request(method, base + path, body=before_body)
         status = int(receipt.get("status") or 0)
         ok = 200 <= status < 300
         result = {
@@ -534,6 +866,7 @@ def _cleanup_after_write(
             "strategy": "restore_before_snapshot",
             "receipt_ref": path,
             "receipt": {"status": status},
+            "attempts": attempts,
         }
         if not ok:
             result["error"] = f"cleanup_restore_http_{status}"
@@ -545,6 +878,214 @@ def _cleanup_after_write(
         "receipt_ref": path,
         "warning": "DELETE_not_reversible",
     }
+
+
+def _execute_with_per_write_governance(
+    scenario: Any,
+    base_url: str,
+    *,
+    root: Path,
+    project: str,
+    runtime_contract: dict[str, Any],
+    campaign_id: str,
+    safety_boundary: dict[str, Any] | None,
+    observer_token: str,
+    documented_routes: list[dict[str, Any]] | None,
+    execute_fn: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    """Observe, compensate, and audit every write in one source scenario."""
+    base = base_url.rstrip("/")
+    events: list[dict[str, Any]] = []
+
+    def write_observer(phase: str, payload: dict[str, Any]) -> int | None:
+        if phase == "before":
+            method = _text(payload.get("method")).upper()
+            path = _text(payload.get("path"))
+            if method not in _WRITE_METHODS or not path.startswith("/"):
+                raise RuntimeError(f"invalid_governed_write_event:{method}:{path}")
+            if safety_boundary:
+                exclusion = match_production_data_exclusion(safety_boundary, path, "")
+                if exclusion:
+                    raise RuntimeError(f"governed_write_blocked:{exclusion}:{method}:{path}")
+            token = _text(observer_token or payload.get("token"))
+            observe_path = _documented_observation_path(scenario, path, documented_routes)
+            before = (
+                _http_request("GET", base + observe_path, token=token)
+                if observe_path
+                else {
+                    "status": 0,
+                    "body": {},
+                    "headers": {},
+                    "error": "documented_observer_missing",
+                }
+            )
+            event_id = len(events)
+            events.append(
+                {
+                    "event_id": event_id,
+                    "action": _text(payload.get("action")),
+                    "method": method,
+                    "path": path,
+                    "request_body": payload.get("body"),
+                    "token": token,
+                    "observe_path": observe_path,
+                    "before": before,
+                    "after_hook_received": False,
+                }
+            )
+            return event_id
+        if phase == "after":
+            event_id = payload.get("event_id")
+            if not isinstance(event_id, int) or event_id < 0 or event_id >= len(events):
+                raise RuntimeError(f"invalid_governed_write_event_id:{event_id}")
+            event = events[event_id]
+            if event["after_hook_received"]:
+                raise RuntimeError(f"duplicate_governed_write_after_event:{event_id}")
+            event["after_hook_received"] = True
+            event["status"] = int(payload.get("status") or 0)
+            event["response_body"] = payload.get("response_body")
+            event["path"] = _text(payload.get("path")) or event["path"]
+            return None
+        raise RuntimeError(f"unsupported_governed_write_phase:{phase}")
+
+    execution_exception = ""
+    try:
+        trace = execute_fn(
+            scenario,
+            base_url,
+            safety_boundary=safety_boundary,
+            write_observer=write_observer,
+        )
+    except Exception as exc:
+        execution_exception = f"{type(exc).__name__}:{exc}"
+        trace = {
+            "scenario_id": _text(getattr(scenario, "id", "") or "?"),
+            "steps": [],
+            "errors": [f"governed_multi_write_execution_failed:{execution_exception}"],
+        }
+    from .policy_wiring import get_policy_value
+
+    retry_count = int(get_policy_value("execution", "cleanup_retry_count", 1) or 0)
+    audit_records: list[dict[str, Any]] = []
+    governed_writes: list[dict[str, Any]] = []
+    audit_path = ""
+    for event in reversed(events):
+        observe_path = _text(event.get("observe_path"))
+        after = (
+            _http_request("GET", base + observe_path, token=_text(event.get("token")))
+            if observe_path
+            else {
+                "status": 0,
+                "body": {},
+                "headers": {},
+                "error": "documented_observer_missing",
+            }
+        )
+        event["after"] = after
+        status = int(event.get("status") or 0)
+        observer_proves_unchanged = (
+            200 <= int(_as_dict(event.get("before")).get("status") or 0) < 300
+            and 200 <= int(after.get("status") or 0) < 300
+            and _as_dict(event.get("before")).get("body") == after.get("body")
+        )
+        if not event.get("after_hook_received"):
+            cleanup = {
+                "status": "failed",
+                "strategy": "per_write_hook_integrity",
+                "receipt_ref": event["path"],
+                "error": "write_after_hook_missing",
+            }
+        elif not 200 <= status < 300 and observer_proves_unchanged:
+            cleanup = {
+                "status": "not_required",
+                "strategy": "rejected_write_observer_unchanged",
+                "receipt_ref": event["path"],
+            }
+        else:
+            cleanup = _cleanup_after_write(
+                method=event["method"],
+                path=event["path"],
+                base_url=base_url,
+                token=_text(event.get("token")),
+                before_body=_as_dict(event.get("before")).get("body"),
+                write_body=event.get("response_body"),
+                documented_routes=documented_routes,
+                retry_count=retry_count,
+            )
+        observer_ref = observe_path or "documented_observer_missing"
+        before_ref = f"sandbox_before:{observer_ref}:{_as_dict(event.get('before')).get('status')}"
+        after_ref = f"sandbox_after:{observer_ref}:{after.get('status')}"
+        audit_record = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "actor_role": _text(getattr(scenario, "actor_role", "") or trace.get("actor_role") or ""),
+            "method": event["method"],
+            "path": event["path"],
+            "before_ref": before_ref,
+            "after_ref": after_ref,
+            "cleanup_status": cleanup.get("status"),
+            "cleanup_receipt_ref": cleanup.get("receipt_ref") or "",
+            "operation_accepted": 200 <= status < 300,
+            "campaign_id": campaign_id,
+            "slice_id": _text(getattr(scenario, "behavior_slice_id", "") or ""),
+            "environment_kind": resolve_environment_kind(root, project, runtime_contract),
+            "approved_base_url": _text(runtime_contract.get("approved_base_url")),
+        }
+        audit_path = str(_append_audit(root, project, audit_record))
+        audit_records.append(audit_record)
+        governed_writes.append(
+            {
+                "event_id": event["event_id"],
+                "action": event["action"],
+                "method": event["method"],
+                "path": event["path"],
+                "status": status,
+                "before": {"status": _as_dict(event.get("before")).get("status"), "ref": before_ref},
+                "after": {"status": after.get("status"), "ref": after_ref},
+                "cleanup": cleanup,
+            }
+        )
+    governed_writes.sort(key=lambda item: int(item["event_id"]))
+    audit_records.reverse()
+    cleanup_statuses = [_text(_as_dict(item.get("cleanup")).get("status")).lower() for item in governed_writes]
+    cleanup_complete = bool(governed_writes) and all(
+        status in {"completed", "verified", "not_required"} for status in cleanup_statuses
+    )
+    lifecycle_complete = not execution_exception and cleanup_complete
+    aggregate_cleanup_status = (
+        "completed"
+        if cleanup_complete
+        else ("not_reversible" if "not_reversible" in cleanup_statuses else "failed")
+    )
+    primary = governed_writes[0] if governed_writes else {}
+    trace["sandbox_write"] = {
+        "status": "completed" if lifecycle_complete else "cleanup_incomplete",
+        "reason": (
+            "per_write_execution_failed"
+            if execution_exception
+            else ("per_write_lifecycle_completed" if lifecycle_complete else "per_write_cleanup_incomplete")
+        ),
+        "before": primary.get("before") or {},
+        "after": primary.get("after") or {},
+        "cleanup": {
+            "status": aggregate_cleanup_status,
+            "receipt_ref": audit_path if lifecycle_complete else "",
+            "write_count": len(governed_writes),
+        },
+        "writes": governed_writes,
+        "audit_records": audit_records,
+        "audit_path": audit_path,
+        "governed_write_receipt_count": len(audit_records),
+        "execution_exception": execution_exception,
+    }
+    if not governed_writes:
+        trace["sandbox_write"].update(
+            {
+                "status": "not_executed",
+                "reason": "no_write_request_reached_transport",
+                "cleanup": {"status": "not_applicable", "receipt_ref": "", "write_count": 0},
+            }
+        )
+    return trace
 
 
 def execute_with_sandbox_write(
@@ -565,7 +1106,9 @@ def execute_with_sandbox_write(
     Read-only scenarios continue through the normal executor. A write scenario
     that fails any gate is returned as blocked without firing the request.
     """
-    write_meta = _first_write_step(scenario)
+    write_steps = _scenario_write_steps(scenario)
+    primary_write = _first_write_step(scenario)
+    write_meta = primary_write or (write_steps[0] if write_steps else None)
     if write_meta is None:
         return execute_fn(scenario, base_url, safety_boundary=safety_boundary)
     token = _text(getattr(scenario, "actor_token", "") or "")
@@ -599,6 +1142,31 @@ def execute_with_sandbox_write(
     # Upgrade policy marker for observability / ranking
     scenario.execution_policy = "approved_sandbox_write"
 
+    requires_per_write_governance = len(write_steps) > 1 or primary_write is None or any(
+        _is_fixture_bootstrap_step(step)
+        for step in (getattr(scenario, "steps", []) or [])
+        if _text(getattr(step, "api_method", "") or "").upper() in _WRITE_METHODS
+    )
+    if requires_per_write_governance:
+        if not _execute_fn_accepts_write_observer(execute_fn):
+            return _blocked_write_trace(
+                scenario,
+                "multi_write_executor_missing_per_write_governance_hook",
+                write_meta,
+            )
+        return _execute_with_per_write_governance(
+            scenario,
+            base_url,
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            safety_boundary=safety_boundary,
+            observer_token=observation_token,
+            documented_routes=documented_routes,
+            execute_fn=execute_fn,
+        )
+
     base = base_url.rstrip("/")
     observe_path = _documented_observation_path(scenario, path, documented_routes)
     before = (
@@ -622,10 +1190,14 @@ def execute_with_sandbox_write(
         step_path = _text(step.get("path"))
         if step_action == "login" or step_action.startswith("login_") or step_path.lower().endswith("/login") or "/auth/login" in step_path.lower():
             continue
+        if step_action.startswith("bootstrap_create_"):
+            continue
         if step_path.startswith("/") and not path_has_placeholders(normalize_path_placeholders(step_path)):
             executed_path = step_path
         write_body = _as_dict(step.get("response")).get("body")
         break
+
+    from .policy_wiring import get_policy_value
 
     cleanup = _cleanup_after_write(
         method=method,
@@ -635,6 +1207,7 @@ def execute_with_sandbox_write(
         before_body=before.get("body"),
         write_body=write_body,
         documented_routes=documented_routes,
+        retry_count=int(get_policy_value("execution", "cleanup_retry_count", 1) or 0),
     )
     observer_ref = observe_path or "documented_observer_missing"
     before_ref = f"sandbox_before:{observer_ref}:{before.get('status')}"
@@ -664,8 +1237,15 @@ def execute_with_sandbox_write(
     }
     audit_path = _append_audit(root, project, audit_record)
 
-    cleanup_status = _text(cleanup.get("status"))
-    write_status = "completed" if cleanup_status == "completed" else "cleanup_incomplete"
+    cleanup_status = _text(cleanup.get("status")).lower()
+    # Only a completed/verified compensation is a clean terminal state.
+    # ``not_required`` is reserved for a rejected request whose source observer
+    # proves no mutation; this legacy single-write path cannot prove that here.
+    write_status = (
+        "completed"
+        if cleanup_status in {"completed", "verified"}
+        else "cleanup_incomplete"
+    )
     trace["sandbox_write"] = {
         "status": write_status,
         "before": {"status": before.get("status"), "ref": before_ref},

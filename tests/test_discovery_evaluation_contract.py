@@ -10,9 +10,11 @@ from ai_test_asset_center.discovery_evaluation_contract import (
     MANIFEST_SCHEMA,
     aggregate_evaluation_receipts,
     assess_commercial_dataset_shape,
+    build_paired_evaluation_evidence,
     build_runtime_view,
     evaluate_completed_scan,
     load_evaluation_manifest,
+    policy_metrics_from_evaluation_reports,
     persist_evaluation_receipt,
 )
 
@@ -135,22 +137,34 @@ def _customer_deliverable_clean_finding() -> dict:
     }
 
 
-def _receipt(manifest, target_id: str, findings: list[dict]) -> dict:
+def _receipt(
+    manifest,
+    target_id: str,
+    findings: list[dict],
+    *,
+    policy_id: str = "policy-champion",
+    evaluation_mode: str = "replay",
+) -> dict:
     return evaluate_completed_scan(
         manifest,
         target_id,
         run_id=f"run-{target_id}",
-        policy_id="policy-champion",
-        evaluation_mode="replay",
+        policy_id=policy_id,
+        evaluation_mode=evaluation_mode,
         findings=findings,
         candidates=[],
         pipeline_health={"status": "OK"},
         operational_metrics={
             "wall_clock_seconds": 10,
             "estimated_cost_usd": 1.25,
+            "request_count": 12,
             "production_http_requests": 0,
             "cleanup_failures": 0,
             "safety_incidents": 0,
+            "dirty_test_environments": 0,
+            "execution_success_rate": 1.0,
+            "engine_success_rate": 1.0,
+            "duplicate_rate": 0.0,
         },
     )
 
@@ -161,6 +175,8 @@ def test_runtime_view_never_exposes_evaluator_ground_truth(tmp_path: Path) -> No
 
     serialized = json.dumps(runtime_view, ensure_ascii=False).lower()
     assert "ground_truth" not in serialized
+    assert "expectation" not in runtime_view["target"]
+    assert "split" not in runtime_view["target"]
     assert "private" not in serialized
     assert runtime_view["target"]["runtime_fingerprint"]
     assert manifest.target_fingerprints["held-in"]["ground_truth_fingerprint"]
@@ -207,6 +223,9 @@ def test_aggregate_uses_hidden_truth_and_clean_false_positive_measurement(tmp_pa
     assert report["held_out_macro_industry_recall"] == 1.0
     assert report["clean"]["customer_deliverable_false_positives"] == 1
     assert report["clean"]["critical_high_false_positives"] == 1
+    assert report["operational"]["complete"] is True
+    assert report["operational"]["total_request_count"] == 60
+    assert report["operational"]["total_estimated_cost_usd"] == 6.25
     assert "ground_truth_source" not in json.dumps(report, ensure_ascii=False)
 
 
@@ -243,3 +262,67 @@ def test_receipts_are_immutable(tmp_path: Path) -> None:
     changed = {**receipt, "measurement_status": "NOT_MEASURED"}
     with pytest.raises(EvaluationContractError, match="immutable evaluation receipt"):
         persist_evaluation_receipt(changed, output_root)
+
+
+def _policy_report(manifest, policy_id: str, evaluation_mode: str) -> dict:
+    receipts = []
+    for target in manifest.targets:
+        findings = [] if target.expectation == "clean" else [_matched_finding(target.target_id)]
+        receipts.append(
+            _receipt(
+                manifest,
+                target.target_id,
+                findings,
+                policy_id=policy_id,
+                evaluation_mode=evaluation_mode,
+            )
+        )
+    return aggregate_evaluation_receipts(manifest, receipts)
+
+
+def test_paired_evidence_requires_four_real_identical_evaluations(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    champion_replay = _policy_report(manifest, "champion", "replay")
+    challenger_replay = _policy_report(manifest, "challenger", "replay")
+    champion_shadow = _policy_report(manifest, "champion", "shadow")
+    challenger_shadow = _policy_report(manifest, "challenger", "shadow")
+
+    evidence = build_paired_evaluation_evidence(
+        manifest,
+        champion_replay=champion_replay,
+        challenger_replay=challenger_replay,
+        champion_shadow=champion_shadow,
+        challenger_shadow=challenger_shadow,
+    )
+    metrics = policy_metrics_from_evaluation_reports(challenger_replay, challenger_shadow)
+
+    assert evidence["replay_executed"] is True
+    assert evidence["shadow_executed"] is True
+    assert evidence["paired_target_count"] == 5
+    assert len(evidence["replay_run_ids"]) == 10
+    assert len(evidence["target_receipt_fingerprints"]) == 5
+    assert metrics["evaluation_complete"] is True
+    assert metrics["commercial_shape_ready"] is True
+    assert metrics["operational_metrics_complete"] is True
+    assert metrics["sample_count"] == 10
+    assert metrics["held_out_recall"] == 1.0
+    assert metrics["unique_industry_count"] == 3
+    assert metrics["production_http_requests"] == 0
+
+
+def test_paired_evidence_rejects_target_fingerprint_drift(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    champion_replay = _policy_report(manifest, "champion", "replay")
+    challenger_replay = _policy_report(manifest, "challenger", "replay")
+    champion_shadow = _policy_report(manifest, "champion", "shadow")
+    challenger_shadow = _policy_report(manifest, "challenger", "shadow")
+    challenger_shadow["target_receipts"][0]["input_fingerprint"] = "drifted"
+
+    with pytest.raises(EvaluationContractError, match="target fingerprints differ"):
+        build_paired_evaluation_evidence(
+            manifest,
+            champion_replay=champion_replay,
+            challenger_replay=challenger_replay,
+            champion_shadow=champion_shadow,
+            challenger_shadow=challenger_shadow,
+        )

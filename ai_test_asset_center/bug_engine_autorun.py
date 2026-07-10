@@ -122,7 +122,7 @@ def _fetch_openapi_spec(base_url: str | None = None, timeout: float = 5.0) -> di
 
     Failure is safe: the planner can still use runtime evidence.
     """
-    base = (base_url or os.environ.get("QUALIBUG_TARGET_BASE_URL") or "http://127.0.0.1:8000").rstrip("/")
+    base = (base_url or os.environ.get("QUALIBUG_TARGET_BASE_URL") or "http://127.0.0.1:8088").rstrip("/")
     if base.endswith("/api"):
         base = base[:-4]
     url = base + "/openapi.json"
@@ -315,7 +315,7 @@ def run_bug_engine_auto(
 
     target = ensure_local_buglab() if bootstrap_target else {"started": False, "status": "skipped"}
     stale = reconcile_stale_runtime(project_id, output_dir) if reset_stale_runtime else {"action": "skipped"}
-    base_url_for_reports = os.environ.get("QUALIBUG_TARGET_BASE_URL", "http://127.0.0.1:8000")
+    base_url_for_reports = os.environ.get("QUALIBUG_TARGET_BASE_URL", "http://127.0.0.1:8088")
     openapi_spec = _fetch_openapi_spec(base_url_for_reports)
 
     summary: dict[str, Any] = {

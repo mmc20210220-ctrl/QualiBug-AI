@@ -8,10 +8,31 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
+
+
+POLICY_REGISTRY_SCHEMA = "qualibug.policy-registry.v2"
+OBSERVED_COMPARISON_SCHEMA = "qualibug.discovery-policy-comparison.v1"
+
+
+class PolicyRegistryError(RuntimeError):
+    """Policy lineage or persistence is invalid and cannot be used safely."""
+
+
+def _full_strategy_signature(strategy: "StrategyBundle") -> str:
+    return hashlib.sha256(
+        json.dumps(
+            asdict(strategy),
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 @dataclass
@@ -77,6 +98,31 @@ class DiscoveryPolicy:
     max_hypotheses_execute: int = 93
     max_rounds: int = 5
     stagnation_limit: int = 3
+    candidate_ranking_signals: list[str] = field(default_factory=lambda: [
+        "source_strength",
+        "endpoint_executability",
+        "evidence_gap",
+        "historical_yield",
+    ])
+    endpoint_binding_strategy: list[str] = field(default_factory=lambda: [
+        "source_operation_id",
+        "method_path_shape",
+    ])
+    min_source_refs_for_execution: int = 1
+    require_documented_endpoint: bool = True
+
+    def __post_init__(self) -> None:
+        self.max_hypotheses_execute = max(1, min(int(self.max_hypotheses_execute or 1), 200))
+        self.max_rounds = max(1, min(int(self.max_rounds or 1), 24))
+        self.stagnation_limit = max(1, min(int(self.stagnation_limit or 1), 12))
+        self.min_source_refs_for_execution = max(1, min(int(self.min_source_refs_for_execution or 1), 5))
+        self.require_documented_endpoint = True
+        self.candidate_ranking_signals = list(dict.fromkeys(
+            str(item).strip() for item in (self.candidate_ranking_signals or []) if str(item).strip()
+        ))
+        self.endpoint_binding_strategy = list(dict.fromkeys(
+            str(item).strip() for item in (self.endpoint_binding_strategy or []) if str(item).strip()
+        ))
 
 
 @dataclass
@@ -87,10 +133,18 @@ class VerificationPolicy:
     convergence_threshold: float = 0.30
     verifier_relaxed: bool = False
     scenario_auto: bool = False
+    reject_non_execution_oracle_votes: bool = True
+    require_valid_success_control_for_5xx: bool = True
+    require_joinable_execution_trace: bool = True
+    require_cleanup_success_for_customer_delivery: bool = True
 
     def __post_init__(self) -> None:
         self.async_window_seconds = max(0, min(int(self.async_window_seconds or 0), 300))
         self.verifier_relaxed = False
+        self.reject_non_execution_oracle_votes = True
+        self.require_valid_success_control_for_5xx = True
+        self.require_joinable_execution_trace = True
+        self.require_cleanup_success_for_customer_delivery = True
 
 
 @dataclass
@@ -124,6 +178,24 @@ class ExecutionPolicy:
     # source-executable slices), so small models are unaffected.
     incremental_discovery_round_limit: int = 8
     require_runtime_receipt_for_slice_confirmation: bool = True
+    runtime_binding_sources: list[str] = field(default_factory=lambda: [
+        "prior_step_extract",
+        "documented_list_response",
+        "fixture_receipt",
+    ])
+    precondition_resolution_attempts: int = 2
+    cleanup_retry_count: int = 1
+    cleanup_created_resource_id_sources: list[str] = field(default_factory=lambda: [
+        "response_body_id",
+        "location_header",
+        "audit_receipt",
+    ])
+    trace_join_key_order: list[str] = field(default_factory=lambda: [
+        "evidence_id",
+        "scenario_and_slice_id",
+    ])
+    require_cleanup_receipt: bool = True
+    persist_cross_round_traces: bool = True
 
     def __post_init__(self) -> None:
         self.max_requests = max(1, min(int(self.max_requests or 1), 1000))
@@ -150,6 +222,21 @@ class ExecutionPolicy:
         self.incremental_discovery_round = max(1, min(int(self.incremental_discovery_round or 1), 12))
         self.incremental_discovery_round_limit = max(1, min(int(self.incremental_discovery_round_limit or 1), 12))
         self.require_runtime_receipt_for_slice_confirmation = bool(self.require_runtime_receipt_for_slice_confirmation)
+        self.runtime_binding_sources = list(dict.fromkeys(
+            str(item).strip() for item in (self.runtime_binding_sources or []) if str(item).strip()
+        ))
+        self.precondition_resolution_attempts = max(1, min(int(self.precondition_resolution_attempts or 1), 5))
+        self.cleanup_retry_count = max(0, min(int(self.cleanup_retry_count or 0), 3))
+        self.cleanup_created_resource_id_sources = list(dict.fromkeys(
+            str(item).strip()
+            for item in (self.cleanup_created_resource_id_sources or [])
+            if str(item).strip()
+        ))
+        self.trace_join_key_order = list(dict.fromkeys(
+            str(item).strip() for item in (self.trace_join_key_order or []) if str(item).strip()
+        ))
+        self.require_cleanup_receipt = True
+        self.persist_cross_round_traces = True
         deployment_mode = str(self.deployment_mode or "private_deployment").strip().lower()
         self.deployment_mode = deployment_mode if deployment_mode in {"private_deployment", "public_saas", "dedicated_cloud"} else "private_deployment"
         learning_sync_mode = str(self.learning_sync_mode or "local_only").strip().lower()
@@ -200,6 +287,7 @@ class PolicyRegistry:
         self._path = Path(registry_path) if registry_path else Path("platform_outputs/policy_registry.json")
         self._policies: dict[str, PolicyRecord] = {}
         self._active_policy_id: str | None = None
+        self._events: list[dict[str, Any]] = []
         if self._path.exists():
             self._load()
         else:
@@ -218,36 +306,66 @@ class PolicyRegistry:
         baseline.effective_from = baseline.created_at
         self._policies[baseline.policy_id] = baseline
         self._active_policy_id = baseline.policy_id
+        self._events.append(self._event("bootstrap", baseline, "registry_initialized"))
         self._save()
 
     def _load(self) -> None:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
-        except Exception:
-            self._bootstrap()
-            return
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PolicyRegistryError(f"policy registry is unreadable or corrupt: {self._path}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise PolicyRegistryError(f"policy registry root must be an object: {self._path}")
         for raw in data.get("policies", []):
             if isinstance(raw, dict):
                 record = self._dict_to_record(raw)
                 if record.policy_id:
                     self._policies[record.policy_id] = record
         self._active_policy_id = data.get("active_policy_id")
+        self._events = [dict(item) for item in (data.get("events") or []) if isinstance(item, dict)]
         if not self._policies:
-            self._bootstrap()
+            raise PolicyRegistryError(f"policy registry contains no policies: {self._path}")
+        active = self.get_active()
+        if active is None:
+            raise PolicyRegistryError(
+                f"policy registry active reference is missing or dangling: {self._active_policy_id!r}"
+            )
+        if active.status != "active":
+            raise PolicyRegistryError(
+                f"policy registry active reference points to status {active.status!r}: {active.policy_id}"
+            )
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "schema_version": POLICY_REGISTRY_SCHEMA,
             "active_policy_id": self._active_policy_id,
             "policies": [self._record_to_dict(item) for item in self._policies.values()],
+            "events": list(self._events),
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        self._path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        temporary = self._path.with_suffix(self._path.suffix + f".{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(temporary, self._path)
 
     def register(self, policy: PolicyRecord) -> PolicyRecord:
         if policy.policy_id in self._policies:
             raise ValueError(f"Policy {policy.policy_id} already exists")
+        if policy.status == "candidate":
+            parent = self._resolve_policy(policy.parent_policy_version)
+            if parent is None:
+                raise PolicyRegistryError(
+                    f"candidate parent policy is missing: {policy.parent_policy_version!r}"
+                )
+            if parent.status != "active":
+                raise PolicyRegistryError(
+                    f"candidate parent must be the active champion, got status {parent.status!r}"
+                )
+            if _full_strategy_signature(policy.strategy) == _full_strategy_signature(parent.strategy):
+                raise PolicyRegistryError("candidate strategy must differ from its parent")
+        policy.signature = policy._compute_signature()
         self._policies[policy.policy_id] = policy
+        self._events.append(self._event("register", policy, policy.created_reason))
         self._save()
         return policy
 
@@ -263,19 +381,79 @@ class PolicyRegistry:
         policy = self._policies.get(policy_id)
         if policy is None:
             raise ValueError(f"Policy {policy_id} not found")
+        reason = str(reason or "").strip()
+        if not reason:
+            raise PolicyRegistryError("policy promotion requires a non-empty reason")
+        evaluation = self._validate_observed_evaluation(policy)
+        parent = self._resolve_policy(policy.parent_policy_version)
+        if parent is None:
+            raise PolicyRegistryError("candidate parent policy is missing during promotion")
         if policy.status == "candidate":
+            if self.get_active() is not parent:
+                raise PolicyRegistryError("candidate parent is no longer the active champion")
             policy.status = "champion"
+            self._events.append(self._event("approve_challenger", policy, reason))
         elif policy.status == "champion":
             previous = self.get_active()
-            if previous and previous.policy_id != policy_id:
-                previous.status = "retired"
-                previous.effective_to = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            if previous is not parent:
+                raise PolicyRegistryError("champion parent is no longer active; activation is stale")
+            previous.status = "retired"
+            previous.effective_to = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             policy.status = "active"
             policy.effective_from = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             self._active_policy_id = policy_id
+            self._events.append(self._event("activate", policy, reason))
+        else:
+            raise PolicyRegistryError(
+                f"policy status {policy.status!r} cannot be promoted; expected candidate or champion"
+            )
         policy.promotion_reason = reason
         self._save()
         return policy
+
+    @staticmethod
+    def _validate_observed_evaluation(policy: PolicyRecord) -> dict[str, Any]:
+        evaluation = policy.evaluation_summary if isinstance(policy.evaluation_summary, dict) else {}
+        if evaluation.get("schema_version") != OBSERVED_COMPARISON_SCHEMA:
+            raise PolicyRegistryError("candidate evaluation summary does not use the observed comparison schema")
+        if evaluation.get("promote") is not True:
+            raise PolicyRegistryError("candidate cannot advance without a passing evaluation summary")
+        if evaluation.get("observed_execution") is not True or evaluation.get("estimated_metrics_used") is not False:
+            raise PolicyRegistryError("candidate cannot advance without observed, non-estimated evaluation evidence")
+        comparison_ref = Path(str(evaluation.get("comparison_ref") or "").strip())
+        if not comparison_ref.is_file():
+            raise PolicyRegistryError("candidate comparison reference is missing or not a file")
+        comparison_bytes = comparison_ref.read_bytes()
+        claimed_file_hash = str(evaluation.get("comparison_file_sha256") or "").strip()
+        actual_file_hash = hashlib.sha256(comparison_bytes).hexdigest()
+        if not claimed_file_hash or claimed_file_hash != actual_file_hash:
+            raise PolicyRegistryError("candidate comparison artifact fingerprint mismatch")
+        try:
+            comparison = json.loads(comparison_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PolicyRegistryError("candidate comparison artifact is invalid JSON") from exc
+        if not isinstance(comparison, dict) or comparison.get("schema_version") != OBSERVED_COMPARISON_SCHEMA:
+            raise PolicyRegistryError("candidate comparison artifact schema is invalid")
+        challenger = comparison.get("challenger") if isinstance(comparison.get("challenger"), dict) else {}
+        current_strategy_fingerprint = _full_strategy_signature(policy.strategy)
+        if challenger.get("policy_id") != policy.policy_id:
+            raise PolicyRegistryError("candidate comparison artifact policy identity mismatch")
+        if challenger.get("policy_version") != policy.policy_version:
+            raise PolicyRegistryError("candidate comparison artifact policy version mismatch")
+        if challenger.get("strategy_fingerprint") != current_strategy_fingerprint:
+            raise PolicyRegistryError("candidate strategy changed after observed evaluation")
+        if evaluation.get("strategy_fingerprint") != current_strategy_fingerprint:
+            raise PolicyRegistryError("candidate evaluation summary strategy fingerprint mismatch")
+        if comparison.get("observed_execution") is not True or comparison.get("estimated_metrics_used") is not False:
+            raise PolicyRegistryError("candidate comparison artifact is not observed execution evidence")
+        decision = comparison.get("promotion_decision") if isinstance(comparison.get("promotion_decision"), dict) else {}
+        if decision.get("promote") is not True:
+            raise PolicyRegistryError("candidate comparison artifact does not authorize promotion")
+        if comparison.get("activation_performed") is not False:
+            raise PolicyRegistryError("candidate comparison artifact must precede activation")
+        if evaluation.get("dataset_manifest_fingerprint") != comparison.get("dataset_manifest_fingerprint"):
+            raise PolicyRegistryError("candidate evaluation dataset fingerprint mismatch")
+        return evaluation
 
     def rollback(self, policy_id: str, reason: str) -> PolicyRecord:
         policy = self._policies.get(policy_id)
@@ -284,21 +462,46 @@ class PolicyRegistry:
         parent = self._resolve_policy(policy.parent_policy_version)
         if parent is None:
             raise ValueError(f"Cannot roll back {policy_id}: parent {policy.parent_policy_version!r} not found")
+        reason = str(reason or "").strip()
+        if not reason:
+            raise PolicyRegistryError("rollback requires a non-empty reason")
+        if self.get_active() is not policy or policy.status != "active":
+            raise PolicyRegistryError("only the currently active child policy can be rolled back")
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         policy.status = "rolled_back"
         policy.rollback_reason = reason
         policy.effective_to = now
-        active = self.get_active()
-        if active and active.policy_id not in {policy.policy_id, parent.policy_id}:
-            active.status = "retired"
-            active.effective_to = now
         parent.status = "active"
         parent.effective_from = now
         parent.effective_to = ""
         parent.promotion_reason = f"Rollback from {policy_id}: {reason}"
-        self._active_policy_id = parent.policy_version
+        self._active_policy_id = parent.policy_id
+        self._events.append(self._event("rollback", policy, reason, parent_policy_id=parent.policy_id))
         self._save()
         return policy
+
+    @staticmethod
+    def _event(
+        event_type: str,
+        policy: PolicyRecord,
+        reason: str,
+        *,
+        parent_policy_id: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "event_id": hashlib.sha256(
+                f"{time.time_ns()}:{event_type}:{policy.policy_id}".encode("utf-8")
+            ).hexdigest()[:20],
+            "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event_type": event_type,
+            "policy_id": policy.policy_id,
+            "policy_version": policy.policy_version,
+            "parent_policy_version": policy.parent_policy_version,
+            "parent_policy_id": parent_policy_id,
+            "strategy_signature": policy.signature,
+            "reason": str(reason or ""),
+            "comparison_ref": str((policy.evaluation_summary or {}).get("comparison_ref") or ""),
+        }
 
     def get_active(self) -> PolicyRecord | None:
         return self._resolve_policy(self._active_policy_id)

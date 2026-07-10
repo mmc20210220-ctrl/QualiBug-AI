@@ -314,6 +314,63 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def reconcile_product_pipeline_health(
+    v12_health: dict[str, Any] | None,
+    *,
+    execution_status: str,
+    preflight_diagnostics: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Reconcile V12 health with product-level preflight/execution truth.
+
+    V12 can have no execution phase when product preflight blocks the run. In
+    that case its local funnel has insufficient context and must not report OK
+    or interpret empty findings as evidence of no defects.
+    """
+    health = dict(v12_health or {})
+    normalized_execution = str(execution_status or "not_executed").strip().lower()
+    diagnostics = _as_dict(preflight_diagnostics)
+    preflight_present = any(
+        key in diagnostics for key in ("ready", "all_checks_passed", "errors", "checks")
+    )
+    preflight_failed = preflight_present and (
+        diagnostics.get("ready") is False
+        or diagnostics.get("all_checks_passed") is False
+        or _as_int(diagnostics.get("errors")) > 0
+    )
+    execution_completed = normalized_execution in {"completed", "executed"}
+    if not execution_completed:
+        health["status"] = (
+            "FAILED_SAFE" if str(health.get("status") or "").upper() == "FAILED_SAFE" else "BLOCKED"
+        )
+        health["empty_findings_means_no_bugs"] = False
+        health["execution_status"] = normalized_execution
+        health["execution_reason"] = (
+            "preflight_not_ready" if preflight_failed else "execution_not_completed"
+        )
+        health["operator_note"] = (
+            "产品级执行未产生完整运行时收据；空 findings 不能解释为目标无缺陷。"
+            f" execution_status={normalized_execution}, "
+            f"preflight_errors={_as_int(diagnostics.get('errors'))}."
+        )
+    elif preflight_failed:
+        health["status"] = "DEGRADED"
+        health["empty_findings_means_no_bugs"] = False
+        health["execution_status"] = normalized_execution
+        health["execution_reason"] = "preflight_health_failed"
+        health["operator_note"] = (
+            "执行虽已返回，但产品级 preflight 未通过；结果覆盖不完整，"
+            "空 findings 不能解释为目标无缺陷。"
+        )
+    health["preflight"] = {
+        "present": preflight_present,
+        "ready": diagnostics.get("ready"),
+        "all_checks_passed": diagnostics.get("all_checks_passed"),
+        "errors": _as_int(diagnostics.get("errors")),
+        "warnings": _as_int(diagnostics.get("warnings")),
+    }
+    return health
+
+
 def _build_explanation(
     *,
     validated_bug_count: int,

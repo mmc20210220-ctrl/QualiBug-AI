@@ -79,6 +79,34 @@ def test_compute_benchmark_with_ground_truth(tmp_path: Path) -> None:
     assert result.get("bug_type_breakdown", {}).get("security", {}).get("detected") == 1
 
 
+def test_benchmark_does_not_count_multiple_oracles_on_one_trace_as_multiple_bugs(tmp_path: Path) -> None:
+    gt_path = tmp_path / "ground_truth" / "bugs.json"
+    _write_json(gt_path, {"bugs": [
+        {"bug_id": "BUG_1", "title": "first", "severity": "P1", "endpoint_hint": "/api/items"},
+        {"bug_id": "BUG_2", "title": "variant", "severity": "P1", "endpoint_hint": "/api/items"},
+    ]})
+    base = {
+        "behavior_slice_id": "slice-1",
+        "method": "POST",
+        "path": "/api/items",
+        "confirmation_status": "confirmed",
+        "customer_delivery_status": "defect",
+        "gate_passed": True,
+    }
+
+    result = compute_benchmark(
+        "test",
+        [{**base, "title": "Oracle A"}, {**base, "title": "Oracle B"}],
+        root=tmp_path,
+        ground_truth_path=str(gt_path),
+    )
+
+    assert result["true_positives"] == 1
+    assert result["duplicate_findings_excluded"] == 1
+    assert result["scan_findings_total"] == 1
+    assert result["recall"] == 0.5
+
+
 def test_persist_and_read_back(tmp_path: Path) -> None:
     metrics = {
         "benchmark_active": True,

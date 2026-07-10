@@ -5,6 +5,9 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Iterator
 from typing import Any
 
 
@@ -23,6 +26,45 @@ _BEHAVIOR_SLICE_EXECUTION_ENV: dict[str, str] = {
     "incremental_discovery_round_limit": "QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT",
 }
 _REASONER_GUARDRAIL_LIMIT_NAMES = ("MAX_HYPOTHESES", "MAX_HYPOTHESES_HARD_LIMIT")
+_STRATEGY_OVERRIDE: ContextVar[Any | None] = ContextVar("qualibug_strategy_override", default=None)
+
+
+@contextmanager
+def policy_strategy_override(strategy: Any) -> Iterator[Any]:
+    """Temporarily exercise a candidate without mutating the active registry.
+
+    Champion/challenger evaluation is sequentially isolated by ContextVar. A
+    malformed strategy fails before the first target request.
+    """
+
+    from .discovery_harness_proposer import validate_strategy_guardrails
+    from .policy_registry import StrategyBundle
+
+    if not isinstance(strategy, StrategyBundle):
+        raise TypeError("policy_strategy_override requires StrategyBundle")
+    guardrails = validate_strategy_guardrails(strategy)
+    if not guardrails.get("passed"):
+        failed = [item.get("name") for item in guardrails.get("checks") or [] if not item.get("passed")]
+        raise ValueError(f"candidate policy violates runtime guardrails: {failed}")
+    token = _STRATEGY_OVERRIDE.set(strategy)
+    try:
+        yield strategy
+    finally:
+        _STRATEGY_OVERRIDE.reset(token)
+
+
+def get_effective_policy_strategy() -> Any:
+    """Return the exact in-context strategy or fail if the registry is unavailable."""
+
+    strategy = _STRATEGY_OVERRIDE.get()
+    if strategy is not None:
+        return strategy
+    from .policy_registry import get_active_policy
+
+    strategy = get_active_policy()
+    if strategy is None:
+        raise RuntimeError("active policy strategy is unavailable")
+    return strategy
 
 
 def _loaded_stage_reasoner_module() -> Any | None:
@@ -118,15 +160,17 @@ def _behavior_slice_execution_value(key: str, value: Any, fallback: Any) -> int:
 def get_policy_value(section: str, key: str, default: Any) -> Any:
     """Read an active policy value while enforcing product-level guardrails."""
     value = default
-    try:
-        from .policy_registry import get_active_policy
+    strategy = _STRATEGY_OVERRIDE.get()
+    if strategy is None:
+        try:
+            from .policy_registry import get_active_policy
 
-        strategy = get_active_policy()
-        section_obj = getattr(strategy, section, None)
-        if section_obj and hasattr(section_obj, key):
-            value = getattr(section_obj, key)
-    except Exception:
-        value = default
+            strategy = get_active_policy()
+        except Exception:
+            strategy = None
+    section_obj = getattr(strategy, section, None) if strategy is not None else None
+    if section_obj and hasattr(section_obj, key):
+        value = getattr(section_obj, key)
 
     if section == "reasoner" and key == "max_hypotheses_per_engine":
         return _reasoner_hypothesis_cap(value, default)
@@ -138,9 +182,11 @@ def get_policy_value(section: str, key: str, default: Any) -> Any:
 def get_policy_dict(section: str) -> dict[str, Any]:
     """Get active policy values, including guardrail-normalized values."""
     try:
-        from .policy_registry import get_active_policy
+        strategy = _STRATEGY_OVERRIDE.get()
+        if strategy is None:
+            from .policy_registry import get_active_policy
 
-        strategy = get_active_policy()
+            strategy = get_active_policy()
         section_obj = getattr(strategy, section, None)
         if section_obj:
             payload = {key: value for key, value in section_obj.__dict__.items() if not key.startswith("_")}

@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+from ai_test_asset_center.customer_delivery_gate import (
+    apply_governed_campaign_cleanup,
+    customer_delivery_rejection_reasons,
+    is_customer_deliverable_defect,
+)
+
+
+def _valid_finding() -> dict:
+    return {
+        "title": "observed defect",
+        "severity": "P1",
+        "bug_status": "reproduced",
+        "gate_passed": True,
+        "execution_status": "executed",
+        "confirmation_status": "confirmed",
+        "customer_delivery_status": "defect",
+        "expected": "rejected",
+        "actual": "accepted",
+        "timestamp": "2026-07-10T00:00:00Z",
+        "evidence_consistency": {"verdict": "confirmed"},
+        "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
+        "evidence_status": {
+            "semantic_verdict": "SEMANTIC_CONFIRMED",
+            "business_evidence_status": "VALIDATED",
+            "final_review_status": "CUSTOMER_READY",
+            "missing_requirements": [],
+        },
+        "reproduction": {
+            "method": "PATCH",
+            "path": "/api/resources/{id}",
+            "is_synthetic": False,
+            "har_evidence": {"status_code": 200, "response_body": {"status": "accepted"}},
+        },
+        "raw_evidence": {
+            "request_raw": {"method": "PATCH", "path": "/api/resources/{id}"},
+            "response_raw": {"status_code": 200, "body": {"status": "accepted"}},
+            "timestamp": "2026-07-10T00:00:00Z",
+            "has_real_evidence": True,
+        },
+    }
+
+
+def test_failed_governed_cleanup_blocks_customer_delivery() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {"cleanup": {"status": "failed", "receipt_ref": ""}}
+
+    assert is_customer_deliverable_defect(finding) is False
+    assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
+
+
+def test_non_reversible_governed_cleanup_blocks_customer_delivery() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {
+        "cleanup": {"status": "not_reversible", "receipt_ref": "/api/resources/{id}"}
+    }
+
+    assert is_customer_deliverable_defect(finding) is False
+    assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
+
+
+def test_successful_cleanup_requires_receipt() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {"cleanup": {"status": "completed", "receipt_ref": ""}}
+
+    assert "CLEANUP_RECEIPT_MISSING" in customer_delivery_rejection_reasons(finding)
+    finding["evidence"]["cleanup"]["receipt_ref"] = "cleanup-receipt-1"
+    assert is_customer_deliverable_defect(finding) is True
+
+
+def test_write_method_without_cleanup_fails_closed_and_read_only_is_explicit() -> None:
+    finding = _valid_finding()
+    assert is_customer_deliverable_defect(finding) is False
+    assert "CLEANUP_EVIDENCE_MISSING" in customer_delivery_rejection_reasons(finding)
+    declared_read_only = deepcopy(finding)
+    declared_read_only["evidence"] = {"cleanup": {"status": "read_only", "receipt_ref": ""}}
+    assert is_customer_deliverable_defect(declared_read_only) is True
+    explicit_safe_read_only = deepcopy(finding)
+    explicit_safe_read_only["execution_semantics"] = "safe_read_only"
+    assert is_customer_deliverable_defect(explicit_safe_read_only) is True
+
+
+def test_not_reversible_or_not_applicable_write_cleanup_stays_internal() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {
+        "cleanup": {"status": "not_reversible", "receipt_ref": "/api/orders/{id}/cancel"},
+    }
+    assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
+    assert is_customer_deliverable_defect(finding) is False
+
+    na = deepcopy(finding)
+    na["evidence"] = {"cleanup": {"status": "not_applicable", "receipt_ref": ""}}
+    assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(na)
+    assert is_customer_deliverable_defect(na) is False
+
+
+def test_action_write_not_required_without_no_mutation_proof_stays_internal() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {
+        "cleanup": {"status": "not_required", "receipt_ref": "/api/orders/{id}/cancel"},
+    }
+    assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
+    assert is_customer_deliverable_defect(finding) is False
+
+
+def test_rejected_write_with_observer_unchanged_proof_allows_not_required() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {
+        "cleanup": {
+            "status": "not_required",
+            "strategy": "rejected_write_observer_unchanged",
+            "receipt_ref": "/api/orders/{id}/cancel",
+        },
+    }
+    assert "CLEANUP_NOT_SUCCEEDED" not in customer_delivery_rejection_reasons(finding)
+    assert is_customer_deliverable_defect(finding) is True
+
+
+def test_governed_campaign_reset_readjudicates_only_cleanup_only_finding() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {"cleanup": {"status": "failed", "receipt_ref": ""}}
+    defects, clues = apply_governed_campaign_cleanup(
+        [finding],
+        {
+            "status": "SUCCEEDED",
+            "dirty_environment": False,
+            "audit_receipt_id": "campaign-cleanup-audit-1",
+            "after_cleanup_observation_ref": "state:clean",
+        },
+    )
+
+    assert len(defects) == 1
+    assert clues == []
+    assert defects[0]["evidence"]["cleanup"]["receipt_ref"] == "campaign-cleanup-audit-1"
+    assert defects[0]["evidence"]["scenario_cleanup_before_campaign_reset"]["status"] == "failed"
+
+
+def test_governed_campaign_reset_does_not_promote_other_evidence_gaps() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {"cleanup": {"status": "failed", "receipt_ref": ""}}
+    finding["evidence_quality"]["score"] = 20
+    defects, clues = apply_governed_campaign_cleanup(
+        [finding],
+        {
+            "status": "SUCCEEDED",
+            "dirty_environment": False,
+            "audit_receipt_id": "campaign-cleanup-audit-1",
+            "after_cleanup_observation_ref": "state:clean",
+        },
+    )
+
+    assert defects == []
+    assert len(clues) == 1
+    assert "EVIDENCE_QUALITY_NOT_VALIDATED" in clues[0]["customer_delivery_gate_reasons"]

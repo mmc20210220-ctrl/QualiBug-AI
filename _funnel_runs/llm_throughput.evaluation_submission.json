@@ -1,0 +1,178 @@
+{
+  "schema_version": "discovery_evaluation_submission.v1",
+  "run_id": "scan_benchmark_mall_1783671990770",
+  "policy_id": "unversioned",
+  "evaluation_mode": "replay",
+  "scan_result": {
+    "findings": [],
+    "candidate_findings": []
+  },
+  "pipeline_health": {
+    "status": "OK",
+    "empty_findings_means_no_bugs": true,
+    "execution_status": "",
+    "execution_reason": "",
+    "observability_status": "",
+    "observability_gaps": [],
+    "failed_stages": {},
+    "stage_failures": [],
+    "unexecuted_candidate_signal": {
+      "stop_reason": "",
+      "pending_slice_count": 0,
+      "binding_or_precondition_blocks": 0,
+      "skip_reason_counts": {}
+    },
+    "operator_note": ""
+  },
+  "operational_metrics": {
+    "elapsed_seconds": 222.158,
+    "total_findings": 0,
+    "total_candidates": 0,
+    "formal_customer_deliverable_count": 0,
+    "discovery_funnel": {
+      "stages": [
+        {
+          "name": "candidate_generation",
+          "input": 0,
+          "output": 0,
+          "conversion": 0.0,
+          "dropped": 0
+        },
+        {
+          "name": "probe_selection",
+          "input": 0,
+          "output": 0,
+          "conversion": 0.0,
+          "dropped": 0
+        },
+        {
+          "name": "execution",
+          "input": 0,
+          "output": 0,
+          "conversion": 0.0,
+          "dropped": 0
+        },
+        {
+          "name": "verification",
+          "input": 0,
+          "output": 0,
+          "conversion": 0.0,
+          "dropped": 0
+        },
+        {
+          "name": "formal_accounting",
+          "input": 0,
+          "output": 0,
+          "conversion": 0.0,
+          "dropped": 0
+        }
+      ],
+      "top_blocking_reasons": [
+        {
+          "reason": "dropped_no_endpoint",
+          "count": 74
+        }
+      ],
+      "validated_bug_count": 0,
+      "pending_finding_count": 0,
+      "candidate_count": 0,
+      "explanation": "本轮正式记账的已验证 Bug 为 0（候选 0，待确认发现 0）。Top 阻断原因：dropped_no_endpoint×74。下一步：部分假设无法绑定 API 文档中的真实 endpoint，请检查 OpenAPI/API 文档是否完整。",
+      "pipeline_health": {
+        "status": "OK",
+        "empty_findings_means_no_bugs": true,
+        "execution_status": "",
+        "execution_reason": "",
+        "observability_status": "",
+        "observability_gaps": [],
+        "failed_stages": {},
+        "stage_failures": [],
+        "unexecuted_candidate_signal": {
+          "stop_reason": "",
+          "pending_slice_count": 0,
+          "binding_or_precondition_blocks": 0,
+          "skip_reason_counts": {}
+        },
+        "operator_note": ""
+      },
+      "mainline_unification": {
+        "analyzer": {
+          "input": 52,
+          "bound": 31,
+          "dropped_no_endpoint": 21,
+          "by_origin": {
+            "analyzer": {
+              "input": 52,
+              "bound": 31,
+              "dropped_no_endpoint": 21
+            }
+          },
+          "origin": "analyzer"
+        },
+        "llm_reasoner": {
+          "input": 667,
+          "bound": 614,
+          "dropped_no_endpoint": 53,
+          "by_origin": {
+            "llm_reasoner": {
+              "input": 667,
+              "bound": 614,
+              "dropped_no_endpoint": 53
+            }
+          },
+          "origin": "llm_reasoner",
+          "status": "ok",
+          "total_hypotheses": 667,
+          "total_engines": 20,
+          "successful_engine_count": 15,
+          "failed_engine_count": 3,
+          "degraded_engine_count": 2,
+          "observed_model_request_count": 23,
+          "model_usage": {
+            "request_count": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "responses_with_cost": 0
+          },
+          "max_workers": 4,
+          "max_hypotheses_per_engine": 15,
+          "timeout_seconds": 300,
+          "max_tokens": 32768
+        }
+      }
+    }
+  },
+  "fixture_governance": {
+    "post_run_cleanup": {
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      },
+      "token_refresh": {
+        "status": "ok",
+        "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+        "exit_code": 0
+      },
+      "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+      "reset_receipt": {
+        "schema_version": "benchmark_target_reset.v1",
+        "receipt_id": "reset_caabb2b07aa84bbb",
+        "project": "benchmark_mall",
+        "target_base_url": "http://localhost:8080",
+        "status": "completed",
+        "reset_at_utc": "2026-07-10T08:30:12Z",
+        "target_db_reset": {
+          "status": "ok",
+          "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+          "exit_code": 0
+        }
+      }
+    },
+    "post_run_cleanliness": {
+      "status": "clean_no_prior_write_audit",
+      "audit_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\platform_workspace\\benchmark_mall\\defect_discovery\\sandbox_write_audit.jsonl"
+    }
+  }
+}

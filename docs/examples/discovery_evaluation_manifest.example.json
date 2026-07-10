@@ -1,0 +1,39 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-dataset.v1",
+  "dataset_id": "cross-industry-private-evaluation",
+  "dataset_version": "replace-with-immutable-version",
+  "targets": [
+    {
+      "target_id": "replace-with-target-id",
+      "project_id": "replace-with-project-id",
+      "industry": "replace-with-industry",
+      "split": "held_in",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "replace-with-environment-ref",
+        "environment_type": "test",
+        "input_bundle_ref": "replace-with-input-bundle-path",
+        "fixture_snapshot_ref": "replace-with-fixture-snapshot-path",
+        "context_artifact_ref": "replace-with-context-artifact-path"
+      },
+      "evaluator": {
+        "ground_truth_ref": "replace-with-evaluator-private-ground-truth-path"
+      }
+    },
+    {
+      "target_id": "replace-with-clean-target-id",
+      "project_id": "replace-with-clean-project-id",
+      "industry": "replace-with-clean-target-industry",
+      "split": "held_out",
+      "expectation": "clean",
+      "runtime": {
+        "environment_ref": "replace-with-clean-environment-ref",
+        "environment_type": "test",
+        "input_bundle_ref": "replace-with-clean-input-bundle-path",
+        "fixture_snapshot_ref": "replace-with-clean-fixture-snapshot-path",
+        "context_artifact_ref": "replace-with-clean-context-artifact-path"
+      },
+      "evaluator": {}
+    }
+  ]
+}

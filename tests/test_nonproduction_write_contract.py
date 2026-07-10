@@ -214,6 +214,141 @@ def test_sandbox_observer_uses_source_declared_read_path_only() -> None:
         "/api/actions/run",
         [{"method": "POST", "path": "/api/actions/run"}],
     ) == ""
+    assert _documented_observation_path(
+        SimpleNamespace(steps=[SimpleNamespace(action="write", api_method="POST", api_path="/api/refunds")]),
+        "/api/refunds",
+        [{"method": "GET", "path": "/api/refunds/{refundId}"}],
+    ) == ""
+
+
+def test_fixture_lifecycle_is_governed_and_audited(tmp_path: Path, monkeypatch) -> None:
+    from ai_test_asset_center.sandbox_write_executor import execute_governed_fixture_lifecycle
+
+    callbacks: list[str] = []
+
+    def observe(method: str, url: str, **kwargs):
+        return {"status": 200, "body": {"records": []}, "headers": {}}
+
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor._http_request", observe)
+    runtime = _runtime("qa")
+    result = execute_governed_fixture_lifecycle(
+        root=tmp_path,
+        project="project",
+        base_url="https://target.invalid",
+        runtime_contract=runtime,
+        campaign_id="campaign-1",
+        slice_id="slice-1",
+        actor_identity="control",
+        actor_token="token",
+        observation_path="/api/resources",
+        setup_execute_fn=lambda: (callbacks.append("setup") or [{"status": "executed", "accepted": True, "method": "POST", "path": "/api/resources"}]),
+        cleanup_execute_fn=lambda: (callbacks.append("cleanup") or [{"status": "executed", "accepted": True, "method": "DELETE", "path": "/api/resources/id-1"}]),
+    )
+
+    assert result["status"] == "completed"
+    assert callbacks == ["setup", "cleanup"]
+    assert result["cleanup"]["status"] == "completed"
+    assert len(result["audit_records"]) == 2
+    audit = Path(result["audit_path"])
+    assert audit.exists()
+    lines = audit.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert all('"campaign_id": "campaign-1"' in line for line in lines)
+
+
+def test_fixture_lifecycle_kill_switch_blocks_before_callbacks(tmp_path: Path, monkeypatch) -> None:
+    from ai_test_asset_center.sandbox_write_executor import execute_governed_fixture_lifecycle
+
+    callbacks: list[str] = []
+    monkeypatch.setenv("QUALIBUG_DISABLE_SANDBOX_WRITE", "1")
+    result = execute_governed_fixture_lifecycle(
+        root=tmp_path,
+        project="project",
+        base_url="https://target.invalid",
+        runtime_contract=_runtime("qa"),
+        campaign_id="campaign-1",
+        slice_id="slice-1",
+        actor_identity="control",
+        actor_token="token",
+        observation_path="/api/resources",
+        setup_execute_fn=lambda: (callbacks.append("setup") or []),
+        cleanup_execute_fn=lambda: (callbacks.append("cleanup") or []),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "write_probing_disabled_by_operator"
+    assert callbacks == []
+
+
+def test_fixture_lifecycle_cleans_up_partial_setup_attempt(tmp_path: Path, monkeypatch) -> None:
+    from ai_test_asset_center.sandbox_write_executor import execute_governed_fixture_lifecycle
+
+    callbacks: list[str] = []
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        lambda *args, **kwargs: {"status": 200, "body": {}, "headers": {}},
+    )
+    result = execute_governed_fixture_lifecycle(
+        root=tmp_path,
+        project="project",
+        base_url="https://target.invalid",
+        runtime_contract=_runtime("qa"),
+        campaign_id="campaign-1",
+        slice_id="slice-1",
+        actor_identity="control",
+        actor_token="token",
+        observation_path="/api/resources",
+        setup_execute_fn=lambda: (callbacks.append("setup") or [
+            {"status": "executed", "accepted": True, "method": "POST", "path": "/api/resources"},
+            {"status": "executed", "accepted": False, "method": "POST", "path": "/api/resources/dependency"},
+        ]),
+        cleanup_execute_fn=lambda: (callbacks.append("cleanup") or [
+            {"status": "executed", "accepted": True, "method": "DELETE", "path": "/api/resources/id-1"},
+        ]),
+    )
+
+    assert callbacks == ["setup", "cleanup"]
+    assert result["status"] == "cleanup_incomplete"
+    assert result["cleanup"]["status"] == "failed"
+
+
+def test_fixture_lifecycle_does_not_send_cleanup_after_observed_unchanged_4xx_setup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from ai_test_asset_center.sandbox_write_executor import execute_governed_fixture_lifecycle
+
+    callbacks: list[str] = []
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        lambda *args, **kwargs: {"status": 200, "body": {"records": []}, "headers": {}},
+    )
+    result = execute_governed_fixture_lifecycle(
+        root=tmp_path,
+        project="project",
+        base_url="https://target.invalid",
+        runtime_contract=_runtime("qa"),
+        campaign_id="campaign-1",
+        slice_id="slice-1",
+        actor_identity="control",
+        actor_token="token",
+        observation_path="/api/resources",
+        setup_execute_fn=lambda: (callbacks.append("setup") or [{
+            "status": "executed",
+            "accepted": False,
+            "method": "POST",
+            "path": "/api/resources",
+            "response": {"status_code": 400},
+        }]),
+        cleanup_execute_fn=lambda: (callbacks.append("cleanup") or []),
+    )
+
+    assert callbacks == ["setup"]
+    assert result["status"] == "cleanup_incomplete"
+    assert result["cleanup"] == {
+        "status": "not_required",
+        "reason": "setup_rejected_observer_unchanged",
+    }
 
 
 def test_post_cleanup_requires_documented_delete_route(monkeypatch) -> None:
@@ -236,8 +371,8 @@ def test_post_cleanup_requires_documented_delete_route(monkeypatch) -> None:
         write_body={"refundId": "rf-123"},
         documented_routes=[{"method": "POST", "path": "/api/refunds"}],
     )
-    assert blocked["status"] == "failed"
-    assert blocked["error"] == "documented_cleanup_route_missing"
+    assert blocked["status"] == "not_reversible"
+    assert blocked["warning"] == "documented_cleanup_route_missing"
     assert calls == []
 
     completed = _cleanup_after_write(
@@ -252,6 +387,39 @@ def test_post_cleanup_requires_documented_delete_route(monkeypatch) -> None:
     assert completed["status"] == "completed"
     assert completed["receipt_ref"] == "/api/refunds/rf-123"
     assert calls == [("DELETE", "https://target.invalid/api/refunds/rf-123")]
+
+
+def test_non_reversible_cleanup_never_reports_completed_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        lambda *args, **kwargs: {"status": 200, "body": {}, "headers": {}},
+    )
+    scenario = _scenario()
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        documented_routes=[
+            {"method": "GET", "path": "/source-derived-resources"},
+            {"method": "POST", "path": "/source-derived-resources"},
+        ],
+        execute_fn=lambda *args, **kwargs: {
+            "steps": [
+                {
+                    "method": "POST",
+                    "path": "/source-derived-resources",
+                    "status": 202,
+                    "response": {"status_code": 202, "body": {"accepted": True}},
+                }
+            ],
+            "errors": [],
+        },
+    )
+
+    assert result["sandbox_write"]["cleanup"]["status"] == "not_reversible"
+    assert result["sandbox_write"]["status"] == "cleanup_incomplete"
 
 
 def test_native_login_write_uses_governed_observer_token_for_snapshots_and_cleanup(
@@ -329,3 +497,296 @@ def test_native_login_write_uses_governed_observer_token_for_snapshots_and_clean
     assert telemetry["sandbox_write_status_counts"] == {"completed": 1}
     assert telemetry["cleanup_status_counts"] == {"completed": 1}
     assert telemetry["observer_status_counts"] == {"after:200": 1, "before:200": 1}
+
+
+def test_multi_write_scenario_emits_one_governed_receipt_per_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        lambda *args, **kwargs: {"status": 200, "body": {}, "headers": {}},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._cleanup_after_write",
+        lambda **kwargs: {"status": "completed", "receipt_ref": kwargs["path"]},
+    )
+    scenario = SimpleNamespace(
+        id="multi-write",
+        actor_token="test-token",
+        actor_role="tester",
+        behavior_slice_id="slice-multi-write",
+        execution_policy="approved_sandbox_write",
+        steps=[
+            SimpleNamespace(
+                action="bootstrap_create_resource",
+                api_method="POST",
+                api_path="/api/resources",
+                body_template={"value": 1},
+            ),
+            SimpleNamespace(
+                action="update_resource",
+                api_method="PATCH",
+                api_path="/api/resources/{id}",
+                body_template={"value": 2},
+            ),
+        ],
+    )
+
+    def execute(*args, write_observer, **kwargs):
+        first = write_observer(
+            "before",
+            {
+                "action": "bootstrap_create_resource",
+                "method": "POST",
+                "path": "/api/resources",
+                "body": {"value": 1},
+                "token": "test-token",
+            },
+        )
+        write_observer(
+            "after",
+            {
+                "event_id": first,
+                "action": "bootstrap_create_resource",
+                "method": "POST",
+                "path": "/api/resources",
+                "status": 201,
+                "response_body": {"id": "resource-1"},
+                "token": "test-token",
+            },
+        )
+        second = write_observer(
+            "before",
+            {
+                "action": "update_resource",
+                "method": "PATCH",
+                "path": "/api/resources/resource-1",
+                "body": {"value": 2},
+                "token": "test-token",
+            },
+        )
+        write_observer(
+            "after",
+            {
+                "event_id": second,
+                "action": "update_resource",
+                "method": "PATCH",
+                "path": "/api/resources/resource-1",
+                "status": 200,
+                "response_body": {"id": "resource-1", "value": 2},
+                "token": "test-token",
+            },
+        )
+        return {
+            "steps": [
+                {"action": "bootstrap_create_resource", "method": "POST", "path": "/api/resources", "status": 201},
+                {"action": "update_resource", "method": "PATCH", "path": "/api/resources/resource-1", "status": 200},
+            ],
+            "errors": [],
+        }
+
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        documented_routes=[
+            {"method": "GET", "path": "/api/resources"},
+            {"method": "POST", "path": "/api/resources"},
+            {"method": "PATCH", "path": "/api/resources/{id}"},
+            {"method": "DELETE", "path": "/api/resources/{id}"},
+        ],
+        execute_fn=execute,
+    )
+
+    assert result["sandbox_write"]["status"] == "completed"
+    assert result["sandbox_write"]["governed_write_receipt_count"] == 2
+    assert len(result["sandbox_write"]["audit_records"]) == 2
+    assert len(Path(result["sandbox_write"]["audit_path"]).read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_multi_write_scenario_without_per_write_hook_is_blocked_before_execution(tmp_path: Path) -> None:
+    calls: list[str] = []
+    scenario = SimpleNamespace(
+        id="multi-write-no-hook",
+        actor_token="test-token",
+        actor_role="tester",
+        behavior_slice_id="slice-multi-write-no-hook",
+        execution_policy="approved_sandbox_write",
+        steps=[
+            SimpleNamespace(action="create_one", api_method="POST", api_path="/api/resources", body_template={}),
+            SimpleNamespace(action="create_two", api_method="POST", api_path="/api/resources", body_template={}),
+        ],
+    )
+
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        execute_fn=lambda *args, **kwargs: calls.append("executed") or {"steps": []},
+    )
+
+    assert calls == []
+    assert result["sandbox_write"]["status"] == "blocked"
+    assert result["sandbox_write"]["reason"] == "multi_write_executor_missing_per_write_governance_hook"
+
+
+def test_multi_write_execution_exception_still_cleans_and_audits_partial_setup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    cleanup_paths: list[str] = []
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        lambda *args, **kwargs: {"status": 200, "body": {}, "headers": {}},
+    )
+
+    def cleanup(**kwargs):
+        cleanup_paths.append(str(kwargs["path"]))
+        return {"status": "completed", "receipt_ref": kwargs["path"]}
+
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor._cleanup_after_write", cleanup)
+    scenario = SimpleNamespace(
+        id="partial-multi-write",
+        actor_token="test-token",
+        actor_role="tester",
+        behavior_slice_id="slice-partial-multi-write",
+        execution_policy="approved_sandbox_write",
+        steps=[
+            SimpleNamespace(action="create_one", api_method="POST", api_path="/api/resources", body_template={}),
+            SimpleNamespace(action="create_two", api_method="POST", api_path="/api/resources", body_template={}),
+        ],
+    )
+
+    def execute(*args, write_observer, **kwargs):
+        event_id = write_observer(
+            "before",
+            {
+                "action": "create_one",
+                "method": "POST",
+                "path": "/api/resources",
+                "body": {},
+                "token": "test-token",
+            },
+        )
+        write_observer(
+            "after",
+            {
+                "event_id": event_id,
+                "action": "create_one",
+                "method": "POST",
+                "path": "/api/resources",
+                "status": 201,
+                "response_body": {"id": "resource-1"},
+                "token": "test-token",
+            },
+        )
+        raise RuntimeError("second_write_binding_failed")
+
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        documented_routes=[
+            {"method": "GET", "path": "/api/resources"},
+            {"method": "POST", "path": "/api/resources"},
+            {"method": "DELETE", "path": "/api/resources/{id}"},
+        ],
+        execute_fn=execute,
+    )
+
+    assert cleanup_paths == ["/api/resources"]
+    assert result["sandbox_write"]["status"] == "cleanup_incomplete"
+    assert result["sandbox_write"]["reason"] == "per_write_execution_failed"
+    assert "RuntimeError:second_write_binding_failed" in result["sandbox_write"]["execution_exception"]
+    assert result["sandbox_write"]["governed_write_receipt_count"] == 1
+    assert Path(result["sandbox_write"]["audit_path"]).is_file()
+
+
+def test_v12_write_scenario_is_not_retried_as_a_whole(monkeypatch) -> None:
+    import ai_test_asset_center.v12_pipeline as v12_pipeline
+
+    calls: list[str] = []
+
+    def fail_once(*args, **kwargs):
+        calls.append("attempted")
+        raise RuntimeError("transport_outcome_unknown")
+
+    monkeypatch.setattr(v12_pipeline, "__execute_scenario_once", fail_once)
+    scenario = SimpleNamespace(
+        id="write-no-retry",
+        steps=[SimpleNamespace(action="create", api_method="POST", api_path="/api/resources")],
+    )
+
+    result = v12_pipeline._execute_scenario(scenario, "https://target.invalid", max_retries=3)
+
+    assert calls == ["attempted"]
+    assert result["errors"] == ["failed_after_retries:transport_outcome_unknown"]
+
+
+def test_v12_executor_emits_before_and_after_hooks_for_each_runtime_write(monkeypatch) -> None:
+    import json
+    import ai_test_asset_center.v12_pipeline as v12_pipeline
+
+    class Response:
+        def __init__(self, status: int, body: dict):
+            self.status = status
+            self._body = body
+            self.headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, limit: int) -> bytes:
+            return json.dumps(self._body).encode("utf-8")
+
+    responses = [Response(201, {"id": "resource-1"}), Response(200, {"id": "resource-1", "value": 2})]
+    monkeypatch.setattr(v12_pipeline.urllib.request, "urlopen", lambda *args, **kwargs: responses.pop(0))
+    scenario = SimpleNamespace(
+        id="hooked-writes",
+        actor_token="test-token",
+        steps=[
+            SimpleNamespace(
+                action="create",
+                api_method="POST",
+                api_path="/api/resources",
+                body_template={"value": 1},
+                extract_from_response=["id"],
+            ),
+            SimpleNamespace(
+                action="update",
+                api_method="PATCH",
+                api_path="/api/resources/{id}",
+                body_template={"value": 2},
+                extract_from_response=[],
+            ),
+        ],
+    )
+    events: list[tuple[str, dict]] = []
+
+    def observer(phase: str, payload: dict):
+        events.append((phase, dict(payload)))
+        if phase == "before":
+            return sum(1 for observed_phase, _ in events if observed_phase == "before") - 1
+        return None
+
+    result = v12_pipeline._execute_scenario(
+        scenario,
+        "https://target.invalid",
+        max_retries=3,
+        write_observer=observer,
+    )
+
+    assert result["errors"] == []
+    assert [phase for phase, _ in events] == ["before", "after", "before", "after"]
+    assert events[2][1]["path"] == "/api/resources/resource-1"
+    assert events[3][1]["status"] == 200

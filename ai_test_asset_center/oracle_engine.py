@@ -78,6 +78,15 @@ class HttpStatusOracle(BaseOracle):
                     "创建成功应返回201", "HTTP 204", "P1", 0.80)
             expected = s.get("expected_status") or 0
             if expected and int(expected) and status != expected:
+                expected_i, status_i = int(expected), int(status)
+                # REST success class: 200/201/202/204 are interchangeable for
+                # "expected success" unless a create-specific rule already fired.
+                if 200 <= expected_i < 300 and 200 <= status_i < 300:
+                    continue
+                action = str(s.get("action") or "").strip().lower()
+                # Fixture bootstrap / resolve steps are harness, not the probe.
+                if action.startswith("bootstrap_create_") or action.startswith("resolve_"):
+                    continue
                 return OracleResult(False, "HttpStatusOracle", "L1", "expected_status_mismatch",
                     f"应返回 HTTP {expected}", f"实际返回 HTTP {status}", "P1", 0.90)
         return OracleResult(True, "HttpStatusOracle", "L1")

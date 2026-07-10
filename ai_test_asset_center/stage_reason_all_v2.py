@@ -1182,6 +1182,8 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         engine_names_for_report,
         all_hypotheses,
     )
+    usage_snapshot_fn = getattr(getattr(self, "client", None), "usage_snapshot", None)
+    model_usage = usage_snapshot_fn() if callable(usage_snapshot_fn) else {}
     self._last_engine_report = {
         "total_engines": len(engine_names_for_report),
         "successful_engines": [e for e in engine_names_for_report if results_by_engine.get(e, {}).get("status") == "success"],
@@ -1200,6 +1202,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "engine_durations_seconds": {e: round(results_by_engine.get(e, {}).get("duration_seconds", 0), 1) for e in engine_names_for_report},
         "engine_errors": {e: results_by_engine.get(e, {}).get("error", "")[:100] for e in engine_names_for_report
                          if results_by_engine.get(e, {}).get("error")},
+        "model_usage": model_usage,
         "total_hypotheses": len(all_hypotheses),
         "max_workers": max_workers,
         "enabled_engines": engine_names_for_report,
@@ -1278,6 +1281,14 @@ def collect_reasoner_hypotheses(
     meta = {
         "status": "ok" if hypotheses else "empty",
         "total_hypotheses": len(hypotheses),
+        "total_engines": int(report.get("total_engines") or 0),
+        "successful_engine_count": len(report.get("successful_engines") or []),
+        "failed_engine_count": len(report.get("failed_engines") or []),
+        "degraded_engine_count": len(report.get("degraded_engines") or []),
+        "observed_model_request_count": sum(
+            int(value or 0) for value in (report.get("engine_attempts") or {}).values()
+        ),
+        "model_usage": dict(report.get("model_usage") or {}),
         "max_workers": report.get("max_workers", MAX_REASONER_WORKERS),
         "max_hypotheses_per_engine": report.get("max_hypotheses_per_engine", MAX_HYPOTHESES),
         "timeout_seconds": report.get("timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS),

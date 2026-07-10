@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
+
 from ai_test_asset_center.auto_test_data_factory import build_auto_fixture_for_probe
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
 from ai_test_asset_center.enterprise_test_data_receipts import issue_test_data_receipt, verify_test_data_receipt
@@ -223,6 +225,114 @@ def test_auto_fixture_infers_resource_identity_and_patch_cleanup_for_inventory_p
     assert cleanup["body"] == {"status": "DELETED"}
 
 
+def test_auto_fixture_merges_structured_and_markdown_api_sources(tmp_path) -> None:
+    (tmp_path / "openapi.json").write_text(
+        json.dumps(
+            {
+                "openapi": "3.0.0",
+                "paths": {
+                    "/api/orders": {"post": {}},
+                    "/api/orders/{id}": {"get": {}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    markdown = """# API\n\n### POST /api/orders\n### GET /api/orders/{id}\n### POST /api/orders/{id}/cancel\n"""
+
+    bundle = build_auto_fixture_for_probe(
+        {
+            "candidate_id": "QBBOOT-MERGED-SOURCES",
+            "risk_type": "anonymous_auth_boundary_probe",
+            "execution_policy": "read_only_safe",
+            "endpoint": {"method": "GET", "path": "/api/orders/{id}"},
+            "probe_plan": {"auth_boundary": {"actor": "anonymous"}},
+        },
+        input_dir=tmp_path,
+        config={"qualibug_auto_create_test_data": True, "api_doc_text": markdown},
+    )
+
+    assert bundle["setup_requests"][0]["path"] == "/api/orders"
+    assert bundle["cleanup_requests"][0]["method"] == "POST"
+    assert bundle["cleanup_requests"][0]["path"] == "/api/orders/{id}/cancel"
+
+
+def test_auto_fixture_never_uses_another_resource_cleanup_route(tmp_path) -> None:
+    (tmp_path / "openapi.json").write_text(
+        json.dumps(
+            {
+                "openapi": "3.0.0",
+                "paths": {
+                    "/api/orders": {"post": {}},
+                    "/api/orders/{id}": {"get": {}},
+                    "/api/cart/items/{id}": {"delete": {}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = build_auto_fixture_for_probe(
+        {
+            "candidate_id": "QBBOOT-CLEANUP-RESOURCE",
+            "risk_type": "anonymous_auth_boundary_probe",
+            "execution_policy": "read_only_safe",
+            "endpoint": {"method": "GET", "path": "/api/orders/{id}"},
+            "probe_plan": {"auth_boundary": {"actor": "anonymous"}},
+        },
+        input_dir=tmp_path,
+        config={"qualibug_auto_create_test_data": True},
+    )
+
+    cleanup = bundle["cleanup_requests"][0]
+    assert cleanup["method"] == "MANUAL"
+    assert cleanup["reason"] == "documented_cleanup_endpoint_missing"
+    assert cleanup["path"] == ""
+
+
+def test_bootstrap_rejects_login_only_fixture_surface_before_authentication(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center import test_data_receipt_bootstrap as bootstrap_module
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_login_control_header_candidates",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("login must not run")),
+    )
+    result = bootstrap_test_data_receipts_for_campaign(
+        project="enterprise-project",
+        root=tmp_path,
+        base_url="http://sandbox.local",
+        api_doc_text=json.dumps(
+            {
+                "openapi": "3.0.0",
+                "paths": {
+                    "/api/auth/login": {"post": {}},
+                },
+            }
+        ),
+        campaign={"campaign_id": "CMP_LOGIN_ONLY", "scope_id": "scope", "environment_ref": "test"},
+        selected_slices=[],
+        contract={"strategy": "create_disposable", "write_approved": True},
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "bootstrap_probe_not_found"
+
+
+def test_auto_fixture_generation_errors_are_not_swallowed(monkeypatch) -> None:
+    from ai_test_asset_center.grounded_probe_executor import _auto_fixture_bundle
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("source-contract-broken")
+
+    monkeypatch.setattr("ai_test_asset_center.auto_test_data_factory.build_auto_fixture_for_probe", fail)
+    with pytest.raises(RuntimeError, match="source-contract-broken"):
+        _auto_fixture_bundle(
+            {"qualibug_auto_create_test_data": True},
+            {"candidate_id": "QBBOOT-FAIL-FAST", "endpoint": {"method": "GET", "path": "/api/resources/{id}"}},
+        )
+
+
 def test_bootstrap_receipts_issue_real_creation_and_cleanup_receipts(tmp_path, monkeypatch) -> None:
     from ai_test_asset_center import test_data_receipt_bootstrap as bootstrap_module
 
@@ -350,7 +460,13 @@ def test_bootstrap_retries_next_control_account_when_first_fixture_attempt_is_fo
     def fake_execute(config: dict, base_url: str, probe: dict, key: str, timeout: float):
         auth = str((config.get("fixture_headers") or {}).get("Authorization") or "")
         if "buyer@example.com" in auth:
-            return [{"status": "executed", "accepted": False, "path": "/api/products/admin", "purpose": key}]
+            return [{
+                "status": "executed",
+                "accepted": False,
+                "path": "/api/products/admin",
+                "purpose": key,
+                "response": {"status_code": 403},
+            }]
         if key == "setup_requests":
             return [{"status": "executed", "accepted": True, "path": "/api/products/admin", "purpose": "create_disposable_qb_auto_fixture"}]
         return [{"status": "executed", "accepted": True, "path": "/api/products/admin/qb_auto_1", "purpose": "cleanup_qb_auto_fixture"}]
@@ -398,7 +514,13 @@ def test_bootstrap_control_account_order_uses_configured_default_without_role_na
     def fake_execute(config: dict, base_url: str, probe: dict, key: str, timeout: float):
         auth = str((config.get("fixture_headers") or {}).get("Authorization") or "")
         if "ops-reader@example.com" in auth:
-            return [{"status": "executed", "accepted": False, "path": "/api/assets", "purpose": key}]
+            return [{
+                "status": "executed",
+                "accepted": False,
+                "path": "/api/assets",
+                "purpose": key,
+                "response": {"status_code": 403},
+            }]
         return [{"status": "executed", "accepted": True, "path": "/api/assets", "purpose": key}]
 
     monkeypatch.setattr("ai_test_asset_center.parameter_fuzzer.ParameterFuzzer.login", fake_login)

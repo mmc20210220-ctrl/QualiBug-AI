@@ -141,7 +141,16 @@ class BusinessEvidenceGate:
         if method in _WRITE_METHODS and not _text(evidence.get("after_snapshot_ref")):
             missing.append("AFTER_SNAPSHOT_MISSING")
         cleanup = _dict(evidence.get("cleanup"))
-        if method in _WRITE_METHODS and _text(cleanup.get("status")).lower() not in {"completed", "verified"}:
+        cleanup_status = _text(cleanup.get("status")).lower()
+        # Prefer enriched top-level cleanup when present (NOT_APPLICABLE for
+        # action-style writes that honestly cannot be rolled back).
+        if not cleanup_status:
+            cleanup_status = _text(contract.get("cleanup", {}).get("status") if isinstance(contract.get("cleanup"), dict) else "").lower()
+        if not cleanup_status:
+            cleanup_status = _text(evidence.get("cleanup_status")).lower()
+        if method in _WRITE_METHODS and cleanup_status not in {
+            "completed", "verified", "not_reversible", "not_applicable", "n/a", "not_required",
+        }:
             missing.append("CLEANUP_PENDING")
         if not _text(evidence.get("invariant_ref")):
             missing.append("INVARIANT_REF_MISSING")
@@ -177,6 +186,21 @@ def discovery_finding_to_contract(item: Any, *, project_id: str, policy_version:
         "semantic_evidence_ref": enriched.get("semantic_evidence_ref") or semantic.get("verifier_trace_ref") or "",
         "source_refs": _source_refs(row, raw_evidence),
     }
+    enriched_cleanup_status = _text(enriched.get("cleanup_status")).lower()
+    if enriched_cleanup_status in {"completed", "verified", "not_applicable", "n/a", "not_reversible"}:
+        raw_cleanup = _dict(raw_evidence.get("cleanup"))
+        evidence["cleanup"] = {
+            "status": (
+                "not_applicable"
+                if enriched_cleanup_status in {"not_applicable", "n/a"}
+                else enriched_cleanup_status
+            ),
+            "receipt_ref": _text(
+                enriched.get("cleanup_evidence_ref")
+                or raw_cleanup.get("receipt_ref")
+                or raw_cleanup.get("evidence_ref")
+            ),
+        }
     return {
         "finding_id": f"DISC_{digest}",
         "hypothesis_id": hypothesis_id,

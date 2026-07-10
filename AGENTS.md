@@ -46,4 +46,15 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 - QualiBug automatically performs read and write probes against explicitly declared non-production targets (local, development, test, QA, SIT, UAT, staging, pre-release, and sandbox). A source-bound campaign does not require per-probe manual approval.
 - Production targets are a hard write boundary. Unknown or undeclared environment types are fail-closed for writes; never infer that an unknown target is safe.
 - Every write must pass through the governed sandbox executor and emit before/after observations, cleanup outcome, campaign/slice identity, target identity, and an audit receipt. Hidden seed/bootstrap writes outside this path are forbidden.
+- Multi-write scenarios must expose a per-write governance hook and emit one audit receipt per actual HTTP write. Never retry an entire scenario after any write may have been accepted; compensate partial setup in reverse order and surface the original failure.
 - Read-only mode remains available as an operator kill-switch, but it must block writes before any request is sent and report the blocking reason visibly.
+
+## Discovery Harness Evolution Contract
+
+- The Bug discovery north star is externally measured hidden-ground-truth quality, not internal candidate, confirmed, validated, or funnel counts. Internal counts may diagnose conversion loss but MUST NOT be presented as recall, precision, or commercial capability.
+- Harness evolution uses a fixed, versioned evaluator-private manifest. Discovery runtime receives only the runtime view; ground-truth paths and contents must never enter prompts, runtime context, traces, policy proposals, or product-facing outputs.
+- Commercial promotion requires paired champion/challenger replay and shadow execution on identical input, fixture, context, environment, held-in, held-out, and intentionally clean targets. Estimated impact is not promotion evidence.
+- Only findings that pass the formal customer-delivery gate may be scored as true or false positives. Candidates and internal clues are excluded from the commercial quality score.
+- A candidate may be promoted only when no measured split regresses and at least one measured split improves. Missing pipeline health, missing target receipts, missing operational metrics, safety incidents, production requests, cleanup failures, dirty environments, or P0/P1 false positives on a clean target must block promotion visibly.
+- Evaluation datasets must remain industry-neutral and data-driven. A commercial generalization claim requires at least three held-out industries; no detector, prompt, UI, or service may encode benchmark answers or customer-specific business rules.
+- The authoritative implementation and Goal acceptance gates are documented in `docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md`. The evaluator contract is implemented in `ai_test_asset_center/discovery_evaluation_contract.py` and the external CLI in `tools/discovery_evaluation.py`.
