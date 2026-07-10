@@ -115,7 +115,7 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
             "environment_ref": "approved-test",
             "source_hash": manifest["source_hash"],
             "target_base_url": "https://example.invalid/path",
-            "execution_mode": "safe_read_only",
+            "execution_mode": "approved_sandbox_write",
             "expires_at_utc": _expiry(),
             "actor": {"name": "release-manager", "role": "approver"},
         },
@@ -138,7 +138,7 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
     body = source_bound_scan.json()
     assert body["grade"] == "blocked"
     assert body["runtime_contract"]["status"] == "approved"
-    assert body["runtime_contract"]["execution_approval"]["execution_mode"] == "safe_read_only"
+    assert body["runtime_contract"]["execution_approval"]["execution_mode"] == "approved_sandbox_write"
     assert body["auto_har"]["status"] == "no_traffic"
 
 

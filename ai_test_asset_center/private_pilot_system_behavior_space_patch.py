@@ -531,7 +531,12 @@ def _universal_post_body(path: str) -> dict[str, Any]:
     return body
 
 
-def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], discovery_round: int) -> Any:
+def _enrich_system_behavior_scenario(
+    item: Any,
+    slice_meta: dict[str, Any],
+    discovery_round: int,
+    api_doc: str = "",
+) -> Any:
     hints = _system_behavior_hints(slice_meta)
     if not hints:
         return item
@@ -744,23 +749,31 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
                         # placeholders resolved at runtime.  No entity-type
                         # hardcoding — every industry gets its own body shape.
                         try:
-                            from ai_test_asset_center.auto_test_data_factory import (
-                                _markdown_request_example,
+                            from ai_test_asset_center.semantic_scenario_generator import (
+                                SemanticScenarioGenerator,
                             )
-                            _doc_body = _markdown_request_example(
-                                "", wr["method"], wr["path"]
+                            _post_body = SemanticScenarioGenerator._runtime_body_template(
+                                api_doc, wr["method"], wr["path"],
                             )
                         except Exception:
-                            _doc_body = None
-                        if isinstance(_doc_body, dict) and _doc_body:
-                            _post_body = dict(_doc_body)
-                        elif isinstance(_doc_body, list) and _doc_body:
-                            _post_body = _doc_body  # type: ignore[assignment]
-                        else:
-                            # Universal fallback: use the API-documented path to
-                            # infer a minimal body. The runtime seed resolver
-                            # replaces {body_*} placeholders with real data.
+                            _post_body = {}
+                        if not isinstance(_post_body, dict) or not _post_body:
                             _post_body = _universal_post_body(wr["path"])
+                        # Resolve body placeholders (orderId/addressId/...) before write.
+                        try:
+                            from ai_test_asset_center.semantic_scenario_generator import (
+                                SemanticScenarioGenerator as _SSG,
+                            )
+                            _bind_steps, _ = _SSG._body_binding_resolve_steps(
+                                _post_body if isinstance(_post_body, dict) else {},
+                                actor="readonly",
+                                start_order=next_order,
+                            )
+                            for _bs in _bind_steps:
+                                existing_steps.append(_bs)
+                                next_order += 1
+                        except Exception:
+                            pass
                         existing_steps.append(ScenarioStep(
                             order=next_order, action="test_write_create_fixture",
                             api_method="POST", api_path=wr["path"],
@@ -778,15 +791,16 @@ def _enrich_system_behavior_scenario(item: Any, slice_meta: dict[str, Any], disc
                     elif wr["method"] in ("PUT", "PATCH"):
                         safe_path = wr["path"].rstrip("/") + "/{id}" if "/:" not in wr["path"] and "/{" not in wr["path"] else wr["path"]
                         try:
-                            from ai_test_asset_center.auto_test_data_factory import (
-                                _markdown_request_example,
+                            from ai_test_asset_center.semantic_scenario_generator import (
+                                SemanticScenarioGenerator,
                             )
-                            _doc_body = _markdown_request_example(
-                                "", wr["method"], wr["path"]
+                            _put_body = SemanticScenarioGenerator._runtime_body_template(
+                                api_doc, wr["method"], safe_path,
                             )
                         except Exception:
-                            _doc_body = None
-                        _put_body = _doc_body if isinstance(_doc_body, dict) and _doc_body else {}
+                            _put_body = {}
+                        if not isinstance(_put_body, dict):
+                            _put_body = {}
                         existing_steps.append(ScenarioStep(
                             order=next_order, action="test_write_update_fixture",
                             api_method=wr["method"], api_path=safe_path,
@@ -1217,7 +1231,7 @@ def _install_system_behavior_scenario_patch() -> None:
 
     def _invariant_from_meta_with_system_behavior(self: Any, slice_meta: dict[str, Any], discovery_round: int, api_doc: str) -> Any:
         item = original(self, slice_meta, discovery_round, api_doc)
-        return _enrich_system_behavior_scenario(item, slice_meta, discovery_round)
+        return _enrich_system_behavior_scenario(item, slice_meta, discovery_round, api_doc=api_doc)
 
     _ssg.SemanticScenarioGenerator._ORIGINAL_INVARIANT_FROM_META_SYSTEM_BEHAVIOR = original  # type: ignore[attr-defined]
     _ssg.SemanticScenarioGenerator._invariant_from_meta = _invariant_from_meta_with_system_behavior  # type: ignore[method-assign]

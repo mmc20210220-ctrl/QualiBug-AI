@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { emitScanCompleted, getCommercialAssets, usePipelineData } from '../api/data';
+import { emitScanCompleted, getCommercialAssets, isCustomerReadyFinding, usePipelineData } from '../api/data';
 import { runRegression } from '../api/client';
 import { useToast } from '../components/useToast';
 import { buildReportData, renderReportHTML } from '../api/report';
@@ -273,7 +273,7 @@ function evidenceItemAction(item: JsonRecord): string {
 function evidenceNormalizationLabel(summary: JsonRecord): string {
   if (Object.keys(summary).length === 0) return '证据标准化未上报';
   const blocked = asNum(summary.blocked_item_count);
-  return blocked > 0 ? `证据缺字段 ${blocked} 项` : '证据字段已标准化';
+  return blocked > 0 ? `证据标准化未完成：缺字段 ${blocked} 项` : '证据字段已标准化';
 }
 
 function mainChainStageLabel(stage: JsonRecord): string {
@@ -380,7 +380,7 @@ export function Dashboard() {
 
   const record = asRecord(data);
   const commercialAssets = getCommercialAssets(record);
-  const findings = ((record.defects || record.risks || []) as Finding[]);
+  const findings = ((record.defects || record.risks || []) as Finding[]).filter(isCustomerReadyFinding);
   const clues = ((record.clues || []) as Finding[]);
   const regressionSummary = asRecord(record.regression_summary) as unknown as RegressionSummary;
   const valueMetrics = asRecord(record.value_metrics);
@@ -390,6 +390,7 @@ export function Dashboard() {
   const coverageData = asRecord(record.coverage_matrix);
   const evidenceClass = asRecord(record.evidence_classification);
   const benchmarkActive = Boolean(benchmarkMetrics.benchmark_active);
+  const benchmarkFailed = asText(benchmarkMetrics.status) === 'FAILED_SAFE';
   const gatePatch = getGatePatchStatus(record);
   const gatePatchEnabled = Boolean(gatePatch.patched);
   const gatePatchSource = asText(gatePatch.source) || '未上报';
@@ -423,18 +424,30 @@ export function Dashboard() {
   const campaignConfirmed = firstNum(campaignSummary.current_campaign_confirmed_slice_count, campaignSummary.confirmed_slice_count, campaign.confirmed_slice_count);
   const campaignCurrentDefects = asNum(campaignSummary.current_campaign_customer_ready_defect_count);
   const campaignCurrentRawFindings = asNum(campaignSummary.current_campaign_bundle_finding_count_raw);
-  const campaignFamilyDefects = asNum(campaignSummary.family_customer_ready_defect_count, totalRiskCount);
+  const campaignFamilyDefects = asNum(campaignSummary.family_customer_ready_defect_count);
   const p0Count = findings.filter((finding) => finding.severity === 'P0').length;
   const highPriorityCount = p0Count + findings.filter((finding) => finding.severity === 'P1').length;
-  const currentScanFindings = asNum(scanMeta.current_report_total_findings, asNum(scanMeta.total_findings, campaignCurrentRawFindings || totalRiskCount));
-  const currentScanDefects = asNum(scanMeta.current_report_customer_ready_defect_count, asNum(scanMeta.customer_ready_defects, campaignCurrentDefects || Math.min(totalRiskCount, currentScanFindings || totalRiskCount)));
-  const familyShelfDefects = asNum(scanMeta.family_customer_ready_defect_count, campaignFamilyDefects);
+  // Raw finding counters are internal observability only — never fall back into customer defect counts.
+  const currentScanFindings = asNum(scanMeta.current_report_total_findings, asNum(scanMeta.total_findings, campaignCurrentRawFindings));
+  const currentScanDefects = asNum(scanMeta.current_report_customer_ready_defect_count, asNum(scanMeta.customer_ready_defects, campaignCurrentDefects || totalRiskCount));
+  const familyShelfDefects = asNum(scanMeta.family_customer_ready_defect_count, campaignFamilyDefects || totalRiskCount);
   const currentScanP0Count = Math.min(p0Count, currentScanDefects);
   const currentScanHighPriorityCount = Math.min(highPriorityCount, currentScanDefects);
   const shelfCarryoverCount = Math.max(0, familyShelfDefects - currentScanDefects);
   const campaignCarryoverDefects = asNum(campaignSummary.family_historical_carryover_defect_count);
   const coverageGaps = Array.isArray(record.coverage_gaps) ? record.coverage_gaps.length : 0;
   const discoveryFunnel = asRecord(record.discovery_funnel);
+  const pipelineHealth = asRecord(
+    Object.keys(asRecord(record.pipeline_health)).length > 0
+      ? record.pipeline_health
+      : Object.keys(asRecord(discoveryFunnel.pipeline_health)).length > 0
+        ? discoveryFunnel.pipeline_health
+        : scanMeta.pipeline_health,
+  );
+  const pipelineHealthStatus = asText(pipelineHealth.status) || asText(scanMeta.pipeline_health_status);
+  const pipelineFailedSafe = pipelineHealthStatus === 'FAILED_SAFE';
+  const pipelineBlocked = pipelineHealthStatus === 'BLOCKED';
+  const pipelineUnhealthy = pipelineFailedSafe || pipelineBlocked;
   const funnelStages = Array.isArray(discoveryFunnel.stages)
     ? discoveryFunnel.stages.filter((item): item is JsonRecord => item !== null && typeof item === 'object' && !Array.isArray(item))
     : [];
@@ -452,7 +465,7 @@ export function Dashboard() {
     verification: '验证',
     formal_accounting: '正式记账',
   };
-  const governanceNeedsAction = campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred';
+  const governanceNeedsAction = campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' || pipelineUnhealthy;
   const clueCount = clues.length;
   const evidenceTrust = asNum(valueMetrics.evidence_trust_score, 0);
   const modules = Array.from(new Set(findings.map(getFindingModule).filter(Boolean)));
@@ -488,10 +501,28 @@ export function Dashboard() {
   const topFamilyLabel = findings[0]?.defect_family_label || findings[0]?.defect_family || '核心业务';
   const executiveHeadline = getExecutiveHeadline(currentScanDefects, familyShelfDefects, currentScanP0Count, currentScanHighPriorityCount, clueCount, campaignStatus, campaignDeferredReason);
   const executiveDescription = getExecutiveDescription(currentScanDefects, familyShelfDefects, clueCount, evidenceTrust, modulesCount, campaignStatus, campaignDeferredReason, nextCampaignReason);
-  const conclusion = campaignStatus === 'blocked' ? 'Campaign 已阻塞' : campaignStatus === 'coverage_deferred' ? '覆盖已递延' : currentScanP0Count > 0 ? '存在阻断发布缺陷' : currentScanDefects > 0 ? '建议进入整改验收' : '当前无可交付缺陷';
-  const conclusionDetail = campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred'
-    ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason)
-    : currentScanP0Count > 0 ? `${currentScanP0Count} 个 P0 缺陷需要优先闭环。` : currentScanDefects > 0 ? `${currentScanHighPriorityCount} 个高风险问题建议先处理。` : '本轮结果需结合 Campaign 覆盖状态作为当前阶段风险结论。';
+  const conclusion = pipelineFailedSafe
+    ? '发现链路 FAILED_SAFE'
+    : pipelineBlocked
+      ? '发现执行被阻断'
+      : campaignStatus === 'blocked'
+        ? 'Campaign 已阻塞'
+        : campaignStatus === 'coverage_deferred'
+          ? '覆盖已递延'
+          : currentScanP0Count > 0
+            ? '存在阻断发布缺陷'
+            : currentScanDefects > 0
+              ? '建议进入整改验收'
+              : '当前无可交付缺陷';
+  const conclusionDetail = pipelineUnhealthy
+    ? (asText(pipelineHealth.operator_note) || '空 findings / 零缺陷不能解读为目标系统无缺陷，请先修复发现链路。')
+    : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred'
+      ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason)
+      : currentScanP0Count > 0
+        ? `${currentScanP0Count} 个 P0 缺陷需要优先闭环。`
+        : currentScanDefects > 0
+          ? `${currentScanHighPriorityCount} 个高风险问题建议先处理。`
+          : '本轮结果需结合 Campaign 覆盖状态作为当前阶段风险结论。';
 
   const mainChainDetail = hasMainChainContract
     ? mainChainReady
@@ -577,10 +608,10 @@ export function Dashboard() {
             <span><em>历史延续</em><b>{campaignCarryoverDefects} 条</b></span>
             <span><em>覆盖缺口</em><b>{coverageGaps}</b></span>
           </div>
-          {(campaignCurrentRawFindings > 0 || campaignCarryoverDefects > 0 || shelfCarryoverCount > 0) && (
+          {(campaignCurrentRawFindings > 0 || currentScanFindings > currentScanDefects) && (
             <div className="customer-secondary-meta">
-              <span><em>本轮原始 finding</em><b>{campaignCurrentRawFindings || currentScanFindings}</b></span>
-              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮缺陷 {currentScanDefects || campaignCurrentDefects || 0} → 货架 {familyShelfDefects}</b></span>
+              <span><em>内部原始 finding（非客户交付）</em><b>{campaignCurrentRawFindings || Math.max(0, currentScanFindings - currentScanDefects)}</b></span>
+              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮可交付 {currentScanDefects || campaignCurrentDefects || 0} → 货架 {familyShelfDefects}；原始 finding 仅供内部观测</b></span>
             </div>
           )}
         </article>
@@ -595,7 +626,7 @@ export function Dashboard() {
       )}
       {/* ── Rounds Overview: real data from Rounds 1-4 ── */}
       {(() => {
-        const rs = asRecord((data as any).rounds_summary);
+        const rs = asRecord(asRecord(data).rounds_summary);
         if (!rs || !(rs.round_1_benchmark || rs.round_2_gaps || rs.round_3_learning || rs.round_4_dsl)) return null;
         const r1 = asRecord(rs.round_1_benchmark); const r2 = asRecord(rs.round_2_gaps);
         const r3 = asRecord(rs.round_3_learning); const r4 = asRecord(rs.round_4_dsl);
@@ -613,7 +644,41 @@ export function Dashboard() {
           </article>
         );
       })()}
-      {benchmarkActive && (
+      {benchmarkFailed && (
+        <article className="customer-secondary-card muted">
+          <span className="customer-value-kicker">检测能力 Benchmark</span>
+          <h3>Benchmark 计算失败（FAILED_SAFE）</h3>
+          <p>召回/精度指标不可用，不等于「无缺陷」或「能力健康」。原因：{asText(benchmarkMetrics.reason) || 'benchmark_compute_failed'}{asText(benchmarkMetrics.error) ? ` — ${asText(benchmarkMetrics.error)}` : ''}</p>
+        </article>
+      )}
+      {pipelineUnhealthy && (
+        <article className="customer-secondary-card muted">
+          <span className="customer-value-kicker">发现链路健康</span>
+          <h3>{pipelineFailedSafe ? 'FAILED_SAFE：空结果 ≠ 无缺陷' : '执行被阻断：本轮未形成可验证证据'}</h3>
+          <p>{asText(pipelineHealth.operator_note) || conclusionDetail}</p>
+          <div className="customer-secondary-meta">
+            <span><em>链路状态</em><b>{pipelineHealthStatus || '未知'}</b></span>
+            <span><em>执行状态</em><b>{asText(pipelineHealth.execution_status) || '—'}</b></span>
+            <span><em>执行原因</em><b>{asText(pipelineHealth.execution_reason) || '—'}</b></span>
+            <span><em>可观测性</em><b>{asText(pipelineHealth.observability_status) || '—'}</b></span>
+            <span><em>零缺陷可解读</em><b>{pipelineHealth.empty_findings_means_no_bugs ? '是' : '否'}</b></span>
+          </div>
+          {Array.isArray(pipelineHealth.observability_gaps) && pipelineHealth.observability_gaps.length > 0 && (
+            <div className="customer-secondary-meta">
+              {pipelineHealth.observability_gaps.slice(0, 4).map((item) => {
+                const gap = asRecord(item);
+                return (
+                  <span key={`${asText(gap.kind)}-${asText(gap.status)}-${asText(gap.reason)}`}>
+                    <em>{asText(gap.kind) || 'observability'}</em>
+                    <b>{asText(gap.status)}{asText(gap.reason) ? ` · ${asText(gap.reason)}` : ''}</b>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </article>
+      )}
+      {benchmarkActive && !benchmarkFailed && (
         <article className={`customer-secondary-card${asNum(benchmarkMetrics.recall) >= 0.8 ? '' : ' muted'}`}>
           <span className="customer-value-kicker">检测能力 Benchmark</span>
           <h3>召回率 {Math.round(asNum(benchmarkMetrics.recall) * 100)}% · 精度 {Math.round(asNum(benchmarkMetrics.precision) * 100)}%</h3>
@@ -649,7 +714,6 @@ export function Dashboard() {
                     const rate = total > 0 ? detected / total : 0;
                     const pct = Math.round(rate * 100);
                     const barColor = rate >= 0.8 ? 'var(--success-color, #16a34a)' : rate >= 0.5 ? 'var(--warning-color, #d97706)' : 'var(--danger-color, #dc2626)';
-                    const bgColor = rate >= 0.8 ? '#dcfce7' : rate >= 0.5 ? '#fef3c7' : '#fee2e2';
                     return (
                       <div key={btype} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', borderRadius: '8px', background: '#f8fafc', border: '1px solid var(--border-color, #e2e8f0)' }}>
                         <span style={{ fontSize: '0.82rem', fontWeight: 500, minWidth: '100px', textTransform: 'capitalize' }}>{btype.replace(/_/g, ' ')}</span>
@@ -668,7 +732,7 @@ export function Dashboard() {
           {Object.keys(asRecord(coverageData.risk_family_coverage)).length > 0 && (
             <>
               <h4 style={{ margin: '14px 0 6px', fontSize: '0.95rem', fontWeight: 600 }}>
-                Risk Family 覆盖率 ({asNum(coverageData.summary?.risk_family_count)} 族)
+                Risk Family 覆盖率 ({asNum(asRecord(coverageData.summary).risk_family_count)} 族)
               </h4>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '6px' }}>
                 {Object.entries(asRecord(coverageData.risk_family_coverage))
@@ -680,7 +744,6 @@ export function Dashboard() {
                   .map(([family, dim]) => {
                     const d = asRecord(dim);
                     const rate = asNum(d.coverage_rate);
-                    const execRate = asNum(d.execution_rate);
                     const pct = Math.round(rate * 100);
                     const barColor = rate >= 0.8 ? 'var(--success-color, #16a34a)' : rate >= 0.5 ? 'var(--warning-color, #d97706)' : 'var(--danger-color, #dc2626)';
                     return (
@@ -698,14 +761,17 @@ export function Dashboard() {
               {/* Evidence Classification Summary */}
               {asRecord(evidenceClass).confirmed !== undefined && (
                 <div style={{ marginTop: '12px', display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '0.82rem' }}>
-                  <span style={{ color: 'var(--success-color, #16a34a)', fontWeight: 600 }}>
-                    确认缺陷: {asNum(evidenceClass.confirmed)}
+                  <span style={{ color: 'var(--muted-color, #64748b)', fontWeight: 600 }}>
+                    语义层确认信号: {asNum(evidenceClass.confirmed)}
                   </span>
                   <span style={{ color: 'var(--warning-color, #d97706)', fontWeight: 600 }}>
-                    候选线索: {asNum(evidenceClass.candidate)}
+                    语义层候选: {asNum(evidenceClass.candidate)}
                   </span>
                   <span style={{ color: 'var(--muted-color, #64748b)', fontWeight: 600 }}>
-                    待补证: {asNum(evidenceClass.clue)}
+                    待补证线索: {asNum(evidenceClass.clue)}
+                  </span>
+                  <span style={{ color: 'var(--success-color, #16a34a)', fontWeight: 600 }}>
+                    客户可交付缺陷: {currentScanDefects}
                   </span>
                 </div>
               )}
@@ -719,7 +785,6 @@ export function Dashboard() {
                     {Object.entries(asRecord(coverageData.invariant_coverage)).map(([inv, dim]) => {
                       const d = asRecord(dim);
                       const rate = asNum(d.coverage_rate);
-                      const pct = Math.round(rate * 100);
                       const color = rate >= 0.8 ? '#16a34a' : rate >= 0.5 ? '#d97706' : '#dc2626';
                       return (
                         <span key={inv} style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', background: '#f1f5f9', color, fontWeight: 500 }}>
@@ -918,8 +983,8 @@ export function Dashboard() {
       </div>
 
       <section className="customer-value-grid mb-4">
-        <article className="customer-value-card"><span className="customer-value-kicker">发布建议</span><h2>{hasMainChainContract && !mainChainReady ? '暂不形成交付结论，先闭合主链路' : evidenceBlockedItemCount > 0 ? '暂不形成交付结论，先补齐证据' : campaignStatus === 'blocked' ? '暂不形成发布结论，先补齐执行条件' : campaignStatus === 'coverage_deferred' ? '先评审递延范围，再决定是否扩大检测' : currentScanP0Count > 0 ? '建议暂停发布，先处理阻断缺陷' : currentScanDefects > 0 ? '建议带着本轮缺陷清单推进整改验收' : '当前没有可交付缺陷，可继续观察后续轮次'}</h2><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : currentScanP0Count > 0 ? '当前存在会直接影响业务履约或发布安全的高风险缺陷。' : currentScanDefects > 0 ? '当前结果已经足以形成客户整改清单，不需要再从线索里筛。' : '本轮输出可以作为当前阶段的风险结论，但建议继续保持持续检测。'}</p></article>
-        <article className="customer-value-card"><span className="customer-value-kicker">客户价值</span><h2>{currentScanDefects > 0 ? `本轮交付 ${currentScanDefects} 个已验证缺陷，累计 ${familyShelfDefects} 个` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '本轮价值在于明确暴露可测试性边界' : '本轮价值在于给出明确风险结论'}</h2><p>{currentScanDefects > 0 ? `缺陷集中在 ${topFamilyLabel} 等方向，证据可信度 ${evidenceTrust}% ，其中 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条为历史延续，可直接进入修复与复验。` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '系统没有把缺少来源、环境、测试数据、真实执行或证据链闭合伪装成“通过”，可直接用于推动补齐条件。' : '当前没有把未补证线索冒充成客户缺陷，避免误导对结果质量的判断。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">发布建议</span><h2>{pipelineUnhealthy ? '暂不形成「无缺陷」结论，先修复发现链路' : hasMainChainContract && !mainChainReady ? '暂不形成交付结论，先闭合主链路' : evidenceBlockedItemCount > 0 ? '暂不形成交付结论，先补齐证据' : campaignStatus === 'blocked' ? '暂不形成发布结论，先补齐执行条件' : campaignStatus === 'coverage_deferred' ? '先评审递延范围，再决定是否扩大检测' : currentScanP0Count > 0 ? '建议暂停发布，先处理阻断缺陷' : currentScanDefects > 0 ? '建议带着本轮缺陷清单推进整改验收' : '当前没有可交付缺陷，可继续观察后续轮次'}</h2><p>{pipelineUnhealthy ? (asText(pipelineHealth.operator_note) || conclusionDetail) : hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : currentScanP0Count > 0 ? '当前存在会直接影响业务履约或发布安全的高风险缺陷。' : currentScanDefects > 0 ? '当前结果已经足以形成客户整改清单，不需要再从线索里筛。' : '本轮输出可以作为当前阶段的风险结论，但建议继续保持持续检测。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">客户价值</span><h2>{pipelineUnhealthy ? '本轮价值在于暴露发现链路故障，而非宣称无缺陷' : currentScanDefects > 0 ? `本轮交付 ${currentScanDefects} 个已验证缺陷，累计 ${familyShelfDefects} 个` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '本轮价值在于明确暴露可测试性边界' : '本轮价值在于给出明确风险结论'}</h2><p>{pipelineUnhealthy ? '系统没有把 FAILED_SAFE / 执行阻断伪装成“通过”或“无缺陷”，可直接用于推动修复账号、探针与执行可观测性。' : currentScanDefects > 0 ? `缺陷集中在 ${topFamilyLabel} 等方向，证据可信度 ${evidenceTrust}% ，其中 ${Math.max(campaignCarryoverDefects, shelfCarryoverCount)} 条为历史延续，可直接进入修复与复验。` : governanceNeedsAction || (hasMainChainContract && !mainChainReady) || evidenceBlockedItemCount > 0 ? '系统没有把缺少来源、环境、测试数据、真实执行或证据链闭合伪装成“通过”，可直接用于推动补齐条件。' : '当前没有把未补证线索冒充成客户缺陷，避免误导对结果质量的判断。'}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">交付边界</span><h2>{evidenceBlockedItemCount > 0 ? `证据仍有 ${evidenceBlockedItemCount} 项待补齐` : hasMainChainContract && !mainChainReady ? `主链路断在：${firstBlockedStageLabel}` : coverageGaps > 0 ? `当前有 ${coverageGaps} 项覆盖缺口` : clueCount > 0 ? `内部仍有 ${clueCount} 条待补证线索` : '当前没有待补证线索'}</h2><p>{evidenceBlockedItemCount > 0 ? evidenceDetail : hasMainChainContract && !mainChainReady ? firstBlockedNextAction : coverageGaps > 0 ? '覆盖缺口不会进入客户缺陷数量，需要通过新的资料、环境、数据或授权条件在后续检测中关闭。' : clueCount > 0 ? '这些线索不会进入客户成果展示，只作为内部继续采证与复验的运营池。' : '当前结果已经清晰收口，没有把内部线索混进客户视图。'}</p></article>
       </section>
 
@@ -929,6 +994,7 @@ export function Dashboard() {
           {hasDiscoveryFunnel ? (
             <>
               <h3>
+                {pipelineUnhealthy ? `${pipelineHealthStatus} · ` : ''}
                 已验证 Bug {funnelValidated}
                 <span style={{ fontWeight: 400, fontSize: '0.85em', marginLeft: 8 }}>
                   · 待确认发现 {funnelPending} · 候选 {funnelCandidates}

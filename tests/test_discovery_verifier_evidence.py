@@ -41,6 +41,97 @@ def test_stage_verify_confirms_server_error_from_http_evidence(monkeypatch):
     assert "HTTP500" in findings[0].actual
 
 
+def test_stage_verify_downgrades_synthetic_id_500_to_inconclusive(monkeypatch):
+    engine = _engine(monkeypatch)
+
+    findings = engine.stage_verify([
+        {
+            "hypothesis_id": "H-SYN-500",
+            "title": "server should not throw exception",
+            "severity": "P0",
+            "expected_behavior": "API must not return 500",
+            "evidence": {
+                "calls": [
+                    {
+                        "call": "GET /api/patients/1",
+                        "path": "/api/patients/1",
+                        "synthetic_id": True,
+                        "results": {
+                            "admin": {"status": 500, "body": {"error": "invalid uuid"}},
+                            "viewer": {"status": 403, "body": {}},
+                            "no_auth": {"status": 401, "body": {}},
+                        },
+                    }
+                ]
+            },
+        }
+    ])
+
+    assert findings[0].verdict == "inconclusive"
+    assert findings[0].evidence.get("probe_quality_gate") == "synthetic_or_unresolved_id"
+    assert "合成" in findings[0].actual or "伪影" in findings[0].actual
+
+
+def test_stage_verify_downgrades_unresolved_route_500_to_inconclusive(monkeypatch):
+    engine = _engine(monkeypatch)
+
+    findings = engine.stage_verify([
+        {
+            "hypothesis_id": "H-UNRES-500",
+            "title": "server should not throw exception",
+            "severity": "P0",
+            "expected_behavior": "API must not return 500",
+            "evidence": {
+                "calls": [
+                    {
+                        "call": "GET /api/contracts/1",
+                        "path": "/api/contracts/1",
+                        "unresolved_route": True,
+                        "synthetic_id": True,
+                        "results": {
+                            "admin": {"status": 500, "body": {"ok": False}},
+                            "viewer": {"status": 403, "body": {}},
+                            "no_auth": {"status": 401, "body": {}},
+                        },
+                    }
+                ]
+            },
+        }
+    ])
+
+    assert findings[0].verdict == "inconclusive"
+    assert findings[0].evidence.get("probe_quality") == "synthetic_or_unresolved_id"
+
+
+def test_stage_verify_bare_5xx_without_expected_error_is_inconclusive(monkeypatch):
+    engine = _engine(monkeypatch)
+
+    findings = engine.stage_verify([
+        {
+            "hypothesis_id": "H-BARE-500",
+            "title": "order amount conservation after refund",
+            "severity": "P1",
+            "expected_behavior": "refund must keep ledger balance conserved",
+            "evidence": {
+                "calls": [
+                    {
+                        "call": "POST /api/orders/42/refund",
+                        "path": "/api/orders/42/refund",
+                        "results": {
+                            "admin": {"status": 500, "body": {"error": "boom"}},
+                            "viewer": {"status": 403, "body": {}},
+                            "no_auth": {"status": 401, "body": {}},
+                        },
+                    }
+                ]
+            },
+        }
+    ])
+
+    assert findings[0].verdict == "inconclusive"
+    assert findings[0].evidence.get("probe_quality_gate") == "bare_5xx_without_expected_error"
+
+
 def test_stage_verify_confirms_auth_bypass_only_with_business_data(monkeypatch):
     engine = _engine(monkeypatch)
 

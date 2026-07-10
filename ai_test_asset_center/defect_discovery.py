@@ -353,8 +353,13 @@ def infer_industry(prd: str, paths: dict) -> str:
         ("education", ["course", "student", "lesson", "课程", "学员", "课时"]),
     ]
     scores = [(name, sum(1 for word in words if word in text)) for name, words in candidates]
-    best = max(scores, key=lambda item: item[1])
-    return best[0] if best[1] else "generic_enterprise_software"
+    scores.sort(key=lambda item: (-item[1], item[0]))
+    # Fail closed: weak or tied keyword hits must not invent ecommerce (or any vertical).
+    if not scores or scores[0][1] < 2:
+        return "generic_enterprise_software"
+    if len(scores) > 1 and scores[0][1] == scores[1][1]:
+        return "generic_enterprise_software"
+    return scores[0][0]
 
 
 def infer_invariants_from_model(operations: list[dict], roles: list[str], tenants: list[str]) -> list[dict]:

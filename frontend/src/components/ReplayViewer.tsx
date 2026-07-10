@@ -88,7 +88,7 @@ export function ReplayViewer({ projectId, finding, onClose }: ReplayViewerProps)
                 <div className="replay-code-line"><span className="replay-code-key">Method:</span> {request.method}</div>
                 <div className="replay-code-line"><span className="replay-code-key">URL:</span> {request.url}</div>
                 {Object.entries(request.headers || {}).map(([key, value]) => <div key={key} className="replay-code-line"><span className="replay-code-key">{key}:</span> {value}</div>)}
-                {request.body && <div className="replay-code-line"><span className="replay-code-key">Body:</span> <pre>{request.body}</pre></div>}
+                {request.body && <div className="replay-code-line"><span className="replay-code-key">Body:</span><code className="replay-response-body">{request.body}</code></div>}
               </div>
             </div>
 
@@ -97,7 +97,7 @@ export function ReplayViewer({ projectId, finding, onClose }: ReplayViewerProps)
               <div className="replay-code-block">
                 <div className="replay-code-line"><span className="replay-code-key">Status:</span><span className={response.status_code >= 400 ? 'tone-danger' : 'tone-success'}> {response.status_code}</span></div>
                 <div className="replay-code-line"><span className="replay-code-key">耗时:</span> {formatDurationMs(response.duration_ms)}</div>
-                {response.body && <div className="replay-code-line"><span className="replay-code-key">Body:</span><pre className="replay-response-body">{response.body}</pre></div>}
+                {response.body && <div className="replay-code-line"><span className="replay-code-key">Body:</span><code className="replay-response-body">{response.body}</code></div>}
               </div>
             </div>
 

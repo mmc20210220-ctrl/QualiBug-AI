@@ -171,7 +171,8 @@ def _result(tmp_path_factory: pytest.TempPathFactory) -> dict:
 def test_scan_produces_privilege_escalation_finding(_result: dict) -> None:
     findings = _result.get("findings") or []
     assert _result.get("execution_status") == "completed"
-    assert _result.get("grade") == "evidence_ready"
+    assert _result.get("grade") == "partial_coverage"
+    assert _result.get("coverage_honesty", {}).get("downgraded") is True
     assert len(findings) >= 1, f"must detect privilege escalation; got {len(findings)}"
 
 

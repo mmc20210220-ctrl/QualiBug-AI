@@ -56,12 +56,12 @@ def test_dashboard_surfaces_current_scan_and_family_shelf_separately() -> None:
     assert "const familyShelfDefects = asNum(scanMeta.family_customer_ready_defect_count, campaignFamilyDefects);" in page
     assert "const focusFindings = currentScanDefects > 0 ? topFindings : [];" in page
     assert "const shelfCarryoverCount = Math.max(0, familyShelfDefects - currentScanDefects);" in page
-    assert "<span className=\"summary-pill strong\">本轮缺陷 {currentScanDefects}</span>" in page
-    assert "<span className=\"summary-pill\">缺陷货架 {familyShelfDefects}</span>" in page
-    assert "当前货架仍保留 {familyShelfDefects} 条历史缺陷，但本轮没有新增 confirmed 缺陷。" in page
+    assert "{ label: `本轮缺陷 ${currentScanDefects}`, strong: true }" in page
+    assert "{ label: `累计结论 ${familyShelfDefects}`, strong: false }" in page
+    assert "当前仍保留 {familyShelfDefects} 条历史结论，但本轮没有新增已确认缺陷。" in page
     assert "{ label: '本轮可交付', val: currentScanDefects, tone: 'primary'" in page
-    assert "{ label: '缺陷货架', val: familyShelfDefects, tone: familyShelfDefects > currentScanDefects ? 'warning' : 'neutral'" in page
-    assert "本页显式区分本轮扫描与累计 defect shelf" in page
+    assert "{ label: '累计结论', val: familyShelfDefects, tone: familyShelfDefects > currentScanDefects ? 'warning' : 'neutral'" in page
+    assert "本轮 ${currentDefectCount} 个，累计保留 ${familyDefectCount} 个历史结论" in page
 
 
 def test_evidence_chain_surfaces_scan_scope_before_evidence_pack_counts() -> None:
@@ -84,4 +84,4 @@ def test_sidebar_uses_current_scope_for_delivery_metric_and_shelf_for_badge() ->
     assert "<span>本轮可交付</span>" in source
     assert "<strong>{currentDefectCount ?? 0}</strong>" in source
     assert "? shelfCount" in source
-    assert "? '已有历史货架'" in source
+    assert "? '有历史结论'" in source

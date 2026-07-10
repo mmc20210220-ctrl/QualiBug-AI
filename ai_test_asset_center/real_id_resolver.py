@@ -37,8 +37,8 @@ _PLACEHOLDER_PATTERNS: tuple[tuple[re.Pattern[str], Callable[[re.Match[str]], st
 _PARAM_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "id": ("id", "uuid", "ID", "pk"),
     "sku": ("sku", "product_sku", "productSku", "code", "product_code", "id"),
-    "orderid": ("orderId", "order_id", "order_no", "orderNo", "id"),
-    "order_id": ("order_id", "orderId", "order_no", "orderNo", "id"),
+    "orderid": ("orderId", "order_id", "id", "uuid", "order_no", "orderNo"),
+    "order_id": ("order_id", "orderId", "id", "uuid", "order_no", "orderNo"),
     "userid": ("userId", "user_id", "uid", "id"),
     "user_id": ("user_id", "userId", "uid", "id"),
     "addressid": ("addressId", "address_id", "id"),
@@ -98,11 +98,46 @@ def param_field_candidates(param_name: str) -> list[str]:
     return result
 
 
+def _pluralize_resource(stem: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "", str(stem or "").strip().lower())
+    if not token:
+        return ""
+    if token.endswith("y") and len(token) > 1 and token[-2] not in "aeiou":
+        return token[:-1] + "ies"
+    if token.endswith(("s", "x", "z", "ch", "sh")):
+        return token + "es"
+    return token + "s"
+
+
+def _resource_siblings_from_token(token: str) -> list[str]:
+    """Derive list-endpoint siblings from a path/body token (industry-agnostic)."""
+    key = re.sub(r"[^a-z0-9]+", "", str(token or "").strip().lower())
+    if not key:
+        return []
+    stem = key
+    for suffix in ("uuid", "guid", "code", "number", "no", "key", "id"):
+        if key.endswith(suffix) and len(key) > len(suffix) + 1:
+            stem = key[: -len(suffix)]
+            break
+    if not stem:
+        return []
+    # Bare identity tokens are not collection resources (sku/code/id → use catalog hints).
+    if stem in {"sku", "code", "id", "uuid", "guid", "no", "key", "pk", "num"}:
+        return []
+    plural = _pluralize_resource(stem)
+    siblings = [stem, plural]
+    # Common REST nesting for nested write surfaces (balance/status under users).
+    if stem in {"user", "account", "customer", "member", "patient", "employee"}:
+        siblings.extend([plural, f"{plural}/search", f"{stem}s/search"])
+    return list(dict.fromkeys(item for item in siblings if item))
+
+
 def alternate_collection_paths(path: str) -> list[str]:
     """Fallback list endpoints when the structural collection path is not listable.
 
-    Example: ``/api/inventory/{sku}`` has no ``GET /api/inventory``; SKUs are
-    typically discoverable from a sibling product catalog endpoint.
+    Derives siblings from path params and resource tokens instead of hardcoding
+    ecommerce catalogs. Nested admin write paths still walk parents / search /
+    identity siblings.
     """
     normalized = normalize_path_placeholders(path).split("?", 1)[0]
     params = infer_path_params(normalized)
@@ -115,23 +150,172 @@ def alternate_collection_paths(path: str) -> list[str]:
     prefix = "/" + parts[0]  # usually "api"
     resource = parts[-1].lower()
     param_keys = {re.sub(r"[^a-z0-9]+", "", p.lower()) for p in params}
+    path_tokens = {p.lower() for p in parts}
     alternates: list[str] = []
-    if "sku" in param_keys or resource in {"inventory", "stock", "warehouse"}:
-        for sibling in ("products", "product", "skus", "items", "goods"):
+
+    # Nested admin/collection trees: prefer searchable siblings and parent walks
+    # before inventing unrelated catalogs. E.g. /api/users/admin/users →
+    # /api/users/admin/search, /api/users, /api/auth/me.
+    if "admin" in path_tokens or len(parts) >= 3:
+        for i in range(len(parts), 1, -1):
+            parent_parts = parts[:i]
+            parent = "/" + "/".join(parent_parts)
+            last = parent_parts[-1].lower()
+            if last in {"admin", "api"}:
+                # /api/users/admin → try /api/users/admin/search
+                search = f"{parent}/search"
+                if search != primary:
+                    alternates.append(search)
+                continue
+            if parent != primary:
+                alternates.append(parent)
+            search = f"{parent}/search"
+            if search != primary:
+                alternates.append(search)
+            # Replace trailing resource with search under the same admin parent.
+            if "admin" in {p.lower() for p in parent_parts}:
+                admin_idx = next(
+                    (idx for idx, p in enumerate(parent_parts) if p.lower() == "admin"),
+                    None,
+                )
+                if admin_idx is not None:
+                    admin_search = "/" + "/".join(parent_parts[: admin_idx + 1] + ["search"])
+                    if admin_search != primary:
+                        alternates.append(admin_search)
+
+    # Param-derived siblings: patient_id → /api/patients, material_code → /api/materials
+    for param in params:
+        for sibling in _resource_siblings_from_token(param):
             candidate = f"{prefix}/{sibling}"
             if candidate != primary:
                 alternates.append(candidate)
-    if any(k in param_keys for k in ("orderid", "order_id")) or resource in {"payments", "payment", "refunds", "refund"}:
-        for sibling in ("orders", "order"):
+
+    # Catalog-like identity tokens often resolve from a sibling list endpoint
+    # (inventory/{sku} → products/materials; not ecommerce-only).
+    if any(k in param_keys for k in ("sku", "productsku", "materialcode", "itemcode", "partnumber", "partno")):
+        for sibling in ("products", "product", "materials", "material", "items", "goods", "catalog", "catalog_items", "skus"):
             candidate = f"{prefix}/{sibling}"
             if candidate != primary:
                 alternates.append(candidate)
-    if any(k in param_keys for k in ("userid", "user_id")):
-        for sibling in ("users", "accounts", "customers"):
+
+    # Resource-token siblings for sub-resources (inventory/{sku}, payments/{order_id})
+    for sibling in _resource_siblings_from_token(resource):
+        candidate = f"{prefix}/{sibling}"
+        if candidate != primary:
+            alternates.append(candidate)
+
+    # Structural parent walk: /api/work-orders/{id}/release → /api/work-orders
+    if len(parts) >= 3:
+        parent = "/" + "/".join(parts[:-1])
+        if parent != primary:
+            alternates.append(parent)
+
+    user_like = (
+        any(k in param_keys for k in ("userid", "user_id", "patientid", "employeeid", "accountid"))
+        or resource in {"users", "user", "accounts", "customers", "patients", "employees"}
+        or bool({"users", "user", "patients", "employees"} & path_tokens)
+    )
+    if user_like:
+        for sibling in ("users", "accounts", "customers", "patients", "employees"):
             candidate = f"{prefix}/{sibling}"
             if candidate != primary:
                 alternates.append(candidate)
-    return list(dict.fromkeys(alternates))
+            alternates.append(f"{candidate}/admin/search")
+            alternates.append(f"{candidate}/search")
+        # Current-actor identity — prefer namespaced /auth/me over bare /me so
+        # invented shallow paths do not crowd out real list endpoints.
+        for identity in (
+            f"{prefix}/auth/me",
+            f"{prefix}/users/me",
+            f"{prefix}/accounts/me",
+        ):
+            if identity != primary:
+                alternates.append(identity)
+    return list(dict.fromkeys(item for item in alternates if item.startswith("/")))
+
+
+# Generic REST collection hints for body-field binding (not domain-specific values).
+# Prefer structural derivation via body_field_collection_paths(); this map only
+# covers common REST naming aliases that pluralization alone would miss.
+_BODY_FIELD_COLLECTION_SEGMENTS: dict[str, tuple[str, ...]] = {
+    "orderid": ("orders", "order"),
+    "order_id": ("orders", "order"),
+    "orderno": ("orders", "order"),
+    "order_no": ("orders", "order"),
+    "sku": ("products", "product", "skus", "items", "goods", "materials", "material"),
+    "productid": ("products", "product", "items"),
+    "product_id": ("products", "product", "items"),
+    "materialid": ("materials", "material", "items"),
+    "material_id": ("materials", "material", "items"),
+    "materialcode": ("materials", "material", "items"),
+    "material_code": ("materials", "material", "items"),
+    "patientid": ("patients", "patient"),
+    "patient_id": ("patients", "patient"),
+    "caseid": ("cases", "case"),
+    "case_id": ("cases", "case"),
+    "permitid": ("permits", "permit"),
+    "permit_id": ("permits", "permit"),
+    "workorderid": ("work-orders", "work_orders", "workorders"),
+    "work_order_id": ("work-orders", "work_orders", "workorders"),
+    "settlementid": ("settlements", "settlement"),
+    "settlement_id": ("settlements", "settlement"),
+    "userid": ("users", "accounts", "customers"),
+    "user_id": ("users", "accounts", "customers"),
+    "addressid": ("users/addresses", "user/addresses", "addresses", "address"),
+    "address_id": ("users/addresses", "user/addresses", "addresses", "address"),
+    "paymentid": ("payments", "payment"),
+    "payment_id": ("payments", "payment"),
+    "refundid": ("refunds", "refund"),
+    "refund_id": ("refunds", "refund"),
+    "couponid": ("coupons", "coupon", "promotions", "vouchers"),
+    "coupon_id": ("coupons", "coupon", "promotions", "vouchers"),
+    "promocode": ("promo_codes", "promotions", "coupons"),
+    "promo_code": ("promo_codes", "promotions", "coupons"),
+    "cartitemid": ("cart", "cart/items", "cartitems"),
+    "cart_item_id": ("cart", "cart/items", "cartitems"),
+    "lineid": ("cart/items", "order/items", "lines"),
+    "line_id": ("cart/items", "order/items", "lines"),
+}
+
+
+def body_field_collection_paths(field: str, *, api_prefix: str = "/api") -> list[str]:
+    """List endpoints that may supply a runtime value for a body placeholder."""
+    name = str(field or "").strip()
+    if not name:
+        return []
+    key = re.sub(r"[^a-z0-9_]+", "", name.lower())
+    segments = _BODY_FIELD_COLLECTION_SEGMENTS.get(key, ())
+    prefix = str(api_prefix or "/api").rstrip("/") or "/api"
+    paths = [f"{prefix}/{segment}" for segment in segments if segment]
+    if not paths and key.endswith("id"):
+        stem = key[:-2].strip("_")
+        if stem:
+            paths.append(f"{prefix}/{stem}s")
+            paths.append(f"{prefix}/{stem}")
+    return list(dict.fromkeys(paths))
+
+
+def extract_body_binding_fields(body: Any) -> list[str]:
+    """Return ``{placeholder}`` field names referenced in a request body template."""
+    found: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                walk(child)
+            return
+        if isinstance(value, str):
+            for match in re.finditer(r"\{([A-Za-z_]\w*)\}", value):
+                token = str(match.group(1) or "").strip()
+                if token and token not in found:
+                    found.append(token)
+
+    walk(body)
+    return found
 
 
 def extract_fields_for_path(path: str) -> list[str]:

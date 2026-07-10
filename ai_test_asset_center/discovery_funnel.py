@@ -132,9 +132,31 @@ def _collect_blocking_reasons(
     blocked = _as_int(execution.get("production_data_blocked"))
     if blocked:
         _bump("production_data_blocked", blocked)
+    skip_telemetry = _as_dict(execution.get("skip_telemetry"))
+    cleanup_counts = _as_dict(skip_telemetry.get("cleanup_status_counts"))
+    if _as_int(cleanup_counts.get("failed")):
+        _bump("sandbox_cleanup_failed", _as_int(cleanup_counts.get("failed")))
+    if _as_int(cleanup_counts.get("not_reversible")):
+        _bump("sandbox_cleanup_not_reversible", _as_int(cleanup_counts.get("not_reversible")))
+    observer_counts = _as_dict(skip_telemetry.get("observer_status_counts"))
+    observer_missing = sum(
+        _as_int(count)
+        for key, count in observer_counts.items()
+        if "documented_observer_missing" in str(key)
+    )
+    if observer_missing:
+        _bump("documented_observer_missing", observer_missing)
     if str(execution.get("status") or "") in {"blocked", "skipped", "plan_only"}:
         reason = str(execution.get("reason") or execution.get("status") or "execution_blocked")
         _bump(reason)
+    if str(execution.get("observability_status") or "") == "FAILED_SAFE":
+        _bump("execution_observability_gap")
+        for item in _as_list(execution.get("observability")):
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "")
+            if status in {"failed", "missing"}:
+                _bump(f"observability_{item.get('kind') or 'unknown'}_{status}")
     if _as_int(execution.get("executed")) == 0:
         selected = _as_list(
             _as_dict(_as_dict(v12_result.get("phases")).get("incremental_discovery")).get("selected_slice_ids")
@@ -143,8 +165,68 @@ def _collect_blocking_reasons(
         if selected:
             _bump(str(execution.get("reason") or "no_runtime_execution_receipts"))
 
+    # Standalone discovery-engine health (when embedded on the result).
+    discovery_health = _as_dict(v12_result.get("discovery_engine_health") or v12_result.get("stage_status"))
+    for stage_name, status in discovery_health.items():
+        if str(status or "") == "FAILED_SAFE":
+            _bump(f"discovery_{stage_name}_FAILED_SAFE")
+    for failure in _as_list(v12_result.get("stage_failures")):
+        _bump(f"stage_failure:{str(failure)[:120]}")
+
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return [{"reason": reason, "count": count} for reason, count in ranked]
+
+
+def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
+    """Summarize whether empty findings mean 'no bugs' or 'pipeline failed safe'."""
+    result = _as_dict(v12_result)
+    phases = _as_dict(result.get("phases"))
+    execution = _as_dict(phases.get("execution"))
+    observability = [item for item in _as_list(execution.get("observability")) if isinstance(item, dict)]
+    failed_obs = [
+        item for item in observability
+        if str(item.get("status") or "") in {"failed", "missing"}
+    ]
+    stage_status = _as_dict(result.get("stage_status") or result.get("discovery_engine_health"))
+    failed_stages = {
+        key: value for key, value in stage_status.items()
+        if str(value or "") == "FAILED_SAFE"
+    }
+    stage_failures = [str(item) for item in _as_list(result.get("stage_failures")) if str(item).strip()]
+    execution_failed_safe = str(execution.get("observability_status") or "") == "FAILED_SAFE"
+    runtime_failed = str(result.get("runtime_status") or "").upper() in {"FAILED", "FAILED_SAFE"}
+    funnel_error = str(result.get("discovery_funnel_error") or _as_dict(result.get("discovery_funnel")).get("error") or "")
+    status = "OK"
+    if execution_failed_safe or failed_stages or stage_failures or runtime_failed:
+        status = "FAILED_SAFE"
+    elif str(execution.get("status") or "") in {"blocked", "skipped"} and _as_int(execution.get("executed")) == 0:
+        status = "BLOCKED"
+    elif funnel_error:
+        status = "DEGRADED"
+
+    operator_note = str(result.get("operator_note") or "").strip()
+    if status == "FAILED_SAFE" and not operator_note:
+        operator_note = (
+            "发现链路关键阶段失败或可观测性缺口：空 findings / 零缺陷不代表目标系统无缺陷，"
+            "请先修复执行/账号/探针可观测性问题后再解读结果。"
+        )
+    elif status == "BLOCKED" and not operator_note:
+        operator_note = (
+            f"执行阶段未产出运行时收据（status={execution.get('status')}, "
+            f"reason={execution.get('reason') or 'unknown'}）；不能把本轮解读为「系统无缺陷」。"
+        )
+
+    return {
+        "status": status,
+        "empty_findings_means_no_bugs": status == "OK",
+        "execution_status": str(execution.get("status") or ""),
+        "execution_reason": str(execution.get("reason") or ""),
+        "observability_status": str(execution.get("observability_status") or ("ok" if observability and not failed_obs else "")),
+        "observability_gaps": failed_obs[:12],
+        "failed_stages": failed_stages,
+        "stage_failures": stage_failures[:20],
+        "operator_note": operator_note,
+    }
 
 
 def _build_explanation(
@@ -155,8 +237,22 @@ def _build_explanation(
     stages: list[dict[str, Any]],
     top_blocking_reasons: list[dict[str, Any]],
     unify: dict[str, Any],
+    pipeline_health: dict[str, Any] | None = None,
 ) -> str:
     parts: list[str] = []
+    health = _as_dict(pipeline_health)
+    health_status = str(health.get("status") or "OK")
+    if health_status == "FAILED_SAFE":
+        parts.append(
+            str(health.get("operator_note") or "")
+            or "发现链路 FAILED_SAFE：空结果不能解读为「系统无缺陷」。"
+        )
+    elif health_status == "BLOCKED":
+        parts.append(
+            str(health.get("operator_note") or "")
+            or "执行阶段被阻断，本轮未形成可验证运行时证据。"
+        )
+
     gen = next((s for s in stages if s["name"] == "candidate_generation"), None)
     sel = next((s for s in stages if s["name"] == "probe_selection"), None)
     exe = next((s for s in stages if s["name"] == "execution"), None)
@@ -164,7 +260,13 @@ def _build_explanation(
     acc = next((s for s in stages if s["name"] == "formal_accounting"), None)
 
     if validated_bug_count == 0:
-        parts.append(f"本轮正式记账的已验证 Bug 为 0（候选 {candidate_count}，待确认发现 {pending_finding_count}）。")
+        if health_status in {"FAILED_SAFE", "BLOCKED"}:
+            parts.append(
+                f"本轮正式记账的已验证 Bug 为 0（候选 {candidate_count}，待确认发现 {pending_finding_count}），"
+                f"但链路状态为 {health_status}，不能据此宣称目标系统无缺陷。"
+            )
+        else:
+            parts.append(f"本轮正式记账的已验证 Bug 为 0（候选 {candidate_count}，待确认发现 {pending_finding_count}）。")
     else:
         parts.append(
             f"本轮已验证 Bug {validated_bug_count}；待确认发现 {pending_finding_count}（不计入客户可见已验证 Bug）；候选信号 {candidate_count}。"
@@ -198,11 +300,15 @@ def _build_explanation(
         suggestions.append("LLM Reasoner 当前不可用（provider offline）；配置并健康检查通过后再开 QUALIBUG_UNIFY_LLM_REASONER=1")
     if "production_data_blocked" in reason_keys:
         suggestions.append("部分探针命中生产数据排除规则被拦截，请核对 production_data_exclusion 与测试环境范围")
+    if "execution_observability_gap" in reason_keys or any(key.startswith("observability_") for key in reason_keys):
+        suggestions.append("多角色账号/禁用账号探针可观测性失败，请检查 platform_inputs/<project>/test_accounts.json 与登录探针配置")
+    if any(key.startswith("discovery_") and key.endswith("FAILED_SAFE") for key in reason_keys) or any(key.startswith("stage_failure:") for key in reason_keys):
+        suggestions.append("发现引擎关键阶段 FAILED_SAFE，请查看 stage_failures / pipeline_health 后再解读零缺陷结果")
     if any("runtime" in key.lower() or "approval" in key.lower() or key in {"no_base_url", "execution_blocked"} for key in reason_keys):
         suggestions.append("检查 runtime_contract / base_url / 执行批准是否已批准，否则执行阶段会 plan_only 或 blocked")
     if suggestions:
         parts.append("下一步：" + "；".join(suggestions) + "。")
-    elif validated_bug_count == 0 and not top:
+    elif validated_bug_count == 0 and not top and health_status == "OK":
         parts.append("漏斗各阶段未见明确阻断码；请核对是否有可执行切片入选，以及目标系统是否可达。")
 
     return "".join(parts)
@@ -217,6 +323,7 @@ def build_funnel(v12_result: dict[str, Any], gate_results: list[dict[str, Any]] 
     execution = _as_dict(phases.get("execution"))
     oracle = _as_dict(phases.get("oracle"))
     unify = _as_dict(result.get("mainline_unification"))
+    pipeline_health = build_pipeline_health(result)
 
     total_slices = _as_int(ledger.get("total_slices"))
     if total_slices <= 0:
@@ -290,6 +397,7 @@ def build_funnel(v12_result: dict[str, Any], gate_results: list[dict[str, Any]] 
         stages=stages,
         top_blocking_reasons=top_blocking_reasons,
         unify=unify,
+        pipeline_health=pipeline_health,
     )
 
     return {
@@ -299,6 +407,7 @@ def build_funnel(v12_result: dict[str, Any], gate_results: list[dict[str, Any]] 
         "pending_finding_count": pending_finding_count,
         "candidate_count": candidate_count,
         "explanation": explanation,
+        "pipeline_health": pipeline_health,
         "mainline_unification": {
             key: value for key, value in unify.items() if key != "error" or value
         } if unify else {},

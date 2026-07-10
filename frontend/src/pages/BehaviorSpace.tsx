@@ -1,6 +1,6 @@
 import { useMemo, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useFindingsData } from '../api/data';
+import { isCustomerReadyFinding, useFindingsData } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
 import type { Finding } from '../types';
 
@@ -285,6 +285,8 @@ function isCoveredFinding(finding: Finding): boolean {
 }
 
 function buildActionableRiskKey(finding: Finding): string {
+  // Align with Findings page: only customer-ready defects inflate "风险发现".
+  if (!isCustomerReadyFinding(finding)) return '';
   if (NON_ACTIONABLE_BUG_STATUS.has(String(finding.bug_status || ''))) return '';
   if (!hasRuntimeEvidence(finding)) return '';
   if (AGGREGATE_LAYER_FINDING_RE.test(String(finding.title || '').trim())) return '';

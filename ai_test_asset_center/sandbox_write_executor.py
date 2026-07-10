@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .enterprise_project_config import match_production_data_exclusion
+from .real_id_resolver import collection_path as documented_collection_path
+from .real_id_resolver import normalize_path_placeholders, path_has_placeholders
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Non-production environment kinds where read+write probing is the product's
@@ -281,18 +283,49 @@ def _collection_path(path: str) -> str:
     return cleaned or path
 
 
-def _extract_resource_id(body: Any) -> str:
-    if isinstance(body, dict):
-        for key in ("id", "uuid", "resource_id", "entity_id"):
-            value = body.get(key)
+def _extract_resource_id(body: Any, path: str = "") -> str:
+    """Extract a created-resource identity without domain-specific field names."""
+    if not isinstance(body, dict):
+        return ""
+    candidates = [body]
+    for envelope in ("data", "result", "item", "resource"):
+        nested = body.get(envelope)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+
+    segment = _collection_path(path).rstrip("/").rsplit("/", 1)[-1]
+    normalized_segment = re.sub(r"[^a-z0-9]", "", segment.lower())
+    stems = {normalized_segment}
+    if normalized_segment.endswith("ies") and len(normalized_segment) > 3:
+        stems.add(normalized_segment[:-3] + "y")
+    if normalized_segment.endswith("s") and len(normalized_segment) > 1:
+        stems.add(normalized_segment[:-1])
+    preferred_keys = {f"{stem}id" for stem in stems if stem}
+
+    for source in candidates:
+        normalized_keys = {
+            re.sub(r"[^a-z0-9]", "", str(key).lower()): key
+            for key in source
+        }
+        for normalized in ("id", "uuid", "pk", *sorted(preferred_keys)):
+            original = normalized_keys.get(normalized)
+            if original is None:
+                continue
+            value = source.get(original)
             if value not in (None, "", [], {}):
                 return str(value)
-        data = body.get("data")
-        if isinstance(data, dict):
-            for key in ("id", "uuid"):
-                value = data.get(key)
-                if value not in (None, "", [], {}):
-                    return str(value)
+    # When exactly one scalar ``*Id`` field exists, it is the only
+    # source-grounded created identity available. Multiple candidates are
+    # ambiguous and must not be guessed.
+    suffix_matches: list[Any] = []
+    for source in candidates:
+        for key, value in source.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if normalized.endswith("id") and value not in (None, "", [], {}) and not isinstance(value, (dict, list)):
+                suffix_matches.append(value)
+    unique = list(dict.fromkeys(str(value) for value in suffix_matches))
+    if len(unique) == 1:
+        return unique[0]
     return ""
 
 
@@ -338,6 +371,62 @@ def _first_write_step(scenario: Any) -> tuple[str, str, Any] | None:
     return None
 
 
+def _documented_observation_path(
+    scenario: Any,
+    write_path: str,
+    documented_routes: list[dict[str, Any]] | None,
+) -> str:
+    """Choose a source-declared GET observer; never invent a read endpoint."""
+    normalized_write = normalize_path_placeholders(write_path).split("?", 1)[0]
+    write_collection = documented_collection_path(normalized_write) or normalized_write
+    candidates: list[tuple[int, int, str]] = []
+
+    # Explicit scenario resolver/observer steps are strongest because they were
+    # generated from the same source-bound behavior slice.
+    for index, step in enumerate(getattr(scenario, "steps", []) or []):
+        method = _text(getattr(step, "api_method", "") or "").upper()
+        path = normalize_path_placeholders(_text(getattr(step, "api_path", "") or "")).split("?", 1)[0]
+        if method in _WRITE_METHODS and not _is_authentication_step(step):
+            break
+        if method not in {"GET", "HEAD"} or not path.startswith("/"):
+            continue
+        if path_has_placeholders(path):
+            path = documented_collection_path(path)
+        if not path or path_has_placeholders(path):
+            continue
+        relation_rank = 0 if path == write_collection else (1 if write_collection.startswith(path.rstrip("/") + "/") else 2)
+        candidates.append((relation_rank, index, path))
+
+    for index, route in enumerate(documented_routes or []):
+        if not isinstance(route, dict) or _text(route.get("method")).upper() not in {"GET", "HEAD"}:
+            continue
+        path = normalize_path_placeholders(_text(route.get("path"))).split("?", 1)[0]
+        if not path.startswith("/"):
+            continue
+        route_collection = documented_collection_path(path) or path
+        if path_has_placeholders(path):
+            if route_collection != write_collection:
+                continue
+            path = route_collection
+        if path_has_placeholders(path):
+            continue
+        if path == write_collection:
+            relation_rank = 0
+        elif route_collection == write_collection:
+            relation_rank = 1
+        elif write_collection.startswith(path.rstrip("/") + "/"):
+            relation_rank = 2
+        else:
+            continue
+        # Route-catalog candidates follow explicit scenario steps at equal rank.
+        candidates.append((relation_rank, 10_000 + index, path))
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    return candidates[0][2]
+
+
 def _blocked_write_trace(scenario: Any, reason: str, write_meta: tuple[str, str, Any]) -> dict[str, Any]:
     method, path, body = write_meta
     return {
@@ -361,6 +450,33 @@ def _blocked_write_trace(scenario: Any, reason: str, write_meta: tuple[str, str,
     }
 
 
+def _documented_delete_cleanup_path(
+    created_path: str,
+    resource_id: str,
+    documented_routes: list[dict[str, Any]] | None,
+) -> str:
+    """Resolve a DELETE cleanup route from source facts, or return empty."""
+    if not resource_id:
+        return ""
+    normalized_created = normalize_path_placeholders(created_path).split("?", 1)[0]
+    created_collection = documented_collection_path(normalized_created) or normalized_created
+    candidates: list[str] = []
+    for route in documented_routes or []:
+        if not isinstance(route, dict) or _text(route.get("method")).upper() != "DELETE":
+            continue
+        route_path = normalize_path_placeholders(_text(route.get("path"))).split("?", 1)[0]
+        if not route_path.startswith("/"):
+            continue
+        route_collection = documented_collection_path(route_path) or route_path
+        if route_collection != created_collection:
+            continue
+        placeholders = re.findall(r"\{[A-Za-z_]\w*\}", route_path)
+        if len(placeholders) != 1:
+            continue
+        candidates.append(route_path.replace(placeholders[0], str(resource_id)))
+    return sorted(set(candidates), key=lambda item: (item.count("/"), item))[0] if candidates else ""
+
+
 def _cleanup_after_write(
     *,
     method: str,
@@ -369,12 +485,12 @@ def _cleanup_after_write(
     token: str,
     before_body: Any,
     write_body: Any,
+    documented_routes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Honest cleanup — never report completed on failure."""
     base = base_url.rstrip("/")
-    observe_path = _collection_path(path)
     if method == "POST":
-        resource_id = _extract_resource_id(write_body)
+        resource_id = _extract_resource_id(write_body, path)
         if not resource_id:
             return {
                 "status": "failed",
@@ -382,7 +498,14 @@ def _cleanup_after_write(
                 "receipt_ref": "",
                 "error": "created_resource_id_missing",
             }
-        delete_path = f"{observe_path.rstrip('/')}/{resource_id}"
+        delete_path = _documented_delete_cleanup_path(path, resource_id, documented_routes)
+        if not delete_path:
+            return {
+                "status": "failed",
+                "strategy": "delete_created_resource",
+                "receipt_ref": "",
+                "error": "documented_cleanup_route_missing",
+            }
         receipt = _http_request("DELETE", base + delete_path, token=token)
         status = int(receipt.get("status") or 0)
         ok = 200 <= status < 300 or status in {204, 404}
@@ -433,6 +556,8 @@ def execute_with_sandbox_write(
     runtime_contract: dict[str, Any],
     campaign_id: str = "",
     safety_boundary: dict[str, Any] | None = None,
+    observer_token: str = "",
+    documented_routes: list[dict[str, Any]] | None = None,
     execute_fn: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     """Wrap ``execute_fn`` with before/after/cleanup when sandbox write is allowed.
@@ -444,6 +569,7 @@ def execute_with_sandbox_write(
     if write_meta is None:
         return execute_fn(scenario, base_url, safety_boundary=safety_boundary)
     token = _text(getattr(scenario, "actor_token", "") or "")
+    observation_token = token or _text(observer_token)
     actor_identity = _text(
         getattr(scenario, "actor_role", "")
         or getattr(scenario, "actor", "")
@@ -454,7 +580,7 @@ def execute_with_sandbox_write(
         root=root,
         project=project,
         runtime_contract=runtime_contract,
-        actor_token=token,
+        actor_token=observation_token,
         actor_identity=actor_identity,
         scenario=scenario,
     )
@@ -474,28 +600,45 @@ def execute_with_sandbox_write(
     scenario.execution_policy = "approved_sandbox_write"
 
     base = base_url.rstrip("/")
-    observe_path = _collection_path(path)
-    before = _http_request("GET", base + observe_path, token=token)
+    observe_path = _documented_observation_path(scenario, path, documented_routes)
+    before = (
+        _http_request("GET", base + observe_path, token=observation_token)
+        if observe_path
+        else {"status": 0, "body": {}, "headers": {}, "error": "documented_observer_missing"}
+    )
     trace = execute_fn(scenario, base_url, safety_boundary=safety_boundary)
-    after = _http_request("GET", base + observe_path, token=token)
+    after = (
+        _http_request("GET", base + observe_path, token=observation_token)
+        if observe_path
+        else {"status": 0, "body": {}, "headers": {}, "error": "documented_observer_missing"}
+    )
 
     write_body: Any = {}
+    executed_path = path
     for step in trace.get("steps") or []:
-        if isinstance(step, dict) and _text(step.get("method")).upper() == method:
-            write_body = _as_dict(step.get("response")).get("body")
-            if write_body:
-                break
+        if not isinstance(step, dict) or _text(step.get("method")).upper() != method:
+            continue
+        step_action = _text(step.get("action")).lower()
+        step_path = _text(step.get("path"))
+        if step_action == "login" or step_action.startswith("login_") or step_path.lower().endswith("/login") or "/auth/login" in step_path.lower():
+            continue
+        if step_path.startswith("/") and not path_has_placeholders(normalize_path_placeholders(step_path)):
+            executed_path = step_path
+        write_body = _as_dict(step.get("response")).get("body")
+        break
 
     cleanup = _cleanup_after_write(
         method=method,
-        path=path,
+        path=executed_path,
         base_url=base_url,
-        token=token,
+        token=observation_token,
         before_body=before.get("body"),
         write_body=write_body,
+        documented_routes=documented_routes,
     )
-    before_ref = f"sandbox_before:{observe_path}:{before.get('status')}"
-    after_ref = f"sandbox_after:{observe_path}:{after.get('status')}"
+    observer_ref = observe_path or "documented_observer_missing"
+    before_ref = f"sandbox_before:{observer_ref}:{before.get('status')}"
+    after_ref = f"sandbox_after:{observer_ref}:{after.get('status')}"
     evidence = {
         "before_snapshot_ref": before_ref,
         "after_snapshot_ref": after_ref,
@@ -504,13 +647,13 @@ def execute_with_sandbox_write(
             "receipt_ref": cleanup.get("receipt_ref") or "",
         },
         "method": method,
-        "path": path,
+        "path": executed_path,
     }
     audit_record = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "actor_role": _text(getattr(scenario, "actor_role", "") or trace.get("actor_role") or ""),
         "method": method,
-        "path": path,
+        "path": executed_path,
         "before_ref": before_ref,
         "after_ref": after_ref,
         "cleanup_status": cleanup.get("status"),

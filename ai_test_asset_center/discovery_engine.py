@@ -1636,6 +1636,31 @@ class AutonomousDiscoveryEngine:
     # Stage 4: Verifier — 判定假设
     # ==================================================================
 
+    @staticmethod
+    def _calls_use_synthetic_or_unresolved(calls: list) -> bool:
+        """True when any probe call used a synthetic/fallback ID or unresolved route."""
+        for call in calls or []:
+            if not isinstance(call, dict):
+                continue
+            if bool(call.get("synthetic_id")) or bool(call.get("unresolved_route")):
+                return True
+            path = str(call.get("path") or call.get("call") or "")
+            if "{" in path or re.search(r"/:[A-Za-z_]", path):
+                return True
+        return False
+
+    @staticmethod
+    def _hypothesis_expects_runtime_error(title: str, expected: str) -> bool:
+        """Hypothesis must explicitly expect a server/runtime error before bare 5xx confirms."""
+        text = f"{title} {expected}".lower()
+        markers = (
+            "500", "5xx", "server error", "runtime error", "exception", "crash", "traceback",
+            "不应抛", "不得抛", "不能抛", "不应返回500", "不得返回500", "不能返回500",
+            "must not return 500", "should not return 500", "must not throw", "should not throw",
+            "服务端异常", "服务器异常", "内部错误", "internal server error",
+        )
+        return any(marker in text for marker in markers)
+
     def stage_verify(self, execution_results: list[dict]) -> list[DiscoveryFinding]:
         """Evidence-based verdict: compare API responses against hypothesis expectations"""
         import re
@@ -1657,44 +1682,100 @@ class AutonomousDiscoveryEngine:
             calls = evidence.get("calls", [])
             title = r.get("title", "").lower()
             expected = r.get("expected_behavior", "").lower()
+            probe_degraded = self._calls_use_synthetic_or_unresolved(calls)
+            expects_runtime_error = self._hypothesis_expects_runtime_error(title, expected)
+            if probe_degraded:
+                evidence["probe_quality"] = "synthetic_or_unresolved_id"
             
             verdict = "inconclusive"
             actual = ""
             confidence = 0.5
             
             # === P-1: RUNTIME ERROR DETECTION (universal) ===
-            # Detect server errors, business failures, and error responses
+            # Detect server errors, business failures, and error responses.
+            # Synthetic/unresolved IDs and bare 5xx without an expected-error
+            # hypothesis are probe artifacts, not confirmed product defects.
+            p1_decided = False
             for call in calls:
+                if p1_decided:
+                    break
                 for role in ("admin", "viewer", "no_auth"):
                     body = call.get("results", {}).get(role, {}).get("body", {})
                     status = call.get("results", {}).get(role, {}).get("status", 0)
-                    if isinstance(body, dict):
-                        # Server error (5xx)
-                        if status >= 500:
+                    if not isinstance(body, dict):
+                        continue
+                    # Server error (5xx)
+                    if status >= 500:
+                        if probe_degraded:
+                            verdict = "inconclusive"
+                            actual = (
+                                f"探针使用合成/未解析实体ID，HTTP{status}视为探针伪影而非确认缺陷: "
+                                f"{str(body)[:300]}"
+                            )
+                            confidence = 0.35
+                            evidence["probe_quality_gate"] = "synthetic_or_unresolved_id"
+                        elif expects_runtime_error:
                             verdict = "confirmed"
                             actual = f"服务端异常 HTTP{status}: {str(body)[:300]}"
                             confidence = 0.90
-                            break
-                        # Business logic failure
-                        if body.get("ok") is False:
+                        else:
+                            verdict = "inconclusive"
+                            actual = (
+                                f"裸HTTP{status}缺少假设期望错误门禁，降级为 inconclusive: "
+                                f"{str(body)[:300]}"
+                            )
+                            confidence = 0.50
+                            evidence["probe_quality_gate"] = "bare_5xx_without_expected_error"
+                        p1_decided = True
+                        break
+                    # Business logic failure
+                    if body.get("ok") is False:
+                        if probe_degraded:
+                            verdict = "inconclusive"
+                            actual = (
+                                f"探针使用合成/未解析实体ID，业务失败响应视为探针伪影: "
+                                f"{str(body)[:300]}"
+                            )
+                            confidence = 0.35
+                            evidence["probe_quality_gate"] = "synthetic_or_unresolved_id"
+                        else:
                             verdict = "confirmed"
                             actual = f"业务逻辑返回失败: {str(body)[:300]}"
                             confidence = 0.85
-                            break
-                        # Explicit error response
-                        if body.get("error") and not (400 <= status < 500 and status not in (401, 403)):
+                        p1_decided = True
+                        break
+                    # Explicit error response
+                    if body.get("error") and not (400 <= status < 500 and status not in (401, 403)):
+                        if probe_degraded:
+                            verdict = "inconclusive"
+                            actual = (
+                                f"探针使用合成/未解析实体ID，错误响应视为探针伪影: "
+                                f"{str(body.get('error', ''))[:200]}"
+                            )
+                            confidence = 0.35
+                            evidence["probe_quality_gate"] = "synthetic_or_unresolved_id"
+                        else:
                             verdict = "confirmed"
                             actual = f"错误响应: {str(body.get('error',''))[:200]}"
                             confidence = 0.80
-                            break
-                        # Exception/stack trace in response (information leak)
-                        if "exception" in str(body).lower() or "traceback" in str(body).lower():
+                        p1_decided = True
+                        break
+                    # Exception/stack trace in response (information leak)
+                    if "exception" in str(body).lower() or "traceback" in str(body).lower():
+                        if probe_degraded:
+                            verdict = "inconclusive"
+                            actual = (
+                                f"探针使用合成/未解析实体ID，异常泄露响应无法确认真实资源缺陷: "
+                                f"{str(body)[:300]}"
+                            )
+                            confidence = 0.40
+                            evidence["probe_quality_gate"] = "synthetic_or_unresolved_id"
+                        else:
                             verdict = "confirmed"
                             actual = f"响应体泄露异常信息: {str(body)[:300]}"
                             confidence = 0.85
-                            break
-                if verdict == "confirmed":
-                    break
+                        p1_decided = True
+                        break
             
             # === P0: BEFORE/AFTER STATE OBSERVER COMPARISON ===
             # If execution has 3+ steps (before GET → action → after GET),
@@ -2132,7 +2213,7 @@ class AutonomousDiscoveryEngine:
                 confidence = 0.5
             
             else:
-                if verdict == "inconclusive":
+                if verdict == "inconclusive" and not evidence.get("probe_quality_gate"):
                     actual = "无法判定"
                     confidence = 0.3
 
@@ -2185,6 +2266,14 @@ class AutonomousDiscoveryEngine:
                                     confidence = 0.75
                 except Exception:
                     pass  # Semantic verifier is best-effort
+
+            # Final probe-quality gate: never confirm defects from synthetic/unresolved IDs.
+            # Mirrors V12's placeholder guard — malformed entity binding is a probe artifact.
+            if probe_degraded and verdict == "confirmed":
+                verdict = "inconclusive"
+                actual = f"探针ID未真实解析(synthetic_id/unresolved_route)，确认结论降级: {actual}"
+                confidence = min(float(confidence or 0.0), 0.45)
+                evidence["probe_quality_gate"] = "synthetic_or_unresolved_id_downgrade"
 
             findings.append(DiscoveryFinding(
                 hypothesis_id=r.get("hypothesis_id", "?"),
@@ -2380,12 +2469,20 @@ class AutonomousDiscoveryEngine:
         print("\n[Stage 3] Executor — building route map + executing probes...")
         route_map = self._build_route_map(api_spec_text)
         print(f"  Route map: {len(route_map)} routes")
+        execution_results: list[dict] = []
+        stage_status: dict[str, Any] = {
+            "reasoner": "FAILED_SAFE" if any(str(item).startswith("reasoner:") for item in stage_failures) else ("ok" if hypotheses else "empty"),
+            "executor": "pending",
+            "verifier": "pending",
+        }
         try:
             execution_results = self.stage_execute(hypotheses, route_map)
+            stage_status["executor"] = "ok"
             print(f"  [OK] 执行了 {len(execution_results)} 个探针")
         except Exception as e:
             execution_results = []
             stage_failures.append(f"executor: {e}")
+            stage_status["executor"] = "FAILED_SAFE"
             print(f"  [FAIL] Executor 失败: {e}")
 
         # Stage 4: Verify
@@ -2401,6 +2498,7 @@ class AutonomousDiscoveryEngine:
             confirmed = sum(1 for f in findings if f.verdict == "confirmed")
             falsified = sum(1 for f in findings if f.verdict == "falsified")
             inconclusive = sum(1 for f in findings if f.verdict == "inconclusive")
+            stage_status["verifier"] = "ok"
             print(f"  [OK] {len(findings)} 条判定完成")
             print(f"     confirmed: {confirmed}, falsified: {falsified}, inconclusive: {inconclusive}")
             for f in findings:
@@ -2410,6 +2508,7 @@ class AutonomousDiscoveryEngine:
             findings = []
             confirmed = 0
             stage_failures.append(f"verifier: {e}")
+            stage_status["verifier"] = "FAILED_SAFE"
             print(f"  [FAIL] Verifier 失败: {e}")
 
         # Stage 4.5: Round 2 — feed confirmed findings back for deeper discovery
@@ -2726,6 +2825,12 @@ class AutonomousDiscoveryEngine:
             "pipeline": "autonomous_discovery_v1",
             "runtime_status": "FAILED" if stage_failures else "OK",
             "stage_failures": stage_failures,
+            "stage_status": stage_status,
+            "operator_note": (
+                "发现链路关键阶段失败：空 findings 表示执行/验证中断，不是「系统无缺陷」。"
+                if any(str(stage_status.get(key) or "") == "FAILED_SAFE" for key in ("reasoner", "executor", "verifier"))
+                else ""
+            ),
             "duration_seconds": round(elapsed, 1),
             "deployment_config": dict(self._deployment_config_snapshot),
             "deployment_config_drift": dict(self._deployment_config_drift),
@@ -2745,10 +2850,11 @@ class AutonomousDiscoveryEngine:
                     "finding_update": graph_finding_update,
                     "ab": graph_ab_report,
                 },
-                "reasoner": {"hypotheses": len(hypotheses)},
-                "executor": {"probes": len(execution_results)},
+                "reasoner": {"hypotheses": len(hypotheses), "status": stage_status.get("reasoner", "ok")},
+                "executor": {"probes": len(execution_results), "status": stage_status.get("executor", "ok")},
                 "verifier": {
                     "total": len(findings),
+                    "status": stage_status.get("verifier", "ok"),
                     "raw_confirmed_signals": raw_confirmed_signals,
                     "validated_candidates": validated_candidates,
                     "rejected": sum(1 for f in self.findings if f.verdict == "rejected"),

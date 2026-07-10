@@ -890,6 +890,33 @@ class EvidenceOracle(BaseOracle):
 # Oracle Registry
 # ═══════════════════════════════════════════════════
 
+def _scenario_allows_ecommerce_oracles(scenario: dict[str, Any]) -> bool:
+    """True only when scenario carries ecommerce evidence — never invent it."""
+    industries: list[str] = []
+    for key in ("recognized_industries", "matched_domains"):
+        raw = scenario.get(key) or []
+        if isinstance(raw, str):
+            industries.append(raw.lower())
+        elif isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, dict):
+                    industries.append(str(item.get("industry") or item.get("domain") or "").lower())
+                else:
+                    industries.append(str(item or "").lower())
+    domain = str(
+        scenario.get("business_domain")
+        or scenario.get("industry")
+        or scenario.get("domain")
+        or ""
+    ).lower()
+    if domain == "ecommerce" or "ecommerce" in industries:
+        return True
+    for rule in scenario.get("oracle_rules") or []:
+        if "coupon" in str(rule or "").lower() or "cart" in str(rule or "").lower():
+            return True
+    return False
+
+
 class OracleRegistry:
     _instance = None
 
@@ -973,18 +1000,32 @@ class OracleRegistry:
         ).lower()
         path_signal += " " + " ".join(str(ep or "") for ep in scenario.get("endpoints") or []).lower()
         entity = str(scenario.get("entity") or "").lower()
-        path_signal += f" {entity}"
-        keyword_oracles = (
+        # Cross-cutting money/state/inventory oracles may attach from path evidence.
+        # Cart/coupon oracles are ecommerce-shaped: require path/endpoint evidence of
+        # those surfaces, or an explicitly recognized ecommerce domain — never from
+        # a bare entity label alone on an unknown-industry scenario.
+        cross_cutting_keywords = (
             ("inventory", "InventoryOracle"),
             ("/pay", "MoneyOracle"),
             ("/payment", "MoneyOracle"),
             ("/refund", "MoneyOracle"),
             ("/order", "StateOracle"),
+        )
+        ecommerce_only_keywords = (
             ("/cart", "DataIntegrityOracle"),
             ("coupon", "CouponOracle"),
         )
-        for token, oracle_name in keyword_oracles:
-            if token in path_signal:
+        for token, oracle_name in cross_cutting_keywords:
+            if token in path_signal or token.strip("/") in entity:
+                oracle = self._oracles.get(oracle_name)
+                if oracle and oracle.name not in seen:
+                    oracles.append(oracle)
+                    seen.add(oracle.name)
+        ecommerce_allowed = _scenario_allows_ecommerce_oracles(scenario)
+        for token, oracle_name in ecommerce_only_keywords:
+            path_hit = token in path_signal
+            entity_hit = token.strip("/") in entity
+            if path_hit or (entity_hit and ecommerce_allowed):
                 oracle = self._oracles.get(oracle_name)
                 if oracle and oracle.name not in seen:
                     oracles.append(oracle)
@@ -1039,9 +1080,13 @@ class OracleEngine:
         _log = logging.getLogger("OracleEngine")
         results = []
         oracles = self.registry.get_for_scenario(scenario)
-        if (
+        if any(str(item or "").startswith("CouponOracle.") for item in scenario.get("oracle_rules", []) or []):
+            coupon_oracle = self.registry._oracles.get("CouponOracle")
+            if coupon_oracle and coupon_oracle not in oracles:
+                oracles.append(coupon_oracle)
+        elif (
             str(scenario.get("entity", "") or "").strip().lower() == "coupon"
-            or any(str(item or "").startswith("CouponOracle.") for item in scenario.get("oracle_rules", []) or [])
+            and _scenario_allows_ecommerce_oracles(scenario)
         ):
             coupon_oracle = self.registry._oracles.get("CouponOracle")
             if coupon_oracle and coupon_oracle not in oracles:

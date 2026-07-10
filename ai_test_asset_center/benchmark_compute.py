@@ -672,6 +672,8 @@ def compute_benchmark(
         "evidence_complete_count": evidence_complete,
         "evidence_total_count": len(confirmed),
         "reproduction_success_rate": round(repro_success / repro_total, 4) if repro_total else 0,
+        "reproduction_success_count": repro_success,
+        "reproduction_total_count": repro_total,
         "regression_success_rate": round(reg_passed / reg_total, 4) if reg_total else 0,
         "regression_total_count": reg_total,
         "regression_passed_count": reg_passed,

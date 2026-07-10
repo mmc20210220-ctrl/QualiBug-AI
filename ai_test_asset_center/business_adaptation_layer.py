@@ -190,13 +190,19 @@ def _score_domains(text: str, operations: list[dict[str, Any]], cfg: dict[str, A
     return dict(sorted(scores.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
+# Fail-closed: a single weak keyword must not invent a vertical domain pack.
+# Aligns with multi_industry_business_reasoning evidence gate (no ecommerce default).
+_MIN_DOMAIN_SCORE = 2.0
+
+
 def _select_domains(scores: dict[str, float]) -> list[str]:
-    positive = [(d, s) for d, s in scores.items() if s > 0]
+    """Select domains only from positive evidence. Never default to ecommerce."""
+    positive = [(d, s) for d, s in scores.items() if float(s or 0) >= _MIN_DOMAIN_SCORE]
     if not positive:
-        return ["ecommerce"]
+        return []
     top_score = positive[0][1]
-    selected = [d for d, s in positive if s >= max(1.0, top_score * 0.55)]
-    return selected[:3] or [positive[0][0]]
+    selected = [d for d, s in positive if s >= max(_MIN_DOMAIN_SCORE, top_score * 0.55)]
+    return selected[:3]
 
 
 def _operation_risks(op: dict[str, Any], selected_domains: list[str]) -> list[str]:
@@ -286,14 +292,29 @@ def build_business_adaptation_profile(project_id: str = "real_project_demo", roo
     text = _load_project_text(project, root)
     scores = _score_domains(text, operations, cfg)
     selected = _select_domains(scores)
+    configured_mode = str(cfg.get("business_domain") or cfg.get("domain") or "auto")
+    domain_mode = (
+        configured_mode
+        if configured_mode and configured_mode not in {"auto", "unknown", "general", "general_business"}
+        else ("multi_domain" if len(selected) > 1 else (selected[0] if selected else "unknown_general_business"))
+    )
     profile = {
         "phase": "phase34_business_adaptation_layer",
         "project_id": project,
         "project_name": cfg.get("project_name") or project,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "business_domain_mode": str(cfg.get("business_domain") or cfg.get("domain") or "auto"),
+        "business_domain_mode": domain_mode,
         "selected_domains": [{"domain": d, "name": DOMAIN_PLAYBOOKS[d]["name"], "score": scores.get(d, 0), "risks": DOMAIN_PLAYBOOKS[d]["risks"], "entities": DOMAIN_PLAYBOOKS[d]["entities"]} for d in selected],
         "domain_scores": scores,
+        "domain_selection": {
+            "min_score": _MIN_DOMAIN_SCORE,
+            "status": "ok" if selected else "unknown_general_business",
+            "operator_note": (
+                None
+                if selected
+                else "No domain pack activated: evidence below threshold. Cross-cutting endpoint risks may still apply; empty domain list is not ecommerce."
+            ),
+        },
         "operation_count": len(operations),
         "endpoint_domain_map": [
             {
@@ -338,8 +359,8 @@ def generate_business_adaptive_probes(openapi: dict[str, Any], cfg: dict[str, An
     project = _safe_project_id(project_id)
     profile = load_business_adaptation_profile(project, root) or build_business_adaptation_profile(project, root)
     selected_domains = [str(d.get("domain")) for d in profile.get("selected_domains") or [] if d.get("domain") in DOMAIN_PLAYBOOKS]
-    if not selected_domains:
-        selected_domains = ["ecommerce"]
+    # Empty selected_domains is intentional (unknown_general_business). Still emit
+    # cross-cutting ENDPOINT_RISK_HINTS probes — never invent an ecommerce pack.
     operations = _openapi_operations(openapi if isinstance(openapi, dict) else {})
     mode = str(cfg.get("discovery_mode") or "safe").lower()
     allow_destructive = bool(cfg.get("allow_destructive_tests"))
@@ -355,7 +376,10 @@ def generate_business_adaptive_probes(openapi: dict[str, Any], cfg: dict[str, An
                 execution_policy = "candidate_only"
             elif mode == "standard" and destructive and not allow_destructive:
                 execution_policy = "candidate_only"
-            matched_domain = next((d for d in selected_domains if risk in DOMAIN_PLAYBOOKS[d].get("risks", [])), selected_domains[0])
+            matched_domain = next(
+                (d for d in selected_domains if risk in DOMAIN_PLAYBOOKS[d].get("risks", [])),
+                (selected_domains[0] if selected_domains else "unknown_general_business"),
+            )
             probes.append({
                 "probe_id": f"RP_ADAPT_{len(probes)+1:04d}",
                 "source": "business_adaptation_layer",

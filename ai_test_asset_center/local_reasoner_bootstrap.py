@@ -18,9 +18,14 @@ _METHOD_RE = re.compile(r"(?:^|[\s`])(?P<method>GET|POST|PUT|PATCH|DELETE)\s+`?(
 _HEADING_RE = re.compile(r"^###\s+(?P<method>GET|POST|PUT|PATCH|DELETE)\s+`(?P<path>/[^`]+)`", re.I | re.M)
 
 _SENSITIVE_HINTS = (
-    "user", "users", "password", "token", "audit", "export", "all", "inventory",
-    "orders", "order", "work-orders", "notifications", "inspection", "quality",
-    "erp", "events", "maintenance", "machines", "stock", "warehouse",
+    # Auth / identity / export surfaces — universal across industries
+    "user", "users", "password", "token", "audit", "export", "all",
+    "admin", "permission", "role", "tenant", "org",
+    # Operational / stateful surfaces (manufacturing, logistics, healthcare, commerce)
+    "inventory", "orders", "order", "work-orders", "workorders", "notifications",
+    "inspection", "quality", "erp", "events", "maintenance", "machines",
+    "stock", "warehouse", "patients", "cases", "permits", "approvals",
+    "settlements", "prescriptions", "materials", "reservations",
 )
 
 _ANONYMOUS_HINTS = ("匿名", "anonymous", "public", "health", "login", "docs", "openapi")

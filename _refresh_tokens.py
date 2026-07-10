@@ -36,3 +36,8 @@ for name, acc in accounts.items():
 
 ACC.write_text(json.dumps(accounts, ensure_ascii=False, indent=2), encoding="utf-8")
 print(f"REFRESHED {refreshed}/{len(accounts)} tokens -> {ACC}")
+if refreshed <= 0:
+    raise SystemExit(
+        f"token refresh failed: 0/{len(accounts)} accounts logged in at {BASE}{LOGIN}; "
+        "auth/isolation probes would silently degrade"
+    )

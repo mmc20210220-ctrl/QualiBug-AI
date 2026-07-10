@@ -20,10 +20,16 @@ Usage::
 
 from .dsl_parser import DSLParser, ParsedRule
 from .dsl_compiler import DSLCompiler
-from .rule_library import RuleLibrary, get_rules_for_industry
+from .rule_library import (
+    RuleLibrary,
+    get_rules_for_industry,
+    get_rules_for_recognized_industries,
+    normalize_industry_key,
+)
 
 __all__ = [
     "DSLParser", "ParsedRule",
     "DSLCompiler",
-    "RuleLibrary", "get_rules_for_industry",
+    "RuleLibrary", "get_rules_for_industry", "get_rules_for_recognized_industries",
+    "normalize_industry_key",
 ]

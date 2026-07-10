@@ -14,7 +14,10 @@ function sha256(text) {
 
 async function main() {
   const openapiText = await fs.readFile(OPENAPI_PATH, "utf8");
-  const openapiJson = JSON.parse(openapiText);
+  // Windows-native exports may include a UTF-8 BOM.  JSON.parse rejects the
+  // BOM even though it is valid at the transport/file boundary, so normalize
+  // only the parser input and keep the original bytes for the integrity hash.
+  const openapiJson = JSON.parse(openapiText.replace(/^\uFEFF/, ""));
   const digest = sha256(openapiText);
 
   const pkg = JSON.parse(await fs.readFile(path.join(ROOT, "package.json"), "utf8"));

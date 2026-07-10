@@ -121,6 +121,20 @@ BASE_URL = "http://localhost:8080"
 # 历史发现），保证 baseline / optimized 都是从零开始的干净扫描，避免上一轮
 # 已完成的 campaign 被 resume 导致第二次跑“0 发现直接返回”。仅限本靶场项目。
 assert PROJECT == "benchmark_mall", "reset guard only for benchmark_mall"
+from ai_test_asset_center.benchmark_target_cleanliness import assert_benchmark_target_clean
+from _funnel_benchmark_prep import prepare_funnel_benchmark_target  # noqa: E402
+
+# Reset target DB first so write-probe residue cannot poison recall, then prove
+# cleanliness with the reset receipt before wiping local campaign state.
+_prep = prepare_funnel_benchmark_target(root=ROOT, project=PROJECT, target_base_url=BASE_URL)
+print(f"PREP: {_prep}")
+_cleanliness = assert_benchmark_target_clean(
+    root=ROOT,
+    project=PROJECT,
+    target_base_url=BASE_URL,
+    reset_receipt_path=str(_prep.get("reset_receipt_path") or os.environ.get("QUALIBUG_BENCHMARK_RESET_RECEIPT_PATH", "")),
+)
+print(f"TARGET_CLEANLINESS: {json.dumps(_cleanliness, ensure_ascii=False)}")
 for _state_dir in (
     ROOT / "platform_workspace" / PROJECT,
     ROOT / "platform_outputs" / PROJECT,
@@ -135,20 +149,17 @@ source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
 context = {
     "scope_id": "benchmark_mall_local_scope",
     "environment_ref": "benchmark_mall_test",
-    "execution_mode": "safe_read_only",
     "source_manifest": {
         "source_id": "benchmark_mall/API_SPEC.md",
         "source_hash": source_hash,
     },
-    "test_data_contract": {"strategy": "blocked_with_testability_gap"},
 }
-
-# 刷新测试账号 token（过期会导致权限/隔离探针全部降级）
-if MODE in {"llm", "llm_throughput", "full"}:
-    import subprocess
-    _rt = ROOT / "_refresh_tokens.py"
-    if _rt.exists():
-        subprocess.run([sys.executable, str(_rt)], check=False)
+# Exercise the same product defaults used by customer scans.  The explicitly
+# declared non-production target must enter governed sandbox-write mode and
+# receive a disposable test-data contract; production/unknown targets remain
+# fail-closed in the shared runtime and sandbox gates.  Hard-coding read-only
+# here previously hid most stateful defects and made benchmark recall
+# unrepresentative of the commercial product.
 
 from ai_test_asset_center.__main__ import scan  # noqa: E402
 
@@ -192,6 +203,7 @@ summary = {
     "unify_analyzers": os.environ.get("QUALIBUG_UNIFY_ANALYZERS", ""),
     "unify_llm_reasoner": os.environ.get("QUALIBUG_UNIFY_LLM_REASONER", ""),
     "elapsed_sec": round(elapsed, 1),
+    "prep": _prep,
     "success": result.get("success"),
     "grade": result.get("grade"),
     "execution_status": result.get("execution_status"),

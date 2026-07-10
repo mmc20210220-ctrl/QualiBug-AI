@@ -189,11 +189,15 @@ def _default_config(project: str) -> dict[str, Any]:
             {"name": "qa_engineer", "role": "qa_engineer"},
         ],
         "policies": {
-            "default_execution_mode": "safe_read_only",
+            "default_execution_mode": "environment_governed",
+            "declared_nonproduction_execution_mode": "approved_sandbox_write",
+            "production_execution_mode": "safe_read_only",
             "max_attempts": 2,
             "retention_days": 30,
             "production_write_blocked": True,
-            "independent_approval_required": True,
+            "unknown_environment_write_blocked": True,
+            "independent_approval_required": False,
+            "authorization_basis": "source_bound_nonproduction_campaign",
             "allow_network_read_only": False,
         },
         "updated_at_utc": _now(),
@@ -317,6 +321,79 @@ def ordered_test_credentials(config: dict[str, Any] | None) -> list[dict[str, An
 
     rows.sort(key=lambda item: item[0])
     return [item for _, item in rows]
+
+
+def load_project_test_credentials(
+    project_id: str,
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Load the ordered credential catalog from every supported project source."""
+    root = Path(root or ROOT)
+    project = _safe_project_id(project_id)
+    registry = load_connector_registry(project, root)
+    merged = ordered_test_credentials(registry)
+    seen: set[str] = set()
+
+    def identity(row: dict[str, Any]) -> str:
+        return str(
+            row.get("email")
+            or row.get("username")
+            or row.get("account")
+            or row.get("mobile")
+            or row.get("phone")
+            or row.get("profile")
+            or ""
+        ).strip().lower()
+
+    ordered: list[dict[str, Any]] = []
+    for row in merged:
+        key = identity(row)
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(dict(row))
+
+    paths = (
+        root / "platform_inputs" / project / "test_accounts.json",
+        root / "platform_workspace" / project / "input" / "test_accounts.json",
+        root / "projects" / project / "input" / "test_accounts.json",
+    )
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"test_account_catalog_invalid:{path}:{type(exc).__name__}:{exc}"
+            ) from exc
+        if isinstance(payload, dict):
+            rows = [
+                {"profile": str(name), **dict(value)}
+                for name, value in payload.items()
+                if isinstance(value, dict)
+            ]
+        elif isinstance(payload, list):
+            rows = [
+                {
+                    "profile": str(
+                        value.get("profile")
+                        or value.get("name")
+                        or value.get("role")
+                        or f"credential_{index}"
+                    ),
+                    **dict(value),
+                }
+                for index, value in enumerate(payload)
+                if isinstance(value, dict)
+            ]
+        else:
+            raise RuntimeError(f"test_account_catalog_invalid:{path}:expected_object_or_list")
+        for row in rows:
+            key = identity(row)
+            if key and key not in seen:
+                seen.add(key)
+                ordered.append(row)
+    return ordered
 
 
 def _validate_ref(value: Any, name: str, allow_blank: bool = True) -> str:
@@ -868,7 +945,7 @@ def _render_dashboard(overview: dict[str, Any], path: Path) -> None:
         "<div class='subtle-card'><h3>运行边界</h3>" + detail_list([
             ("目标环境", env_name),
             ("环境状态", env_status),
-            ("默认模式", policies.get("default_execution_mode") or "safe_read_only"),
+            ("默认模式", policies.get("default_execution_mode") or "environment_governed"),
             ("公开绑定", "已禁止" if not deployment.get("allow_public_bind") else "受控代理"),
         ]) + "</div></div>"
     )

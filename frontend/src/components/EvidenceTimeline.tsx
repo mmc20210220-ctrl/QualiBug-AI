@@ -54,7 +54,7 @@ function StructuredBlock({ step }: { step: EvidenceStep }) {
           {durationMs > 0 && <span className="evidence-meta-chip">耗时 {formatDurationMs(durationMs)}</span>}
           {actor && <span className="evidence-meta-chip">操作者: {formatActorName(actor)}</span>}
         </div>
-        {body && <pre className="evidence-code-block">{body}</pre>}
+        {body && <code className="evidence-code-block">{body}</code>}
       </div>
     );
   }

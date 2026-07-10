@@ -145,7 +145,7 @@ def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, A
         headline = f"最近回归失败：{failed} 个探针失败，需要客户内部处理或复核。"
         trend_direction = "regressing"
         release_recommendation = "block_release"
-        release_label = "发布阻断"
+        release_label = "建议阻断发布"
         release_reason = "最新回归仍存在失败项，不能声明缺陷已闭环。"
         readiness = "回归失败，暂不交付"
     elif gate == "passed":
@@ -159,7 +159,7 @@ def _dashboard_regression_summary(compact: dict[str, Any], existing: dict[str, A
         headline = f"最近回归需要复核：{needs_review} 个探针缺少强自动判定。"
         trend_direction = "stable"
         release_recommendation = "hold_for_validation"
-        release_label = "待完成剩余回归"
+        release_label = "建议先完成剩余回归"
         release_reason = "最新回归仍有需人工确认项，不能直接声明通过。"
         readiness = "需要人工复核"
     merged = dict(existing)

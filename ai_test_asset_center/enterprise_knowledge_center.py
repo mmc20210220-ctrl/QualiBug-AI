@@ -1522,6 +1522,81 @@ def _oracle_family(risk_type: str) -> str:
     }.get(str(risk_type), "business_rule_oracle")
 
 
+def _oracle_dsl_pack_from_recognized_industries(
+    recognized_industries: list[dict[str, Any]] | list[str] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Compile evidence-gated Oracle DSL rules into knowledge-asset rows.
+
+    Returns (rule_rows, industry_oracle_rows). Empty when no industry is
+    confidently recognized — never invents an ecommerce pack.
+    """
+    from .oracle_dsl import DSLCompiler, RuleLibrary, normalize_industry_key
+
+    industries: list[str] = []
+    confidences: dict[str, float] = {}
+    for row in recognized_industries or []:
+        if isinstance(row, dict):
+            key = str(row.get("industry") or "").strip().lower()
+            if not key:
+                continue
+            industries.append(key)
+            confidences[key] = float(row.get("confidence") or 0.0)
+        else:
+            key = str(row or "").strip().lower()
+            if key:
+                industries.append(key)
+                confidences.setdefault(key, 1.0)
+    if not industries:
+        return [], []
+
+    lib = RuleLibrary()
+    compiler = DSLCompiler()
+    rules: list[dict[str, Any]] = []
+    oracles: list[dict[str, Any]] = []
+    seen_markers: set[str] = set()
+    for raw_key in industries:
+        catalog_key = normalize_industry_key(raw_key)
+        if not catalog_key:
+            continue
+        confidence = float(confidences.get(raw_key, confidences.get(catalog_key, 0.0)) or 0.0)
+        if confidence < 0.58:
+            continue
+        for rule in lib.get_rules(catalog_key):
+            marker = str(getattr(rule, "raw_text", None) or id(rule))
+            if marker in seen_markers:
+                continue
+            seen_markers.add(marker)
+            compiled = compiler.compile_to_oracle_object(rule)
+            rule_id = f"oracle_dsl:{catalog_key}:{_short_hash(marker)}"
+            statement = _redact_text(marker or compiled.expected_behavior or "", 720)
+            risk_type = str(getattr(rule, "rule_type", None) or "business_rule")
+            rules.append({
+                "rule_id": rule_id,
+                "source_id": "oracle_dsl_library",
+                "source_type": "derived_inference",
+                "statement": statement,
+                "tokens": sorted(_tokens(statement)),
+                "risk_type": risk_type,
+                "kind": risk_type,
+                "severity": getattr(rule, "severity", None) or compiled.severity or "P1",
+                "expected": compiled.expected_behavior,
+                "oracle_family": compiled.oracle_family,
+                "industry": catalog_key,
+                "evidence_gate": "recognized_industry_min_confidence",
+            })
+            oracles.append({
+                "oracle_id": f"DSL_{_short_hash(rule_id)}",
+                "rule_id": rule_id,
+                "oracle_family": compiled.oracle_family,
+                "expected": compiled.expected_behavior,
+                "assertion": compiled.expected_behavior,
+                "oracle_rules": compiled.oracle_rules,
+                "industry": catalog_key,
+                "source": "oracle_dsl_library",
+            })
+    return rules, oracles
+
+
 def _oracle_library(rules: list[dict[str, Any]], industry_oracles: list[dict[str, Any]], relation_edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     related_interfaces: dict[str, list[str]] = defaultdict(list)
     related_tables: dict[str, list[str]] = defaultdict(list)
@@ -1656,7 +1731,12 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         copied["risk_type"] = copied.get("kind") or _risk_type_from_text(copied["statement"])
         copied["severity"] = copied.get("severity") or "P1"
         rules.append(copied)
+    dsl_rules, dsl_oracles = _oracle_dsl_pack_from_recognized_industries(
+        industry.get("recognized_industries") or []
+    )
+    rules.extend(dsl_rules)
     rules = _dedupe_by_id(rules, "rule_id")
+    industry_oracles = list(industry.get("industry_oracles") or []) + dsl_oracles
     objects = list(industry.get("business_objects") or [])
     object_names = {str(row.get("object") or "") for row in objects if isinstance(row, dict)}
     for table in tables:
@@ -1703,7 +1783,7 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
                 if node_id:
                     relation_edges.append({"edge_id": f"edge:{_short_hash({'source': sid, 'node': node_id})}", "from": f"source:{sid}", "to": node_id, "relation": "source_to_asset", "confidence": 1.0, "evidence": {"source_version": source.get("version")}})
     relation_edges = _dedupe_by_id(relation_edges, "edge_id")
-    oracles = _oracle_library(rules, list(industry.get("industry_oracles") or []), relation_edges)
+    oracles = _oracle_library(rules, industry_oracles, relation_edges)
     risks = _risk_domains(rules, tickets, industry)
     asset = {
         "phase": PHASE,
@@ -1724,7 +1804,13 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         "permission_matrix": permissions,
         "data_dependencies": dependencies,
         "risk_domains": risks,
-        "industry_business_understanding": {"summary": industry.get("summary") or {}, "recognized_industries": industry.get("recognized_industries") or [], "risk_domains": industry.get("risk_domains") or []},
+        "industry_business_understanding": {
+            "summary": industry.get("summary") or {},
+            "recognized_industries": industry.get("recognized_industries") or [],
+            "risk_domains": industry.get("risk_domains") or [],
+            "oracle_dsl_rule_count": len(dsl_rules),
+            "oracle_dsl_activation": "evidence_gated" if dsl_rules else "suppressed_unknown_or_low_confidence",
+        },
         "relationships": relation_edges,
         "oracle_library": oracles,
         "governance": {

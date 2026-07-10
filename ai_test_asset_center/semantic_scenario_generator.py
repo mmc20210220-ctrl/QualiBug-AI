@@ -15,7 +15,10 @@ from .auto_test_data_factory import _markdown_request_example
 from .business_state_graph import BusinessStateGraph, StateEdge, StateTransition, _api_facts, behavior_slice_id
 from .real_id_resolver import (
     alternate_collection_paths,
+    body_field_collection_paths,
+    extract_body_binding_fields,
     extract_fields_for_path,
+    infer_path_params,
     normalize_path_placeholders,
     path_has_placeholders,
     collection_path,
@@ -236,15 +239,15 @@ class SemanticScenarioGenerator:
         elif kind == "invariant":
             item = self._invariant_from_meta(slice_meta, discovery_round, api_doc)
         elif kind == "permission":
-            item = self._permission_slice(slice_meta, discovery_round)
+            item = self._permission_slice(slice_meta, discovery_round, api_doc)
         elif kind == "isolation":
             item = self._isolation_slice(slice_meta, discovery_round, api_doc)
         elif kind == "concurrency":
-            item = self._concurrency_slice(slice_meta, discovery_round)
+            item = self._concurrency_slice(slice_meta, discovery_round, api_doc)
         elif kind == "money":
-            item = self._money_slice(slice_meta, discovery_round)
+            item = self._money_slice(slice_meta, discovery_round, api_doc)
         elif kind == "inventory":
-            item = self._inventory_slice(slice_meta, discovery_round)
+            item = self._inventory_slice(slice_meta, discovery_round, api_doc)
         elif kind == "account_status":
             item = self._account_status_slice(slice_meta, discovery_round)
         else:
@@ -767,7 +770,12 @@ class SemanticScenarioGenerator:
         create_ep = self._entity_create_endpoint(entity, endpoints)
         if create_ep:
             cpath, cmethod = create_ep
-            cbody = _markdown_request_example(api_doc, cmethod, cpath)
+            cbody = self._runtime_body_template(api_doc, cmethod, cpath)
+            bind_steps, _ = self._body_binding_resolve_steps(
+                cbody, actor=role or "readonly", start_order=order,
+            )
+            steps.extend(bind_steps)
+            order += len(bind_steps)
             steps.append(ScenarioStep(
                 order=order,
                 action="create_entity",
@@ -776,11 +784,18 @@ class SemanticScenarioGenerator:
                 body_template=cbody if isinstance(cbody, dict) else {},
                 expected_status=200,
                 actor=role,
-                extract_from_response=["id", "orderId", "order_id", "refundId", "paymentId"],
+                extract_from_response=["id", "orderId", "order_id", "refundId", "paymentId", "sku"],
             ))
             order += 1
         else:
             gaps.append("CREATE_ENDPOINT_NOT_SOURCE_BOUND")
+            # No create route — try list-resolve so later {id} paths can still bind.
+            if path_has_placeholders(normalize_path_placeholders(transition.api_endpoint)):
+                resolve_steps, _ = self._resolve_entity_steps(
+                    transition.api_endpoint, actor=role or "readonly", start_order=order,
+                )
+                steps.extend(resolve_steps)
+                order += len(resolve_steps)
         # 3) Drive the entity toward from_state when it is not the initial state.
         if graph is not None and transition.from_state:
             order = self._drive_to_state(entity, transition.from_state, graph, endpoints, role, api_doc, steps, order, gaps)
@@ -788,6 +803,22 @@ class SemanticScenarioGenerator:
         method = self._endpoint_method(transition.api_endpoint, endpoints) or "POST"
         action_path = normalize_path_placeholders(transition.api_endpoint) if path_has_placeholders(normalize_path_placeholders(transition.api_endpoint)) else transition.api_endpoint
         action_body = self._action_body_for(transition.api_endpoint, method, endpoints, api_doc)
+        if action_body:
+            bind_steps, _ = self._body_binding_resolve_steps(
+                action_body, actor=role or "readonly", start_order=order,
+            )
+            steps.extend(bind_steps)
+            order += len(bind_steps)
+        # If action path still needs an id and create was missing, resolve now.
+        if path_has_placeholders(normalize_path_placeholders(action_path)) and not any(
+            str(getattr(s, "action", "")).startswith("resolve_") or str(getattr(s, "action", "")) == "create_entity"
+            for s in steps
+        ):
+            resolve_steps, action_path = self._resolve_entity_steps(
+                action_path, actor=role or "readonly", start_order=order,
+            )
+            steps.extend(resolve_steps)
+            order += len(resolve_steps)
         steps.append(ScenarioStep(
             order=order,
             action=f"transition_{transition.action or 'mutate'}",
@@ -958,10 +989,105 @@ class SemanticScenarioGenerator:
 
     @staticmethod
     def _action_body_for(path: str, method: str, endpoints: list[dict[str, str]], api_doc: str) -> dict[str, Any]:
-        example = _markdown_request_example(api_doc, method, path) if api_doc else {}
-        if isinstance(example, dict) and example:
-            return example
-        return {}
+        return SemanticScenarioGenerator._runtime_body_template(api_doc, method, path)
+
+    @staticmethod
+    def _convert_doc_body_to_bindings(value: Any) -> Any:
+        """Turn API-doc angle-bracket placeholders into runtime ``{field}`` bindings."""
+        if isinstance(value, dict):
+            return {
+                str(key): SemanticScenarioGenerator._convert_doc_body_to_bindings(child)
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [SemanticScenarioGenerator._convert_doc_body_to_bindings(child) for child in value]
+        if isinstance(value, str):
+            stripped = value.strip()
+            angle = re.fullmatch(r"<([A-Za-z_]\w*)>", stripped)
+            if angle:
+                return "{" + str(angle.group(1) or "").strip() + "}"
+            return value
+        return value
+
+    @staticmethod
+    def _runtime_body_template(api_doc: str, method: str, path: str) -> dict[str, Any]:
+        """Build a write-probe body from the API doc with bindable ``{field}`` placeholders."""
+        normalized_path = normalize_path_placeholders(path)
+        example = _markdown_request_example(api_doc, method, normalized_path) if api_doc else {}
+        if not isinstance(example, dict) or not example:
+            example = _markdown_request_example(api_doc, method, path) if api_doc else {}
+        if not isinstance(example, dict) or not example:
+            return {}
+        bindable = SemanticScenarioGenerator._convert_doc_body_to_bindings(example)
+        return bindable if isinstance(bindable, dict) else {}
+
+    @staticmethod
+    def _body_binding_resolve_steps(
+        body: dict[str, Any],
+        *,
+        actor: str,
+        start_order: int,
+        api_prefix: str = "/api",
+    ) -> tuple[list[ScenarioStep], int]:
+        """Insert list-resolve steps for body placeholders not satisfied by path resolve.
+
+        Uses documented/derived collection paths directly (e.g. ``/api/users/addresses``)
+        instead of expanding nested admin/search alternates that crowd out the real list.
+        """
+        from .real_id_resolver import param_field_candidates
+
+        steps: list[ScenarioStep] = []
+        order = start_order
+        seen_paths: set[str] = set()
+        for field in extract_body_binding_fields(body):
+            extract_fields = list(dict.fromkeys([
+                field,
+                *param_field_candidates(field),
+                "id", "uuid", "code", "sku",
+            ]))
+            for collection in body_field_collection_paths(field, api_prefix=api_prefix):
+                if not collection.startswith("/") or collection in seen_paths:
+                    continue
+                seen_paths.add(collection)
+                steps.append(ScenarioStep(
+                    order=order,
+                    action=f"resolve_body_{field}",
+                    api_method="GET",
+                    api_path=collection,
+                    extract_from_response=list(extract_fields),
+                    expected_status=200,
+                    actor=actor,
+                ))
+                order += 1
+                if len(steps) >= 3:
+                    return steps, order
+        return steps, order
+
+    @staticmethod
+    def _append_write_probe_step(
+        steps: list[ScenarioStep],
+        *,
+        action: str,
+        method: str,
+        path: str,
+        actor: str,
+        expected_status: int,
+        api_doc: str,
+    ) -> None:
+        body = SemanticScenarioGenerator._runtime_body_template(api_doc, method, path)
+        binding_steps, _ = SemanticScenarioGenerator._body_binding_resolve_steps(
+            body, actor=actor, start_order=len(steps) + 1,
+        )
+        steps.extend(binding_steps)
+        steps.append(ScenarioStep(
+            order=len(steps) + 1,
+            action=action,
+            api_method=method,
+            api_path=path,
+            body_template=body,
+            expected_status=expected_status,
+            actor=actor,
+        ))
 
     def _dependency(
         self,
@@ -1145,8 +1271,15 @@ class SemanticScenarioGenerator:
         rule_key = str(action_plan.get("rule_key") or "").strip()
         if rule_key:
             oracle_rules.insert(0, f"CouponOracle.{rule_key}")
+        body = write_step.body_template if isinstance(write_step.body_template, dict) else {}
+        bind_steps, _ = self._body_binding_resolve_steps(
+            body, actor="readonly", start_order=1,
+        )
         if validation_only:
-            steps = [write_step]
+            for index, step in enumerate(bind_steps):
+                step.order = index + 1
+            write_step.order = len(bind_steps) + 1
+            steps = [*bind_steps, write_step]
         else:
             # State precondition driver: when the invariant is anchored to a
             # concrete lifecycle status (e.g. PAID / CANCELLED), bind an entity
@@ -1160,8 +1293,12 @@ class SemanticScenarioGenerator:
                 observe_where = {"status": state_token}
             steps = [
                 ScenarioStep(order=1, action="observe_bound_entity", api_method="GET", api_path=observation_path, expected_status=200, actor="readonly", extract_from_response=extract_fields, extract_where=observe_where),
-                write_step,
             ]
+            for index, step in enumerate(bind_steps):
+                step.order = len(steps) + 1
+                steps.append(step)
+            write_step.order = len(steps) + 1
+            steps.append(write_step)
         if not validation_only and str(action_plan.get("mode") or "") == "duplicate_write":
             steps.append(ScenarioStep(
                 order=3,
@@ -1318,7 +1455,28 @@ class SemanticScenarioGenerator:
                 for ep in (_fallback_endpoints or [])
             )
             if validate_profile and invariant_is_affirmative and has_validation_route:
-                profile = validate_profile
+                # Only bind a validate/apply route when it belongs to this entity
+                # (or the invariant itself is promo/validation scoped). Otherwise
+                # cart/inventory invariants steal POST /coupons/validate.
+                entity_token = re.sub(r"[^a-z0-9]+", "", str(entity or "").lower())
+                entity_has_own_validate = any(
+                    (
+                        entity_token
+                        and entity_token in re.sub(r"[^a-z0-9]+", "", str(ep.get("path") or "").lower())
+                    )
+                    or str(ep.get("entity") or "").strip().lower() == str(entity or "").strip().lower()
+                    for ep in (_fallback_endpoints or [])
+                    if str(ep.get("method") or "").upper() in {"POST", "PUT", "PATCH"}
+                    and any(
+                        tok in str(ep.get("path") or "").lower()
+                        for tok in ("validate", "apply", "redeem")
+                    )
+                )
+                promo_scoped = bool(self._coupon_rule_key(entity, "", invariant, contexts))
+                if entity_has_own_validate or promo_scoped:
+                    profile = validate_profile
+                else:
+                    return {}
             else:
                 return {}
         if not mode and any(token in profile["endpoint_tokens"] for token in ("validate", "apply", "redeem")):
@@ -1342,7 +1500,13 @@ class SemanticScenarioGenerator:
             if not any(token.lower() in haystack for token in profile["endpoint_tokens"]):
                 continue
             normalized_path = normalize_path_placeholders(path)
-            if path_has_placeholders(normalized_path) and str(endpoint.get("entity") or "") != entity:
+            endpoint_entity = str(endpoint.get("entity") or "").strip().lower()
+            entity_token = re.sub(r"[^a-z0-9]+", "", str(entity or "").lower())
+            path_token = re.sub(r"[^a-z0-9]+", "", normalized_path.lower())
+            if endpoint_entity and entity and endpoint_entity != str(entity or "").strip().lower():
+                if not (entity_token and entity_token in path_token):
+                    continue
+            if path_has_placeholders(normalized_path) and endpoint_entity and endpoint_entity != str(entity or "").strip().lower():
                 continue
             body = self._invariant_write_body(api_doc, method, path, entity)
             if body is None:
@@ -1366,7 +1530,17 @@ class SemanticScenarioGenerator:
 
     @staticmethod
     def _coupon_rule_key(entity: str, state: str, invariant: str, contexts: list[str]) -> str:
-        if str(entity or "").strip().lower() != "coupon":
+        entity_token = re.sub(r"[^a-z0-9]+", "", str(entity or "").strip().lower())
+        promo_aliases = {
+            "coupon", "coupons", "promotion", "promotions", "promo", "promocode", "promocodes",
+            "voucher", "vouchers", "discount", "discounts", "subsidy", "subsidies",
+            "feewaiver", "feewaivers", "rebate", "rebates",
+        }
+        # Also accept CJK entity labels commonly used in PRDs.
+        entity_raw = str(entity or "").strip().lower()
+        if entity_token not in promo_aliases and not any(
+            token in entity_raw for token in ("优惠券", "促销", "代金券", "补贴", "折扣", "减免")
+        ):
             return ""
 
         def has_any(text: str, tokens: tuple[str, ...]) -> bool:
@@ -1401,15 +1575,33 @@ class SemanticScenarioGenerator:
 
     @staticmethod
     def _invariant_write_body(api_doc: str, method: str, path: str, entity: str) -> dict[str, Any] | None:
-        example = _markdown_request_example(api_doc, method, path)
-        if not example:
-            return {}
-        if not isinstance(example, dict):
-            return None
-        rendered = SemanticScenarioGenerator._bind_dependency_placeholders(example, entity)
+        # Prefer bindable runtime templates from the API doc so write probes are
+        # not executed with an empty body when the spec documents a request schema.
+        rendered = SemanticScenarioGenerator._runtime_body_template(api_doc, method, path)
+        if not rendered:
+            example = _markdown_request_example(api_doc, method, path)
+            if not example:
+                return {}
+            if not isinstance(example, dict):
+                return None
+            rendered = SemanticScenarioGenerator._bind_dependency_placeholders(example, entity)
+        else:
+            rendered = SemanticScenarioGenerator._bind_dependency_placeholders(rendered, entity)
         if SemanticScenarioGenerator._has_unresolved_dependency_placeholder(rendered):
+            # Keep bindable {field} placeholders — runtime resolve fills them.
+            # Only reject angle-bracket leftovers that were not converted.
+            if isinstance(rendered, dict) and not SemanticScenarioGenerator._has_angle_placeholders(rendered):
+                return rendered if isinstance(rendered, dict) else None
             return None
-        return rendered
+        return rendered if isinstance(rendered, dict) else None
+
+    @staticmethod
+    def _has_angle_placeholders(value: Any) -> bool:
+        if isinstance(value, dict):
+            return any(SemanticScenarioGenerator._has_angle_placeholders(v) for v in value.values())
+        if isinstance(value, list):
+            return any(SemanticScenarioGenerator._has_angle_placeholders(v) for v in value)
+        return isinstance(value, str) and bool(re.search(r"<[A-Za-z_]\w*>", value))
 
     @staticmethod
     def _preferred_read_endpoint(endpoints: list[Any]) -> str:
@@ -1503,7 +1695,9 @@ class SemanticScenarioGenerator:
 
         Uses structural collection path first, then sibling catalog fallbacks
         (e.g. inventory/{sku} → products) when the collection itself is not
-        listable. Field extraction follows the path parameter name.
+        listable. Nested admin write collections are deprioritized in favor of
+        ``search`` / identity (``/me``) siblings. Field extraction follows the
+        path parameter name.
         """
         normalized = normalize_path_placeholders(path)
         if not path_has_placeholders(normalized):
@@ -1517,8 +1711,69 @@ class SemanticScenarioGenerator:
         candidates = [item for item in dict.fromkeys(candidates) if item.startswith("/")]
         if not candidates:
             return [], normalized
+
+        def _resolve_rank(candidate: str) -> tuple[int, int, int, int, int]:
+            low = candidate.lower().split("?", 1)[0]
+            is_search = low.endswith("/search")
+            is_me = low.endswith("/me")
+            prefer = 0 if (is_search or is_me) else 1
+            # Prefer candidates that share resource tokens with the target path.
+            target_tokens = {p.lower() for p in normalized.strip("/").split("/") if p and "{" not in p}
+            cand_tokens = {p.lower() for p in low.strip("/").split("/") if p}
+            shared = len(target_tokens & cand_tokens)
+            # Nested admin write collections without search are last-resort.
+            admin_write_penalty = 1 if ("/admin/" in low and not is_search) else 0
+            # Param-stem collections (orderId → /api/orders) beat structural
+            # parents that don't list the entity (/api/payments/order).
+            params = infer_path_params(normalized)
+            stem_hit = 0
+            for param in params:
+                key = re.sub(r"[^a-z0-9_]+", "", str(param or "").lower())
+                stem = key[:-2].strip("_") if key.endswith("id") else key
+                if not stem or stem in {"id", "uuid"}:
+                    continue
+                last = low.rstrip("/").rsplit("/", 1)[-1]
+                depth = low.count("/")
+                plural = stem + "s"
+                if stem.endswith("y") and len(stem) > 1 and stem[-2] not in "aeiou":
+                    plural = stem[:-1] + "ies"
+                # Catalog-like identity (sku/code): prefer products/materials lists
+                # over invented /api/sku which is rarely a real collection.
+                if key in {"sku", "productsku", "materialcode", "itemcode", "partnumber"} or stem in {"sku", "code"}:
+                    if last in {"products", "product", "materials", "material", "items", "goods", "skus", "catalog"}:
+                        stem_hit = max(stem_hit, 3)
+                    elif last == stem and depth <= 2:
+                        stem_hit = max(stem_hit, 1)
+                    continue
+                # Strong match: /api/orders for orderId — not nested /api/payments/order.
+                if last == plural:
+                    stem_hit = max(stem_hit, 3)
+                elif last == stem and depth <= 2:
+                    stem_hit = max(stem_hit, 2)
+                elif last in {stem, plural}:
+                    stem_hit = max(stem_hit, 1)
+            # Param-stem collections (orderId → /api/orders) beat invented
+            # /search under structural parents that do not list the entity.
+            return (-stem_hit, prefer, admin_write_penalty, -shared, low.count("/"))
+
+        ranked = sorted(candidates, key=_resolve_rank)
+        # Keep a true structural collection in the attempt set (inventory/{sku} →
+        # /api/inventory) even when catalog siblings score higher. Nested false
+        # stems (payments/order/{orderId}) stay demoted by ranking alone.
+        if primary and primary in candidates:
+            primary_last = primary.rstrip("/").rsplit("/", 1)[-1].lower()
+            params = infer_path_params(normalized)
+            param_stems: set[str] = set()
+            for param in params:
+                key = re.sub(r"[^a-z0-9_]+", "", str(param or "").lower())
+                stem = key[:-2].strip("_") if key.endswith("id") else key
+                if stem and stem not in {"sku", "code", "id", "uuid", "guid", "no", "key", "pk"}:
+                    param_stems.add(stem)
+                    param_stems.add(f"{stem}s")
+            if primary_last not in param_stems and "/admin/" not in primary.lower():
+                ranked = [primary] + [item for item in ranked if item != primary]
         steps: list[ScenarioStep] = []
-        for index, candidate in enumerate(candidates[:2]):
+        for index, candidate in enumerate(ranked[:3]):
             steps.append(ScenarioStep(
                 order=start_order + index,
                 action="resolve_entity_id" if index == 0 else f"resolve_entity_id_alt_{index}",
@@ -1577,7 +1832,7 @@ class SemanticScenarioGenerator:
 
     @staticmethod
     def _permission_slice(
-        slice_meta: dict[str, Any], discovery_round: int,
+        slice_meta: dict[str, Any], discovery_round: int, api_doc: str = "",
     ) -> ExecutableScenario | None:
         """Build an actor-permission scenario from a permission slice.
 
@@ -1612,13 +1867,15 @@ class SemanticScenarioGenerator:
             path, actor=actor_label, start_order=len(steps) + 1,
         )
         steps.extend(resolve_steps)
-        steps.append(ScenarioStep(
-            order=len(steps) + 1,
+        SemanticScenarioGenerator._append_write_probe_step(
+            steps,
             action=f"permission_probe_{actor_label}",
-            api_method=method, api_path=probe_path,
-            expected_status=(200 if not denied else 403),
+            method=method,
+            path=probe_path,
             actor=actor_label,
-        ))
+            expected_status=(200 if not denied else 403),
+            api_doc=api_doc,
+        )
         return ExecutableScenario(
             id=SemanticScenarioGenerator._id(entity, "permission", actor_label, method, path),
             title=f"[Actor permission probe] {actor_label} → {method} {path}",
@@ -1791,7 +2048,7 @@ class SemanticScenarioGenerator:
 
     @staticmethod
     def _concurrency_slice(
-        slice_meta: dict[str, Any], discovery_round: int,
+        slice_meta: dict[str, Any], discovery_round: int, api_doc: str = "",
     ) -> ExecutableScenario | None:
         """Build a double-write scenario to probe concurrency/mutual exclusion."""
         entity = str(slice_meta.get("entity") or "").strip()
@@ -1814,12 +2071,18 @@ class SemanticScenarioGenerator:
             path, actor=actor_label, start_order=len(steps) + 1,
         )
         steps.extend(resolve_steps)
+        probe_body = SemanticScenarioGenerator._runtime_body_template(api_doc, method, probe_path)
+        binding_steps, _ = SemanticScenarioGenerator._body_binding_resolve_steps(
+            probe_body, actor=actor_label, start_order=len(steps) + 1,
+        )
+        steps.extend(binding_steps)
         base = len(steps)
         for i in (1, 2):
             steps.append(ScenarioStep(
                 order=base + i,
                 action=f"concurrent_{method}_{i}",
                 api_method=method, api_path=probe_path,
+                body_template=dict(probe_body),
                 expected_status=(200 if i == 1 else 409),
                 actor=actor_label,
             ))
@@ -1848,7 +2111,7 @@ class SemanticScenarioGenerator:
 
     @staticmethod
     def _money_slice(
-        slice_meta: dict[str, Any], discovery_round: int,
+        slice_meta: dict[str, Any], discovery_round: int, api_doc: str = "",
     ) -> ExecutableScenario | None:
         """Build a financial-integrity observation scenario.
 
@@ -1884,16 +2147,24 @@ class SemanticScenarioGenerator:
         steps.extend(resolve_steps)
         if path_has_placeholders(normalize_path_placeholders(path)):
             probe_write = normalized_target
-        if path_has_placeholders(normalize_path_placeholders(read_path)):
-            probe_read = normalize_path_placeholders(read_path)
+        observe_candidates = _observation_read_candidates(path)
+        if observe_candidates:
+            probe_read = observe_candidates[0]
+        if path_has_placeholders(normalize_path_placeholders(probe_read)):
+            probe_read = normalize_path_placeholders(probe_read)
         steps.append(ScenarioStep(
             order=len(steps) + 1, action="observe_money_endpoint",
             api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
         ))
-        steps.append(ScenarioStep(
-            order=len(steps) + 1, action=f"money_probe_{method}",
-            api_method=method, api_path=probe_write, expected_status=200, actor=actor_label,
-        ))
+        SemanticScenarioGenerator._append_write_probe_step(
+            steps,
+            action=f"money_probe_{method}",
+            method=method,
+            path=probe_write,
+            actor=actor_label,
+            expected_status=200,
+            api_doc=api_doc,
+        )
         steps.append(ScenarioStep(
             order=len(steps) + 1, action="observe_money_after",
             api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
@@ -1922,7 +2193,7 @@ class SemanticScenarioGenerator:
 
     @staticmethod
     def _inventory_slice(
-        slice_meta: dict[str, Any], discovery_round: int,
+        slice_meta: dict[str, Any], discovery_round: int, api_doc: str = "",
     ) -> ExecutableScenario | None:
         """Build an inventory-integrity observation scenario."""
         entity = str(slice_meta.get("entity") or "").strip()
@@ -1951,20 +2222,24 @@ class SemanticScenarioGenerator:
         steps.extend(resolve_steps)
         if path_has_placeholders(normalize_path_placeholders(path)):
             probe_write = normalized_target
-        if path_has_placeholders(normalize_path_placeholders(read_path)):
-            probe_read = normalize_path_placeholders(read_path)
-            # Prefer sibling catalog for inventory observation when collection 404s.
-            alts = alternate_collection_paths(path)
-            if alts and not path_has_placeholders(alts[0]):
-                probe_read = alts[0]
+        observe_candidates = _observation_read_candidates(path)
+        if observe_candidates:
+            probe_read = observe_candidates[0]
+        if path_has_placeholders(normalize_path_placeholders(probe_read)):
+            probe_read = normalize_path_placeholders(probe_read)
         steps.append(ScenarioStep(
             order=len(steps) + 1, action="observe_inventory_endpoint",
             api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
         ))
-        steps.append(ScenarioStep(
-            order=len(steps) + 1, action=f"inventory_probe_{method}",
-            api_method=method, api_path=probe_write, expected_status=200, actor=actor_label,
-        ))
+        SemanticScenarioGenerator._append_write_probe_step(
+            steps,
+            action=f"inventory_probe_{method}",
+            method=method,
+            path=probe_write,
+            actor=actor_label,
+            expected_status=200,
+            api_doc=api_doc,
+        )
         steps.append(ScenarioStep(
             order=len(steps) + 1, action="observe_inventory_after",
             api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
@@ -2000,9 +2275,34 @@ def _adjacent_read_for_entity(entity: str, write_path: str) -> str:
     We compute that purely from path structure — the first two segments form
     the resource collection — with no per-project or per-industry endpoint map.
     """
+    candidates = _observation_read_candidates(write_path)
+    return candidates[0] if candidates else normalize_path_placeholders(str(write_path or ""))
+
+
+def _observation_read_candidates(write_path: str) -> list[str]:
+    """Return ordered GET observation paths for a write endpoint."""
     normalized = normalize_path_placeholders(str(write_path or ""))
+    paths: list[str] = []
     parts = [p for p in normalized.strip("/").split("/") if p and "{" not in p]
     if len(parts) >= 2:
-        return "/" + "/".join(parts[:2])
+        paths.append("/" + "/".join(parts[:2]))
     coll = collection_path(normalized)
-    return coll if coll.startswith("/") else normalized
+    if coll.startswith("/") and coll not in paths:
+        paths.append(coll)
+    alternates: list[str] = []
+    if len(parts) >= 2:
+        prefix, resource = parts[0], parts[1].lower()
+        synthetic = f"/{prefix}/{resource}/{{id}}"
+        if resource in {"inventory", "stock", "warehouse"}:
+            synthetic = f"/{prefix}/{resource}/{{sku}}"
+        alternates.extend(alternate_collection_paths(synthetic))
+        # Action-style writes (/api/inventory/reserve) usually have no list at /api/inventory.
+        if len(parts) > 2 and resource in {"inventory", "stock", "warehouse"} and alternates:
+            def _obs_rank(candidate: str) -> tuple[int, int]:
+                last = candidate.rstrip("/").rsplit("/", 1)[-1].lower()
+                catalog = 0 if last in {"products", "product", "materials", "material", "items", "goods", "skus", "catalog"} else 1
+                return (catalog, candidate.count("/"))
+            paths = sorted(alternates, key=_obs_rank) + paths
+        else:
+            paths.extend(alternates)
+    return list(dict.fromkeys(item for item in paths if item.startswith("/")))

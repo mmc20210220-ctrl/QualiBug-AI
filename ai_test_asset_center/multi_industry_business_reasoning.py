@@ -500,18 +500,40 @@ def _dedupe_evidence(rows: Iterable[dict[str, Any]], limit: int = 20) -> list[di
     return result
 
 
+# Minimum evidence score / confidence before an industry signature may activate
+# vertical oracles, risks, or DSL rule packs. Below this, fall back to
+# general-business inference only — never invent ecommerce/finance defaults.
+_MIN_INDUSTRY_SCORE = 2.8
+_MIN_INDUSTRY_CONFIDENCE = 0.58
+_MIN_SECONDARY_INDUSTRY_SCORE = 3.8
+_MIN_SECONDARY_INDUSTRY_CONFIDENCE = 0.62
+
+
 def _select_industries(scores: dict[str, dict[str, Any]]) -> tuple[list[str], str]:
     ranked = sorted(scores.items(), key=lambda item: (-float(item[1].get("score") or 0), item[0]))
-    if not ranked or float(ranked[0][1].get("score") or 0) < 2.2:
+    if not ranked:
         return [], "unknown_general_business"
     top_industry, top_data = ranked[0]
     top = float(top_data.get("score") or 0)
+    top_confidence = float(top_data.get("confidence") or 0)
+    # Fail closed: weak keyword overlap must not activate a vertical oracle pack.
+    if top < _MIN_INDUSTRY_SCORE or top_confidence < _MIN_INDUSTRY_CONFIDENCE:
+        return [], "unknown_general_business"
+    # Require at least one object hit so a lone role/flow keyword cannot select an industry.
+    if len(top_data.get("object_hits") or []) < 1:
+        return [], "unknown_general_business"
     selected = [top_industry]
     for industry, data in ranked[1:]:
         object_count = len(data.get("object_hits") or [])
         flow_count = len(data.get("flow_hits") or [])
         independent_evidence = object_count >= 3 or (object_count >= 2 and flow_count >= 1)
-        if independent_evidence and float(data.get("score") or 0) >= max(3.4, top * 0.55) and float(data.get("confidence") or 0) >= 0.56:
+        score = float(data.get("score") or 0)
+        confidence = float(data.get("confidence") or 0)
+        if (
+            independent_evidence
+            and score >= max(_MIN_SECONDARY_INDUSTRY_SCORE, top * 0.55)
+            and confidence >= _MIN_SECONDARY_INDUSTRY_CONFIDENCE
+        ):
             selected.append(industry)
         if len(selected) >= 3:
             break
@@ -856,8 +878,15 @@ def infer_multi_industry_business_model(documents: dict[str, str], openapi: dict
             "manual_industry_selection_required": False,
             "evidence_gated_industry_activation": True,
             "unknown_or_low_confidence_falls_back_to_general_business": True,
+            "min_industry_score": _MIN_INDUSTRY_SCORE,
+            "min_industry_confidence": _MIN_INDUSTRY_CONFIDENCE,
             "write_and_replay_validation_requires_sandbox": True,
             "input_sources": ["PRD", "MRD", "requirements", "OpenAPI", "interface_descriptions"],
+            "vertical_oracle_activation": (
+                "only_recognized_industries_with_object_evidence"
+                if selected
+                else "suppressed_unknown_general_business"
+            ),
         },
     }
     profile["summary"] = {
@@ -925,6 +954,19 @@ def generate_multi_industry_business_probes(openapi: dict[str, Any], cfg: dict[s
     profile = load_multi_industry_business_profile(project, root) or build_multi_industry_business_profile(project, root)
     operations = _openapi_operations(openapi if isinstance(openapi, dict) else {})
     selected = [str(row.get("industry")) for row in profile.get("recognized_industries") or [] if str(row.get("industry")) in INDUSTRY_SIGNATURES]
+    # Evidence gate: never emit vertical industry probes from low-confidence recognition.
+    selected = [
+        industry
+        for industry in selected
+        if float(next(
+            (row.get("confidence") for row in profile.get("recognized_industries") or [] if row.get("industry") == industry),
+            0.0,
+        ) or 0.0) >= _MIN_INDUSTRY_CONFIDENCE
+        and float(next(
+            (row.get("score") for row in profile.get("recognized_industries") or [] if row.get("industry") == industry),
+            0.0,
+        ) or 0.0) >= _MIN_INDUSTRY_SCORE
+    ]
     if not selected:
         return []
     max_count = int(max_count or cfg.get("max_probe_count") or 100)

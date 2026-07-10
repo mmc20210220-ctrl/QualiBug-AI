@@ -85,13 +85,28 @@ def test_p3_7_regression_stability():
 
 
 # ── P3-11: Cache Drift via Double GET ──
-def test_p3_11_cache_drift_double_get():
+def test_p3_11_cache_drift_double_get(monkeypatch):
     """P3-11: detect_cache_drift_via_double_get detects response changes."""
-    from ai_test_asset_center.analyzers.cache_consistency import detect_cache_drift_via_double_get
+    from ai_test_asset_center.analyzers import cache_consistency
+
+    class StableResponse:
+        status = 200
+
+        def read(self, _size=-1):
+            return b'{"stable": true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout=8.0: StableResponse())
+    monkeypatch.setattr(cache_consistency.time, "sleep", lambda seconds: None)
 
     # Use a known stable endpoint that won't drift (tests the function, not the infra)
-    result = detect_cache_drift_via_double_get(
-        "https://httpbin.org/get?ts=1", timeout=8.0, interval_seconds=0.5,
+    result = cache_consistency.detect_cache_drift_via_double_get(
+        "https://test.example.invalid/stable", timeout=8.0, interval_seconds=0.5,
     )
     assert isinstance(result, dict)
     assert "drift_detected" in result
@@ -116,11 +131,12 @@ def test_p3_11_frontend_backend_state_drift():
 
 
 # ── P3-13: UI/API Availability Check ──
-def test_p3_13_ui_api_availability_check():
+def test_p3_13_ui_api_availability_check(monkeypatch):
     """P3-13: check_api_ui_availability classifies both-ok for reachable endpoints."""
-    from ai_test_asset_center.analyzers.ui_api_availability import check_api_ui_availability
+    from ai_test_asset_center.analyzers import ui_api_availability
 
-    check = check_api_ui_availability("GET", "/get", "https://httpbin.org", timeout=8.0)
+    monkeypatch.setattr(ui_api_availability, "_safe_get", lambda url, timeout=8.0, headers=None: (200, '{"ok": true}'))
+    check = ui_api_availability.check_api_ui_availability("GET", "/get", "https://test.example.invalid", timeout=8.0)
     assert check.api_status > 0, f"API unreachable: {check.api_status}"
     assert check.mismatch_kind in ("both_ok", "api_ok_ui_broken", "ui_ok_api_broken")
     assert isinstance(check.evidence, dict)

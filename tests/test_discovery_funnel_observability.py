@@ -25,6 +25,13 @@ def test_build_funnel_five_stages_and_separates_validated_from_pending():
                 "failed": 1,
                 "planned_only": 0,
                 "production_data_blocked": 1,
+                "skip_telemetry": {
+                    "cleanup_status_counts": {"failed": 2, "not_reversible": 1},
+                    "observer_status_counts": {
+                        "before:documented_observer_missing": 1,
+                        "after:documented_observer_missing": 1,
+                    },
+                },
             },
             "oracle": {
                 "status": "completed",
@@ -102,6 +109,9 @@ def test_build_funnel_five_stages_and_separates_validated_from_pending():
     assert reasons.get("CLEANUP_PENDING", 0) >= 1
     assert reasons.get("dropped_no_endpoint", 0) == 3
     assert reasons.get("production_data_blocked", 0) == 1
+    assert reasons.get("sandbox_cleanup_failed", 0) == 2
+    assert reasons.get("sandbox_cleanup_not_reversible", 0) == 1
+    assert reasons.get("documented_observer_missing", 0) == 2
 
     assert isinstance(funnel["explanation"], str) and funnel["explanation"]
     assert "已验证" in funnel["explanation"] or "正式" in funnel["explanation"]

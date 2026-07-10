@@ -243,17 +243,13 @@ def _login_example_credentials(api_doc: str, login_path: str) -> list[dict[str, 
 
 
 def _login_parameter_fuzzer(fuzzer: Any, catalog: list[dict[str, Any]], project: str, root: Path, api_doc: str = "") -> bool:
-    profile = _test_profile(project, root)
     login_route = _login_route(catalog)
     login_path = str(login_route.get("path") or "")
     if not login_path:
         return False
-    try:
-        from .enterprise_pilot_runtime import ordered_test_credentials
-        candidates = ordered_test_credentials(profile)
-    except Exception:
-        credentials = profile.get("test_credentials") if isinstance(profile, dict) else {}
-        candidates = [value for value in credentials.values() if isinstance(credentials, dict) and isinstance(value, dict)]
+    from .enterprise_pilot_runtime import load_project_test_credentials
+
+    candidates = load_project_test_credentials(project, root)
     candidates.extend(_login_example_credentials(api_doc, login_path))
     for item in candidates:
         email = str(item.get("email") or "").strip()
@@ -322,6 +318,152 @@ def _coupon_rule_from_scenario(scenario: Any) -> str:
     return ""
 
 
+_PROMO_ENTITY_ALIASES = {
+    "coupon", "coupons", "promotion", "promotions", "promo", "promo_code", "promo_codes",
+    "voucher", "vouchers", "discount", "discounts", "subsidy", "subsidies",
+    "fee_waiver", "fee_waivers", "rebate", "rebates", "优惠券", "促销", "代金券", "补贴",
+}
+_PROMO_TABLE_ALIASES = (
+    "coupons", "coupon", "promotions", "promotion", "promo_codes", "promo_code",
+    "vouchers", "voucher", "discounts", "discount", "subsidies", "subsidy",
+    "fee_waivers", "fee_waiver", "rebates", "rebate",
+)
+_CATALOG_TABLE_ALIASES = (
+    "products", "product", "items", "item", "goods", "skus", "sku",
+    "materials", "material", "catalog_items", "catalog_item", "offerings", "offering",
+)
+_PROMO_COLUMN_ALIASES = {
+    "code": ("code", "coupon_code", "promo_code", "voucher_code", "discount_code", "subsidy_code"),
+    "status": ("status", "state", "enabled", "active"),
+    "expires_at": ("expires_at", "expire_at", "expired_at", "valid_until", "end_time", "expiry_date", "end_at"),
+    "min_order_amount": ("min_order_amount", "min_amount", "threshold", "minimum_amount", "min_order", "order_threshold"),
+    "category_scope": ("category_scope", "category", "scope", "applicable_category", "category_id"),
+}
+_CATALOG_COLUMN_ALIASES = {
+    "sku": ("sku", "product_sku", "item_code", "material_code", "product_code", "code", "product_id", "item_id"),
+    "price": ("price", "unit_price", "amount", "sale_price", "list_price"),
+    "category": ("category", "category_name", "category_id", "type", "class"),
+    "status": ("status", "state", "sale_status"),
+}
+
+
+def _normalize_schema_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _is_promo_validation_entity(entity: str) -> bool:
+    token = _normalize_schema_token(entity)
+    if not token:
+        return False
+    aliases = {_normalize_schema_token(item) for item in _PROMO_ENTITY_ALIASES}
+    return token in aliases or any(alias in token or token in alias for alias in aliases if alias)
+
+
+def _pick_schema_name(names: list[str], aliases: tuple[str, ...]) -> str:
+    normalized = {_normalize_schema_token(name): name for name in names if str(name or "").strip()}
+    for alias in aliases:
+        hit = normalized.get(_normalize_schema_token(alias))
+        if hit:
+            return hit
+    # Fuzzy contains match for industry-specific prefixes/suffixes (e.g. t_promo_codes).
+    for alias in aliases:
+        alias_norm = _normalize_schema_token(alias)
+        for norm, original in normalized.items():
+            if alias_norm and (alias_norm in norm or norm in alias_norm):
+                return original
+    return ""
+
+
+def _map_schema_columns(columns: list[str], alias_groups: dict[str, tuple[str, ...]]) -> dict[str, str]:
+    normalized = {_normalize_schema_token(col): col for col in columns if str(col or "").strip()}
+    mapped: dict[str, str] = {}
+    for logical, aliases in alias_groups.items():
+        for alias in aliases:
+            hit = normalized.get(_normalize_schema_token(alias))
+            if hit:
+                mapped[logical] = hit
+                break
+        if logical in mapped:
+            continue
+        for alias in aliases:
+            alias_norm = _normalize_schema_token(alias)
+            for norm, original in normalized.items():
+                if alias_norm and alias_norm in norm:
+                    mapped[logical] = original
+                    break
+            if logical in mapped:
+                break
+    return mapped
+
+
+def _list_relation_names(cur: Any, *, dialect: str, is_sqlite: bool) -> list[str]:
+    if is_sqlite:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        rows = cur.fetchall() or []
+        return [str(row[0] if not isinstance(row, dict) else row.get("name") or "") for row in rows if row]
+    if dialect == "postgresql":
+        cur.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
+        )
+    elif dialect in {"mysql", "mariadb"}:
+        cur.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema=DATABASE() AND table_type='BASE TABLE'"
+        )
+    else:
+        cur.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE'"
+        )
+    rows = cur.fetchall() or []
+    names: list[str] = []
+    for row in rows:
+        if isinstance(row, dict):
+            names.append(str(row.get("table_name") or row.get("TABLE_NAME") or ""))
+        else:
+            names.append(str(row[0] if row else ""))
+    return [name for name in names if name]
+
+
+def _list_relation_columns(cur: Any, table: str, *, dialect: str, is_sqlite: bool) -> list[str]:
+    if is_sqlite:
+        cur.execute(f"PRAGMA table_info({table})")
+        rows = cur.fetchall() or []
+        cols: list[str] = []
+        for row in rows:
+            if isinstance(row, dict):
+                cols.append(str(row.get("name") or ""))
+            else:
+                # PRAGMA table_info: cid, name, type, notnull, dflt_value, pk
+                cols.append(str(row[1] if len(row) > 1 else ""))
+        return [col for col in cols if col]
+    if dialect == "postgresql":
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position",
+            (table,),
+        )
+    elif dialect in {"mysql", "mariadb"}:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema=DATABASE() AND table_name=? ORDER BY ordinal_position",
+            (table,),
+        )
+    else:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=? ORDER BY ordinal_position",
+            (table,),
+        )
+    rows = cur.fetchall() or []
+    cols = []
+    for row in rows:
+        if isinstance(row, dict):
+            cols.append(str(row.get("column_name") or row.get("COLUMN_NAME") or ""))
+        else:
+            cols.append(str(row[0] if row else ""))
+    return [col for col in cols if col]
+
+
 def _coupon_validation_request(code: str, *, sku: str, price: float, qty: int) -> dict[str, Any]:
     normalized_qty = max(1, int(qty or 1))
     normalized_price = round(float(price or 0.0), 2)
@@ -353,54 +495,55 @@ def _db_dialect_from_dsn(dsn: str) -> str:
     return "other"
 
 
-def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
-    """Return DB-discovered coupon samples for validation scenarios.
+def _discover_coupon_validation_samples(dsn: str) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Schema-driven promo/coupon sample discovery for validation scenarios.
 
-    Supports PostgreSQL (psycopg2), SQLite (stdlib sqlite3), and MySQL /
-    MariaDB / SQL Server / Oracle via pyodbc.  NoSQL databases and
-    unsupported schemes return an empty dict gracefully so the scan
-    continues with a DB_SAMPLE_DISCOVERY_MISSING gap instead of crashing.
+    Discovers promo-like and catalog-like tables/columns from the live DB
+    instead of hardcoding ecommerce ``products`` / ``coupons`` names.
     """
+    meta: dict[str, Any] = {"status": "empty", "gap_code": "DB_SAMPLE_DISCOVERY_MISSING"}
     if not str(dsn or "").strip():
-        return {}
+        meta.update({"status": "skipped", "gap_code": "DB_DSN_MISSING", "reason": "dsn_empty"})
+        return {}, meta
 
     _dsn = str(dsn).strip()
     _dialect = _db_dialect_from_dsn(_dsn)
     if not _dialect:
-        return {}  # NoSQL or unrecognized
+        meta.update({"status": "skipped", "gap_code": "DB_DIALECT_UNSUPPORTED", "reason": "nosql_or_unrecognized"})
+        return {}, meta
 
     conn = None
     _placeholder = "%s"
     _is_sqlite = _dialect == "sqlite"
 
-    if _dialect == "sqlite":
-        import sqlite3
-        _db_path = _dsn
-        for _pfx in ("sqlite:///", "sqlite:"):
-            if _db_path.lower().startswith(_pfx):
-                _db_path = _db_path[len(_pfx):]
-                break
-        if not Path(_db_path).exists():
-            return {}
-        conn = sqlite3.connect(_db_path)
-        conn.row_factory = sqlite3.Row
-        _placeholder = "?"
-    elif _dialect == "postgresql":
-        try:
+    try:
+        if _dialect == "sqlite":
+            import sqlite3
+            _db_path = _dsn
+            for _pfx in ("sqlite:///", "sqlite:"):
+                if _db_path.lower().startswith(_pfx):
+                    _db_path = _db_path[len(_pfx):]
+                    break
+            if not Path(_db_path).exists():
+                meta.update({"status": "failed", "gap_code": "DB_FILE_MISSING", "reason": _db_path})
+                return {}, meta
+            conn = sqlite3.connect(_db_path)
+            conn.row_factory = sqlite3.Row
+            _placeholder = "?"
+        elif _dialect == "postgresql":
             import psycopg2
             conn = psycopg2.connect(_dsn)
-        except Exception:
-            return {}
-    else:
-        try:
+        else:
             import pyodbc
             conn = pyodbc.connect(_dsn)
             _placeholder = "?"
-        except Exception:
-            return {}
+    except Exception as exc:
+        meta.update({"status": "failed", "gap_code": "DB_CONNECT_FAILED", "reason": str(exc)[:300]})
+        return {}, meta
 
     if conn is None:
-        return {}
+        meta.update({"status": "failed", "gap_code": "DB_CONNECT_FAILED", "reason": "conn_none"})
+        return {}, meta
 
     def _now() -> str:
         return "datetime('now')" if _is_sqlite else "NOW()"
@@ -412,6 +555,39 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
 
     try:
         cur = conn.cursor()
+        tables = _list_relation_names(cur, dialect=_dialect, is_sqlite=_is_sqlite)
+        promo_table = _pick_schema_name(tables, _PROMO_TABLE_ALIASES)
+        catalog_table = _pick_schema_name(tables, _CATALOG_TABLE_ALIASES)
+        meta["tables_seen"] = tables[:40]
+        meta["promo_table"] = promo_table
+        meta["catalog_table"] = catalog_table
+        if not promo_table or not catalog_table:
+            meta.update({
+                "status": "failed",
+                "gap_code": "DB_SCHEMA_TABLE_NOT_FOUND",
+                "reason": f"promo={promo_table or '-'} catalog={catalog_table or '-'}",
+            })
+            return {}, meta
+
+        promo_cols = _map_schema_columns(
+            _list_relation_columns(cur, promo_table, dialect=_dialect, is_sqlite=_is_sqlite),
+            _PROMO_COLUMN_ALIASES,
+        )
+        catalog_cols = _map_schema_columns(
+            _list_relation_columns(cur, catalog_table, dialect=_dialect, is_sqlite=_is_sqlite),
+            _CATALOG_COLUMN_ALIASES,
+        )
+        meta["promo_columns"] = promo_cols
+        meta["catalog_columns"] = catalog_cols
+        required_promo = {"code"}
+        required_catalog = {"sku", "price"}
+        if not required_promo.issubset(promo_cols) or not required_catalog.issubset(catalog_cols):
+            meta.update({
+                "status": "failed",
+                "gap_code": "DB_SCHEMA_COLUMN_NOT_FOUND",
+                "reason": f"promo_cols={promo_cols} catalog_cols={catalog_cols}",
+            })
+            return {}, meta
 
         def one(sql: str, params: tuple = ()) -> dict:
             if _placeholder == "?":
@@ -425,30 +601,50 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
             cols = [str(item[0]) for item in cur.description]
             return dict(zip(cols, row))
 
+        def project_promo(row: dict) -> dict:
+            return {
+                "code": row.get(promo_cols["code"]),
+                "min_order_amount": row.get(promo_cols["min_order_amount"]) if "min_order_amount" in promo_cols else None,
+                "category_scope": row.get(promo_cols["category_scope"]) if "category_scope" in promo_cols else None,
+                "status": row.get(promo_cols["status"]) if "status" in promo_cols else None,
+                "expires_at": row.get(promo_cols["expires_at"]) if "expires_at" in promo_cols else None,
+            }
+
+        def project_catalog(row: dict) -> dict:
+            return {
+                "sku": row.get(catalog_cols["sku"]),
+                "category": row.get(catalog_cols["category"]) if "category" in catalog_cols else None,
+                "price": row.get(catalog_cols["price"]),
+                "status": row.get(catalog_cols["status"]) if "status" in catalog_cols else None,
+            }
+
+        status_col = catalog_cols.get("status")
+        price_col = catalog_cols["price"]
+        sku_col = catalog_cols["sku"]
+        category_col = catalog_cols.get("category")
+
         def saleable_product(*, excluded_category: str = "") -> dict:
-            if excluded_category:
-                return one(
-                    f"""
-                    SELECT sku, category, price, status
-                    FROM products
-                    WHERE COALESCE(status, '') IN ('ON_SALE', 'ACTIVE')
-                      AND COALESCE(price, 0) > 0
-                      AND COALESCE(category, '') <> {_placeholder}
-                    ORDER BY price DESC, sku ASC
-                    LIMIT 1
-                    """,
-                    (excluded_category,),
+            where = [f"COALESCE({price_col}, 0) > 0"]
+            params: list[Any] = []
+            if status_col:
+                where.append(
+                    f"UPPER(COALESCE(CAST({status_col} AS TEXT), '')) IN "
+                    f"('ON_SALE', 'ACTIVE', 'ENABLED', 'AVAILABLE', 'PUBLISHED')"
                 )
-            return one(
-                f"""
-                SELECT sku, category, price, status
-                FROM products
-                WHERE COALESCE(status, '') IN ('ON_SALE', 'ACTIVE')
-                  AND COALESCE(price, 0) > 0
-                ORDER BY price DESC, sku ASC
-                LIMIT 1
-                """
+            if excluded_category and category_col:
+                where.append(f"COALESCE(CAST({category_col} AS TEXT), '') <> {_placeholder}")
+                params.append(excluded_category)
+            select_cols = [sku_col, price_col]
+            if category_col:
+                select_cols.append(category_col)
+            if status_col:
+                select_cols.append(status_col)
+            sql = (
+                f"SELECT {', '.join(select_cols)} FROM {catalog_table} "
+                f"WHERE {' AND '.join(where)} ORDER BY {price_col} DESC, {sku_col} ASC LIMIT 1"
             )
+            row = one(sql, tuple(params))
+            return project_catalog(row) if row else {}
 
         def quantity_for(min_order_amount, price) -> int:
             import math as _math
@@ -456,103 +652,143 @@ def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
             minimum = max(float(min_order_amount or 0.0), 0.0)
             return max(1, int(_math.ceil(max(minimum, price_value) / price_value)))
 
-        samples: dict = {}
-        expired = one(
-            f"""
-            SELECT code, min_order_amount, category_scope, status, expires_at
-            FROM coupons
-            WHERE expires_at IS NOT NULL AND expires_at < {_now()}
-            ORDER BY expires_at ASC, code ASC
-            LIMIT 1
-            """
-        )
-        if expired:
-            product = saleable_product()
-            if product:
-                qty = quantity_for(expired.get("min_order_amount"), product.get("price"))
-                samples["expired_coupon_must_be_invalid"] = {
-                    "body": _coupon_validation_request(
-                        str(expired.get("code") or ""),
-                        sku=str(product.get("sku") or ""),
-                        price=float(product.get("price") or 0.0),
-                        qty=qty,
-                    ),
-                    "coupon_code": str(expired.get("code") or ""),
-                    "coupon_status": str(expired.get("status") or ""),
-                    "coupon_expires_at": str(expired.get("expires_at") or ""),
-                    "item_sku": str(product.get("sku") or ""),
-                    "item_category": str(product.get("category") or ""),
-                }
+        code_col = promo_cols["code"]
+        promo_status_col = promo_cols.get("status")
+        expires_col = promo_cols.get("expires_at")
+        min_col = promo_cols.get("min_order_amount")
+        scope_col = promo_cols.get("category_scope")
+        promo_select = [code_col]
+        for optional in (min_col, scope_col, promo_status_col, expires_col):
+            if optional and optional not in promo_select:
+                promo_select.append(optional)
 
-        inactive = one(
-            f"""
-            SELECT code, min_order_amount, category_scope, status, expires_at
-            FROM coupons
-            WHERE COALESCE(status, '') <> 'ACTIVE'
-            ORDER BY {_nulls_last("expires_at")} ASC, code ASC
-            LIMIT 1
-            """
-        )
-        if inactive:
-            product = saleable_product()
-            if product:
-                qty = quantity_for(inactive.get("min_order_amount"), product.get("price"))
-                samples["inactive_coupon_must_be_invalid"] = {
-                    "body": _coupon_validation_request(
-                        str(inactive.get("code") or ""),
-                        sku=str(product.get("sku") or ""),
-                        price=float(product.get("price") or 0.0),
-                        qty=qty,
-                    ),
-                    "coupon_code": str(inactive.get("code") or ""),
-                    "coupon_status": str(inactive.get("status") or ""),
-                    "coupon_expires_at": str(inactive.get("expires_at") or ""),
-                    "item_sku": str(product.get("sku") or ""),
-                    "item_category": str(product.get("category") or ""),
-                }
+        samples: dict[str, dict[str, Any]] = {}
+        if expires_col:
+            expired = one(
+                f"""
+                SELECT {', '.join(promo_select)}
+                FROM {promo_table}
+                WHERE {expires_col} IS NOT NULL AND {expires_col} < {_now()}
+                ORDER BY {expires_col} ASC, {code_col} ASC
+                LIMIT 1
+                """
+            )
+            if expired:
+                product = saleable_product()
+                if product:
+                    projected = project_promo(expired)
+                    qty = quantity_for(projected.get("min_order_amount"), product.get("price"))
+                    samples["expired_coupon_must_be_invalid"] = {
+                        "body": _coupon_validation_request(
+                            str(projected.get("code") or ""),
+                            sku=str(product.get("sku") or ""),
+                            price=float(product.get("price") or 0.0),
+                            qty=qty,
+                        ),
+                        "coupon_code": str(projected.get("code") or ""),
+                        "coupon_status": str(projected.get("status") or ""),
+                        "coupon_expires_at": str(projected.get("expires_at") or ""),
+                        "item_sku": str(product.get("sku") or ""),
+                        "item_category": str(product.get("category") or ""),
+                        "source_tables": {"promo": promo_table, "catalog": catalog_table},
+                    }
 
-        mismatched_category = one(
-            f"""
-            SELECT code, min_order_amount, category_scope, status, expires_at
-            FROM coupons
-            WHERE COALESCE(status, '') = 'ACTIVE'
-              AND category_scope IS NOT NULL
-              AND (expires_at IS NULL OR expires_at >= {_now()})
-            ORDER BY {_nulls_last("min_order_amount")} DESC, code ASC
-            LIMIT 10
-            """
-        )
-        if mismatched_category:
-            product = saleable_product(excluded_category=str(mismatched_category.get("category_scope") or ""))
-            if product:
-                qty = quantity_for(mismatched_category.get("min_order_amount"), product.get("price"))
-                samples["coupon_category_scope_must_match"] = {
-                    "body": _coupon_validation_request(
-                        str(mismatched_category.get("code") or ""),
-                        sku=str(product.get("sku") or ""),
-                        price=float(product.get("price") or 0.0),
-                        qty=qty,
-                    ),
-                    "coupon_code": str(mismatched_category.get("code") or ""),
-                    "coupon_status": str(mismatched_category.get("status") or ""),
-                    "coupon_expires_at": str(mismatched_category.get("expires_at") or ""),
-                    "coupon_category_scope": str(mismatched_category.get("category_scope") or ""),
-                    "item_sku": str(product.get("sku") or ""),
-                    "item_category": str(product.get("category") or ""),
-                }
-        return samples
-    except Exception:
-        return {}
+        if promo_status_col:
+            inactive = one(
+                f"""
+                SELECT {', '.join(promo_select)}
+                FROM {promo_table}
+                WHERE UPPER(COALESCE(CAST({promo_status_col} AS TEXT), '')) NOT IN ('ACTIVE', 'ENABLED', 'ON')
+                ORDER BY {_nulls_last(expires_col or code_col)} ASC, {code_col} ASC
+                LIMIT 1
+                """
+            )
+            if inactive:
+                product = saleable_product()
+                if product:
+                    projected = project_promo(inactive)
+                    qty = quantity_for(projected.get("min_order_amount"), product.get("price"))
+                    samples["inactive_coupon_must_be_invalid"] = {
+                        "body": _coupon_validation_request(
+                            str(projected.get("code") or ""),
+                            sku=str(product.get("sku") or ""),
+                            price=float(product.get("price") or 0.0),
+                            qty=qty,
+                        ),
+                        "coupon_code": str(projected.get("code") or ""),
+                        "coupon_status": str(projected.get("status") or ""),
+                        "coupon_expires_at": str(projected.get("expires_at") or ""),
+                        "item_sku": str(product.get("sku") or ""),
+                        "item_category": str(product.get("category") or ""),
+                        "source_tables": {"promo": promo_table, "catalog": catalog_table},
+                    }
+
+        if scope_col and promo_status_col:
+            where_active = (
+                f"UPPER(COALESCE(CAST({promo_status_col} AS TEXT), '')) IN ('ACTIVE', 'ENABLED', 'ON') "
+                f"AND {scope_col} IS NOT NULL"
+            )
+            if expires_col:
+                where_active += f" AND ({expires_col} IS NULL OR {expires_col} >= {_now()})"
+            order_col = min_col or code_col
+            mismatched_category = one(
+                f"""
+                SELECT {', '.join(promo_select)}
+                FROM {promo_table}
+                WHERE {where_active}
+                ORDER BY {_nulls_last(order_col)} DESC, {code_col} ASC
+                LIMIT 1
+                """
+            )
+            if mismatched_category:
+                projected = project_promo(mismatched_category)
+                product = saleable_product(excluded_category=str(projected.get("category_scope") or ""))
+                if product:
+                    qty = quantity_for(projected.get("min_order_amount"), product.get("price"))
+                    samples["coupon_category_scope_must_match"] = {
+                        "body": _coupon_validation_request(
+                            str(projected.get("code") or ""),
+                            sku=str(product.get("sku") or ""),
+                            price=float(product.get("price") or 0.0),
+                            qty=qty,
+                        ),
+                        "coupon_code": str(projected.get("code") or ""),
+                        "coupon_status": str(projected.get("status") or ""),
+                        "coupon_expires_at": str(projected.get("expires_at") or ""),
+                        "coupon_category_scope": str(projected.get("category_scope") or ""),
+                        "item_sku": str(product.get("sku") or ""),
+                        "item_category": str(product.get("category") or ""),
+                        "source_tables": {"promo": promo_table, "catalog": catalog_table},
+                    }
+
+        if samples:
+            meta.update({"status": "ok", "gap_code": "", "sample_rules": sorted(samples.keys())})
+        else:
+            meta.update({"status": "empty", "gap_code": "DB_SAMPLE_DISCOVERY_MISSING", "reason": "no_matching_rows"})
+        return samples, meta
+    except Exception as exc:
+        meta.update({"status": "failed", "gap_code": "DB_SAMPLE_DISCOVERY_ERROR", "reason": str(exc)[:300]})
+        return {}, meta
     finally:
         try:
             conn.close()
         except Exception:
             pass
 
+
+def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
+    """Return DB-discovered promo/coupon samples for validation scenarios."""
+    samples, meta = _discover_coupon_validation_samples(dsn)
+    _coupon_validation_samples.last_meta = meta  # type: ignore[attr-defined]
+    return samples
+
+
 def _enrich_coupon_validation_scenarios(scenarios: list[Any], dsn: str) -> None:
     samples = _coupon_validation_samples(dsn)
+    meta = dict(getattr(_coupon_validation_samples, "last_meta", {}) or {})
+    gap_code = str(meta.get("gap_code") or "DB_SAMPLE_DISCOVERY_MISSING").strip() or "DB_SAMPLE_DISCOVERY_MISSING"
     for scenario in scenarios:
-        if str(getattr(scenario, "entity", "") or "").strip().lower() != "coupon":
+        if not _is_promo_validation_entity(str(getattr(scenario, "entity", "") or "")):
             continue
         rule = _coupon_rule_from_scenario(scenario)
         if not rule:
@@ -560,14 +796,20 @@ def _enrich_coupon_validation_scenarios(scenarios: list[Any], dsn: str) -> None:
         sample = dict(samples.get(rule) or {})
         if not sample:
             gaps = [str(item) for item in (getattr(scenario, "evidence_gaps", []) or []) if str(item).strip()]
-            if "DB_SAMPLE_DISCOVERY_MISSING" not in gaps:
+            if gap_code not in gaps:
+                gaps.append(gap_code)
+            if "DB_SAMPLE_DISCOVERY_MISSING" not in gaps and gap_code != "DB_SAMPLE_DISCOVERY_MISSING":
                 gaps.append("DB_SAMPLE_DISCOVERY_MISSING")
             scenario.evidence_gaps = gaps
             scenario.execution_policy = "plan_only_requires_fixture"
+            runtime_hints = dict(getattr(scenario, "runtime_hints", {}) or {})
+            runtime_hints["coupon_sample_discovery"] = meta
+            scenario.runtime_hints = runtime_hints
             continue
         runtime_hints = dict(getattr(scenario, "runtime_hints", {}) or {})
         runtime_hints["coupon_validation_rule"] = rule
         runtime_hints["coupon_validation_sample"] = sample
+        runtime_hints["coupon_sample_discovery"] = meta
         scenario.runtime_hints = runtime_hints
         steps = list(getattr(scenario, "steps", []) or [])
         if steps:
@@ -603,7 +845,8 @@ def _source_manifest_details(context: dict[str, Any], source_text: Any) -> tuple
 
 def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) -> dict[str, Any]:
     """Direct callers cannot bypass source, scope, environment, or hash approval."""
-    manifest, source_issues = _source_manifest_details(context, source_text)
+    verification_text = context.get("_source_verification_text", source_text)
+    manifest, source_issues = _source_manifest_details(context, verification_text)
     environment_ref = str(context.get("environment_ref") or context.get("target_environment") or "").strip()
     if not base_url:
         return {
@@ -1115,7 +1358,7 @@ def _slice_route_collapse_key(item: dict[str, Any]) -> tuple[str, str, str] | No
     return (kind, method, path)
 
 
-def _slice_llm_invariant_collapse_key(item: dict[str, Any]) -> tuple[str, str, tuple[str, ...]] | None:
+def _slice_llm_invariant_collapse_key(item: dict[str, Any]) -> tuple[str, str, tuple[str, ...], str] | None:
     kind = str(item.get("kind") or "").strip().lower()
     if kind != "invariant" or _slice_hypothesis_origin(item) != "llm_reasoner":
         return None
@@ -1129,7 +1372,21 @@ def _slice_llm_invariant_collapse_key(item: dict[str, Any]) -> tuple[str, str, t
     )
     if not endpoints:
         return None
-    return (kind, entity, endpoints)
+    # Do not collapse every invariant that happens to touch the same route.
+    # Payment, lifecycle, audit, and conservation hypotheses commonly share one
+    # endpoint but represent different executable assertions.  Collapse only
+    # semantically identical text, while retaining the old endpoint-level
+    # fallback for legacy slices with no semantic text at all.  Keep numeric
+    # thresholds and amounts intact: normalizing them would erase distinct
+    # business assertions such as "<= 100" versus "<= 200".
+    semantic = str(
+        item.get("_invariant_text")
+        or item.get("_selection_family")
+        or item.get("_hypothesis_family")
+        or ""
+    ).strip().lower()
+    semantic = re.sub(r"\s+", " ", semantic)
+    return (kind, entity, endpoints, semantic)
 
 
 def _slice_has_actor_credentials(item: dict[str, Any]) -> bool:
@@ -1426,7 +1683,8 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     rerun_key = str(context.get("campaign_rerun_key") or context.get("campaign_restart_key") or "")[:120]
     rerun_reason = str(context.get("campaign_rerun_reason") or context.get("campaign_restart_reason") or "")[:240]
     snapshot = source_snapshot_hash(prd_text, api_spec_text, db_schema_text, scope_id, environment_ref)
-    source_manifest, source_issues = _source_manifest_details(context, submitted_api_spec_text)
+    verification_text = context.get("_source_verification_text", submitted_api_spec_text)
+    source_manifest, source_issues = _source_manifest_details(context, verification_text)
     candidate = EnterpriseCampaign.create(
         project,
         scope_id,
@@ -1961,6 +2219,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         fuzz_started = time.time()
         fuzzer_findings: list[dict[str, Any]] = []
         fuzzer_execution_receipts: list[dict[str, Any]] = []
+        fuzzer_error = ""
         if approved_base_url and selected_paths and selection["status"] == "planned":
             try:
                 from .parameter_fuzzer import ParameterFuzzer
@@ -1984,12 +2243,25 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         matching = next((item for item in selection["selected"] if str(finding.get("path") or "") in item.get("endpoints", [])), None)
                         if matching:
                             finding.update({"behavior_slice_id": matching["slice_id"], "discovery_round": settings["round_number"], "campaign_id": campaign.campaign_id, "execution_status": "executed", "confirmation_status": "candidate"})
-            except Exception:
-                pass
+            except Exception as exc:
+                fuzzer_error = f"parameter_fuzzer_failed:{type(exc).__name__}:{str(exc)[:300]}"
+                logger.exception(
+                    "parameter fuzzer failed campaign=%s selected_path_count=%s",
+                    campaign.campaign_id,
+                    len(selected_paths),
+                )
         result["findings"].extend(fuzzer_findings)
-        fuzzer_reason = "selected_source_bound_read_routes_only" if selected_paths and approved_base_url else (runtime_contract.get("reason") or "no_selected_source_bound_read_routes")
+        fuzzer_reason = fuzzer_error or (
+            "selected_source_bound_read_routes_only"
+            if selected_paths and approved_base_url
+            else (runtime_contract.get("reason") or "no_selected_source_bound_read_routes")
+        )
         result["phases"]["parameter_fuzzer"] = {
-            "status": "completed" if approved_base_url and selected_paths and selection["status"] == "planned" else "skipped",
+            "status": (
+                "failed"
+                if fuzzer_error
+                else ("completed" if approved_base_url and selected_paths and selection["status"] == "planned" else "skipped")
+            ),
             "reason": fuzzer_reason,
             "findings": len(fuzzer_findings),
             "execution_receipts": len([
@@ -2034,7 +2306,13 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "duration_ms": int((time.time() - scenario_started) * 1000),
         }
         result["plan_only_scenarios"] = [scenario.to_dict() for scenario in plan_only]
+        # ``traces`` feeds the oracle and therefore contains only real HTTP
+        # receipts. ``attempted_traces`` is the complete execution ledger,
+        # including governed blocks and precondition failures.  Keeping the two
+        # separate prevents an unexecuted scenario from becoming a fake Bug,
+        # while still making every lost execution observable.
         traces: list[tuple[Any, dict[str, Any]]] = []
+        attempted_traces: list[tuple[Any, dict[str, Any]]] = []
         if base_url and runtime_contract.get("status") == "blocked" and "SOURCE_PROVENANCE_MISSING" not in set(runtime_contract.get("missing_requirements") or []):
             result["phases"]["execution"] = {"status": "blocked", "reason": str(runtime_contract.get("reason") or "runtime_contract_missing"), "missing_requirements": runtime_contract.get("missing_requirements", []), "planned_only": len(plan_only), "executed": 0}
         elif selection["status"] != "planned":
@@ -2063,23 +2341,58 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             # from multiple actor perspectives, catching cross-role auth bugs.
             _role_tokens: dict[str, str] = {}
             _account_statuses: dict[str, str] = {}
+            _execution_observability: list[dict[str, Any]] = []
+            _accounts_path = root / "platform_inputs" / project / "test_accounts.json"
             try:
-                _accounts = json.loads((root / "platform_inputs" / project / "test_accounts.json").read_text(encoding="utf-8"))
-                if isinstance(_accounts, dict):
-                    for _name, _acc in _accounts.items():
-                        if isinstance(_acc, dict):
-                            _tok = str(_acc.get("token") or "").strip()
-                            _role = str(_acc.get("role") or _name).strip()
-                            _status = str(_acc.get("status") or "").strip().upper()
-                            if _tok and not _tok.startswith("ERROR") and _role:
-                                _role_key = f"{_role}:{_name}"
-                                _role_tokens[_role_key] = _tok
-                                if _status:
-                                    _account_statuses[_role_key] = _status
-            except Exception:
-                pass
+                if not _accounts_path.exists():
+                    _execution_observability.append({
+                        "kind": "multi_role_accounts",
+                        "status": "missing",
+                        "reason": "test_accounts_json_missing",
+                        "path": str(_accounts_path),
+                    })
+                else:
+                    _accounts = json.loads(_accounts_path.read_text(encoding="utf-8"))
+                    if isinstance(_accounts, dict):
+                        for _name, _acc in _accounts.items():
+                            if isinstance(_acc, dict):
+                                _tok = str(_acc.get("token") or "").strip()
+                                _role = str(_acc.get("role") or _name).strip()
+                                _status = str(_acc.get("status") or "").strip().upper()
+                                if _tok and not _tok.startswith("ERROR") and _role:
+                                    _role_key = f"{_role}:{_name}"
+                                    _role_tokens[_role_key] = _tok
+                                    if _status:
+                                        _account_statuses[_role_key] = _status
+                    if not _role_tokens:
+                        _execution_observability.append({
+                            "kind": "multi_role_accounts",
+                            "status": "empty",
+                            "reason": "test_accounts_json_has_no_usable_tokens",
+                            "path": str(_accounts_path),
+                        })
+                    else:
+                        _execution_observability.append({
+                            "kind": "multi_role_accounts",
+                            "status": "ok",
+                            "roles": sorted(_role_tokens.keys()),
+                            "path": str(_accounts_path),
+                        })
+            except Exception as exc:
+                _execution_observability.append({
+                    "kind": "multi_role_accounts",
+                    "status": "failed",
+                    "reason": str(exc)[:300],
+                    "path": str(_accounts_path),
+                })
+                logger.warning("multi-role account load failed for %s: %s", project, exc)
             if not _role_tokens and runtime_token:
                 _role_tokens["default"] = runtime_token
+                _execution_observability.append({
+                    "kind": "multi_role_accounts",
+                    "status": "degraded_default_token",
+                    "reason": "fallback_to_single_runtime_token",
+                })
             try:
                 from .supplementary_behavior_slices import probe_disabled_account_logins
 
@@ -2096,8 +2409,17 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     _probe_sid = str(_login_finding.get("behavior_slice_id") or "").strip()
                     if _probe_sid:
                         attempted_slice_ids.add(_probe_sid)
-            except Exception:
-                pass
+                _execution_observability.append({
+                    "kind": "disabled_account_login_probe",
+                    "status": "ok",
+                })
+            except Exception as exc:
+                _execution_observability.append({
+                    "kind": "disabled_account_login_probe",
+                    "status": "failed",
+                    "reason": str(exc)[:300],
+                })
+                logger.warning("disabled-account login probe failed for %s: %s", project, exc)
             _disabled_finding_keys: set[tuple[str, str, str]] = set()
             for scenario in executable:
                 _orig_token = getattr(scenario, "actor_token", "") or ""
@@ -2115,7 +2437,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 elif _scenario_has_login:
                     _role_iter = [("scenario_native", "")]
                 elif _slice_kind in _multi_role_kinds or _scenario_category in _multi_role_kinds:
-                    _role_iter = list(_role_tokens.items())
+                    _role_iter = list(_role_tokens.items()) or [("default", "")]
                 elif _role_tokens:
                     _default_role = next(
                         (
@@ -2141,6 +2463,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         if _declared_actors:
                             scenario_actor_identity = str(_declared_actors[0]).strip()
                     if not _token and execution_mode != "safe_read_only" and not scenario_actor_identity:
+                        attempted_traces.append((scenario, {
+                            "scenario_id": getattr(scenario, "id", "?"),
+                            "steps": [],
+                            "errors": ["test_actor_identity_missing"],
+                            "execution_blocked": True,
+                            "execution_block_reason": "test_actor_identity_missing",
+                            "actor_role": _role,
+                        }))
                         continue
                     # ── Role-aware expected status ──
                     # If the actor is disabled/locked, all endpoints should reject.
@@ -2161,12 +2491,15 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                             runtime_contract=runtime_contract,
                             campaign_id=str(campaign.campaign_id or ""),
                             safety_boundary=_safety_boundary,
+                            observer_token=str(_orig_token or _token or ""),
+                            documented_routes=catalog,
                             execute_fn=lambda sc, bu, safety_boundary=None: _execute_scenario(
                                 sc, bu, max_retries=2, safety_boundary=safety_boundary,
                             ),
                         )
                         # Tag trace with role info for oracle
                         trace["actor_role"] = _role
+                        attempted_traces.append((scenario, trace))
                         # ── DISABLED/LOCKED account check ──
                         # Catch AUTH-001 automatically: any 2xx response from a
                         # disabled/locked account is a confirmed violation.
@@ -2267,6 +2600,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                             str(_exec_err)[:300],
                         )
                         failed += 1
+                        attempted_traces.append((scenario, {
+                            "scenario_id": getattr(scenario, "id", "?"),
+                            "steps": [],
+                            "errors": [f"scenario_execution_failed:{type(_exec_err).__name__}:{_exec_err}"],
+                            "execution_blocked": True,
+                            "execution_block_reason": "scenario_execution_failed",
+                            "actor_role": _role,
+                        }))
                 # Restore original token after role loop
                 scenario.actor_token = _orig_token
             real_trace_count = sum(
@@ -2278,6 +2619,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     if isinstance(step, dict)
                 )
             )
+            execution_telemetry = _summarize_execution_skip_telemetry(attempted_traces)
             execution_phase_status = "completed" if real_trace_count > 0 else "blocked"
             execution_reason = "" if real_trace_count > 0 else (
                 "test_actor_identity_missing"
@@ -2298,12 +2640,29 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 "reason": execution_reason,
                 "executed": real_trace_count,
                 "failed": failed,
+                "selected_slices": len(selection["selected_slice_ids"]),
+                "generated_scenarios": len(scenarios),
+                "executable_scenarios": len(executable),
+                "scenario_attempts": len(attempted_traces),
+                "attempts_without_http": int(execution_telemetry.get("scenarios_blocked") or 0),
                 "planned_only": len(plan_only),
                 # 主链 5 × 主链 1: observability — how many scenarios were blocked
                 # by the customer's production-data safety boundary (never touched).
-                "production_data_blocked": sum(1 for _, t in traces if t.get("production_data_blocked")),
+                "production_data_blocked": sum(1 for _, t in attempted_traces if t.get("production_data_blocked")),
+                "skip_telemetry": execution_telemetry,
+                "observability": _execution_observability,
                 "duration_ms": int((time.time() - execution_started) * 1000),
             }
+            if any(
+                str(item.get("status") or "") in {"failed", "missing"}
+                for item in _execution_observability
+                if isinstance(item, dict)
+            ):
+                # Keep execution receipts, but surface account/probe failures so
+                # operators never confuse "no bugs" with "multi-role path died".
+                result["phases"]["execution"]["observability_status"] = "FAILED_SAFE"
+                if not result["phases"]["execution"].get("reason"):
+                    result["phases"]["execution"]["reason"] = "execution_observability_gap"
         try:
             from .ui_execution_adapter import execute_ui_execution_requests
 
@@ -2531,6 +2890,24 @@ def _execute_scenario(scenario: Any, base_url: str, max_retries: int = 2,
     return {"scenario_id": "?", "steps": [], "errors": ["unreachable"], "duration_ms": 0}
 
 
+def _resolve_get_candidates(path: str) -> list[str]:
+    """Resolve-step GET URLs: bare collection first, then paginated variants."""
+    base = str(path or "").split("?", 1)[0]
+    if not base:
+        return []
+    from .real_id_resolver import _PAGINATION_SUFFIXES
+
+    candidates = [base] if "?" not in str(path or "") else [str(path)]
+    if "?" not in base:
+        candidates.extend(base + suffix for suffix in _PAGINATION_SUFFIXES)
+    return list(dict.fromkeys(item for item in candidates if item.startswith("/")))
+
+
+def _body_has_unbound_placeholders(body: Any) -> list[str]:
+    text = json.dumps(body, ensure_ascii=False) if body else ""
+    return list(dict.fromkeys(re.findall(r"\{([A-Za-z_]\w*)\}", text)))
+
+
 def __execute_scenario_once(scenario: Any, base_url: str,
                             safety_boundary: dict[str, Any] | None = None) -> dict[str, Any]:
     trace: dict[str, Any] = {"scenario_id": getattr(scenario, "id", "?"), "steps": [], "errors": []}
@@ -2656,6 +3033,27 @@ def __execute_scenario_once(scenario: Any, base_url: str,
                 # Append ?_limit=1 or &limit=1 as safety net
                 sep = "&" if "?" in path else "?"
                 path = f"{path}{sep}_qualibug_safe_limit=1"
+        unbound_body_fields = _body_has_unbound_placeholders(body) if body and method not in {"GET", "HEAD"} else []
+        if unbound_body_fields:
+            reason = f"missing_runtime_body_binding:{','.join(unbound_body_fields)}"
+            trace["errors"].append(reason)
+            trace.setdefault("precondition_not_met", list(trace.get("precondition_not_met", [])))
+            trace["precondition_not_met"].append({
+                "step": getattr(step, "action", ""),
+                "path": path,
+                "missing_body_fields": unbound_body_fields,
+            })
+            trace["steps"].append({
+                "action": getattr(step, "action", ""),
+                "method": method,
+                "path": path,
+                "status": 0,
+                "request": {"body": _redact(body)} if body else {},
+                "response": {"status_code": 0, "headers": {}, "body": {"error": reason}},
+                "expected_status": getattr(step, "expected_status", 0),
+                "skipped_reason": reason,
+            })
+            break
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
         headers = {"Accept": "application/json"}
         if data is not None:
@@ -2671,18 +3069,61 @@ def __execute_scenario_once(scenario: Any, base_url: str,
             token = str(bindings["token"])
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        started, url = time.time(), base_url.rstrip("/") + path
-        try:
-            request = urllib.request.Request(url, method=method, data=data, headers=headers)
-            with urllib.request.urlopen(request, timeout=10) as response:
-                raw = response.read(300_000).decode("utf-8", errors="replace")
-                status, response_body, response_headers = int(response.status), _json_or_text(raw), dict(response.headers.items())
-        except urllib.error.HTTPError as exc:
-            raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
-            status, response_body, response_headers = int(exc.code), _json_or_text(raw), dict(exc.headers.items()) if exc.headers else {}
-        except Exception as exc:
-            status, response_body, response_headers = 0, {"error": str(exc)}, {}
-            trace["errors"].append(str(exc))
+        started = time.time()
+        action_name = str(getattr(step, "action", "") or "").strip().lower()
+        resolve_attempt_paths = (
+            _resolve_get_candidates(path)
+            if method == "GET" and action_name.startswith("resolve_")
+            else [path]
+        )
+        status, response_body, response_headers = 0, {}, {}
+        url = base_url.rstrip("/") + path
+        for attempt_path in resolve_attempt_paths:
+            url = base_url.rstrip("/") + attempt_path
+            try:
+                request = urllib.request.Request(url, method=method, data=data, headers=headers)
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    raw = response.read(300_000).decode("utf-8", errors="replace")
+                    status, response_body, response_headers = int(response.status), _json_or_text(raw), dict(response.headers.items())
+            except urllib.error.HTTPError as exc:
+                raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
+                status, response_body, response_headers = int(exc.code), _json_or_text(raw), dict(exc.headers.items()) if exc.headers else {}
+            except Exception as exc:
+                status, response_body, response_headers = 0, {"error": str(exc)}, {}
+                trace["errors"].append(str(exc))
+            # A resolver fallback is useful for an explicit HTTP 4xx/5xx
+            # response, but a transport/runtime failure is not evidence that a
+            # different pagination shape will work. Stop immediately so one
+            # unavailable endpoint does not fan out into several opaque calls.
+            if method == "GET" and action_name.startswith("resolve_") and status == 0:
+                break
+            if method != "GET" or not action_name.startswith("resolve_"):
+                break
+            if 200 <= status < 300:
+                # A successful empty collection is an authoritative negative
+                # result for this resolver.  Trying every pagination dialect
+                # after a valid [] response only creates opaque traffic (and
+                # can turn a deterministic missing-binding trace into a
+                # transport-error cascade).  Pagination fallbacks remain
+                # available for explicit HTTP errors and non-empty envelopes
+                # whose requested identity field is absent.
+                if isinstance(response_body, list) and not response_body:
+                    path = attempt_path
+                    break
+                trial_bindings = dict(bindings)
+                for field in getattr(step, "extract_from_response", []) or []:
+                    value = _extract(response_body, str(field))
+                    if value not in (None, "", [], {}):
+                        trial_bindings[str(field)] = value
+                for key, value in bind_entity_fields(response_body, attempt_path).items():
+                    trial_bindings.setdefault(key, value)
+                expected_fields = [str(f) for f in (getattr(step, "extract_from_response", []) or []) if str(f)]
+                if not expected_fields or any(trial_bindings.get(f) not in (None, "", [], {}) for f in expected_fields):
+                    path = attempt_path
+                    break
+            if attempt_path == resolve_attempt_paths[-1]:
+                path = attempt_path
+                break
         _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
         for field in getattr(step, "extract_from_response", []) or []:
             value = _extract(response_body, str(field))
@@ -2690,7 +3131,6 @@ def __execute_scenario_once(scenario: Any, base_url: str,
                 bindings[str(field)] = value
         # Resolve steps / list GETs: bind all identity fields needed by later
         # path placeholders (sku, orderId, id, ...), not just the first "id".
-        action_name = str(getattr(step, "action", "") or "").strip().lower()
         if method == "GET" and 200 <= status < 300 and (
             action_name.startswith("resolve_") or "resolve_entity" in action_name or action_name.startswith("observe_")
         ):
@@ -2782,7 +3222,117 @@ def _replace(value: Any, bindings: dict[str, Any]) -> Any:
         return value
     for key, item in bindings.items():
         value = value.replace("{" + key + "}", str(item))
+    if "{" in value and "}" in value:
+        from .real_id_resolver import param_field_candidates
+
+        for param in infer_path_params(value):
+            token = "{" + param + "}"
+            if token not in value:
+                continue
+            for alias in param_field_candidates(param):
+                if alias in bindings and bindings[alias] not in (None, ""):
+                    value = value.replace(token, str(bindings[alias]))
+                    break
     return value
+
+
+def _summarize_execution_skip_telemetry(traces: list[tuple[Any, dict[str, Any]]]) -> dict[str, Any]:
+    """Aggregate skip/precondition reasons across scenario execution traces."""
+    reason_counts: dict[str, int] = {}
+    path_binding_misses: dict[str, int] = {}
+    empty_write_bodies: dict[str, int] = {}
+    blocked_samples: list[dict[str, str]] = []
+    sandbox_write_status_counts: dict[str, int] = {}
+    cleanup_status_counts: dict[str, int] = {}
+    cleanup_failure_reasons: dict[str, int] = {}
+    observer_status_counts: dict[str, int] = {}
+    scenarios_with_http = 0
+    scenarios_blocked = 0
+    for _, trace in traces:
+        if not isinstance(trace, dict):
+            continue
+        steps = trace.get("steps") or []
+        has_http = any(
+            int(step.get("status") or _dict(step.get("response")).get("status_code") or 0) > 0
+            for step in steps
+            if isinstance(step, dict)
+        )
+        if has_http:
+            scenarios_with_http += 1
+        else:
+            scenarios_blocked += 1
+            errors = [str(item) for item in (trace.get("errors") or []) if str(item).strip()]
+            skipped_reasons = [
+                str(step.get("skipped_reason") or "").strip()
+                for step in steps
+                if isinstance(step, dict) and str(step.get("skipped_reason") or "").strip()
+            ]
+            primary_reason = str(
+                trace.get("execution_block_reason")
+                or (errors[0] if errors else "")
+                or (skipped_reasons[0] if skipped_reasons else "")
+                or "no_runtime_receipt"
+            )
+            if len(blocked_samples) < 20:
+                blocked_samples.append({
+                    "scenario_id": str(
+                        getattr(_, "id", "")
+                        or getattr(_, "behavior_slice_id", "")
+                        or trace.get("scenario_id")
+                        or "?"
+                    )[:160],
+                    "behavior_slice_id": str(getattr(_, "behavior_slice_id", "") or "")[:160],
+                    "reason": primary_reason[:240],
+                })
+        for err in trace.get("errors") or []:
+            key = str(err).split(":", 1)[0]
+            reason_counts[key] = reason_counts.get(key, 0) + 1
+            if key == "missing_runtime_path_binding":
+                detail = str(err).split(":", 1)[1] if ":" in str(err) else "unknown"
+                path_binding_misses[detail] = path_binding_misses.get(detail, 0) + 1
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            skipped = str(step.get("skipped_reason") or "").strip()
+            if skipped:
+                key = skipped.split(":", 1)[0]
+                reason_counts[key] = reason_counts.get(key, 0) + 1
+            method = str(step.get("method") or "").upper()
+            if method in {"POST", "PUT", "PATCH"} and not skipped:
+                req_body = _dict(step.get("request")).get("body")
+                if not req_body:
+                    target = f"{method} {step.get('path') or '?'}"
+                    empty_write_bodies[target] = empty_write_bodies.get(target, 0) + 1
+        sandbox = trace.get("sandbox_write") if isinstance(trace.get("sandbox_write"), dict) else {}
+        if sandbox:
+            sandbox_status = str(sandbox.get("status") or "unknown")
+            sandbox_write_status_counts[sandbox_status] = sandbox_write_status_counts.get(sandbox_status, 0) + 1
+            cleanup = sandbox.get("cleanup") if isinstance(sandbox.get("cleanup"), dict) else {}
+            cleanup_status = str(cleanup.get("status") or "unknown")
+            cleanup_status_counts[cleanup_status] = cleanup_status_counts.get(cleanup_status, 0) + 1
+            cleanup_error = str(cleanup.get("error") or "").strip()
+            if cleanup_error:
+                cleanup_failure_reasons[cleanup_error] = cleanup_failure_reasons.get(cleanup_error, 0) + 1
+            for phase in ("before", "after"):
+                observation = sandbox.get(phase) if isinstance(sandbox.get(phase), dict) else {}
+                ref = str(observation.get("ref") or "")
+                status_key = str(observation.get("status") or 0)
+                if "documented_observer_missing" in ref:
+                    status_key = "documented_observer_missing"
+                key = f"{phase}:{status_key}"
+                observer_status_counts[key] = observer_status_counts.get(key, 0) + 1
+    return {
+        "scenarios_with_http": scenarios_with_http,
+        "scenarios_blocked": scenarios_blocked,
+        "reason_counts": dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))),
+        "path_binding_misses": dict(sorted(path_binding_misses.items(), key=lambda item: (-item[1], item[0]))[:20]),
+        "empty_write_bodies": dict(sorted(empty_write_bodies.items(), key=lambda item: (-item[1], item[0]))[:20]),
+        "blocked_samples": blocked_samples,
+        "sandbox_write_status_counts": dict(sorted(sandbox_write_status_counts.items())),
+        "cleanup_status_counts": dict(sorted(cleanup_status_counts.items())),
+        "cleanup_failure_reasons": dict(sorted(cleanup_failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:20]),
+        "observer_status_counts": dict(sorted(observer_status_counts.items())),
+    }
 
 
 def _fill_path_aliases(path: str, bindings: dict[str, Any]) -> str:
@@ -2900,6 +3450,31 @@ def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, 
     return steps[-1] if isinstance(steps[-1], dict) else {}
 
 
+def _status_confirmation_gap(
+    step: dict[str, Any],
+    trace: dict[str, Any],
+    oracle_result: Any,
+) -> str:
+    """Require a proven valid control before calling an expected-2xx 4xx a Bug."""
+    oracle_name = str(getattr(oracle_result, "oracle_name", "") or "").strip()
+    rule = str(getattr(oracle_result, "violated_rule", "") or "").strip().lower()
+    if oracle_name != "HttpStatusOracle" or rule != "expected_status_mismatch":
+        return ""
+    expected = int(step.get("expected_status") or 0)
+    response = step.get("response") if isinstance(step.get("response"), dict) else {}
+    actual = int(response.get("status_code") or step.get("status") or 0)
+    if not (200 <= expected < 300 and 400 <= actual < 500):
+        return ""
+    validation = trace.get("request_contract_validation")
+    if isinstance(validation, dict) and validation.get("valid_success_control") is True:
+        return ""
+    # A 4xx can be caused by missing fixtures, stale identities, incomplete
+    # payloads or credentials. It remains a real observation, but without a
+    # successful control proving the request contract it is not a customer
+    # deliverable defect.
+    return "VALID_SUCCESS_CONTROL_REQUIRED"
+
+
 def _trace_before_after_snapshot(trace: dict[str, Any]) -> dict[str, Any]:
     steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
     runtime_steps = [step for step in steps if isinstance(step, dict) and isinstance(step.get("response"), dict)]
@@ -2977,6 +3552,7 @@ def _confirmed_oracle_finding(
         db_evidence.get("after_db_snapshot"), dict
     )
     db_captured = db_status == "captured" or (_has_before_after_db and db_status != "unavailable")
+    status_confirmation_gap = _status_confirmation_gap(step, trace, oracle_result)
     evidence_strength = "runtime"
     if before_after_snapshot and db_captured:
         evidence_strength = "runtime_and_db"
@@ -2998,6 +3574,9 @@ def _confirmed_oracle_finding(
         # satisfied at runtime means the tested transition was never actually
         # exercised from the claimed state — do not confirm on fabricated state.
         and not (trace.get("precondition_not_met") if isinstance(trace, dict) else None)
+        # Expected-success 4xx mismatches need a known-valid control. Otherwise
+        # they are usually probe/test-data artifacts and must stay candidates.
+        and not status_confirmation_gap
         # 主链 6 × 主链 1/5: a step blocked by the production-data safety
         # boundary was never executed, so any "violation" derived from its
         # absent response is not a confirmed target defect. Force candidate.
@@ -3014,6 +3593,12 @@ def _confirmed_oracle_finding(
     raw_request = {"method": method, "path": path}
     if actor_label:
         raw_request["actor"] = actor_label
+    step_request = step.get("request") if isinstance(step.get("request"), dict) else {}
+    if "body" in step_request:
+        # The executor already redacts request bodies before placing them on the
+        # trace. Preserve that source-bound payload in the evidence receipt so
+        # protocol failures from materially different mutations are not merged.
+        raw_request["body"] = step_request.get("body")
     raw_response = {"status_code": status, "body": response.get("body")}
     finding = {
         "severity": getattr(oracle_result, "severity", "P1"),
@@ -3031,7 +3616,11 @@ def _confirmed_oracle_finding(
         "confirmation_status": confirmation_status,
         "gate_passed": gate_passed,
         "bug_status": bug_status,
-        "customer_delivery_status": "blocked_safety_boundary" if safety_boundary_blocked else "defect",
+        "customer_delivery_status": (
+            "blocked_safety_boundary"
+            if safety_boundary_blocked
+            else ("defect" if gate_passed else "candidate")
+        ),
         "blocked_by_safety_boundary": safety_boundary_blocked,
         "blocked_reason": safety_boundary_reason if safety_boundary_blocked else "",
         "expected": assertion,
@@ -3075,7 +3664,7 @@ def _confirmed_oracle_finding(
             "semantic_verdict": "SEMANTIC_CONFIRMED" if gate_passed else "SEMANTIC_CANDIDATE",
             "business_evidence_status": "VALIDATED" if gate_passed else "PENDING_EVIDENCE",
             "final_review_status": "VALIDATED_CANDIDATE" if gate_passed else "NEEDS_MORE_EVIDENCE",
-            "missing_requirements": [],
+            "missing_requirements": [status_confirmation_gap] if status_confirmation_gap else [],
         },
         "final_review_status": "VALIDATED_CANDIDATE" if gate_passed else "NEEDS_MORE_EVIDENCE",
         "business_evidence_status": "VALIDATED" if gate_passed else "PENDING_EVIDENCE",

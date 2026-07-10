@@ -746,9 +746,9 @@ export function EnterpriseMaterials() {
                       </div>
                     </td>
                     <td className="materials-table-type-cell"><span className="materials-type-chip">{formatSourceType(s.source_type)}</span></td>
-                    <td className="font-mono text-right materials-table-size-cell">{formatSize(s.size_bytes)}</td>
+                    <td className="font-mono text-right materials-table-size-cell">{formatSize(s.size_bytes ?? 0)}</td>
                     <td className="materials-table-status-cell"><span className={`status status-${formatSourceStatus(s.status).tone}`}>{formatSourceStatus(s.status).label}</span></td>
-                    <td className="text-muted materials-table-time-cell">{formatUploadedAt(s.uploaded_at)}</td>
+                    <td className="text-muted materials-table-time-cell">{formatUploadedAt(s.uploaded_at ?? '')}</td>
                     <td className="materials-table-action-cell">
                       <button
                         type="button"

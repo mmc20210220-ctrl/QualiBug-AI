@@ -274,7 +274,7 @@ def test_release_gate_merges_existing_checks_without_overwrite() -> None:
     assert gate["overall_status"] == "fail"
     assert gate["blocking_check_count"] == 1
     assert gate["pending_check_count"] == 1
-    assert [item["name"] for item in gate["checks"]] == ["修复后回归 Gate", "P0 缺陷阻塞"]
+    assert [item["name"] for item in gate["checks"]] == ["客户处理后回归 Gate", "P0 缺陷阻塞"]
     assert gate["checks"][0]["status"] == "pending"
     assert gate["checks"][0]["source"] == "regression_suite_refresh"
     assert gate["checks"][1]["source"] == "scan_result"

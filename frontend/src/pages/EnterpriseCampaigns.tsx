@@ -222,7 +222,7 @@ export function EnterpriseCampaigns() {
     } finally {
       setRunning(false);
     }
-  }, [buildTestDataContract, environmentRef, project, refreshContext, resolvedTargetBaseUrl, scopeId, toast]);
+  }, [buildTestDataContract, environmentRef, project, refreshContext, resolvedTargetBaseUrl, scopeId, selectedSourceId, toast]);
 
   if (!project) {
     return <section className="state-panel"><div className="state-panel-badge">客户选择</div><h2>请先选择客户项目</h2><p>运行中心必须绑定真实客户上下文，才能把项目配置、资料、执行和结果回显串成同一条闭环。</p></section>;

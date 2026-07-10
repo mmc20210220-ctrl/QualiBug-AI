@@ -134,9 +134,15 @@ _ACTOR_LABELS = {
 _BUSINESS_GROUP_ALIASES = {
     "cart": {"cart", "carts", "basket", "购物车"},
     "order": {"order", "orders", "订单"},
-    "payment": {"payment", "payments", "pay", "charge", "capture", "settle", "支付"},
+    "payment": {"payment", "payments", "pay", "charge", "capture", "settle", "settlement", "支付", "结算"},
     "refund": {"refund", "refunds", "after_sale", "aftersale", "return", "售后", "退款", "退货"},
-    "product": {"product", "products", "sku", "goods", "商品"},
+    "product": {"product", "products", "sku", "goods", "material", "materials", "catalog", "商品", "物料"},
+    "inventory": {"inventory", "stock", "warehouse", "库存", "仓"},
+    "notification": {"notification", "notifications", "message", "messages", "notify", "sms", "通知", "消息", "短信"},
+    "logistics": {"logistics", "shipment", "shipping", "dispatch", "delivery", "物流", "发运", "配送"},
+    "approval": {"approval", "approvals", "workflow", "review", "审批", "流程"},
+    "patient": {"patient", "patients", "encounter", "emr", "fhir", "患者", "就诊"},
+    "work_order": {"workorder", "work_order", "work-orders", "workorders", "工单"},
     "user": {"user", "users", "member", "account", "customer", "用户", "会员"},
 }
 
@@ -783,10 +789,8 @@ def _endpoint_rule_matches(ep: ApiEndpoint, rules: list[BusinessRule]) -> dict[s
             and endpoint_groups
             and rule_groups
             and endpoint_groups.intersection(rule_groups)
-            and endpoint_groups.intersection({"cart", "order", "product", "inventory", "notification", "logistics"})
-            and rule_groups.intersection({"cart", "order", "product", "inventory", "notification", "logistics"})
             and re.search(
-                r"callback|webhook|events?|message|notify|third|signature|nonce|timestamp|external_event_id|idempotency|replay|retry|back[_ -]?in[_ -]?stock|restock|inventory[_ -]?sync|inventory[_ -]?restore|幂等|回调|验签|签名|重试|重放|消息|通知|第三方事件号|到货提醒|补货提醒|库存同步|库存恢复|恢复库存|库存回补",
+                r"callback|webhook|events?|message|notify|third|signature|nonce|timestamp|external_event_id|idempotency|replay|retry|back[_ -]?in[_ -]?stock|restock|inventory[_ -]?sync|inventory[_ -]?restore|幂等|回调|验签|签名|重试|重放|消息|通知|第三方事件号|到货提醒|补货提醒|库存同步|库存恢复|恢复库存|库存回补|settlement|审批回调|支付回调",
                 rule_low,
                 re.I,
             )
@@ -1431,7 +1435,7 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
                 or "sync" in path_low
                 or "process" in path_low
                 or (
-                    endpoint_groups.intersection({"payment", "refund", "order", "cart"})
+                    bool(endpoint_groups)
                     and (prd_refs.get("idempotency") or "idempotency_replay_probe" in inferred_rule_risks)
                 )
             )
@@ -1605,11 +1609,11 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
         async_endpoint_signal = bool(
             _is_write(ep.method)
             and (
-                re.search(r"callback|webhook|events|process|sync|retry|message|notify|third|payment|logistics", combined, re.I)
+                re.search(r"callback|webhook|events|process|sync|retry|message|notify|third|payment|logistics|settlement|approval", combined, re.I)
                 or "idempotency" in checks
                 or "async_external_event_probe" in inferred_rule_risks
                 or (
-                    endpoint_groups.intersection({"payment", "refund", "order"})
+                    bool(endpoint_groups)
                     and (prd_refs.get("async") or prd_refs.get("idempotency") or "idempotency_replay_probe" in inferred_rule_risks)
                 )
             )

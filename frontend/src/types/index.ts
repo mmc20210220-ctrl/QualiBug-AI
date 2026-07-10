@@ -10,6 +10,16 @@ export interface ProductResponsibilityBoundary {
   customer_meaning: string;
 }
 
+export interface ReplayResult {
+  ok: boolean;
+  error?: string;
+  success?: boolean;
+  request?: { method: string; url: string; timestamp?: string; headers?: Record<string, string>; body?: string };
+  response?: { status_code: number; duration_ms?: number; body: string };
+  diff?: { status_match: boolean; body_match: boolean; key_differences: string[] };
+  original_evidence?: { status_code?: number; response_body_excerpt?: string };
+}
+
 export interface Finding {
   // 基础信息
   id: string;
@@ -396,7 +406,7 @@ export interface TechnicalDetails {
     actor: string;
   };
   related_tables: string[];
-  response_status?: number;
+  response_status: number;
   response_body_excerpt?: string;
   trace_id?: string;
   regression_verification_obligations?: string[];

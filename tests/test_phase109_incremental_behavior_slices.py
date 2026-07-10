@@ -515,6 +515,44 @@ def test_login_parameter_fuzzer_prefers_configured_default_credential_without_ro
     assert stub.calls[0]["email"] == "portal-primary@example.com"
 
 
+def test_pipeline_surfaces_parameter_fuzzer_failure(monkeypatch, tmp_path):
+    import ai_test_asset_center.v12_pipeline as v12_pipeline_module
+    from ai_test_asset_center.parameter_fuzzer import ParameterFuzzer
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    manifest = {
+        "source_id": "uploaded:fuzzer-observability-api",
+        "source_hash": hashlib.sha256(API_SPEC.encode("utf-8")).hexdigest(),
+        "source_origin": "declared_manifest",
+    }
+
+    def raise_probe_error(*args, **kwargs):
+        raise RuntimeError("probe-boom")
+
+    monkeypatch.setattr(v12_pipeline_module, "_login_parameter_fuzzer", lambda *args, **kwargs: True)
+    monkeypatch.setattr(ParameterFuzzer, "fuzz_all", raise_probe_error)
+    monkeypatch.setattr(SemanticScenarioGenerator, "generate", lambda *args, **kwargs: [])
+
+    result = run_v12_pipeline(
+        project="generic-project",
+        root=tmp_path,
+        prd_text=PRD,
+        api_spec_text=API_SPEC,
+        db_schema_text=DB_SCHEMA,
+        base_url="http://example.test",
+        campaign_context={
+            "scope_id": "fuzzer-observability",
+            "environment_ref": "approved-test",
+            "execution_mode": "safe_read_only",
+            "source_manifest": manifest,
+        },
+    )
+
+    phase = result["phases"]["parameter_fuzzer"]
+    assert phase["status"] == "failed"
+    assert phase["reason"].startswith("parameter_fuzzer_failed:RuntimeError:probe-boom")
+
+
 def test_coupon_validation_scenario_is_enriched_with_db_discovered_sample(monkeypatch):
     scenario = SimpleNamespace(
         entity="coupon",
@@ -543,6 +581,57 @@ def test_coupon_validation_scenario_is_enriched_with_db_discovered_sample(monkey
 
     assert scenario.steps[0].body_template["code"] == "EXPIRED50"
     assert scenario.runtime_hints["coupon_validation_sample"]["coupon_code"] == "EXPIRED50"
+    assert scenario.execution_policy == "approved_sandbox_write"
+
+
+def test_promo_entity_alias_is_enriched_and_schema_driven_sqlite_samples(tmp_path):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+    from ai_test_asset_center.v12_pipeline import _discover_coupon_validation_samples, _enrich_coupon_validation_scenarios
+
+    db_path = tmp_path / "promo.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE promo_codes (promo_code TEXT, status TEXT, expires_at TEXT, min_amount REAL, category TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE catalog_items (item_code TEXT, unit_price REAL, category_name TEXT, sale_status TEXT)"
+    )
+    expired_at = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        "INSERT INTO promo_codes VALUES (?, ?, ?, ?, ?)",
+        ("OLD50", "ACTIVE", expired_at, 100.0, "phones"),
+    )
+    conn.execute(
+        "INSERT INTO catalog_items VALUES (?, ?, ?, ?)",
+        ("SKU-1", 199.0, "laptops", "ACTIVE"),
+    )
+    conn.commit()
+    conn.close()
+
+    samples, meta = _discover_coupon_validation_samples(f"sqlite:///{db_path}")
+    assert meta["status"] == "ok"
+    assert meta["promo_table"] == "promo_codes"
+    assert meta["catalog_table"] == "catalog_items"
+    assert "expired_coupon_must_be_invalid" in samples
+    assert samples["expired_coupon_must_be_invalid"]["coupon_code"] == "OLD50"
+
+    assert SemanticScenarioGenerator._coupon_rule_key(
+        "voucher", "ACTIVE", "expired voucher must be rejected", ["expire"]
+    ) == "expired_coupon_must_be_invalid"
+
+    scenario = SimpleNamespace(
+        entity="voucher",
+        oracle_rules=["CouponOracle.expired_coupon_must_be_invalid"],
+        runtime_hints={"coupon_validation_rule": "expired_coupon_must_be_invalid"},
+        steps=[SimpleNamespace(body_template={"code": "NEW100"})],
+        evidence_gaps=[],
+        execution_policy="approved_sandbox_write",
+    )
+    _enrich_coupon_validation_scenarios([scenario], f"sqlite:///{db_path}")
+    assert scenario.steps[0].body_template["code"] == "OLD50"
     assert scenario.execution_policy == "approved_sandbox_write"
 
 
@@ -747,6 +836,59 @@ def test_optimize_behavior_slice_pool_collapses_llm_permission_duplicates():
     assert "BHV_hist" in kept_ids
     assert "BHV_money" in kept_ids
     assert "BHV_perm_b" in kept_ids
+
+
+def test_optimize_behavior_slice_pool_preserves_distinct_llm_invariants_on_same_route():
+    """A shared endpoint must not erase independent business assertions."""
+    slices = [
+        {
+            "slice_id": "BHV_amount",
+            "entity": "resource",
+            "kind": "invariant",
+            "_hypothesis_origin": "llm_reasoner",
+            "_invariant_text": "amount must equal the persisted total",
+            "endpoints": ["/api/resources/action"],
+        },
+        {
+            "slice_id": "BHV_idempotency",
+            "entity": "resource",
+            "kind": "invariant",
+            "_hypothesis_origin": "llm_reasoner",
+            "_invariant_text": "retries must not create duplicate side effects",
+            "endpoints": ["/api/resources/action"],
+        },
+    ]
+
+    optimized, stats = _optimize_behavior_slice_pool(slices)
+
+    assert len(optimized) == 2
+    assert stats["collapsed_llm_invariant"] == 0
+
+
+def test_optimize_behavior_slice_pool_keeps_numeric_thresholds_distinct():
+    slices = [
+        {
+            "slice_id": "BHV_limit_100",
+            "entity": "resource",
+            "kind": "invariant",
+            "_hypothesis_origin": "llm_reasoner",
+            "_invariant_text": "amount must be <= 100",
+            "endpoints": ["/api/resources/action"],
+        },
+        {
+            "slice_id": "BHV_limit_200",
+            "entity": "resource",
+            "kind": "invariant",
+            "_hypothesis_origin": "llm_reasoner",
+            "_invariant_text": "amount must be <= 200",
+            "endpoints": ["/api/resources/action"],
+        },
+    ]
+
+    optimized, stats = _optimize_behavior_slice_pool(slices)
+
+    assert len(optimized) == 2
+    assert stats["collapsed_llm_invariant"] == 0
 
 
 def test_sandbox_write_allows_login_bound_scenarios_without_preflight_token(monkeypatch):
@@ -1143,6 +1285,8 @@ def test_execute_scenario_stops_when_runtime_path_binding_is_missing(monkeypatch
             return FakeResponse(200, {"token": "tok_buyer2"})
         if url.endswith("/api/cart/items"):
             return FakeResponse(200, [])
+        if "/api/cart/items?" in url:
+            return FakeResponse(200, [])
         if url.endswith("/api/cart/items/{id}"):
             return FakeResponse(500, {"error": "should_not_execute"})
         raise AssertionError(f"unexpected request {method} {url}")
@@ -1167,10 +1311,12 @@ def test_execute_scenario_stops_when_runtime_path_binding_is_missing(monkeypatch
 
     trace = _execute_scenario(scenario, "http://127.0.0.1:8080", max_retries=0)
 
-    assert calls == [
+    assert calls[:2] == [
         ("POST", "http://127.0.0.1:8080/api/auth/login"),
         ("GET", "http://127.0.0.1:8080/api/cart/items"),
     ]
+    assert all(method == "GET" for method, _ in calls[2:])
+    assert not any(method == "PATCH" for method, _ in calls)
     assert trace["errors"] == ["missing_runtime_path_binding:id"]
     assert trace["precondition_not_met"] == [{"step": "permission_probe_buyer2", "path": "/api/cart/items/{id}", "missing_path_params": ["id"]}]
     assert trace["steps"][-1]["path"] == "/api/cart/items/{id}"
@@ -1579,6 +1725,9 @@ def test_pipeline_records_blocked_cycle_without_marking_unexecuted_slices_attemp
     campaign_dir = tmp_path / "platform_workspace" / "generic-project" / "defect_discovery" / "campaigns"
     assert blocked["phases"]["execution"]["status"] == "blocked"
     assert blocked["phases"]["execution"]["reason"] == "test_actor_identity_missing"
+    assert blocked["phases"]["execution"]["scenario_attempts"] > 0
+    assert blocked["phases"]["execution"]["attempts_without_http"] > 0
+    assert blocked["phases"]["execution"]["skip_telemetry"]["reason_counts"]["test_actor_identity_missing"] > 0
     assert blocked["runtime_contract"]["status"] == "approved"
     assert blocked["behavior_slice_ledger"]["attempted_slice_ids"] == []
     assert ledger_path.exists()

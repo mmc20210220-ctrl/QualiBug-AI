@@ -271,5 +271,5 @@ def test_stage_reasoner_reports_env_max_tokens(monkeypatch) -> None:
     dummy = Dummy()
     hypotheses = stage._stage_reason_all_v2(dummy, "prd", "api", {}, prior_findings=[])
 
-    assert len(hypotheses) == 1
+    assert any(str(item.get("title") or "") == "causality" for item in hypotheses)
     assert dummy._last_engine_report["max_tokens"] == 100000

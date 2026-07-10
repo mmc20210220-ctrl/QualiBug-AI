@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTestTaskBoard } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
-import type { TestTaskSlice } from '../types';
 
 type TaskStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked';
 

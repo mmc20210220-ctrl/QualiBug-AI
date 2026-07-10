@@ -773,6 +773,36 @@ def test_compile_grounded_candidates_generates_idempotency_and_async_for_payment
     assert "async_external_event_probe" in risk_types
 
 
+def test_compile_grounded_candidates_generates_async_for_settlement_callback_outside_ecommerce(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+    (input_dir / "PRD.md").write_text("# Settlement\n- 结算回调必须幂等且验签，失败可重试\n", encoding="utf-8")
+
+    knowledge_asset = {
+        "interfaces": [
+            {"method": "POST", "path": "/api/v1/settlements/callback", "summary": "结算回调"},
+        ],
+        "rule_library": [
+            {
+                "rule_id": "rule:settlement-callback-idempotent",
+                "source_id": "src_rules",
+                "rule_type": "async_event",
+                "risk_type": "async_event",
+                "statement": "结算回调必须幂等且验签，失败可重试。",
+                "tokens": ["结算", "回调", "幂等", "验签", "重试"],
+            }
+        ],
+        "roles": [{"role": "finance_manager"}],
+    }
+
+    payload = compile_grounded_candidates(input_dir, project_id="demo_settlement_callback", knowledge_asset=knowledge_asset)
+    risk_types = {candidate["risk_type"] for candidate in payload["candidates"]}
+    paths = {candidate["endpoint"]["path"] for candidate in payload["candidates"]}
+
+    assert "/api/v1/settlements/callback" in paths
+    assert "idempotency_replay_probe" in risk_types or "async_external_event_probe" in risk_types
+
+
 def test_compile_grounded_candidates_bridges_async_notify_and_message_rules(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir(parents=True)

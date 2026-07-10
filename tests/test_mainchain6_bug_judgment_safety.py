@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from ai_test_asset_center.v12_pipeline import _confirmed_oracle_finding
+from ai_test_asset_center.__main__ import _dedupe_findings
 
 
 def _make_scenario():
@@ -129,6 +130,93 @@ def test_non_blocked_real_evidence_confirmed():
     assert finding["bug_status"] == "reproduced"
     assert finding["customer_delivery_status"] == "defect"
     assert finding["blocked_by_safety_boundary"] is False
+
+
+def test_expected_success_4xx_requires_valid_success_control():
+    trace = {
+        "steps": [
+            {
+                "action": "read",
+                "method": "GET",
+                "path": "/api/resources/missing-id",
+                "status": 404,
+                "response": {"status_code": 404, "body": {"error": "not_found"}},
+                "expected_status": 200,
+            }
+        ]
+    }
+    finding = _confirmed_oracle_finding(
+        _make_scenario(), trace, _make_oracle_result(violated_rule="expected_status_mismatch", severity="P1"),
+        _make_evidence(confirm=True),
+        campaign_id="c1", discovery_round=1, base_url="http://x",
+    )
+    assert finding["gate_passed"] is False
+    assert finding["confirmation_status"] == "candidate"
+    assert finding["customer_delivery_status"] == "candidate"
+    assert finding["evidence_status"]["missing_requirements"] == ["VALID_SUCCESS_CONTROL_REQUIRED"]
+
+
+def test_expected_success_4xx_can_confirm_after_valid_control():
+    trace = {
+        "request_contract_validation": {"valid_success_control": True},
+        "steps": [
+            {
+                "action": "read",
+                "method": "GET",
+                "path": "/api/resources/known-id",
+                "status": 404,
+                "response": {"status_code": 404, "body": {"error": "not_found"}},
+                "expected_status": 200,
+            }
+        ],
+    }
+    finding = _confirmed_oracle_finding(
+        _make_scenario(), trace, _make_oracle_result(violated_rule="expected_status_mismatch", severity="P1"),
+        _make_evidence(confirm=True),
+        campaign_id="c1", discovery_round=1, base_url="http://x",
+    )
+    assert finding["gate_passed"] is True
+    assert finding["confirmation_status"] == "confirmed"
+    assert finding["customer_delivery_status"] == "defect"
+
+
+def test_protocol_dedupe_collapses_dynamic_ids_but_preserves_business_values():
+    def finding(resource_id: str, amount: int) -> dict:
+        return {
+            "title": f"server failure {resource_id}",
+            "category": "protocol",
+            "oracle": {
+                "oracle_name": "HttpStatusOracle",
+                "violated_rule": "server_5xx",
+                "expected": "service should respond normally",
+            },
+            "raw_evidence": {
+                "request_raw": {
+                    "method": "POST",
+                    "path": f"/api/orders/{resource_id}/pay",
+                    "actor": "buyer",
+                    "body": {"amount": amount, "requestId": resource_id},
+                },
+                "response_raw": {"status_code": 500, "body": {"error": "boom"}},
+            },
+            "evidence": {
+                "request": f"POST /api/orders/{resource_id}/pay",
+                "reproduction_steps": [f"POST /api/orders/{resource_id}/pay"],
+            },
+        }
+
+    first_id = "4dd73e49-bb11-4bb4-887e-9e284dd315c6"
+    second_id = "cc0aa36d-32e9-4a0e-b7ef-494a76b7eb45"
+    third_id = "5cbf4db8-eaf9-414e-bc52-cad3e191f0af"
+    deduped, report = _dedupe_findings([
+        finding(first_id, 100),
+        finding(second_id, 100),
+        finding(third_id, 200),
+    ])
+
+    assert len(deduped) == 2
+    assert report["collapsed_count"] == 1
+    assert sorted(item["_duplicate_count"] for item in deduped) == [1, 2]
 
 
 def test_blocked_reason_surfaced_on_trace_level():

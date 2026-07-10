@@ -19,7 +19,13 @@ PRIVATE_MARKERS = {
     "bug_instance_id",
 }
 DESTRUCTIVE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-HIGH_RISK_TYPES = {"permission_bypass", "idor", "tenant_isolation", "payment", "refund", "money", "stock", "order_state", "idempotency", "duplicate_submit"}
+HIGH_RISK_TYPES = {
+    "permission_bypass", "idor", "tenant_isolation", "payment", "refund", "money",
+    "stock", "order_state", "idempotency", "duplicate_submit",
+    "approval_bypass", "workflow_bypass", "prescription_authorization",
+    "data_isolation", "cross_tenant", "privilege_escalation", "audit_tamper",
+    "settlement", "state_machine", "conservation",
+}
 MODE_LIMITS = {"smoke": 20, "release": 80, "full": 500}
 SEVERITY_WEIGHT = {"P0": 100, "P1": 80, "P2": 45, "P3": 20}
 
@@ -250,6 +256,7 @@ def _load_confirmed_findings_regression_probes(project: str, root: Path) -> list
         reproduction = defect.get("reproduction") if isinstance(defect.get("reproduction"), dict) else {}
         raw_evidence = defect.get("raw_evidence") if isinstance(defect.get("raw_evidence"), dict) else {}
         request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+        response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
         evidence_quality = defect.get("evidence_quality") if isinstance(defect.get("evidence_quality"), dict) else {}
         method = str(reproduction.get("method") or request_raw.get("method") or "GET").upper()
         path = str(reproduction.get("path") or request_raw.get("path") or "").strip()
@@ -322,6 +329,9 @@ def _load_confirmed_findings_regression_probes(project: str, root: Path) -> list
             probe["current_campaign_scope"] = dict(current_campaign_scope)
         if request_body is not None:
             probe["request_body"] = request_body
+        buggy_status_code = response_raw.get("status_code") or request_raw.get("status_code")
+        if buggy_status_code not in (None, ""):
+            probe["buggy_status_code"] = buggy_status_code
         probes.append(probe)
     return probes
 

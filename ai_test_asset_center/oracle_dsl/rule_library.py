@@ -69,6 +69,22 @@ INDUSTRY_RULES: dict[str, list[str]] = {
     ],
 }
 
+# Bridge keys used by multi_industry / phase103 onto the DSL catalog keys above.
+# Aliases never invent an industry — they only resolve an already-recognized key.
+INDUSTRY_KEY_ALIASES: dict[str, str] = {
+    "healthcare": "medical",
+    "saas_multitenant": "saas",
+    "medical_healthcare": "medical",
+}
+
+
+def normalize_industry_key(industry: str | None) -> str:
+    """Normalize an industry id for DSL lookup. Empty/unknown stay empty."""
+    key = str(industry or "").strip().lower()
+    if not key or key in {"unknown", "unknown_general_business", "general", "general_business", "auto"}:
+        return ""
+    return INDUSTRY_KEY_ALIASES.get(key, key)
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Rule Library
@@ -80,8 +96,12 @@ class RuleLibrary:
     Usage::
 
         lib = RuleLibrary()
-        rules = lib.get_rules("ecommerce")
+        rules = lib.get_rules("finance")  # only when industry is evidence-selected
         # → list[ParsedRule]
+
+    Never call get_rules with a guessed default industry. Prefer
+    ``get_rules_for_recognized_industries`` so unknown projects do not inherit
+    ecommerce inventory/coupon invariants.
     """
 
     def __init__(self):
@@ -92,12 +112,16 @@ class RuleLibrary:
         """Get all pre-built DSL rules for an industry.
 
         Args:
-            industry: Industry ID (crm, ecommerce, erp, finance, medical, education, saas).
+            industry: Industry ID (crm, ecommerce, erp, finance, medical, education, saas)
+                or an alias (healthcare→medical, saas_multitenant→saas).
+                Empty / unknown industries return [] — never fall back to ecommerce.
 
         Returns:
             List of ParsedRule objects.
         """
-        industry = industry.lower()
+        industry = normalize_industry_key(industry)
+        if not industry:
+            return []
         if industry in self._cache:
             return self._cache[industry]
 
@@ -110,6 +134,41 @@ class RuleLibrary:
 
         self._cache[industry] = rules
         return rules
+
+    def get_rules_for_recognized_industries(
+        self,
+        industries: list[str] | None,
+        *,
+        min_confidence: float = 0.58,
+        confidences: dict[str, float] | None = None,
+    ) -> list[ParsedRule]:
+        """Return DSL rules only for evidence-gated recognized industries.
+
+        Unknown / low-confidence recognition yields an empty pack so vertical
+        ecommerce/finance oracles cannot activate by default.
+        """
+        confidences = confidences or {}
+        collected: list[ParsedRule] = []
+        seen_industries: set[str] = set()
+        seen_rules: set[str] = set()
+        for industry in industries or []:
+            raw_key = str(industry or "").strip().lower()
+            key = normalize_industry_key(raw_key)
+            if not key or key in seen_industries:
+                continue
+            seen_industries.add(key)
+            confidence = float(
+                confidences.get(raw_key, confidences.get(key, 1.0)) or 0.0
+            )
+            if confidence < float(min_confidence):
+                continue
+            for rule in self.get_rules(key):
+                marker = str(getattr(rule, "raw_text", None) or getattr(rule, "text", None) or id(rule))
+                if marker in seen_rules:
+                    continue
+                seen_rules.add(marker)
+                collected.append(rule)
+        return collected
 
     def list_industries(self) -> list[str]:
         """Return the list of industries with pre-built rules."""
@@ -124,12 +183,15 @@ class RuleLibrary:
 
     def get_rule_texts(self, industry: str) -> list[str]:
         """Return raw rule text strings for an industry."""
-        return list(INDUSTRY_RULES.get(industry.lower(), []))
+        industry = normalize_industry_key(industry)
+        if not industry:
+            return []
+        return list(INDUSTRY_RULES.get(industry, []))
 
     def rule_count(self, industry: str | None = None) -> int:
         """Return the count of pre-built rules, optionally filtered by industry."""
         if industry:
-            return len(INDUSTRY_RULES.get(industry.lower(), []))
+            return len(self.get_rule_texts(industry))
         return sum(len(v) for v in INDUSTRY_RULES.values())
 
 
@@ -138,5 +200,19 @@ class RuleLibrary:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_rules_for_industry(industry: str) -> list[ParsedRule]:
-    """Convenience: get pre-built DSL rules for an industry."""
+    """Convenience: get pre-built DSL rules for an industry (no ecommerce default)."""
     return RuleLibrary().get_rules(industry)
+
+
+def get_rules_for_recognized_industries(
+    industries: list[str] | None,
+    *,
+    min_confidence: float = 0.58,
+    confidences: dict[str, float] | None = None,
+) -> list[ParsedRule]:
+    """Convenience: evidence-gated multi-industry DSL rule pack."""
+    return RuleLibrary().get_rules_for_recognized_industries(
+        industries,
+        min_confidence=min_confidence,
+        confidences=confidences,
+    )

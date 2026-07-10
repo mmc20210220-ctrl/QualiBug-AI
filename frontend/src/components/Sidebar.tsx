@@ -90,7 +90,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
               <strong>{riskStateLabel}</strong>
             </div>
             <div className="side-project-metric">
-              <span>可交付</span>
+              <span>本轮可交付</span>
               <strong>{currentDefectCount ?? 0}</strong>
             </div>
             <div className="side-project-metric">

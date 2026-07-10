@@ -37,6 +37,12 @@ def bootstrap_test_data_receipts_for_campaign(
     environment_ref = str(campaign.get("environment_ref") or current.get("environment_ref") or "").strip()
     if not campaign_id or not scope_id or not environment_ref:
         return {"status": "skipped", "reason": "campaign_identity_incomplete", "contract": current}
+    from .sandbox_write_executor import is_production_environment, is_test_or_sandbox_environment
+
+    if is_production_environment(environment_ref):
+        return {"status": "blocked", "reason": "production_environment_blocked", "contract": current}
+    if not is_test_or_sandbox_environment(environment_ref):
+        return {"status": "blocked", "reason": "environment_not_recognized_nonprod", "contract": current}
     if str(current.get("creation_receipt_ref") or "").strip() and str(current.get("cleanup_receipt_ref") or "").strip():
         merged = dict(current)
         merged.setdefault("campaign_id", campaign_id)
@@ -258,13 +264,9 @@ def _login_route(routes: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _test_credentials(project: str, root: Path) -> list[dict[str, Any]]:
-    try:
-        from .enterprise_pilot_runtime import load_connector_registry, ordered_test_credentials
+    from .enterprise_pilot_runtime import load_project_test_credentials
 
-        registry = load_connector_registry(project, root)
-    except Exception:
-        return []
-    return ordered_test_credentials(registry)
+    return load_project_test_credentials(project, root)
 
 
 def _login_body_template(account: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:

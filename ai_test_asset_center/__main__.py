@@ -85,6 +85,27 @@ def _scan_campaign_context_defaults(project: str, root: Path) -> dict[str, str]:
     return defaults
 
 
+def _apply_scan_execution_defaults(context: dict[str, Any], base_url: str) -> dict[str, Any]:
+    """Apply the product-wide non-production execution/test-data defaults."""
+    normalized = dict(context or {})
+    from .private_pilot_scan_context_contract import (
+        default_scan_execution_mode,
+        default_scan_test_data_contract,
+    )
+
+    body = {**normalized, "base_url": str(base_url or normalized.get("base_url") or "")}
+    if not str(normalized.get("execution_mode") or "").strip():
+        normalized["execution_mode"] = default_scan_execution_mode(body)
+    if not _as_dict(normalized.get("test_data_contract")):
+        inferred_contract = default_scan_test_data_contract({
+            **normalized,
+            "base_url": body["base_url"],
+        })
+        if inferred_contract:
+            normalized["test_data_contract"] = dict(inferred_contract)
+    return normalized
+
+
 def _truthy_env(name: str, default: str = "") -> bool:
     value = str(os.environ.get(name, default) or "").strip().lower()
     return value not in {"", "0", "false", "no", "off"}
@@ -3001,6 +3022,17 @@ def _dedupe_findings(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
         text = _re.sub(r"\b\d+\b", "{n}", text)
         return text.strip()
 
+    def _protocol_body(value: Any) -> str:
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        except (TypeError, ValueError):
+            text = str(value or "")
+        # Normalize only volatile identities. Numeric boundary/amount values are
+        # business semantics and must remain distinct.
+        text = _re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{20,}", "{id}", text)
+        text = _re.sub(r"\b[0-9a-fA-F]{16,}\b", "{id}", text)
+        return text
+
     groups: dict[tuple, dict[str, Any]] = {}
     order: list[tuple] = []
     for item in items:
@@ -3012,7 +3044,23 @@ def _dedupe_findings(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
         steps = ev.get("reproduction_steps") if isinstance(ev.get("reproduction_steps"), list) else []
         fingerprint = tuple(_norm(s) for s in steps)
         primary = _norm(str(ev.get("request") or ""))
-        key = (rule, primary, fingerprint)
+        protocol_rules = {"server_5xx", "expected_status_mismatch", "wrong_create_status", "200_with_error"}
+        if rule in protocol_rules:
+            raw = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
+            request_raw = raw.get("request_raw") if isinstance(raw.get("request_raw"), dict) else {}
+            response_raw = raw.get("response_raw") if isinstance(raw.get("response_raw"), dict) else {}
+            key = (
+                "protocol_runtime",
+                rule,
+                str(request_raw.get("method") or "").upper(),
+                _norm(str(request_raw.get("path") or "")),
+                int(response_raw.get("status_code") or 0),
+                str(request_raw.get("actor") or ""),
+                _norm(str(oracle.get("expected") or item.get("expected") or "")),
+                _protocol_body(request_raw.get("body")) if "body" in request_raw else "",
+            )
+        else:
+            key = (rule, primary, fingerprint)
         variant = {
             "title": item.get("title"),
             "behavior_slice_id": item.get("behavior_slice_id"),
@@ -3939,18 +3987,11 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         context["scope_id"] = context_defaults["scope_id"]
     if context_defaults.get("environment_ref") and not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
         context["environment_ref"] = context_defaults["environment_ref"]
-    if not _as_dict(context.get("test_data_contract")):
-        try:
-            from .private_pilot_scan_context_contract import default_scan_test_data_contract
-
-            inferred_contract = default_scan_test_data_contract({
-                **context,
-                "base_url": str(base_url or context.get("base_url") or ""),
-            })
-        except Exception:
-            inferred_contract = {}
-        if isinstance(inferred_contract, dict) and inferred_contract:
-            context["test_data_contract"] = dict(inferred_contract)
+    # Keep every product entrypoint on the same execution contract. The
+    # private-pilot HTTP path already derives these defaults; direct scan()
+    # callers (automation, CI and benchmark harnesses) must behave identically.
+    # Production/unknown targets remain fail-closed by the shared sandbox gate.
+    context = _apply_scan_execution_defaults(context, base_url)
     if api_doc_path and not api_doc_text:
         try:
             api_doc_text = Path(api_doc_path).read_text(encoding="utf-8")
@@ -3961,29 +4002,20 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     if not str(api_doc_text or "").strip():
         return {"success": False, "error": "api_doc_text, api_doc_path, or a registered source_manifest is required"}
 
-    # Merge Markdown/OpenAPI materials into one effective API catalog. When the
-    # caller declared a source_hash for the primary doc, refresh it to the
-    # post-merge digest so enrichment does not falsely trip SOURCE_HASH_MISMATCH.
-    _pre_enrich_hash = _sha256(api_doc_text)
+    # Keep immutable source identity separate from the derived, merged API
+    # catalog. Enrichment may add other registered documents for planning, but
+    # it must never rewrite the primary source hash recorded by the customer.
+    source_api_doc_text = api_doc_text
     try:
         from .api_doc_assets import enrich_api_spec_text
 
         api_doc_text = enrich_api_spec_text(root, project, api_doc_text)
     except Exception:
         pass
-    _post_enrich_hash = _sha256(api_doc_text)
-    if _post_enrich_hash != _pre_enrich_hash:
-        declared = _as_dict(context.get("source_manifest"))
-        declared_hash = str(declared.get("source_hash") or "").strip().lower().removeprefix("sha256:").strip()
-        if declared_hash and declared_hash == _pre_enrich_hash:
-            context["source_manifest"] = {
-                **declared,
-                "source_hash": _post_enrich_hash,
-                "source_origin": str(declared.get("source_origin") or "declared_manifest") + "+api_doc_merge",
-            }
+    context["_source_verification_text"] = source_api_doc_text
 
     started = time.time()
-    manifest = _source_manifest(root, project, context, api_doc_path, api_doc_text)
+    manifest = _source_manifest(root, project, context, api_doc_path, source_api_doc_text)
     context["source_manifest"] = {"source_id": manifest["source_id"], "source_hash": manifest["source_hash"], "source_version_id": manifest["source_version_id"], "source_origin": manifest["source_origin"]}
     provenance_gaps = _source_contract(manifest)
     approved_base_url, runtime_gaps, initial_runtime_contract = _runtime_contract(context, base_url, manifest)
@@ -4287,8 +4319,17 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         benchmark_metrics = compute_benchmark(project, confirmed, candidates=candidates, root=root)
         if benchmark_metrics:
             persist_benchmark_result(project, benchmark_metrics, root=root)
-    except Exception:
-        benchmark_metrics = {}
+    except Exception as benchmark_error:
+        # Never silently pretend benchmark is healthy/empty — operators must see
+        # compute failures separately from "no ground truth for this project".
+        benchmark_metrics = {
+            "benchmark_active": False,
+            "ground_truth_available": False,
+            "status": "FAILED_SAFE",
+            "reason": "benchmark_compute_failed",
+            "error": str(benchmark_error)[:400],
+        }
+        print(f"  [WARN] Benchmark compute failed (non-fatal): {benchmark_error}", flush=True)
     ui_findings = v12.get("ui_findings") if isinstance(v12.get("ui_findings"), list) else []
     ui_candidate_findings = _ui_candidate_gate(ui_findings)
     ui_candidate_findings = _verify_ui_candidate_findings(ui_candidate_findings, root=root, runtime_contract=runtime_contract)
@@ -4354,6 +4395,8 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         "benchmark_metrics": benchmark_metrics,
         "dedupe_report": dedupe_report,
         "discovery_verdict": _discovery_verdict(confirmed, db_verification),
+        "discovery_funnel": _as_dict(v12.get("discovery_funnel")),
+        "pipeline_health": _as_dict(_as_dict(v12.get("discovery_funnel")).get("pipeline_health")),
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
         "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution": ui_execution, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "external_signal_execution": external_signal_execution, "v12": v12,
     }

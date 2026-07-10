@@ -264,12 +264,37 @@ def list_industry_templates() -> list[dict[str, Any]]:
 
 def get_industry_template(industry_or_template_id: str) -> dict[str, Any]:
     industry = (industry_or_template_id or "").replace("industry_", "").strip().lower()
+    if not industry or industry in {"unknown", "unknown_general_business", "general", "general_business", "auto"}:
+        raise ValueError(
+            f"industry template requires an explicit evidence-selected industry, got: {industry_or_template_id!r}"
+        )
     if industry not in INDUSTRY_TEMPLATES:
         raise ValueError(f"unsupported industry template: {industry_or_template_id}")
     data = deepcopy(INDUSTRY_TEMPLATES[industry])
     data["template_id"] = f"industry_{industry}"
     data["industry"] = industry
     return data
+
+
+def resolve_industry_template_or_general(industry_or_template_id: str) -> dict[str, Any]:
+    """Return an industry template only when explicitly selected; else a general empty pack.
+
+    Never defaults to ecommerce. Callers that need vertical flows must pass a
+    recognized industry id from evidence-gated inference or operator selection.
+    """
+    industry = (industry_or_template_id or "").replace("industry_", "").strip().lower()
+    if industry in INDUSTRY_TEMPLATES:
+        return get_industry_template(industry)
+    return {
+        "template_id": "industry_general_business",
+        "industry": "general_business",
+        "display_name": "通用业务（未识别垂直行业）",
+        "description": "行业证据不足时不套用垂直模板；仅保留通用角色与空流程，等待来源证据激活。",
+        "default_roles": ["normal_user", "admin_user", "auditor_user"],
+        "default_risk_focus": ["越权访问", "租户隔离", "状态机绕过", "幂等缺失", "审计日志缺失"],
+        "default_business_flows": [],
+        "activation": "suppressed_unknown_general_business",
+    }
 
 
 def build_customer_business_model(

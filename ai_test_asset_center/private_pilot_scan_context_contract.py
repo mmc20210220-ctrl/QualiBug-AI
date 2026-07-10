@@ -29,17 +29,16 @@ def as_text(value: Any) -> str:
 
 
 def _is_production_like_environment(environment_ref: str, environment_type: str = "") -> bool:
-    try:
-        from ai_test_asset_center.enterprise_testops_control_plane import _is_production
+    # Use the same fail-closed classifier as the governed write executor.  The
+    # TestOps helper intentionally recognizes only canonical environment names;
+    # relying on it here misclassified names such as ``customer-production`` as
+    # writable.  A single classifier keeps scan defaults and the final request
+    # gate consistent.
+    from ai_test_asset_center.sandbox_write_executor import is_production_environment
 
-        return bool(_is_production({
-            "name": as_text(environment_ref),
-            "type": as_text(environment_type),
-            "production_protected": False,
-        }))
-    except Exception:
-        fingerprint = f"{as_text(environment_ref)} {as_text(environment_type)}".lower()
-        return any(token in fingerprint for token in ("prod", "production", "live"))
+    return is_production_environment(as_text(environment_ref)) or is_production_environment(
+        as_text(environment_type)
+    )
 
 
 def default_scan_execution_mode(body: dict[str, Any]) -> str:
@@ -48,9 +47,17 @@ def default_scan_execution_mode(body: dict[str, Any]) -> str:
         return explicit
     if not as_text(body.get("base_url")):
         return "safe_read_only"
-    if _is_production_like_environment(
-        as_text(body.get("environment_ref") or body.get("target_environment")),
-        as_text(body.get("environment_class")),
+    environment_ref = as_text(body.get("environment_ref") or body.get("target_environment"))
+    environment_type = as_text(body.get("environment_class"))
+    if _is_production_like_environment(environment_ref, environment_type):
+        return "safe_read_only"
+    from ai_test_asset_center.sandbox_write_executor import is_test_or_sandbox_environment
+
+    # Unknown or undeclared targets are fail-closed for writes. A name/type
+    # must explicitly carry a recognized non-production classification.
+    if not (
+        is_test_or_sandbox_environment(environment_ref)
+        or is_test_or_sandbox_environment(environment_type)
     ):
         return "safe_read_only"
     return "approved_sandbox_write"

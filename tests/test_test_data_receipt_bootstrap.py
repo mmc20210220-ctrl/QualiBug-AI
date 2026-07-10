@@ -283,6 +283,63 @@ def test_bootstrap_receipts_issue_real_creation_and_cleanup_receipts(tmp_path, m
     )["valid"] is True
 
 
+def test_bootstrap_uses_project_test_accounts_when_registry_has_no_credentials(tmp_path) -> None:
+    from ai_test_asset_center.test_data_receipt_bootstrap import _test_credentials
+
+    path = tmp_path / "platform_inputs" / "enterprise-project" / "test_accounts.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "qa_buyer": {
+                    "email": "buyer@example.test",
+                    "password": "secret-ref-value",
+                    "role": "buyer",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    credentials = _test_credentials("enterprise-project", tmp_path)
+
+    assert len(credentials) == 1
+    assert credentials[0]["profile"] == "qa_buyer"
+    assert credentials[0]["email"] == "buyer@example.test"
+
+
+def test_bootstrap_blocks_production_and_unknown_before_login_or_write(tmp_path, monkeypatch) -> None:
+    from ai_test_asset_center import test_data_receipt_bootstrap as bootstrap_module
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_login_control_header_candidates",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("login must not run")),
+    )
+
+    common = {
+        "project": "enterprise-project",
+        "root": tmp_path,
+        "base_url": "https://target.example.test",
+        "api_doc_text": API_SPEC,
+        "selected_slices": [],
+        "contract": {"strategy": "create_disposable", "write_approved": True},
+    }
+    production = bootstrap_test_data_receipts_for_campaign(
+        **common,
+        campaign={"campaign_id": "CMP_PROD", "scope_id": "scope", "environment_ref": "customer-production"},
+    )
+    unknown = bootstrap_test_data_receipts_for_campaign(
+        **common,
+        campaign={"campaign_id": "CMP_UNKNOWN", "scope_id": "scope", "environment_ref": "customer-primary"},
+    )
+
+    assert production["status"] == "blocked"
+    assert production["reason"] == "production_environment_blocked"
+    assert unknown["status"] == "blocked"
+    assert unknown["reason"] == "environment_not_recognized_nonprod"
+
+
 def test_bootstrap_retries_next_control_account_when_first_fixture_attempt_is_forbidden(tmp_path, monkeypatch) -> None:
     from ai_test_asset_center import test_data_receipt_bootstrap as bootstrap_module
 

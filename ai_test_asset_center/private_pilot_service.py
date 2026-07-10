@@ -5718,6 +5718,22 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         if isinstance(discovery_funnel, dict):
             data["discovery_funnel"] = discovery_funnel
             data["scan_meta"]["discovery_funnel"] = discovery_funnel
+            pipeline_health = discovery_funnel.get("pipeline_health") if isinstance(discovery_funnel.get("pipeline_health"), dict) else None
+            if not pipeline_health:
+                for source in (current_scan_report, report, real_discovery_payload):
+                    if isinstance(source, dict) and isinstance(source.get("pipeline_health"), dict):
+                        pipeline_health = source.get("pipeline_health")
+                        break
+                    if isinstance(source, dict) and isinstance(source.get("v12"), dict):
+                        nested_funnel = source["v12"].get("discovery_funnel")
+                        if isinstance(nested_funnel, dict) and isinstance(nested_funnel.get("pipeline_health"), dict):
+                            pipeline_health = nested_funnel.get("pipeline_health")
+                            break
+            if isinstance(pipeline_health, dict):
+                data["pipeline_health"] = pipeline_health
+                data["scan_meta"]["pipeline_health"] = pipeline_health
+                data["scan_meta"]["pipeline_health_status"] = str(pipeline_health.get("status") or "")
+                data["scan_meta"]["empty_findings_means_no_bugs"] = bool(pipeline_health.get("empty_findings_means_no_bugs"))
         if knowledge_summary:
             data["knowledge_summary"] = knowledge_summary
         if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
@@ -6064,10 +6080,17 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             db_path = root / db_persist.DB_FILENAME
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
-            # Try both the project_id and normalized version
+            # Try both the project_id and a locale-agnostic normalized form
+            # (strip common company-suffix tokens in any language, not only 科技).
+            _project_aliases = {
+                str(project_id),
+                re.sub(r"(科技|技术|软件|信息|集团|有限公司|股份|inc|ltd|llc|corp|co)$", "", str(project_id), flags=re.I).strip("-_ "),
+            }
+            _project_aliases = {item for item in _project_aliases if item}
+            _placeholders = ",".join("?" for _ in range(len(_project_aliases) or 1))
             rows = conn.execute(
-                "SELECT title FROM findings WHERE tenant_id IN (?, ?) AND project_id IN (?, ?) ORDER BY created_at",
-                (self._request_tenant(), "default", project_id, str(project_id).replace('科技',''))
+                f"SELECT title FROM findings WHERE tenant_id IN (?, ?) AND project_id IN ({_placeholders}) ORDER BY created_at",
+                (self._request_tenant(), "default", *sorted(_project_aliases)),
             ).fetchall()
             conn.close()
             return {r["title"][:120].lower() for r in rows}

@@ -6923,6 +6923,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .replay-code-line { margin-bottom: 4px; }
 .replay-code-key { color: #60a5fa; font-weight: 600; }
 .replay-response-body {
+  display: block;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 300px;
@@ -7047,7 +7048,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .status-code-badge.status-warn { background: #d97706; }
 .status-code-badge.status-error { background: #dc2626; }
 .status-code-badge.status-redirect { background: #64748b; }
-.evidence-code-block { margin: 6px 0 0; padding: 8px 10px; background: #0f172a; color: #e2e8f0; border-radius: 4px; font-size: 11px; line-height: 1.5; overflow-x: auto; max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+.evidence-code-block { display: block; margin: 6px 0 0; padding: 8px 10px; background: #0f172a; color: #e2e8f0; border-radius: 4px; font-size: 11px; line-height: 1.5; overflow-x: auto; max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
 
 /* DB 字段表 */
 .evidence-db-table { display: flex; flex-wrap: wrap; gap: 6px 12px; }
