@@ -3961,6 +3961,13 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     if not str(api_doc_text or "").strip():
         return {"success": False, "error": "api_doc_text, api_doc_path, or a registered source_manifest is required"}
 
+    try:
+        from .api_doc_assets import enrich_api_spec_text
+
+        api_doc_text = enrich_api_spec_text(root, project, api_doc_text)
+    except Exception:
+        pass
+
     started = time.time()
     manifest = _source_manifest(root, project, context, api_doc_path, api_doc_text)
     context["source_manifest"] = {"source_id": manifest["source_id"], "source_hash": manifest["source_hash"], "source_version_id": manifest["source_version_id"], "source_origin": manifest["source_origin"]}

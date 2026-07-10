@@ -10,18 +10,16 @@ Authorization: Bearer <token>
 
 ## Auth
 
+### GET /api/auth/me
+
+当前登录用户信息。
+
 ### POST /api/auth/login
 
 请求：
 
 ```json
 {"email":"buyer01@example.com","password":"Test@123456"}
-```
-
-响应：
-
-```json
-{"token":"...","user":{"id":"...","email":"...","role":"buyer","status":"ACTIVE"}}
 ```
 
 ### POST /api/auth/register
@@ -32,17 +30,31 @@ Authorization: Bearer <token>
 {"email":"new@example.com","password":"Test@123456","name":"新用户","phone":"13900000000"}
 ```
 
+### POST /api/auth/password/reset
+
+重置指定用户密码（后台/管理员能力）。
+
+请求：
+
+```json
+{"email":"buyer01@example.com","newPassword":"NewPass@123"}
+```
+
+### POST /api/auth/admin/users/:id/status
+
+修改用户状态（应仅限管理员）。
+
+请求：
+
+```json
+{"status":"DISABLED"}
+```
+
 ## Product
 
 ### GET /api/products
 
-查询商品列表。常用参数：
-
-- `category`
-- `keyword`
-- `minPrice`
-- `maxPrice`
-- `status` 后台使用
+查询商品列表。
 
 ### GET /api/products/:sku
 
@@ -75,6 +87,10 @@ Authorization: Bearer <token>
 修改数量或选中状态。
 
 ## Coupon
+
+### GET /api/coupons
+
+查询优惠券列表。
 
 ### POST /api/coupons/validate
 
@@ -155,3 +171,9 @@ Authorization: Bearer <token>
 ### GET /api/reports/inventory-risk
 
 库存风险报表。
+
+## User
+
+### GET /api/users/addresses
+
+查询用户地址（应校验归属）。
