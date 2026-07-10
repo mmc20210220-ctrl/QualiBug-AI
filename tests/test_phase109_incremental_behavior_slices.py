@@ -14,6 +14,9 @@ from ai_test_asset_center.v12_pipeline import (
     _execute_scenario,
     _login_parameter_fuzzer,
     _behavior_slice_settings,
+    _auto_scale_slice_budget,
+    _auto_scale_round_limit,
+    _ABS_MAX_SLICE_BUDGET,
     _enrich_coupon_validation_scenarios,
     _rank_behavior_slices_for_selection,
     _runtime_contract,
@@ -577,9 +580,44 @@ def test_visibility_oracle_flags_hidden_state_resource_exposed_in_collection_res
     assert "SKU-OFF-001" in violation.actual
 
 
-def test_slice_budget_is_hard_capped_at_fifteen(monkeypatch):
-    monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "999")
+def test_slice_budget_default_is_lean_floor(monkeypatch):
+    """Without an explicit override, the starting per-round budget is the lean
+    floor of 15. (The effective budget is auto-scaled to the system's candidate
+    pool at scheduling time — see the auto-scale tests below.)"""
+    monkeypatch.delenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", raising=False)
     assert _behavior_slice_settings()["slice_budget"] == 15
+
+
+def test_slice_budget_explicit_override_is_honored_and_bounded(monkeypatch):
+    """A power-user env override is honored, bounded only by the absolute max."""
+    monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "40")
+    assert _behavior_slice_settings()["slice_budget"] == 40
+    monkeypatch.setenv("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", "9999")
+    assert _behavior_slice_settings()["slice_budget"] == _ABS_MAX_SLICE_BUDGET
+
+
+def test_auto_scale_budget_follows_system_size():
+    """Small systems keep the lean floor; large enterprises scale up automatically,
+    bounded by the absolute cost ceiling — no env tuning required."""
+    assert _auto_scale_slice_budget(0) == 15
+    assert _auto_scale_slice_budget(10) == 15          # small system -> floor
+    assert _auto_scale_slice_budget(60) == 20          # ceil(60/3)
+    assert _auto_scale_slice_budget(450) == 150        # ceil(450/3) == 150 (cap)
+    assert _auto_scale_slice_budget(100000) == _ABS_MAX_SLICE_BUDGET
+    # Monotonic non-decreasing with system size.
+    prev = 0
+    for pool in (0, 10, 45, 90, 300, 900):
+        cur = _auto_scale_slice_budget(pool)
+        assert cur >= prev
+        prev = cur
+
+
+def test_auto_scale_round_limit_drains_pool():
+    """Round limit is sized so the pool can actually be drained at the budget."""
+    assert _auto_scale_round_limit(0, 15) == 8          # default floor
+    assert _auto_scale_round_limit(60, 20) == 8         # 3 rounds needed -> floor 8
+    assert _auto_scale_round_limit(450, 150) == 8       # 3 rounds -> floor 8
+    assert _auto_scale_round_limit(2000, 100) == 21     # ceil(2000/100)+1
 
 
 def test_plan_only_slice_is_not_misclassified_as_confirmed():

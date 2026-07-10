@@ -10,8 +10,24 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+# Historical lean floor for a per-round slice batch. Small systems stay here.
 MAX_SLICES_PER_ROUND = 15
 MAX_AUTOMATIC_ROUNDS = 12
+
+# Absolute upper bounds the auto-scaler (v12_pipeline._auto_scale_*) may reach for
+# a large enterprise system. The per-round batch is sized dynamically to the
+# discovered candidate pool; these only cap the extreme tail so API cost stays
+# bounded. They are NOT the reasoner MAX_HYPOTHESES / max_workers floors.
+ABS_MAX_SLICES_PER_ROUND = 150
+ABS_MAX_AUTOMATIC_ROUNDS = 24
+
+
+def _slice_budget_ceiling() -> int:
+    return ABS_MAX_SLICES_PER_ROUND
+
+
+def _round_limit_ceiling() -> int:
+    return ABS_MAX_AUTOMATIC_ROUNDS
 
 
 class CampaignPersistenceError(RuntimeError):
@@ -228,8 +244,8 @@ class EnterpriseCampaign:
             lineage_campaign_id=lineage_campaign_id,
             rerun_key=_text(rerun_key, 120),
             rerun_reason=_text(rerun_reason, 240),
-            slice_budget=max(1, min(int(slice_budget or 1), MAX_SLICES_PER_ROUND)),
-            automatic_round_limit=max(1, min(int(automatic_round_limit or 1), MAX_AUTOMATIC_ROUNDS)),
+            slice_budget=max(1, min(int(slice_budget or 1), _slice_budget_ceiling())),
+            automatic_round_limit=max(1, min(int(automatic_round_limit or 1), _round_limit_ceiling())),
         )
 
     def history_item(self) -> dict[str, Any]:
@@ -355,8 +371,8 @@ class EnterpriseCampaign:
             status=_text(value.get("campaign_status") or value.get("status"), 80) or "active",
             run_count=max(0, int(value.get("run_count") or 0)),
             round_count=max(0, int(value.get("round_count") or 0)),
-            slice_budget=max(1, min(int(value.get("slice_budget") or 15), MAX_SLICES_PER_ROUND)),
-            automatic_round_limit=max(1, min(int(value.get("automatic_round_limit") or 3), MAX_AUTOMATIC_ROUNDS)),
+            slice_budget=max(1, min(int(value.get("slice_budget") or 15), _slice_budget_ceiling())),
+            automatic_round_limit=max(1, min(int(value.get("automatic_round_limit") or 3), _round_limit_ceiling())),
             attempted_slice_ids=[_text(item) for item in value.get("attempted_slice_ids", []) if _text(item)],
             confirmation_receipts={_text(key): _text(item, 80) for key, item in _as_dict(value.get("confirmation_receipts")).items() if _text(key)},
             coverage_deferred_reason=_text(value.get("coverage_deferred_reason"), 240),

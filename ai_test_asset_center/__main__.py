@@ -4015,11 +4015,22 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         except Exception:
             _run_v12 = None
         if _run_v12 is not None:
+            # How many times scan() re-drives run_v12. When the operator did not
+            # pin QUALIBUG_SCAN_MAX_ROUNDS, follow the auto-scaled round limit the
+            # pipeline sized to this system (so a large enterprise drains its pool
+            # without a manual bump). Absolute-bounded at 24.
             try:
-                _max_rounds = int(os.environ.get("QUALIBUG_SCAN_MAX_ROUNDS", "8") or "8")
+                _auto_round_limit = int(_as_dict(v12.get("auto_scale")).get("round_limit") or 8)
             except (TypeError, ValueError):
-                _max_rounds = 8
-            _max_rounds = max(1, min(_max_rounds, 12))
+                _auto_round_limit = 8
+            if "QUALIBUG_SCAN_MAX_ROUNDS" in os.environ:
+                try:
+                    _max_rounds = int(os.environ.get("QUALIBUG_SCAN_MAX_ROUNDS") or "8")
+                except (TypeError, ValueError):
+                    _max_rounds = 8
+            else:
+                _max_rounds = _auto_round_limit
+            _max_rounds = max(1, min(_max_rounds, 24))
             _acc_findings: list[dict[str, Any]] = [f for f in (v12.get("findings") or []) if isinstance(f, dict)]
             _seen_keys = {(str(f.get("behavior_slice_id") or ""), str(f.get("title") or "")) for f in _acc_findings}
             _rounds_run = 1
@@ -4082,6 +4093,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         refreshed_candidates.extend(refreshed_external_candidates)
     candidates = refreshed_candidates
     v12["external_findings"] = external_findings
+    ui_execution = _as_dict(v12.get("ui_execution"))
     try:
         evidence_bundle = _persist_execution_evidence(project, root, scan_id, campaign, runtime_contract, execution_status, v12)
 

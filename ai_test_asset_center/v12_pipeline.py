@@ -127,11 +127,48 @@ def _behavior_slice_settings() -> dict[str, int]:
         round_limit = get_policy_value("execution", "incremental_discovery_round_limit", 8)
     except Exception:
         budget, round_number, round_limit = 15, 1, 8
+    # These are the PRE-POOL starting values. The real per-round budget and round
+    # limit are auto-scaled to the discovered candidate-pool size just before
+    # scheduling (see _auto_scale_slice_budget / _auto_scale_round_limit), so an
+    # operator never has to hand-tune env vars for a large enterprise system.
+    # An explicit env value still wins (power-user override).
     return {
-        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, 50),
+        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, _ABS_MAX_SLICE_BUDGET),
         "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 24),
-        "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 8, 1, 24),
+        "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 8, 1, _ABS_MAX_ROUND_LIMIT),
     }
+
+
+# Absolute safety clamps — the auto-scaler and any env override are bounded by
+# these so a pathological pool size can never explode API cost without bound.
+_ABS_MAX_SLICE_BUDGET = 150
+_ABS_MAX_ROUND_LIMIT = 24
+
+
+def _auto_scale_slice_budget(pool_size: int) -> int:
+    """Per-round slice budget that follows the business system's scale.
+
+    Small systems (few source-bound slices) keep the lean historical floor of 15.
+    Large enterprises (hundreds of slices from state graph + analyzers + LLM
+    reasoner) automatically get a proportionally larger budget so the candidate
+    pool is actually consumed instead of starving at 15/round — no env tuning.
+    Target: drain the pool in ~3 rounds, bounded by _ABS_MAX_SLICE_BUDGET.
+    """
+    import math
+
+    if pool_size <= 0:
+        return 15
+    return max(15, min(_ABS_MAX_SLICE_BUDGET, math.ceil(pool_size / 3)))
+
+
+def _auto_scale_round_limit(pool_size: int, budget: int) -> int:
+    """Automatic round count sized to actually drain ``pool_size`` at ``budget``/round."""
+    import math
+
+    if pool_size <= 0 or budget <= 0:
+        return 8
+    needed = math.ceil(pool_size / budget) + 1
+    return max(8, min(_ABS_MAX_ROUND_LIMIT, needed))
 
 
 def _test_profile(project: str, root: Path) -> dict[str, Any]:
@@ -1249,8 +1286,12 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     )
     store = EnterpriseCampaignStore(root, project)
     campaign, mode = store.open_or_create(candidate)
-    campaign.slice_budget = min(campaign.slice_budget, settings["slice_budget"], 15)
-    campaign.automatic_round_limit = min(campaign.automatic_round_limit, settings["round_limit"], 12)
+    # NOTE: the effective per-round budget / round limit are auto-scaled to the
+    # discovered candidate-pool size just before scheduling. Here we only align the
+    # persisted campaign ceilings with the (possibly env-overridden) starting
+    # settings; the auto-scaler may raise them further at scheduling time.
+    campaign.slice_budget = min(campaign.slice_budget, settings["slice_budget"])
+    campaign.automatic_round_limit = min(campaign.automatic_round_limit, settings["round_limit"])
     return campaign, store, mode
 
 
@@ -1530,6 +1571,61 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 behavior_contract["summary"]["supplementary_slices"] = len(supp)
         except Exception:
             pass  # Supplementary coverage best-effort; never blocks the scan
+        # ── 主链统一: 分析器 + LLM Reasoner 候选并入同一执行队列 ──
+        # 加法、可开关、源绑定；关闭时行为与现状一致。
+        try:
+            import re as _re_unify
+
+            from .business_state_graph import _api_facts
+            from .hypothesis_slice_bridge import hypotheses_to_slices
+
+            graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+            _state_re = _re_unify.compile(
+                r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])",
+                _re_unify.I,
+            )
+            _entities, _states, _endpoints = _api_facts(graph_api_doc, _state_re)
+            _unify_stats: dict[str, Any] = {}
+
+            if os.environ.get("QUALIBUG_UNIFY_ANALYZERS", "1") == "1":
+                from .analyzers_adapter import build_analyzer_hypotheses
+
+                _ana = build_analyzer_hypotheses(prd_text, graph_api_doc)
+                _ana_flat = [h for hs in (_ana or {}).values() for h in hs if isinstance(h, dict)]
+                _ana_slices, _ana_funnel = hypotheses_to_slices(
+                    _ana_flat, api_endpoints=_endpoints, origin="analyzer",
+                )
+                ranked_behavior_slices = list(ranked_behavior_slices) + _ana_slices
+                _unify_stats["analyzer"] = _ana_funnel
+
+            if os.environ.get("QUALIBUG_UNIFY_LLM_REASONER", "0") == "1":
+                from .stage_reason_all_v2 import collect_reasoner_hypotheses
+
+                _llm_hyps, _llm_meta = collect_reasoner_hypotheses(prd_text, graph_api_doc)
+                if str(_llm_meta.get("status") or "") == "provider_unavailable":
+                    _unify_stats["llm_reasoner"] = {
+                        "status": "provider_unavailable",
+                        "input": 0,
+                        "bound": 0,
+                        "dropped_no_endpoint": 0,
+                        "reason": str(_llm_meta.get("reason") or "llm_not_configured"),
+                    }
+                else:
+                    _llm_slices, _llm_funnel = hypotheses_to_slices(
+                        _llm_hyps, api_endpoints=_endpoints, origin="llm_reasoner",
+                    )
+                    ranked_behavior_slices = list(ranked_behavior_slices) + _llm_slices
+                    _unify_stats["llm_reasoner"] = {**_llm_funnel, **{k: v for k, v in _llm_meta.items() if k not in _llm_funnel}}
+
+            if _unify_stats:
+                behavior_contract["slices"] = ranked_behavior_slices
+                behavior_contract["summary"]["total_slices"] = len(ranked_behavior_slices)
+                behavior_contract["summary"]["unified_slices"] = sum(
+                    int(f.get("bound") or 0) for f in _unify_stats.values() if isinstance(f, dict)
+                )
+                result["mainline_unification"] = _unify_stats
+        except Exception as exc:
+            result.setdefault("mainline_unification", {})["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
         if runtime_contract.get("status") == "approved":
             from .semantic_scenario_generator import SemanticScenarioGenerator
 
@@ -1555,8 +1651,35 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 history.extend(_load_persisted_slice_history(root, project, campaign.source_snapshot_hash, campaign.source_hash))
             if "QUALIBUG_DISCOVERY_ROUND" not in os.environ and campaign.round_count:
                 settings["round_number"] = min(campaign.round_count + 1, campaign.automatic_round_limit + 1)
+            # ── Auto-scale per-round budget / round limit to the real system scale ──
+            # The candidate pool (state graph + supplementary + analyzer + LLM
+            # reasoner slices) directly reflects how big the customer's system is.
+            # Size the per-round batch to drain it in a few rounds so large
+            # enterprises work out of the box — no env tuning. An explicit env
+            # value still wins for power users.
+            _executable_pool = [
+                s for s in ranked_behavior_slices
+                if isinstance(s, dict) and str(s.get("slice_id") or "") and _slice_has_source_executable_route(s)
+            ]
+            _pool_size = len(_executable_pool) or len([
+                s for s in ranked_behavior_slices if isinstance(s, dict) and str(s.get("slice_id") or "")
+            ])
+            if "QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND" not in os.environ:
+                _auto_budget = _auto_scale_slice_budget(_pool_size)
+                settings["slice_budget"] = _auto_budget
+                campaign.slice_budget = _auto_budget
+            if "QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT" not in os.environ:
+                _auto_rounds = _auto_scale_round_limit(_pool_size, settings["slice_budget"])
+                settings["round_limit"] = _auto_rounds
+                campaign.automatic_round_limit = _auto_rounds
             settings["slice_budget"] = min(settings["slice_budget"], campaign.slice_budget)
             settings["round_limit"] = min(settings["round_limit"], campaign.automatic_round_limit)
+            result["auto_scale"] = {
+                "executable_pool_size": _pool_size,
+                "slice_budget": settings["slice_budget"],
+                "round_limit": settings["round_limit"],
+                "source": "explicit_env" if "QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND" in os.environ else "auto_scaled_to_system_size",
+            }
             selection = _schedule_behavior_slices(ranked_behavior_slices, settings, history)
         selected_ids = set(selection["selected_slice_ids"])
         result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
@@ -1750,7 +1873,25 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                         _role_expected_override = 403
                     try:
                         scenario.actor_token = _token
-                        trace = _execute_scenario(scenario, approved_base_url, max_retries=2, safety_boundary=_safety_boundary)
+                        from .sandbox_write_executor import execute_with_sandbox_write, sandbox_write_enabled
+
+                        if sandbox_write_enabled():
+                            trace = execute_with_sandbox_write(
+                                scenario,
+                                approved_base_url,
+                                root=root,
+                                project=project,
+                                runtime_contract=runtime_contract,
+                                campaign_id=str(campaign.campaign_id or ""),
+                                safety_boundary=_safety_boundary,
+                                execute_fn=lambda sc, bu, safety_boundary=None: _execute_scenario(
+                                    sc, bu, max_retries=2, safety_boundary=safety_boundary,
+                                ),
+                            )
+                        else:
+                            trace = _execute_scenario(
+                                scenario, approved_base_url, max_retries=2, safety_boundary=_safety_boundary,
+                            )
                         # Tag trace with role info for oracle
                         trace["actor_role"] = _role
                         # ── DISABLED/LOCKED account check ──
@@ -1993,6 +2134,34 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             pass
     result["total_duration_ms"] = int((time.time() - started) * 1000)
     result["auto_har"] = _v12_har_report()
+    try:
+        from .discovery_funnel import build_funnel
+
+        gate_results = []
+        for finding in result.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            missing = finding.get("business_gate_missing")
+            if missing:
+                gate_results.append({"business_gate_missing": missing})
+            status = str(finding.get("final_review_status") or finding.get("business_evidence_status") or "")
+            if status and ("NEEDS_MORE_EVIDENCE" in status.upper() or status.upper().startswith("PENDING")):
+                gate_results.append({
+                    "business_gate_missing": list(
+                        (finding.get("evidence_status") or {}).get("missing_requirements") or []
+                    ) or ([status] if status else []),
+                })
+        result["discovery_funnel"] = build_funnel(result, gate_results)
+    except Exception as exc:
+        result["discovery_funnel"] = {
+            "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+            "stages": [],
+            "top_blocking_reasons": [],
+            "validated_bug_count": 0,
+            "pending_finding_count": 0,
+            "candidate_count": 0,
+            "explanation": f"漏斗聚合失败：{type(exc).__name__}",
+        }
     return result
 
 
@@ -2649,12 +2818,41 @@ def _confirmed_oracle_finding(
             "final_review_status": "VALIDATED_CANDIDATE" if gate_passed else "NEEDS_MORE_EVIDENCE",
             "missing_requirements": [],
         },
+        "final_review_status": "VALIDATED_CANDIDATE" if gate_passed else "NEEDS_MORE_EVIDENCE",
+        "business_evidence_status": "VALIDATED" if gate_passed else "PENDING_EVIDENCE",
         "reproduction_steps": reproduction_steps,
         "before_after_snapshot": before_after_snapshot,
         "business_invariant_evaluation": business_invariant_evaluation,
         "db_evidence": db_evidence,
         "evidence_strength": evidence_strength,
     }
+    # Attach sandbox write evidence (before/after/cleanup) when present on the trace.
+    sandbox = trace.get("sandbox_write") if isinstance(trace.get("sandbox_write"), dict) else {}
+    sandbox_evidence = sandbox.get("evidence") if isinstance(sandbox.get("evidence"), dict) else {}
+    trace_evidence = trace.get("evidence") if isinstance(trace.get("evidence"), dict) else {}
+    before_ref = str(
+        sandbox_evidence.get("before_snapshot_ref")
+        or trace_evidence.get("before_snapshot_ref")
+        or ""
+    )
+    after_ref = str(
+        sandbox_evidence.get("after_snapshot_ref")
+        or trace_evidence.get("after_snapshot_ref")
+        or ""
+    )
+    cleanup = (
+        sandbox_evidence.get("cleanup")
+        or trace_evidence.get("cleanup")
+        or sandbox.get("cleanup")
+        or {}
+    )
+    if isinstance(cleanup, dict) and (before_ref or after_ref or cleanup):
+        finding["evidence"]["before_snapshot_ref"] = before_ref
+        finding["evidence"]["after_snapshot_ref"] = after_ref
+        finding["evidence"]["cleanup"] = {
+            "status": str(cleanup.get("status") or ""),
+            "receipt_ref": str(cleanup.get("receipt_ref") or ""),
+        }
     if actor:
         finding["evidence"]["actor_token_present"] = True
     return finding

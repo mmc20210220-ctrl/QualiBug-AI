@@ -1214,3 +1214,73 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
 
     print(f"  [OK] 生成了 {len(all_hypotheses)} 条假设 (across {len(engines)} engines)", flush=True)
     return all_hypotheses
+
+
+def collect_reasoner_hypotheses(
+    prd_text: str,
+    api_spec: str,
+    *,
+    reader_output: dict | None = None,
+    prior_findings: list | None = None,
+) -> tuple[list[dict], dict]:
+    """Thin wrapper for v12 mainline unification.
+
+    Returns ``(hypotheses, meta)``. When the LLM provider is not configured or
+    fails a basic availability check, returns ``([], {"status": "provider_unavailable"})``
+    so the scan never crashes for a missing key. Preserves MAX_HYPOTHESES /
+    max_workers floors via ``_stage_reason_all_v2``.
+    """
+    from .llm_reasoning import ReasoningConfig
+
+    config = ReasoningConfig.from_env()
+    if not config.enabled:
+        return [], {"status": "provider_unavailable", "reason": "llm_not_configured"}
+
+    # Enforce floors without lowering existing higher values.
+    if int(getattr(config, "timeout_seconds", 0) or 0) < MIN_REASONER_TIMEOUT_SECONDS:
+        config.timeout_seconds = MIN_REASONER_TIMEOUT_SECONDS
+    if int(getattr(config, "max_tokens", 0) or 0) < MIN_REASONER_MAX_TOKENS:
+        config.max_tokens = MIN_REASONER_MAX_TOKENS
+
+    class _ReasonerHost:
+        """Minimal host exposing the attributes ``_stage_reason_all_v2`` needs."""
+
+        def __init__(self, client_config: Any) -> None:
+            from .llm_reasoning import ReasoningClient
+
+            self.client = ReasoningClient(config=client_config)
+            self._last_engine_report: dict[str, Any] = {}
+
+        def _fill_template(self, template: str, **kwargs: Any) -> str:
+            result = template
+            for key, value in kwargs.items():
+                result = result.replace("{" + key + "}", str(value or ""))
+            return result
+
+    host = _ReasonerHost(config)
+    try:
+        hypotheses = _stage_reason_all_v2(
+            host,
+            prd_text or "",
+            api_spec or "",
+            reader_output if isinstance(reader_output, dict) else {},
+            prior_findings,
+        )
+    except Exception as exc:
+        return [], {
+            "status": "provider_unavailable",
+            "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
+    if not isinstance(hypotheses, list):
+        hypotheses = []
+    report = dict(getattr(host, "_last_engine_report", {}) or {})
+    meta = {
+        "status": "ok" if hypotheses else "empty",
+        "total_hypotheses": len(hypotheses),
+        "max_workers": report.get("max_workers", MAX_REASONER_WORKERS),
+        "max_hypotheses_per_engine": report.get("max_hypotheses_per_engine", MAX_HYPOTHESES),
+        "timeout_seconds": report.get("timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS),
+        "max_tokens": report.get("max_tokens", MIN_REASONER_MAX_TOKENS),
+    }
+    return hypotheses, meta

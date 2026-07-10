@@ -5675,6 +5675,21 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["current_campaign_scope"] = campaign_scope
             data["value_metrics"]["current_campaign_scope"] = campaign_scope
             data["executive_summary"]["current_campaign_scope"] = campaign_scope
+        # Discovery funnel observability (five-stage + blockers). Prefer the
+        # freshest scan report; never invent numbers when absent.
+        discovery_funnel = None
+        for source in (current_scan_report, report, real_discovery_payload):
+            if isinstance(source, dict) and isinstance(source.get("discovery_funnel"), dict):
+                discovery_funnel = source.get("discovery_funnel")
+                break
+            if isinstance(source, dict) and isinstance(source.get("v12"), dict):
+                nested = source["v12"].get("discovery_funnel")
+                if isinstance(nested, dict):
+                    discovery_funnel = nested
+                    break
+        if isinstance(discovery_funnel, dict):
+            data["discovery_funnel"] = discovery_funnel
+            data["scan_meta"]["discovery_funnel"] = discovery_funnel
         if knowledge_summary:
             data["knowledge_summary"] = knowledge_summary
         if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):

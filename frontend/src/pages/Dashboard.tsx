@@ -434,6 +434,24 @@ export function Dashboard() {
   const shelfCarryoverCount = Math.max(0, familyShelfDefects - currentScanDefects);
   const campaignCarryoverDefects = asNum(campaignSummary.family_historical_carryover_defect_count);
   const coverageGaps = Array.isArray(record.coverage_gaps) ? record.coverage_gaps.length : 0;
+  const discoveryFunnel = asRecord(record.discovery_funnel);
+  const funnelStages = Array.isArray(discoveryFunnel.stages)
+    ? discoveryFunnel.stages.filter((item): item is JsonRecord => item !== null && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  const funnelBlockers = Array.isArray(discoveryFunnel.top_blocking_reasons)
+    ? discoveryFunnel.top_blocking_reasons.filter((item): item is JsonRecord => item !== null && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  const hasDiscoveryFunnel = funnelStages.length > 0 || Boolean(asText(discoveryFunnel.explanation));
+  const funnelValidated = asNum(discoveryFunnel.validated_bug_count);
+  const funnelPending = asNum(discoveryFunnel.pending_finding_count);
+  const funnelCandidates = asNum(discoveryFunnel.candidate_count);
+  const FUNNEL_STAGE_LABELS: Record<string, string> = {
+    candidate_generation: '候选生成',
+    probe_selection: '探针入选',
+    execution: '执行',
+    verification: '验证',
+    formal_accounting: '正式记账',
+  };
   const governanceNeedsAction = campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred';
   const clueCount = clues.length;
   const evidenceTrust = asNum(valueMetrics.evidence_trust_score, 0);
@@ -912,6 +930,54 @@ export function Dashboard() {
           <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.val}</strong><small>{item.note}</small></article>
         ))}
       </div>
+
+      <section className="customer-secondary-grid mb-4">
+        <article className={`customer-secondary-card${hasDiscoveryFunnel ? '' : ' muted'}`}>
+          <span className="customer-value-kicker">发现漏斗</span>
+          {hasDiscoveryFunnel ? (
+            <>
+              <h3>
+                已验证 Bug {funnelValidated}
+                <span style={{ fontWeight: 400, fontSize: '0.85em', marginLeft: 8 }}>
+                  · 待确认发现 {funnelPending}（非已验证）· 候选 {funnelCandidates}
+                </span>
+              </h3>
+              <p>{asText(discoveryFunnel.explanation) || '本轮漏斗已生成。'}</p>
+              <div className="customer-secondary-meta">
+                {funnelStages.map((stage) => {
+                  const name = asText(stage.name);
+                  const label = FUNNEL_STAGE_LABELS[name] || name || '阶段';
+                  const input = asNum(stage.input);
+                  const output = asNum(stage.output);
+                  const conversion = asNum(stage.conversion);
+                  const pct = conversion > 0 ? `${Math.round(conversion * 100)}%` : (input > 0 ? '0%' : '—');
+                  return (
+                    <span key={name || label}>
+                      <em>{label}</em>
+                      <b>{output}/{input}（{pct}）</b>
+                    </span>
+                  );
+                })}
+              </div>
+              {funnelBlockers.length > 0 && (
+                <div className="customer-secondary-meta">
+                  {funnelBlockers.slice(0, 5).map((item) => (
+                    <span key={`${asText(item.reason)}-${asNum(item.count)}`}>
+                      <em>阻断 {asText(item.reason) || '未知'}</em>
+                      <b>{asNum(item.count)}</b>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <h3>暂无漏斗数据</h3>
+              <p>完成一次扫描后，将展示五阶段转化、Top 阻断原因，以及已验证 Bug / 待确认发现的分层计数。不会填充假数字。</p>
+            </>
+          )}
+        </article>
+      </section>
 
       <section className="customer-value-grid mb-4">
         <article className="customer-value-card"><span className="customer-value-kicker">发布建议</span><h2>{hasMainChainContract && !mainChainReady ? '暂不形成客户交付结论，先闭合主链路' : evidenceBlockedItemCount > 0 ? '暂不形成客户交付结论，先补齐证据字段' : campaignStatus === 'blocked' ? '暂不形成发布结论，先补齐执行合同' : campaignStatus === 'coverage_deferred' ? '先评审递延范围，再决定是否扩大 Campaign' : currentScanP0Count > 0 ? '建议暂停发布，先处理阻断缺陷' : currentScanDefects > 0 ? '建议带着本轮缺陷清单推进整改验收' : '当前没有可交付缺陷，可继续观察后续轮次'}</h2><p>{hasMainChainContract && !mainChainReady ? `第一断点：${firstBlockedStageLabel}。下一步：${firstBlockedNextAction}` : evidenceBlockedItemCount > 0 ? evidenceDetail : campaignStatus === 'blocked' || campaignStatus === 'coverage_deferred' ? campaignDetail(campaignStatus, campaignDeferredReason, nextCampaignReason) : currentScanP0Count > 0 ? '当前存在会直接影响业务履约或发布安全的高风险缺陷。' : currentScanDefects > 0 ? '当前扫描结果已经足以形成客户整改清单，不需要再从线索里筛。' : '本轮输出可以作为当前阶段的风险结论，但建议继续保持持续检测。'}</p></article>
