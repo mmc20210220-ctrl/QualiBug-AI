@@ -22,26 +22,34 @@ const healthLabels: Record<HealthState, string> = {
   unavailable: '登录服务不可用',
 };
 
+let healthCheck: Promise<HealthState> | null = null;
+
+function getVerifiedHealthState(): Promise<HealthState> {
+  if (healthCheck) return healthCheck;
+  const request = getHealth()
+    .then<HealthState>((payload) => {
+      if (!isVerifiedApiHealth(payload)) {
+        throw new Error('Health payload did not verify API availability');
+      }
+      return 'available';
+    })
+    .catch<HealthState>((error: unknown) => {
+      console.error('[login.health] Login service health check failed', { error });
+      return 'unavailable';
+    });
+  healthCheck = request;
+  return request;
+}
+
 export function ServiceHealthBadge() {
   const [state, setState] = useState<HealthState>('checking');
 
   useEffect(() => {
     let active = true;
 
-    const checkHealth = async () => {
-      try {
-        const payload = await getHealth();
-        if (!isVerifiedApiHealth(payload)) {
-          throw new Error('Health payload did not verify API availability');
-        }
-        if (active) setState('available');
-      } catch (error: unknown) {
-        console.error('[login.health] Login service health check failed', { error });
-        if (active) setState('unavailable');
-      }
-    };
-
-    void checkHealth();
+    void getVerifiedHealthState().then((nextState) => {
+      if (active) setState(nextState);
+    });
     return () => { active = false; };
   }, []);
 

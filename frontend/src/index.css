@@ -532,7 +532,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .login-forgot-link {
   font-size: 12px !important;
   font-weight: 700 !important;
-  padding: 0 !important;
+  min-height: 30px;
+  padding: 4px 6px !important;
   text-shadow: none !important;
 }
 .login-form .form-input {
@@ -560,8 +561,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   position: absolute;
   top: 50%;
   right: 6px;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
@@ -693,6 +694,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   border-radius: 6px;
   cursor: pointer;
 }
+.login-switch-btn { min-height: 34px; }
 .login-panel .btn-link:hover { background: rgba(45, 212, 191, .1); }
 .login-panel .btn-link:focus-visible { box-shadow: 0 0 0 3px rgba(45,212,191,.25); }
 .login-footnote {
@@ -757,6 +759,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 
 @media (max-width: 900px) {
+  html:has(.login-page),
+  body:has(.login-page) {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
   .login-page {
     grid-template-columns: 1fr;
     height: auto;
@@ -767,6 +776,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
     overflow-y: auto;
   }
   .login-stage {
+    display: block;
     order: 0;
     min-height: auto;
     padding: 24px 22px 18px;
@@ -826,6 +836,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   .login-form .form-input,
   .login-page.is-register .login-form .form-input { min-height: 46px; }
   .login-page.is-register .login-submit { min-height: 48px; }
+  .login-forgot-link,
+  .login-switch-btn { min-height: 40px; }
   .login-switch { flex-wrap: wrap; }
 }
 

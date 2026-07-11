@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 
 const baseUrl = process.env.LOGIN_PAGE_URL || 'http://127.0.0.1:5174/login?next=%2Fdashboard';
+let healthRequestCount = 0;
 const browser = await chromium.launch({
   headless: true,
   channel: process.env.PLAYWRIGHT_CHANNEL || 'msedge',
@@ -37,6 +38,7 @@ async function assertLabel(page, text, context) {
 
 async function installHealthyApi(page) {
   await page.route('**/api/health', async (route) => {
+    healthRequestCount += 1;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -57,6 +59,7 @@ async function verifyMode(page, mode, viewport) {
       ? { heading: '创建工作区', action: '创建并进入工作区' }
       : { heading: '重置登录密码', action: '重置密码并登录' };
   const context = { mode, viewport, url: url.toString() };
+  const healthRequestsBeforeNavigation = healthRequestCount;
 
   await page.setViewportSize(viewport);
   await page.goto(url.toString(), { waitUntil: 'domcontentloaded' });
@@ -65,7 +68,15 @@ async function verifyMode(page, mode, viewport) {
   await assertLabel(page, mode === 'login' ? '账号' : '登录账号', context);
   await assertLabel(page, mode === 'forgot' ? '新密码' : '密码', context);
   await expectCount(page.getByRole('button', { name: '显示密码', exact: true }), mode === 'login' ? 1 : 2, context);
-  await expectCount(page.getByText('登录服务可用', { exact: true }), 1, context);
+  const healthLabel = page.getByText('登录服务可用', { exact: true });
+  await healthLabel.waitFor({ state: 'visible' });
+  await expectCount(healthLabel, 1, context);
+  if (healthRequestCount !== healthRequestsBeforeNavigation + 1) {
+    fail('Expected exactly one health request for this page load', {
+      ...context,
+      requestDelta: healthRequestCount - healthRequestsBeforeNavigation,
+    });
+  }
   await assertNoHorizontalOverflow(page, context);
 
   if (mode === 'login') {
