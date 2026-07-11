@@ -6,6 +6,7 @@ from ai_test_asset_center.discovery_funnel import (
     reconcile_product_pipeline_health,
 )
 from ai_test_asset_center.v12_pipeline import (
+    _normalize_executable_api_document,
     _publish_behavior_contract_snapshot,
     _record_pipeline_failure,
 )
@@ -241,4 +242,45 @@ def test_v12_failure_preserves_grounded_candidate_pool_in_funnel() -> None:
     assert selection["output"] == 0
     assert funnel["pipeline_health"]["status"] == "FAILED_SAFE"
     assert funnel["pipeline_health"]["empty_findings_means_no_bugs"] is False
+
+
+def test_markdown_api_is_normalized_before_runtime_scenario_generation() -> None:
+    markdown = """# Benchmark API
+
+### GET /api/orders/{id}
+Response note: values may include YAML-like colons: without quoting.
+
+### POST /api/orders
+```json
+{"name": "qualibug-order"}
+```
+"""
+
+    executable_document, receipt = _normalize_executable_api_document(markdown)
+    normalized = __import__("json").loads(executable_document)
+
+    assert receipt["status"] == "normalized"
+    assert receipt["input_format"] == "markdown_api"
+    assert receipt["normalized_path_count"] == 2
+    assert receipt["normalized_operation_count"] == 2
+    assert normalized["paths"]["/api/orders/{id}"]["get"]
+    assert normalized["paths"]["/api/orders"]["post"]
+
+
+def test_unparseable_api_becomes_observable_safe_catalog(monkeypatch) -> None:
+    from ai_test_asset_center import universal_api_parser
+
+    def _explode(_document):
+        raise RuntimeError("parser exploded")
+
+    monkeypatch.setattr(universal_api_parser, "parse_to_openapi", _explode)
+    executable_document, receipt = _normalize_executable_api_document(
+        "### GET /api/orders"
+    )
+    normalized = __import__("json").loads(executable_document)
+
+    assert receipt["status"] == "FAILED_SAFE"
+    assert receipt["reason"] == "api_document_parse_failed"
+    assert receipt["error_type"] == "RuntimeError"
+    assert normalized["paths"] == {}
 
