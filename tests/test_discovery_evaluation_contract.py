@@ -169,6 +169,61 @@ def _receipt(
     )
 
 
+def _trace_ledger(
+    target_id: str,
+    *,
+    policy_id: str = "policy-champion",
+    evaluation_mode: str = "replay",
+    oracle_failure_votes: int = 0,
+    formal_defect_count: int = 0,
+) -> dict:
+    return {
+        "schema_version": "qualibug.discovery-trace-ledger.v1",
+        "run_id": f"run-{target_id}",
+        "policy_id": policy_id,
+        "target_id": target_id,
+        "project_id": f"project-{target_id}",
+        "industry": "commerce",
+        "evaluation_mode": evaluation_mode,
+        "trace_count": 1,
+        "redaction_contract": {
+            "raw_request_bodies_persisted": False,
+            "raw_response_bodies_persisted": False,
+            "credentials_persisted": False,
+            "ground_truth_persisted": False,
+        },
+        "traces": [
+            {
+                "trace_id": f"TRACE-{target_id}",
+                "behavior_slice_id": f"slice-{target_id}",
+                "generation": {
+                    "family": "authorization_access_control",
+                    "endpoint_count": 1,
+                    "endpoint_shapes": [f"/api/{target_id}"],
+                    "bound_method": "GET",
+                    "bound_path_shape": f"/api/{target_id}",
+                },
+                "selection": {"selected": True, "attempted_in_campaign": True},
+                "execution": {
+                    "trace_observed": True,
+                    "scenario_id": f"scenario-{target_id}",
+                    "http_step_count": 1,
+                    "methods": ["GET"],
+                    "normalized_paths": [f"/api/{target_id}"],
+                },
+                "verification": {
+                    "oracle_evaluated_count": 1,
+                    "oracle_failure_votes": oracle_failure_votes,
+                    "oracle_pass_votes": 1 if oracle_failure_votes == 0 else 0,
+                    "formal_defect_count": formal_defect_count,
+                },
+                "failure_signatures": [],
+                "outcome": "valid_success_control",
+            }
+        ],
+    }
+
+
 def test_runtime_view_never_exposes_evaluator_ground_truth(tmp_path: Path) -> None:
     manifest = load_evaluation_manifest(_manifest(tmp_path))
     runtime_view = build_runtime_view(manifest, "held-in")
@@ -250,6 +305,63 @@ def test_failed_pipeline_is_not_reported_as_zero_bug_or_zero_false_positive(tmp_
     assert report["claim_status"] == "NOT_MEASURED"
     assert report["evaluation_complete"] is False
     assert "held-in" in {item["target_id"] for item in report["not_measured_targets"]}
+
+
+def test_private_evaluator_reports_per_bug_first_loss_stage(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    receipt = evaluate_completed_scan(
+        manifest,
+        "held-in",
+        run_id="run-held-in",
+        policy_id="policy-champion",
+        evaluation_mode="replay",
+        findings=[],
+        candidates=[],
+        pipeline_health={"status": "OK"},
+        operational_metrics={},
+        trace_ledger=_trace_ledger("held-in"),
+    )
+
+    diagnostics = receipt["metrics"]["stage_loss_diagnostics"]
+    assert receipt["metrics"]["true_positives"] == 0
+    assert receipt["metrics"]["false_negatives"] == 1
+    assert diagnostics["status"] == "READY"
+    assert diagnostics["ground_truth_bug_count"] == 1
+    assert diagnostics["first_loss_stage_counts"] == {"oracle_resolution": 1}
+    assert diagnostics["stage_reached_rates"]["executed"] == 1.0
+    assert diagnostics["stage_reached_rates"]["deliverable"] == 0.0
+    bug = diagnostics["bugs"][0]
+    assert bug["bug_id"] == "BUG-held-in"
+    assert bug["hypothesis_generated"] is True
+    assert bug["endpoint_bound"] is True
+    assert bug["selected"] is True
+    assert bug["executed"] is True
+    assert bug["oracle_evaluated"] is True
+    assert bug["oracle_matched"] is False
+    assert bug["deliverable"] is False
+    serialized = json.dumps(diagnostics, ensure_ascii=False).lower()
+    assert "alpha" not in serialized
+    assert "private" not in serialized
+
+
+def test_trace_ledger_identity_must_match_evaluated_run(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    trace = _trace_ledger("held-in")
+    trace["run_id"] = "wrong-run"
+
+    with pytest.raises(EvaluationContractError, match="trace_ledger.run_id"):
+        evaluate_completed_scan(
+            manifest,
+            "held-in",
+            run_id="run-held-in",
+            policy_id="policy-champion",
+            evaluation_mode="replay",
+            findings=[],
+            candidates=[],
+            pipeline_health={"status": "OK"},
+            operational_metrics={},
+            trace_ledger=trace,
+        )
 
 
 def test_receipts_are_immutable(tmp_path: Path) -> None:

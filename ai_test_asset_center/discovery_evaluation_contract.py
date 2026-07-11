@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .benchmark_compute import compute_benchmark
+from .benchmark_compute import compute_benchmark, compute_stage_loss_matrix
 from .customer_delivery_gate import is_customer_deliverable_defect
 
 
@@ -347,6 +347,53 @@ def _pipeline_health_status(pipeline_health: Any) -> tuple[str, str]:
     return "MEASURED", ""
 
 
+def _validate_trace_ledger(
+    trace_ledger: dict[str, Any] | None,
+    *,
+    target: EvaluationTarget,
+    run_id: str,
+    policy_id: str,
+    evaluation_mode: str,
+) -> dict[str, Any] | None:
+    if trace_ledger is None:
+        return None
+    if not isinstance(trace_ledger, dict):
+        raise EvaluationContractError("trace_ledger must be an object when supplied")
+
+    from .discovery_trace_ledger import TRACE_LEDGER_SCHEMA
+
+    if trace_ledger.get("schema_version") != TRACE_LEDGER_SCHEMA:
+        raise EvaluationContractError("trace_ledger uses an unsupported schema")
+    expected = {
+        "target_id": target.target_id,
+        "project_id": target.project_id,
+        "run_id": run_id,
+        "policy_id": policy_id,
+        "evaluation_mode": evaluation_mode,
+    }
+    for field, value in expected.items():
+        if str(trace_ledger.get(field) or "").strip() != str(value or "").strip():
+            raise EvaluationContractError(
+                f"trace_ledger.{field} does not match the evaluated run"
+            )
+    redaction = trace_ledger.get("redaction_contract")
+    if not isinstance(redaction, dict) or any(
+        redaction.get(field) is not False
+        for field in (
+            "raw_request_bodies_persisted",
+            "raw_response_bodies_persisted",
+            "credentials_persisted",
+            "ground_truth_persisted",
+        )
+    ):
+        raise EvaluationContractError(
+            "trace_ledger does not prove the required redaction contract"
+        )
+    if not isinstance(trace_ledger.get("traces"), list):
+        raise EvaluationContractError("trace_ledger.traces must be a list")
+    return trace_ledger
+
+
 def evaluate_completed_scan(
     manifest: EvaluationManifest,
     target_id: str,
@@ -359,6 +406,7 @@ def evaluate_completed_scan(
     pipeline_health: dict[str, Any],
     operational_metrics: dict[str, Any],
     fixture_governance: dict[str, Any] | None = None,
+    trace_ledger: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one completed scan without exposing hidden answers to runtime."""
 
@@ -372,6 +420,13 @@ def evaluate_completed_scan(
     target = manifest.target(target_id)
     measurement_status, not_measured_reason = _pipeline_health_status(pipeline_health)
     fingerprints = manifest.target_fingerprints[target_id]
+    validated_trace_ledger = _validate_trace_ledger(
+        trace_ledger,
+        target=target,
+        run_id=run_id,
+        policy_id=policy_id,
+        evaluation_mode=evaluation_mode,
+    )
 
     metrics: dict[str, Any] = {}
     if measurement_status == "MEASURED" and target.expectation == "seeded_defects":
@@ -398,6 +453,24 @@ def evaluate_completed_scan(
         metrics["ground_truth_fingerprint"] = fingerprints.get("ground_truth_fingerprint", "")
         metrics["formal_findings_evaluated"] = len(deliverable_findings)
         metrics["non_delivery_findings_excluded"] = max(0, len(findings) - len(deliverable_findings))
+        if validated_trace_ledger is not None and metrics.get("benchmark_active") is True:
+            metrics["stage_loss_diagnostics"] = compute_stage_loss_matrix(
+                ground_truth_path=ground_truth_path,
+                candidates=candidates or [],
+                trace_ledger=validated_trace_ledger,
+                delivered_bug_ids=metrics.get("matched_bug_ids") or [],
+            )
+        else:
+            metrics["stage_loss_diagnostics"] = {
+                "schema_version": "qualibug.discovery-stage-loss-matrix.v1",
+                "status": "NOT_AVAILABLE",
+                "reason": (
+                    "trace_ledger_missing"
+                    if validated_trace_ledger is None
+                    else "benchmark_not_active"
+                ),
+                "scoring_contract": "diagnostic_only_never_changes_tp_fp_fn",
+            }
     elif measurement_status == "MEASURED":
         deliverable = [item for item in findings if isinstance(item, dict) and is_customer_deliverable_defect(item)]
         high_value = [

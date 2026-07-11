@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 from ai_test_asset_center.discovery_funnel import (
     build_funnel,
     build_pipeline_health,
     reconcile_product_pipeline_health,
 )
+from ai_test_asset_center.discovery_trace_ledger import build_discovery_trace_ledger
 from ai_test_asset_center.v12_pipeline import (
     _normalize_executable_api_document,
     _publish_behavior_contract_snapshot,
+    _redacted_execution_trace_graph,
     _record_pipeline_failure,
 )
 
@@ -284,3 +289,76 @@ def test_unparseable_api_becomes_observable_safe_catalog(monkeypatch) -> None:
     assert receipt["error_type"] == "RuntimeError"
     assert normalized["paths"] == {}
 
+
+def test_successful_execution_without_violation_remains_in_trace_ledger() -> None:
+    scenario = SimpleNamespace(
+        id="scenario-1",
+        behavior_slice_id="slice-1",
+    )
+    summary = _redacted_execution_trace_graph(
+        scenario,
+        {
+            "scenario_id": "scenario-1",
+            "actor_role": "readonly",
+            "steps": [
+                {
+                    "method": "GET",
+                    "path": "/api/orders/123?token=do-not-persist",
+                    "status": 200,
+                    "response": {
+                        "status_code": 200,
+                        "body": {"password": "do-not-persist"},
+                    },
+                }
+            ],
+            "errors": [],
+        },
+        discovery_round=1,
+    )
+    summary["oracle_results"].append(
+        {"oracle_name": "ConsistencyOracle", "passed": True}
+    )
+    v12_result = {
+        "behavior_slices": [
+            {
+                "slice_id": "slice-1",
+                "kind": "invariant",
+                "endpoints": ["/api/orders/{id}"],
+                "source_refs": [{"kind": "api", "quote": "orders"}],
+            }
+        ],
+        "behavior_slice_ledger": {
+            "campaign_id": "campaign-1",
+            "round": 1,
+            "selected_slice_ids": ["slice-1"],
+            "attempted_slice_ids": ["slice-1"],
+        },
+        "phases": {
+            "scenario_generation": {"selected_slice_ids": ["slice-1"]},
+            "execution": {"status": "completed", "executed": 1},
+        },
+        "findings": [],
+        "evidence_graphs": [],
+        "execution_trace_summaries": [summary],
+    }
+
+    ledger = build_discovery_trace_ledger(
+        v12_result,
+        run_id="run-1",
+        policy_id="policy-1",
+        target_id="target-1",
+        project_id="project-1",
+        industry="commerce",
+        evaluation_mode="replay",
+    )
+
+    trace = ledger["traces"][0]
+    assert trace["execution"]["trace_observed"] is True
+    assert trace["execution"]["http_step_count"] == 1
+    assert trace["execution"]["normalized_paths"] == ["/api/orders/{id}"]
+    assert trace["verification"]["oracle_pass_votes"] == 1
+    assert trace["outcome"] == "valid_success_control"
+    assert "SELECTED_WITHOUT_EXECUTION_TRACE" not in trace["failure_signatures"]
+    serialized = json.dumps(summary, ensure_ascii=False)
+    assert "do-not-persist" not in serialized
+    assert "password" not in serialized

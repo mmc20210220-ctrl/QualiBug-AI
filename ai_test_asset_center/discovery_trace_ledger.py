@@ -96,6 +96,16 @@ def _finding_matches(
     return bool(slice_id and finding_slice == slice_id)
 
 
+def _execution_graph_key(graph: dict[str, Any]) -> tuple[str, str, str]:
+    scenario = _dict(graph.get("scenario"))
+    execution = _dict(graph.get("execution_trace"))
+    return (
+        str(scenario.get("behavior_slice_id") or "").strip(),
+        str(execution.get("scenario_id") or scenario.get("id") or "").strip(),
+        str(execution.get("actor_role") or "").strip(),
+    )
+
+
 def _error_code(value: Any) -> str:
     text = str(value or "").strip().lower()
     if "missing_runtime_path_binding" in text:
@@ -137,7 +147,15 @@ def _execution_summary(graph: dict[str, Any]) -> dict[str, Any]:
         if int(item.get("status") or _dict(item.get("response")).get("status_code") or 0) > 0
     ]
     audit_records = [item for item in _list(sandbox_write.get("audit_records")) if isinstance(item, dict)]
-    governed_write_receipt_count = len(audit_records) or (1 if sandbox_write.get("audit_path") else 0)
+    try:
+        declared_audit_count = int(sandbox_write.get("audit_record_count") or 0)
+    except (TypeError, ValueError):
+        declared_audit_count = 0
+    governed_write_receipt_count = (
+        len(audit_records)
+        or max(0, declared_audit_count)
+        or (1 if sandbox_write.get("audit_path") else 0)
+    )
     return {
         "trace_observed": bool(graph),
         "scenario_id": str(execution.get("scenario_id") or _dict(graph.get("scenario")).get("id") or ""),
@@ -323,6 +341,19 @@ def build_discovery_trace_ledger(
     }
     findings = [_dict(item) for item in _list(v12_result.get("findings"))]
     graphs = [_dict(item) for item in _list(v12_result.get("evidence_graphs"))]
+    observed_execution_keys = {
+        _execution_graph_key(item)
+        for item in graphs
+        if any(_execution_graph_key(item))
+    }
+    for summary in _list(v12_result.get("execution_trace_summaries")):
+        if not isinstance(summary, dict):
+            continue
+        key = _execution_graph_key(summary)
+        if not any(key) or key in observed_execution_keys:
+            continue
+        graphs.append(summary)
+        observed_execution_keys.add(key)
     graphs_by_slice: dict[str, list[dict[str, Any]]] = {}
     for graph in graphs:
         scenario = _dict(graph.get("scenario"))

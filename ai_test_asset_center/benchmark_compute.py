@@ -573,6 +573,313 @@ def _coverage_matrix(
     }
 
 
+_STAGE_LOSS_STAGES = (
+    "hypothesis_generated",
+    "endpoint_bound",
+    "selected",
+    "executed",
+    "oracle_evaluated",
+    "oracle_matched",
+    "deliverable",
+)
+
+
+def _truth_paths(truth: dict[str, Any]) -> set[str]:
+    paths = _extract_api_paths(str(truth.get("trigger") or ""))
+    paths |= _extract_api_paths(
+        str(truth.get("endpoint_hint") or truth.get("api_path") or "")
+    )
+    for endpoint in truth.get("affected_endpoints") or truth.get("related_endpoints") or []:
+        if isinstance(endpoint, dict):
+            paths |= _extract_api_paths(
+                str(endpoint.get("path") or endpoint.get("api_path") or "")
+            )
+        else:
+            paths |= _extract_api_paths(str(endpoint))
+    keywords = truth.get("match_keywords")
+    if isinstance(keywords, list):
+        paths |= _extract_api_paths(" ".join(str(item) for item in keywords))
+    return paths
+
+
+def _trace_family(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "permission": "authorization_access_control",
+        "authorization": "authorization_access_control",
+        "auth": "authorization_access_control",
+        "isolation": "tenant_isolation",
+        "multi_tenant": "tenant_isolation",
+        "tenant": "tenant_isolation",
+        "state": "state_machine",
+        "lifecycle": "state_machine",
+        "money": "money_quantity_conservation",
+        "inventory": "money_quantity_conservation",
+        "financial": "money_quantity_conservation",
+        "idempotency": "idempotency_duplicate_submit",
+        "duplicate": "idempotency_duplicate_submit",
+        "concurrency": "concurrency_race_condition",
+        "race": "concurrency_race_condition",
+        "consistency": "data_consistency",
+        "validation": "input_validation_boundary",
+        "boundary": "input_validation_boundary",
+        "visibility": "visibility_disclosure",
+        "workflow": "workflow_approval",
+        "async": "async_eventual_consistency",
+        "cache": "cache_stale_state",
+        "audit": "audit_traceability",
+        "ui": "ui_api_contract_drift",
+        "regression": "regression_historical_bug",
+    }
+    if raw in _RISK_FAMILY_ONTOLOGY:
+        return raw
+    for token, family in aliases.items():
+        if token in raw:
+            return family
+    return raw or "unclassified"
+
+
+def _trace_paths(trace: dict[str, Any]) -> set[str]:
+    generation = trace.get("generation") if isinstance(trace.get("generation"), dict) else {}
+    execution = trace.get("execution") if isinstance(trace.get("execution"), dict) else {}
+    values = list(generation.get("endpoint_shapes") or [])
+    values.append(generation.get("bound_path_shape"))
+    values.extend(execution.get("normalized_paths") or [])
+    return _extract_api_paths(" ".join(str(item or "") for item in values))
+
+
+def _trace_methods(trace: dict[str, Any]) -> set[str]:
+    generation = trace.get("generation") if isinstance(trace.get("generation"), dict) else {}
+    execution = trace.get("execution") if isinstance(trace.get("execution"), dict) else {}
+    values = list(execution.get("methods") or [])
+    values.append(generation.get("bound_method"))
+    return {str(item or "").strip().upper() for item in values if str(item or "").strip()}
+
+
+def _truth_methods(truth: dict[str, Any]) -> set[str]:
+    methods: set[str] = set()
+    for key in ("method", "http_method", "verb"):
+        value = str(truth.get(key) or "").strip().upper()
+        if value in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            methods.add(value)
+    for endpoint in truth.get("affected_endpoints") or truth.get("related_endpoints") or []:
+        if not isinstance(endpoint, dict):
+            continue
+        value = str(endpoint.get("method") or endpoint.get("http_method") or "").strip().upper()
+        if value in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            methods.add(value)
+    trigger = str(truth.get("trigger") or "").upper()
+    for method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
+        if re.search(rf"\b{method}\b", trigger):
+            methods.add(method)
+    return methods
+
+
+def _candidate_id(candidate: dict[str, Any]) -> str:
+    for key in (
+        "candidate_id",
+        "hypothesis_id",
+        "finding_id",
+        "behavior_slice_id",
+        "evidence_id",
+        "id",
+    ):
+        value = str(candidate.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def compute_stage_loss_matrix(
+    *,
+    ground_truth_path: Path | str,
+    candidates: list[dict[str, Any]] | None,
+    trace_ledger: dict[str, Any],
+    delivered_bug_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Build evaluator-private per-Bug loss diagnostics from redacted traces.
+
+    Candidate and trace matches are diagnostic only: they never increase TP or
+    alter Recall/Precision. Ground-truth titles, keywords and paths are not
+    copied into the returned matrix.
+    """
+
+    truth_bugs = _load_truth_bugs(Path(ground_truth_path))
+    traces = [item for item in (trace_ledger.get("traces") or []) if isinstance(item, dict)]
+    delivered = {str(item) for item in delivered_bug_ids if str(item).strip()}
+    candidate_rows = [item for item in (candidates or []) if isinstance(item, dict)]
+
+    candidates_by_truth: dict[str, list[dict[str, Any]]] = {}
+    for candidate in candidate_rows:
+        matched = _match_finding_to_gt(candidate, truth_bugs, set())
+        if not matched:
+            continue
+        bug_id = str(matched.get("bug_id") or matched.get("id") or "").strip()
+        if bug_id:
+            candidates_by_truth.setdefault(bug_id, []).append(candidate)
+
+    family_counts: dict[str, int] = {}
+    for truth in truth_bugs:
+        family = _risk_family_for_item(truth)
+        family_counts[family] = family_counts.get(family, 0) + 1
+
+    rows: list[dict[str, Any]] = []
+    first_loss_counts: dict[str, int] = {}
+    stage_reached_counts = {stage: 0 for stage in _STAGE_LOSS_STAGES}
+    ambiguous_count = 0
+
+    for truth in truth_bugs:
+        bug_id = str(truth.get("bug_id") or truth.get("id") or "").strip()
+        if not bug_id:
+            continue
+        family = _risk_family_for_item(truth)
+        truth_paths = _truth_paths(truth)
+        truth_methods = _truth_methods(truth)
+        matched_candidates = candidates_by_truth.get(bug_id, [])
+        candidate_slice_ids = {
+            str(item.get("behavior_slice_id") or "").strip()
+            for item in matched_candidates
+            if str(item.get("behavior_slice_id") or "").strip()
+        }
+
+        trace_matches: list[tuple[float, str, dict[str, Any]]] = []
+        family_only_collision = False
+        for trace in traces:
+            generation = trace.get("generation") if isinstance(trace.get("generation"), dict) else {}
+            trace_family = _trace_family(generation.get("family"))
+            trace_path_values = _trace_paths(trace)
+            trace_method_values = _trace_methods(trace)
+            slice_id = str(trace.get("behavior_slice_id") or "").strip()
+            identity_link = bool(slice_id and slice_id in candidate_slice_ids)
+            path_link = _paths_overlap(truth_paths, trace_path_values)
+            family_link = trace_family == family
+            method_link = bool(truth_methods and trace_method_values and truth_methods & trace_method_values)
+
+            if identity_link:
+                trace_matches.append((1.0, "candidate_slice_identity", trace))
+            elif path_link:
+                score = 0.65 + (0.25 if family_link else 0.0) + (0.1 if method_link else 0.0)
+                trace_matches.append((min(1.0, score), "endpoint_path", trace))
+            elif family_link and family_counts.get(family, 0) == 1:
+                trace_matches.append((0.35, "unique_family", trace))
+            elif family_link:
+                family_only_collision = True
+
+        trace_matches.sort(key=lambda item: (-item[0], str(item[2].get("trace_id") or "")))
+        matched_traces = [item[2] for item in trace_matches]
+        is_delivered = bug_id in delivered
+        ambiguous = bool(
+            family_only_collision
+            and not matched_candidates
+            and not matched_traces
+            and not is_delivered
+        )
+
+        if ambiguous:
+            ambiguous_count += 1
+            stage_state: dict[str, bool | None] = {stage: None for stage in _STAGE_LOSS_STAGES}
+            first_loss_stage = "diagnostic_ambiguity"
+            diagnostic_status = "AMBIGUOUS"
+        else:
+            hypothesis_generated = bool(matched_candidates or matched_traces or is_delivered)
+            endpoint_bound = bool(
+                is_delivered
+                or any(_finding_paths(item) for item in matched_candidates)
+                or any(
+                    int((trace.get("generation") or {}).get("endpoint_count") or 0) > 0
+                    for trace in matched_traces
+                )
+            )
+            selected = bool(
+                is_delivered
+                or any(bool((trace.get("selection") or {}).get("selected")) for trace in matched_traces)
+            )
+            executed = bool(
+                is_delivered
+                or any(int((trace.get("execution") or {}).get("http_step_count") or 0) > 0 for trace in matched_traces)
+            )
+            oracle_evaluated = bool(
+                is_delivered
+                or any(
+                    int((trace.get("verification") or {}).get("oracle_evaluated_count") or 0) > 0
+                    for trace in matched_traces
+                )
+            )
+            oracle_matched = bool(
+                is_delivered
+                or any(
+                    int((trace.get("verification") or {}).get("oracle_failure_votes") or 0) > 0
+                    for trace in matched_traces
+                )
+            )
+            stage_state = {
+                "hypothesis_generated": hypothesis_generated,
+                "endpoint_bound": endpoint_bound,
+                "selected": selected,
+                "executed": executed,
+                "oracle_evaluated": oracle_evaluated,
+                "oracle_matched": oracle_matched,
+                "deliverable": is_delivered,
+            }
+            if not hypothesis_generated:
+                first_loss_stage = "hypothesis_generation"
+            elif not endpoint_bound:
+                first_loss_stage = "endpoint_binding"
+            elif not matched_traces and not is_delivered:
+                first_loss_stage = "trace_observability"
+            elif not selected:
+                first_loss_stage = "selection"
+            elif not executed:
+                first_loss_stage = "execution"
+            elif not oracle_evaluated:
+                first_loss_stage = "oracle_evaluation"
+            elif not oracle_matched:
+                first_loss_stage = "oracle_resolution"
+            elif not is_delivered:
+                first_loss_stage = "delivery_gate"
+            else:
+                first_loss_stage = "delivered"
+            diagnostic_status = "COMPLETE"
+            for stage, reached in stage_state.items():
+                if reached is True:
+                    stage_reached_counts[stage] += 1
+
+        first_loss_counts[first_loss_stage] = first_loss_counts.get(first_loss_stage, 0) + 1
+        rows.append(
+            {
+                "bug_id": bug_id,
+                "category": family,
+                "severity": str(truth.get("severity") or ""),
+                **stage_state,
+                "first_loss_stage": first_loss_stage,
+                "diagnostic_status": diagnostic_status,
+                "match_basis": trace_matches[0][1] if trace_matches else ("candidate_semantic" if matched_candidates else "none"),
+                "match_confidence": round(trace_matches[0][0], 4) if trace_matches else (0.6 if matched_candidates else 0.0),
+                "candidate_ids": [value for value in (_candidate_id(item) for item in matched_candidates[:8]) if value],
+                "trace_ids": [str(item.get("trace_id") or "") for item in matched_traces[:8] if str(item.get("trace_id") or "")],
+            }
+        )
+
+    definite_count = max(0, len(rows) - ambiguous_count)
+    return {
+        "schema_version": "qualibug.discovery-stage-loss-matrix.v1",
+        "status": "READY" if rows and ambiguous_count == 0 else ("PARTIAL" if rows else "EMPTY"),
+        "ground_truth_bug_count": len(rows),
+        "diagnostic_complete_count": definite_count,
+        "diagnostic_ambiguous_count": ambiguous_count,
+        "first_loss_stage_counts": dict(
+            sorted(first_loss_counts.items(), key=lambda item: (-item[1], item[0]))
+        ),
+        "stage_reached_counts": stage_reached_counts,
+        "stage_reached_rates": {
+            stage: round(count / definite_count, 4) if definite_count else None
+            for stage, count in stage_reached_counts.items()
+        },
+        "bugs": rows,
+        "scoring_contract": "diagnostic_only_never_changes_tp_fp_fn",
+    }
+
+
 def compute_benchmark(
     project: str,
     findings: list[dict[str, Any]],
@@ -729,6 +1036,7 @@ def compute_benchmark(
         "regression_total_count": reg_total,
         "regression_passed_count": reg_passed,
         "matched_bugs": matched_pairs[:50],
+        "matched_bug_ids": sorted(matched_gt_ids),
         "missed_bug_ids": [b.get("bug_id") for b in truth_bugs if b.get("bug_id") not in matched_gt_ids],
         "bug_type_breakdown": _bug_type_breakdown(matched_pairs, truth_bugs),
         "risk_family_breakdown": _risk_family_breakdown(matched_pairs, truth_bugs),

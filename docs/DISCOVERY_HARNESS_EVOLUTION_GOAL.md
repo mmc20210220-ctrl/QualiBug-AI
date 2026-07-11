@@ -56,6 +56,7 @@ Missing ground truth, missing pipeline health, a failed-safe pipeline, missing r
 ## Required run envelope
 
 The external evaluator accepts a completed run envelope. All operational fields are measured inputs; the evaluator does not invent defaults.
+For per-Bug loss diagnosis, supply the redacted immutable discovery Trace Ledger from the same run with `--trace-ledger` (or embed it as `trace_ledger`). Its run, policy, target, mode, and redaction contract must match exactly.
 
 ```json
 {
@@ -86,11 +87,11 @@ Use the external CLI:
 
 ```powershell
 python tools/discovery_evaluation.py inspect --manifest <private-manifest>
-python tools/discovery_evaluation.py evaluate --manifest <private-manifest> --target-id <target> --run-envelope <run-envelope> --output-root <private-receipt-root>
+python tools/discovery_evaluation.py evaluate --manifest <private-manifest> --target-id <target> --run-envelope <run-envelope> --trace-ledger <trace-ledger> --output-root <private-receipt-root>
 python tools/discovery_evaluation.py aggregate --manifest <private-manifest> --receipt-dir <policy-mode-receipts> --output <immutable-report.json>
 ```
 
-The evaluator output deliberately omits the ground-truth source path.
+The evaluator output deliberately omits the ground-truth source path. When the Trace Ledger is present, `metrics.stage_loss_diagnostics` reports every hidden Bug's first loss stage across hypothesis generation, endpoint binding, selection, execution, Oracle evaluation/resolution, and formal delivery. These diagnostics never change TP/FP/FN scoring.
 
 ## Promotion rule
 

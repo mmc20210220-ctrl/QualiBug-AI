@@ -4155,6 +4155,31 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                 )
 
             _seen_evidence_graph_keys = {_evidence_graph_key(item) for item in _acc_evidence_graphs}
+            _acc_execution_trace_summaries: list[dict[str, Any]] = [
+                item
+                for item in (v12.get("execution_trace_summaries") or [])
+                if isinstance(item, dict)
+            ]
+
+            def _execution_trace_summary_key(
+                item: dict[str, Any],
+            ) -> tuple[str, str, str]:
+                _scenario = _as_dict(item.get("scenario"))
+                _execution_trace = _as_dict(item.get("execution_trace"))
+                return (
+                    str(_scenario.get("behavior_slice_id") or ""),
+                    str(
+                        _execution_trace.get("scenario_id")
+                        or _scenario.get("id")
+                        or ""
+                    ),
+                    str(_execution_trace.get("actor_role") or ""),
+                )
+
+            _seen_execution_trace_summary_keys = {
+                _execution_trace_summary_key(item)
+                for item in _acc_execution_trace_summaries
+            }
             _rounds_run = 1
             while _rounds_run < _max_rounds:
                 _ledger = _as_dict(v12.get("behavior_slice_ledger"))
@@ -4184,6 +4209,22 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                     if _graph_key not in _seen_evidence_graph_keys:
                         _seen_evidence_graph_keys.add(_graph_key)
                         _acc_evidence_graphs.append(_graph)
+                for _trace_summary in (
+                    _next.get("execution_trace_summaries") or []
+                ):
+                    if not isinstance(_trace_summary, dict):
+                        continue
+                    _trace_summary_key = _execution_trace_summary_key(
+                        _trace_summary
+                    )
+                    if (
+                        _trace_summary_key
+                        not in _seen_execution_trace_summary_keys
+                    ):
+                        _seen_execution_trace_summary_keys.add(
+                            _trace_summary_key
+                        )
+                        _acc_execution_trace_summaries.append(_trace_summary)
                 v12 = _next
                 _rounds_run += 1
                 # Stop early if a round contributed nothing new AND has no next round.
@@ -4191,11 +4232,15 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                     break
             v12["findings"] = _acc_findings
             v12["evidence_graphs"] = _acc_evidence_graphs
+            v12["execution_trace_summaries"] = _acc_execution_trace_summaries
             v12["multi_round_summary"] = {
                 "rounds_run": _rounds_run,
                 "max_rounds": _max_rounds,
                 "accumulated_findings": len(_acc_findings),
                 "accumulated_evidence_graphs": len(_acc_evidence_graphs),
+                "accumulated_execution_trace_summaries": len(
+                    _acc_execution_trace_summaries
+                ),
             }
             runtime_contract = _as_dict(v12.get("runtime_contract")) or runtime_contract
             phases = _as_dict(v12.get("phases"))

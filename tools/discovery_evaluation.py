@@ -83,6 +83,15 @@ def _command_evaluate(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("run envelope.operational_metrics must be an object")
     if fixture_governance is not None and not isinstance(fixture_governance, dict):
         raise ValueError("run envelope.fixture_governance must be an object when present")
+    trace_ledger: dict[str, Any] | None = None
+    if args.trace_ledger:
+        trace_ledger = _load_object(Path(args.trace_ledger), "discovery trace ledger")
+    else:
+        embedded_trace = scan_result.get("trace_ledger") or envelope.get("trace_ledger")
+        if embedded_trace is not None:
+            if not isinstance(embedded_trace, dict):
+                raise ValueError("trace_ledger must be an object when embedded")
+            trace_ledger = embedded_trace
 
     receipt = evaluate_completed_scan(
         manifest,
@@ -95,6 +104,7 @@ def _command_evaluate(args: argparse.Namespace) -> dict[str, Any]:
         pipeline_health=pipeline_health,
         operational_metrics=operational_metrics,
         fixture_governance=fixture_governance or {},
+        trace_ledger=trace_ledger,
     )
     persisted = persist_evaluation_receipt(receipt, args.output_root)
     return {"receipt_path": str(persisted), "receipt": receipt}
@@ -126,6 +136,14 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--manifest", required=True, type=Path)
     evaluate_parser.add_argument("--target-id", required=True)
     evaluate_parser.add_argument("--run-envelope", required=True, type=Path)
+    evaluate_parser.add_argument(
+        "--trace-ledger",
+        type=Path,
+        help=(
+            "optional redacted discovery trace ledger for evaluator-private "
+            "per-Bug first-loss diagnostics"
+        ),
+    )
     evaluate_parser.add_argument("--output-root", required=True, type=Path)
     evaluate_parser.set_defaults(handler=_command_evaluate)
 

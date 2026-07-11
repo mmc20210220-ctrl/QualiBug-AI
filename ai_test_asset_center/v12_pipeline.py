@@ -2027,6 +2027,129 @@ def _normalize_executable_api_document(api_document: Any) -> tuple[str, dict[str
         }
 
 
+def _redacted_trace_path(value: Any) -> str:
+    path = str(value or "").strip()
+    if not path:
+        return ""
+    path = re.sub(r"^https?://[^/]+", "", path, flags=re.IGNORECASE)
+    path = path.split("?", 1)[0]
+    path = re.sub(r"/[0-9]+(?=/|$)", "/{id}", path)
+    path = re.sub(
+        r"/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?=/|$)",
+        "/{id}",
+        path,
+        flags=re.IGNORECASE,
+    )
+    return path
+
+
+def _redacted_execution_error(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if "missing_runtime_path_binding" in text:
+        return "missing_runtime_path_binding"
+    if "precondition" in text:
+        return "precondition_not_met"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "connection" in text or "unreachable" in text:
+        return "connection_failure"
+    if "auth" in text or "token" in text or "credential" in text:
+        return "authentication_failure"
+    if "validation" in text or "invalid input" in text:
+        return "invalid_test_input"
+    return "execution_error"
+
+
+def _redacted_trace_status(step: dict[str, Any]) -> int:
+    response = _dict(step.get("response"))
+    try:
+        return max(0, int(step.get("status") or response.get("status_code") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _execution_trace_identity(scenario: Any, trace: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(getattr(scenario, "behavior_slice_id", "") or "").strip(),
+        str(trace.get("scenario_id") or getattr(scenario, "id", "") or "").strip(),
+        str(trace.get("actor_role") or "").strip(),
+    )
+
+
+def _redacted_execution_trace_graph(
+    scenario: Any,
+    trace: dict[str, Any],
+    *,
+    discovery_round: int,
+) -> dict[str, Any]:
+    """Keep stage evidence for every attempt without persisting payloads."""
+
+    steps: list[dict[str, Any]] = []
+    for raw_step in trace.get("steps") or []:
+        if not isinstance(raw_step, dict):
+            continue
+        steps.append(
+            {
+                "method": str(raw_step.get("method") or "").strip().upper(),
+                "path": _redacted_trace_path(raw_step.get("path")),
+                "action": str(raw_step.get("action") or "")[:80],
+                "status": _redacted_trace_status(raw_step),
+                "skipped_reason": _redacted_execution_error(raw_step.get("skipped_reason"))
+                if str(raw_step.get("skipped_reason") or "").strip()
+                else "",
+            }
+        )
+
+    sandbox_write = _dict(trace.get("sandbox_write"))
+    cleanup = _dict(sandbox_write.get("cleanup"))
+    audit_records = [
+        item for item in sandbox_write.get("audit_records") or []
+        if isinstance(item, dict)
+    ]
+    execution_trace = {
+        "scenario_id": str(trace.get("scenario_id") or getattr(scenario, "id", "") or ""),
+        "actor_role": str(trace.get("actor_role") or "")[:80],
+        "steps": steps,
+        "errors": [
+            _redacted_execution_error(item)
+            for item in trace.get("errors") or []
+            if str(item or "").strip()
+        ],
+        "precondition_not_met": [
+            {}
+            for item in trace.get("precondition_not_met") or []
+            if item is not None
+        ],
+        "sandbox_write": {
+            "status": str(sandbox_write.get("status") or ""),
+            "cleanup": {
+                "status": str(cleanup.get("status") or ""),
+                "receipt_ref": "present" if cleanup.get("receipt_ref") else "",
+            },
+            "audit_path": "present" if sandbox_write.get("audit_path") else "",
+            "audit_record_count": len(audit_records),
+        },
+    }
+    return {
+        "scenario": {
+            "id": str(trace.get("scenario_id") or getattr(scenario, "id", "") or ""),
+            "behavior_slice_id": str(
+                getattr(scenario, "behavior_slice_id", "") or ""
+            ),
+            "discovery_round": int(discovery_round or 0),
+        },
+        "execution_trace": execution_trace,
+        "oracle_results": [],
+        "layers_triggered": [],
+        "redaction_contract": {
+            "request_body_persisted": False,
+            "response_body_persisted": False,
+            "query_string_persisted": False,
+            "credentials_persisted": False,
+        },
+    }
+
+
 def _publish_behavior_contract_snapshot(
     result: dict[str, Any],
     behavior_contract: dict[str, Any],
@@ -2113,6 +2236,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         "ui_findings": [],
         "ui_execution": {},
         "evidence_graphs": [],
+        "execution_trace_summaries": [],
         "risk_clues_saved": 0,
         "behavior_slice_ledger": {},
         "campaign": {},
@@ -2916,6 +3040,15 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 result["phases"]["execution"]["observability_status"] = "FAILED_SAFE"
                 if not result["phases"]["execution"].get("reason"):
                     result["phases"]["execution"]["reason"] = "execution_observability_gap"
+        result["execution_trace_summaries"] = [
+            _redacted_execution_trace_graph(
+                scenario,
+                trace,
+                discovery_round=settings["round_number"],
+            )
+            for scenario, trace in attempted_traces
+            if isinstance(trace, dict)
+        ]
         try:
             from .ui_execution_adapter import execute_ui_execution_requests
 
@@ -3001,6 +3134,14 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         _pre_oracle_findings = len(result["findings"])
         _oracle_evaluated = 0
         _oracle_violations = 0
+        _execution_trace_summary_index = {
+            _execution_trace_identity(scenario, trace): summary
+            for (scenario, trace), summary in zip(
+                attempted_traces,
+                result.get("execution_trace_summaries") or [],
+            )
+            if isinstance(trace, dict) and isinstance(summary, dict)
+        }
         for scenario, trace in traces:
             # Skip traces that never made a real HTTP request (all steps errored/skipped).
             # These produce false-positive 404/400 findings from unexecutable scenarios.
@@ -3012,7 +3153,19 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             if not _has_real_request:
                 continue
             _oracle_evaluated += 1
+            _summary_graph = _execution_trace_summary_index.get(
+                _execution_trace_identity(scenario, trace)
+            )
             for oracle_result in oracle.evaluate(scenario.to_dict(), trace, None):
+                if isinstance(_summary_graph, dict):
+                    _summary_graph.setdefault("oracle_results", []).append(
+                        {
+                            "oracle_name": str(
+                                getattr(oracle_result, "oracle_name", "") or ""
+                            ),
+                            "passed": bool(oracle_result.passed),
+                        }
+                    )
                 if oracle_result.passed:
                     continue
                 _oracle_violations += 1
