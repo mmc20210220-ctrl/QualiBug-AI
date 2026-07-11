@@ -1,5 +1,5 @@
 export const OPENAPI_SPEC_RELATIVE_PATH = "openapi/phase104_api_contract/openapi.json";
-export const OPENAPI_SPEC_SHA256 = "e9e2ef45b935a84206bbb2b6a6ed95f717ead3de7bfbbacb91b85cd31f2deb3a";
+export const OPENAPI_SPEC_SHA256 = "7d4bd4557e9803f26e9c886cf4456dfaaddc44f8082e3b6d37f1cd3339c520a4";
 export const OPENAPI_GENERATOR = "openapi-typescript@7.13.0";
 
 export type paths = {

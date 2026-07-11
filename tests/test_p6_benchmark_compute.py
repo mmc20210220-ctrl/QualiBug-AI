@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center.benchmark_compute import (
+    _extract_api_paths,
     _method_path_key,
     compute_benchmark,
     persist_benchmark_result,
@@ -54,7 +55,7 @@ def test_compute_benchmark_with_ground_truth(tmp_path: Path) -> None:
         {"title": "SQL Injection", "method": "POST", "path": "/api/login", "severity": "P0", "confirmation_status": "confirmed",
          "raw_evidence": {"request_raw": {"method": "POST"}, "response_raw": {"status_code": 200}}, "expected": "no SQL error", "actual": "SQL error",
          "reproduction": {"is_synthetic": False}, "gate_passed": True},
-        {"title": "Double Refund", "method": "POST", "path": "/api/refunds", "severity": "P0", "confirmation_status": "confirmed",
+        {"title": "Double Refund", "category": "idempotency_duplicate_submit", "method": "POST", "path": "/api/refunds", "severity": "P0", "confirmation_status": "confirmed",
          "raw_evidence": {"request_raw": {"method": "POST"}, "response_raw": {"status_code": 201}}, "expected": "409 conflict", "actual": "201 created",
          "reproduction": {"is_synthetic": False}, "gate_passed": True},
     ]
@@ -82,8 +83,8 @@ def test_compute_benchmark_with_ground_truth(tmp_path: Path) -> None:
 def test_benchmark_does_not_count_multiple_oracles_on_one_trace_as_multiple_bugs(tmp_path: Path) -> None:
     gt_path = tmp_path / "ground_truth" / "bugs.json"
     _write_json(gt_path, {"bugs": [
-        {"bug_id": "BUG_1", "title": "first", "severity": "P1", "endpoint_hint": "/api/items"},
-        {"bug_id": "BUG_2", "title": "variant", "severity": "P1", "endpoint_hint": "/api/items"},
+        {"bug_id": "BUG_1", "title": "missing auth", "type": "auth", "severity": "P1", "endpoint_hint": "/api/items"},
+        {"bug_id": "BUG_2", "title": "permission variant", "type": "auth", "severity": "P1", "endpoint_hint": "/api/items"},
     ]})
     base = {
         "behavior_slice_id": "slice-1",
@@ -96,7 +97,7 @@ def test_benchmark_does_not_count_multiple_oracles_on_one_trace_as_multiple_bugs
 
     result = compute_benchmark(
         "test",
-        [{**base, "title": "Oracle A"}, {**base, "title": "Oracle B"}],
+        [{**base, "title": "Permission Oracle A", "category": "permission"}, {**base, "title": "Permission Oracle B", "category": "permission"}],
         root=tmp_path,
         ground_truth_path=str(gt_path),
     )
@@ -105,6 +106,42 @@ def test_benchmark_does_not_count_multiple_oracles_on_one_trace_as_multiple_bugs
     assert result["duplicate_findings_excluded"] == 1
     assert result["scan_findings_total"] == 1
     assert result["recall"] == 0.5
+
+
+def test_endpoint_coverage_alone_is_not_counted_as_a_detected_bug(tmp_path: Path) -> None:
+    gt_path = tmp_path / "ground_truth" / "bugs.json"
+    _write_json(gt_path, {"bugs": [{
+        "bug_id": "BUG_PRICE",
+        "title": "amount calculation violates pricing rules",
+        "type": "money",
+        "severity": "P1",
+        "endpoint_hint": "/api/pricing/quote",
+    }]})
+    finding = {
+        "title": "Permission oracle accepted readonly actor",
+        "category": "permission",
+        "method": "POST",
+        "path": "/api/pricing/quote",
+        "confirmation_status": "confirmed",
+        "customer_delivery_status": "defect",
+        "gate_passed": True,
+    }
+
+    result = compute_benchmark(
+        "test",
+        [finding],
+        root=tmp_path,
+        ground_truth_path=str(gt_path),
+    )
+
+    assert result["true_positives"] == 0
+    assert result["false_positives"] == 1
+    assert result["recall"] == 0.0
+
+
+def test_api_path_matching_preserves_unicode_segments_without_prefix_collisions() -> None:
+    assert _extract_api_paths("POST /api/v1/ecommerce/订单/{id}") == {"/api/v1/ecommerce/订单/*"}
+    assert _extract_api_paths("POST /api/v1/ecommerce/库存/deduct") == {"/api/v1/ecommerce/库存/deduct"}
 
 
 def test_persist_and_read_back(tmp_path: Path) -> None:

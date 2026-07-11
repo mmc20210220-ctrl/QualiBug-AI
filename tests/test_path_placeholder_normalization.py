@@ -49,6 +49,31 @@ def test_sku_binding_uses_product_catalog_fallback_and_field_aliases() -> None:
     assert bindings.get("id") == "SKU-PHONE-001"
 
 
+def test_path_specific_sibling_id_binding_uses_response_primary_id() -> None:
+    from ai_test_asset_center.real_id_resolver import bind_entity_fields
+
+    bindings = bind_entity_fields(
+        {"id": "ord-123", "status": "PENDING"},
+        "/api/payments/order/{orderId}",
+    )
+
+    assert bindings["id"] == "ord-123"
+    assert bindings["orderId"] == "ord-123"
+
+
+def test_primary_id_is_not_broadcast_across_multiple_path_identities() -> None:
+    from ai_test_asset_center.real_id_resolver import bind_entity_fields
+
+    bindings = bind_entity_fields(
+        {"id": "ord-123", "status": "PENDING"},
+        "/api/tenants/{tenantId}/orders/{orderId}",
+    )
+
+    assert bindings["id"] == "ord-123"
+    assert "tenantId" not in bindings
+    assert "orderId" not in bindings
+
+
 def test_alternate_collection_paths_derives_non_ecommerce_siblings() -> None:
     from ai_test_asset_center.real_id_resolver import (
         alternate_collection_paths,
@@ -79,7 +104,10 @@ def test_resolve_entity_steps_include_sibling_catalog_for_inventory() -> None:
     from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
 
     steps, probe = SemanticScenarioGenerator._resolve_entity_steps(
-        "/api/inventory/:sku", actor="buyer", start_order=2,
+        "/api/inventory/:sku",
+        actor="buyer",
+        start_order=2,
+        api_doc="### GET /api/products\n### GET /api/inventory/:sku\n",
     )
     assert probe == "/api/inventory/{sku}"
     assert steps
@@ -103,7 +131,7 @@ def test_runtime_body_template_converts_angle_placeholders() -> None:
     body = SemanticScenarioGenerator._runtime_body_template(api_doc, "POST", "/api/inventory/reserve")
     assert body["sku"] == "SKU-PHONE-001"
     assert body["qty"] == 1
-    assert body["orderId"] == "{order_id}"
+    assert body["orderId"] == "{orderId}"
 
 
 def test_inventory_slice_includes_write_body_and_order_resolve() -> None:
@@ -140,7 +168,7 @@ def test_inventory_slice_includes_write_body_and_order_resolve() -> None:
         if str(step.api_method).upper() == "POST" and "inventory_probe" in step.action
     ]
     assert write_steps
-    assert write_steps[0].body_template.get("orderId") == "{order_id}"
+    assert write_steps[0].body_template.get("orderId") == "{orderId}"
     resolve_paths = [step.api_path for step in scenario.steps if step.action.startswith("resolve_")]
     assert any("/api/orders" in path for path in resolve_paths)
 
@@ -164,7 +192,10 @@ def test_nested_admin_user_paths_resolve_via_search_or_me() -> None:
     assert "/api/users/admin/search" in alts2 or "/api/auth/me" in alts2
 
     steps, probe = SemanticScenarioGenerator._resolve_entity_steps(
-        "/api/users/admin/users/:id/balance", actor="admin", start_order=1,
+        "/api/users/admin/users/:id/balance",
+        actor="admin",
+        start_order=1,
+        api_doc="### GET /api/users/admin/search\n### GET /api/auth/me\n### POST /api/users/admin/users/:id/balance\n",
     )
     assert probe == "/api/users/admin/users/{id}/balance"
     resolve_paths = [step.api_path for step in steps]
@@ -180,7 +211,10 @@ def test_orderid_path_prefers_orders_collection() -> None:
     alts = alternate_collection_paths("/api/payments/order/{orderId}")
     assert "/api/orders" in alts
     steps, probe = SemanticScenarioGenerator._resolve_entity_steps(
-        "/api/payments/order/:orderId", actor="buyer", start_order=1,
+        "/api/payments/order/:orderId",
+        actor="buyer",
+        start_order=1,
+        api_doc="### GET /api/orders\n### POST /api/payments/order/:orderId\n",
     )
     assert probe == "/api/payments/order/{orderId}"
     assert any(s.api_path.startswith("/api/orders") for s in steps)
@@ -201,7 +235,7 @@ def test_address_body_binding_uses_users_addresses() -> None:
 ```
 """
     body = SemanticScenarioGenerator._runtime_body_template(api_doc, "POST", "/api/orders")
-    assert body.get("addressId") == "{address_id}"
+    assert body.get("addressId") == "{addressId}"
     bind_steps, _ = SemanticScenarioGenerator._body_binding_resolve_steps(
         body, actor="buyer", start_order=1,
     )
@@ -223,6 +257,44 @@ def test_body_binding_bootstraps_create_when_api_doc_present() -> None:
     assert bootstrap.api_method == "POST"
     assert bootstrap.api_path == "/api/orders"
     assert isinstance(bootstrap.body_template, dict) and bootstrap.body_template
+
+
+def test_bootstrap_create_preserves_source_identity_strings() -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    api_doc = """
+### POST /api/cart/items
+
+请求：
+
+```json
+{"sku":"SKU-PHONE-001","qty":1}
+```
+"""
+
+    body = SemanticScenarioGenerator._bootstrap_create_body(api_doc, "/api/cart/items")
+
+    assert body == {"sku": "SKU-PHONE-001", "qty": 1}
+
+
+def test_bootstrap_create_drops_optional_promotional_demo_strings() -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    api_doc = """
+### POST /api/orders
+
+请求：
+
+```json
+{"items":[{"sku":"SKU-PHONE-001","qty":1}],"couponCode":"NEW100","addressId":"<address_id>"}
+```
+"""
+
+    body = SemanticScenarioGenerator._bootstrap_create_body(api_doc, "/api/orders")
+
+    assert "couponCode" not in body
+    assert body["items"] == [{"sku": "SKU-PHONE-001", "qty": 1}]
+    assert body["addressId"] == "{addressId}"
 
 
 def test_resolve_entity_bootstraps_generic_id_from_collection_path() -> None:

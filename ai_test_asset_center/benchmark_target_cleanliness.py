@@ -82,7 +82,20 @@ def assert_benchmark_target_clean(
         if not isinstance(value, dict):
             raise RuntimeError(f"benchmark_write_audit_invalid:{audit_path}:{line_number}:expected_object")
         rows.append(value)
-    incomplete = [row for row in rows if str(row.get("cleanup_status") or "").strip().lower() != "completed"]
+    incomplete = []
+    for row in rows:
+        status = str(row.get("cleanup_status") or "").strip().lower()
+        strategy = str(row.get("cleanup_strategy") or "").strip().lower()
+        # completed/verified = compensated. Observer-proven no-mutation writes
+        # leave the target unchanged and do not require a reset receipt.
+        if status in {"completed", "verified"}:
+            continue
+        if status == "not_required" and strategy in {
+            "rejected_write_observer_unchanged",
+            "setup_rejected_observer_unchanged",
+        }:
+            continue
+        incomplete.append(row)
     if not incomplete:
         latest_audit = max((_parse_utc(row.get("timestamp")) for row in rows), default=datetime.now(timezone.utc))
         archived_audit, archived_sha256 = _archive_audit(

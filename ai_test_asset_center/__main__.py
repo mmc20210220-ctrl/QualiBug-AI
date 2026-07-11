@@ -25,6 +25,11 @@ from .enterprise_campaign import has_real_confirmation_receipt
 from .scan_counter import increment_scan_counter
 from .enterprise_test_data_plan import build_campaign_test_data_plan
 from .test_data_receipt_bootstrap import bootstrap_test_data_receipts_for_campaign
+from .target_policy import build_target_policy_decision
+from .customer_delivery_gate import (
+    customer_delivery_rejection_reasons,
+    is_customer_deliverable_defect,
+)
 
 _SOURCE_EXTENSIONS = {".json", ".yaml", ".yml", ".md", ".txt"}
 _MAX_SOURCE_BYTES = 5_000_000
@@ -77,11 +82,18 @@ def _scan_campaign_context_defaults(project: str, root: Path) -> dict[str, str]:
         profile.get("target_environment"),
         profile.get("environment"),
     )
+    environment_type = _first_text(
+        profile.get("environment_type"),
+        profile.get("environment_kind"),
+        profile.get("environment_class"),
+    )
     defaults: dict[str, str] = {}
     if scope_id:
         defaults["scope_id"] = scope_id[:160]
     if environment_ref:
         defaults["environment_ref"] = environment_ref[:160]
+    if environment_type:
+        defaults["environment_type"] = environment_type[:80].lower()
     return defaults
 
 
@@ -190,17 +202,20 @@ def _should_refresh_local_execution_approval(runtime_contract: dict[str, Any], c
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    """Persist JSON only after unified recursive redaction + secret scan."""
+    from .artifact_redactor import ArtifactSecretLeakError, write_json_redacted
+
     try:
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        temporary.replace(path)
-    finally:
-        if temporary.exists():
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
+        write_json_redacted(path, payload)
+    except ArtifactSecretLeakError as exc:
+        # Fail closed: do not leave a secret-bearing artifact on disk.
+        import sys as _sys
+
+        print(
+            f"[scan] FAILED_SAFE artifact secret scan blocked write to {path}: {exc}",
+            file=_sys.stderr,
+        )
+        raise
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -2842,14 +2857,61 @@ def _runtime_contract(context: dict[str, Any], base_url: str, manifest: dict[str
         missing.append(_gap("SOURCE_PROVENANCE_MISSING", "A registered source is required before runtime probing."))
     if not str(context.get("scope_id") or "").strip():
         missing.append(_gap("CAMPAIGN_SCOPE_MISSING", "An explicit campaign scope_id is required before runtime probing."))
-    if not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
+    environment_ref = str(context.get("environment_ref") or context.get("target_environment") or "").strip()
+    if not environment_ref:
         missing.append(_gap("ENVIRONMENT_REFERENCE_MISSING", "An approved environment_ref is required before runtime probing."))
+    environment_type = _first_text(
+        context.get("environment_type"),
+        context.get("environment_kind"),
+        context.get("environment_class"),
+    ).lower()
+    execution_mode = str(context.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
+    if execution_mode == "approved_sandbox_write" and not environment_type:
+        missing.append(_gap("UNKNOWN_ENVIRONMENT", "Write execution requires an explicit non-production environment_type."))
     test_data = _as_dict(context.get("test_data_contract"))
     if test_data.get("strategy") in {"create_disposable", "approved_fixture_setup"} and test_data.get("write_approved") is not True:
         missing.append(_gap("WRITE_APPROVAL_MISSING", "Write-capable test-data strategies require explicit write approval."))
+    approved_base_url = _first_text(
+        context.get("approved_base_url"),
+        _as_dict(context.get("target_policy")).get("approved_base_url"),
+        base_url if not missing else "",
+    )
+    decision = build_target_policy_decision(
+        requested_base_url=base_url,
+        approved_base_url=approved_base_url,
+        environment_type=environment_type,
+        environment_ref=environment_ref,
+        execution_mode=execution_mode,
+        runtime_status="approved" if not missing else "blocked",
+    )
+    if execution_mode == "approved_sandbox_write" and not decision.get("write_allowed"):
+        for code in decision.get("blocking_codes") or []:
+            missing.append(_gap(str(code), "Target Policy blocked governed write execution."))
+    elif not decision.get("read_allowed"):
+        for code in decision.get("blocking_codes") or []:
+            missing.append(_gap(str(code), "Target Policy blocked runtime access."))
     if missing:
-        return "", missing, {"status": "blocked", "reason": "runtime_contract_missing", "source_manifest": public_manifest}
-    return base_url.rstrip("/"), [], {"status": "approved", "reason": "", "source_manifest": public_manifest}
+        return "", missing, {
+            "status": "blocked",
+            "reason": "runtime_contract_missing",
+            "source_manifest": public_manifest,
+            "environment_ref": environment_ref,
+            "environment_kind": environment_type,
+            "execution_mode": execution_mode,
+            "target_policy_decision": decision,
+        }
+    normalized_base = str(decision.get("approved_base_url") or "")
+    return normalized_base, [], {
+        "status": "approved",
+        "reason": "",
+        "requested_base_url": str(decision.get("requested_base_url") or ""),
+        "approved_base_url": normalized_base,
+        "environment_ref": environment_ref,
+        "environment_kind": environment_type,
+        "execution_mode": execution_mode,
+        "source_manifest": public_manifest,
+        "target_policy_decision": decision,
+    }
 
 
 def _scan_preflight_guide(
@@ -2881,6 +2943,31 @@ def _scan_preflight_guide(
         if configured_services and bool(service_credentials.get("ok"))
         else ("configured_unverified" if configured_services else "not_configured")
     )
+    target_decision = _as_dict(runtime_contract.get("target_policy_decision"))
+    if not target_decision and base_url:
+        target_decision = build_target_policy_decision(
+            requested_base_url=base_url,
+            approved_base_url=runtime_contract.get("approved_base_url"),
+            environment_type=_first_text(
+                runtime_contract.get("environment_kind"),
+                context.get("environment_type"),
+                context.get("environment_kind"),
+                context.get("environment_class"),
+            ),
+            environment_ref=_first_text(
+                runtime_contract.get("environment_ref"),
+                context.get("environment_ref"),
+                context.get("target_environment"),
+            ),
+            execution_mode=_first_text(runtime_contract.get("execution_mode"), context.get("execution_mode"), "safe_read_only"),
+            runtime_status=runtime_contract.get("status"),
+        )
+    source_bound_nonproduction = bool(
+        target_decision.get("write_allowed")
+        and manifest.get("source_id")
+        and manifest.get("source_hash")
+        and str(context.get("scope_id") or "").strip()
+    )
     checks = [
         {
             "key": "source_manifest",
@@ -2892,7 +2979,7 @@ def _scan_preflight_guide(
         {
             "key": "target_base_url",
             "label": "target_environment_url",
-            "status": "configured_unverified" if base_url else "missing",
+            "status": "ready" if target_decision.get("read_allowed") else ("configured_unverified" if base_url else "missing"),
             "required": bool(base_url),
             "detail": base_url or "plan_only_scan_has_no_runtime_target",
         },
@@ -2911,6 +2998,13 @@ def _scan_preflight_guide(
             "detail": str(context.get("environment_ref") or context.get("target_environment") or ""),
         },
         {
+            "key": "environment_type",
+            "label": "explicit_environment_classification",
+            "status": "ready" if str(target_decision.get("environment_type") or "").strip() else "missing",
+            "required": bool(base_url and str(context.get("execution_mode") or "") == "approved_sandbox_write"),
+            "detail": str(target_decision.get("environment_type") or ""),
+        },
+        {
             "key": "test_data_strategy",
             "label": "test_data_strategy",
             "status": "ready" if str(test_data.get("strategy") or "").strip() else "missing",
@@ -2919,10 +3013,17 @@ def _scan_preflight_guide(
         },
         {
             "key": "execution_approval",
-            "label": "readonly_execution_approval",
-            "status": "ready" if str(context.get("execution_approval_id") or "").strip() else ("not_required" if not base_url else "missing"),
+            "label": "execution_authorization_basis",
+            "status": "ready" if str(context.get("execution_approval_id") or "").strip() else ("not_required" if source_bound_nonproduction or not base_url or str(context.get("execution_mode") or "") == "safe_read_only" else "missing"),
+            "required": bool(base_url and str(context.get("execution_mode") or "") == "approved_sandbox_write" and not source_bound_nonproduction),
+            "detail": str(context.get("execution_approval_id") or target_decision.get("authorization_basis") or ""),
+        },
+        {
+            "key": "target_policy",
+            "label": "target_policy_decision",
+            "status": "ready" if target_decision.get("status") == "approved" else "failed",
             "required": bool(base_url),
-            "detail": str(context.get("execution_approval_id") or ""),
+            "detail": ",".join(str(code) for code in target_decision.get("blocking_codes") or []),
         },
         {
             "key": "actor_credentials",
@@ -2968,8 +3069,10 @@ def _scan_preflight_guide(
         "status": "ready" if not missing and runtime_status == "approved" else ("plan_only" if not base_url else "blocked"),
         "runtime_contract_status": runtime_status,
         "missing": missing,
+        "blocking_codes": sorted(set(str(code) for code in target_decision.get("blocking_codes") or [] if str(code))),
+        "target_policy_decision": target_decision,
         "checks": checks,
-        "healthy_claim_allowed": not missing and runtime_status == "approved",
+        "healthy_claim_allowed": not missing and runtime_status == "approved" and bool(target_decision.get("read_allowed") if base_url else True),
     }
 
 
@@ -2992,10 +3095,15 @@ def _classify_findings(items: Any) -> tuple[list[dict[str, Any]], list[dict[str,
         if not isinstance(value, dict):
             continue
         row = dict(value)
-        if has_real_confirmation_receipt(row):
+        if has_real_confirmation_receipt(row) and is_customer_deliverable_defect(row):
             row["confirmation_status"] = "confirmed"
             confirmed.append(row)
         else:
+            reasons = customer_delivery_rejection_reasons(row)
+            row["upstream_gate_passed"] = bool(row.get("gate_passed"))
+            row["gate_passed"] = False
+            row["customer_delivery_status"] = "candidate"
+            row["customer_delivery_gate_reasons"] = reasons
             row.setdefault("execution_status", "not_executed")
             row["confirmation_status"] = str(row.get("confirmation_status") or "candidate")
             candidates.append(row)
@@ -3766,11 +3874,11 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
     preflight_guide = _scan_preflight_guide(context=context, base_url="", manifest={**manifest, "actual_hash": manifest.get("source_hash", "")}, runtime_contract=runtime_contract, test_data_plan=test_data_plan)
     from .discovery_funnel import reconcile_product_pipeline_health
 
-    discovery_funnel = _as_dict(v12.get("discovery_funnel"))
+    discovery_funnel: dict[str, Any] = {}
     pipeline_health = reconcile_product_pipeline_health(
-        _as_dict(discovery_funnel.get("pipeline_health")),
-        execution_status=execution_status,
-        preflight_diagnostics=diagnostics,
+        {},
+        execution_status="blocked",
+        preflight_diagnostics={"ready": False, "all_checks_passed": False, "errors": 1},
     )
     discovery_funnel["pipeline_health"] = pipeline_health
     result: dict[str, Any] = {
@@ -3996,6 +4104,12 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         context["scope_id"] = context_defaults["scope_id"]
     if context_defaults.get("environment_ref") and not str(context.get("environment_ref") or context.get("target_environment") or "").strip():
         context["environment_ref"] = context_defaults["environment_ref"]
+    if context_defaults.get("environment_type") and not _first_text(
+        context.get("environment_type"),
+        context.get("environment_kind"),
+        context.get("environment_class"),
+    ):
+        context["environment_type"] = context_defaults["environment_type"]
     # Keep every product entrypoint on the same execution contract. The
     # private-pilot HTTP path already derives these defaults; direct scan()
     # callers (automation, CI and benchmark harnesses) must behave identically.
@@ -4071,6 +4185,8 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         ).strip()
         if environment_kind:
             diagnostics_config["environment_kind"] = environment_kind
+            diagnostics_config["environment_type"] = environment_kind
+        diagnostics_config.setdefault("execution_mode", str(context.get("execution_mode") or ""))
         diagnostics = run_preflight(diagnostics_config, api_doc_text)
     except Exception as exc:
         diagnostics = {"ready": False, "checks": [], "summary": f"preflight_unavailable:{type(exc).__name__}"}
@@ -4085,7 +4201,9 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     phases = _as_dict(v12.get("phases"))
     execution = _as_dict(phases.get("execution"))
     campaign = _as_dict(v12.get("campaign"))
-    execution_status = str(execution.get("status") or "not_executed")
+    from .discovery_funnel import effective_execution_status
+
+    execution_status = effective_execution_status(v12)
     refresh_local_approval = _should_refresh_local_execution_approval(runtime_contract, context)
     if (
         execution_status == "blocked"
@@ -4105,7 +4223,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             phases = _as_dict(v12.get("phases"))
             execution = _as_dict(phases.get("execution"))
             campaign = _as_dict(v12.get("campaign"))
-            execution_status = str(execution.get("status") or "not_executed")
+            execution_status = effective_execution_status(v12)
 
     # ── Automatic multi-round campaign convergence ──
     # A single behavior-slice round only exercises up to the per-round budget.
@@ -4246,7 +4364,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             phases = _as_dict(v12.get("phases"))
             execution = _as_dict(phases.get("execution"))
             campaign = _as_dict(v12.get("campaign"))
-            execution_status = str(execution.get("status") or execution_status)
+            execution_status = effective_execution_status(v12)
     confirmed, candidates = _classify_findings(v12.get("findings"))
     # Collapse state-graph cross-product duplicates so one real defect is not
     # reported as N near-identical P0 rows. Collapsed lifecycle variants are
@@ -4453,6 +4571,29 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         selected_slices=selected_slices,
         plan_only_scenarios=v12.get("plan_only_scenarios") if isinstance(v12.get("plan_only_scenarios"), list) else [],
     )
+    from .discovery_funnel import reconcile_product_pipeline_health
+
+    discovery_funnel = _as_dict(v12.get("discovery_funnel"))
+    pipeline_health = reconcile_product_pipeline_health(
+        _as_dict(discovery_funnel.get("pipeline_health")),
+        execution_status=execution_status,
+        preflight_diagnostics=diagnostics,
+    )
+    discovery_funnel["pipeline_health"] = pipeline_health
+    # Rebuild formal accounting against post-dedupe findings so funnel /
+    # delivery-gate / submission counts share one SSOT.
+    try:
+        from .discovery_funnel import build_funnel as _rebuild_funnel
+
+        _post_dedupe_v12 = dict(v12)
+        _post_dedupe_v12["findings"] = list(confirmed)
+        _post_dedupe_v12["discovery_funnel"] = discovery_funnel
+        discovery_funnel = _rebuild_funnel(_post_dedupe_v12)
+        discovery_funnel["pipeline_health"] = pipeline_health
+    except Exception as _funnel_rebuild_exc:
+        discovery_funnel["formal_count_rebuild_error"] = (
+            f"{type(_funnel_rebuild_exc).__name__}: {str(_funnel_rebuild_exc)[:160]}"
+        )
     result: dict[str, Any] = {
         "success": True, "scan_id": scan_id, "project": project, "grade": grade, "score": score, "coverage": coverage,
         "total_findings": len(confirmed), "total_candidates": len(candidates), "total_ms": duration_ms,
@@ -4503,6 +4644,16 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
         "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution": ui_execution, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "external_signal_execution": external_signal_execution, "v12": v12,
     }
+    from .discovery_quality_projection import (
+        attach_quality_projection_to_scan_result,
+        suppress_benchmark_quality_when_not_measured,
+    )
+
+    result = attach_quality_projection_to_scan_result(result)
+    result["benchmark_metrics"] = suppress_benchmark_quality_when_not_measured(
+        _as_dict(result.get("benchmark_metrics")),
+        _as_dict(result.get("external_evaluation")),
+    )
     # Evidence-driven Harness evolution observability. This is derived only
     # from the completed real V12 run and persists redacted lineage/status
     # summaries; raw bodies, credentials, and benchmark ground truth are never
@@ -4637,7 +4788,30 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     except Exception as e:
         import sys
         print(f"[scan] Closed-loop learning failed: {e}", file=sys.stderr)
-        result["closed_loop"] = {"status": "unavailable", "error": str(e)}
+        failure_code = f"CLOSED_LOOP_LEARNING_FAILED:{type(e).__name__}:{str(e)[:200]}"
+        result.setdefault("stage_failures", []).append(failure_code)
+        result["closed_loop"] = {
+            "status": "failed_safe",
+            "stage": "closed_loop_learning",
+            "code": "CLOSED_LOOP_LEARNING_FAILED",
+            "identity": {"project_id": project, "scan_id": result.get("scan_id")},
+            "retryability": "after_operator_action",
+            "operator_action": "Inspect closed-loop history and generated probe inputs, then rerun the campaign.",
+            "error": f"{type(e).__name__}:{str(e)[:300]}",
+        }
+        pipeline_health = _as_dict(result.get("pipeline_health"))
+        if str(pipeline_health.get("status") or "").upper() not in {"FAILED_SAFE"}:
+            pipeline_health["status"] = "DEGRADED"
+        pipeline_health["empty_findings_means_no_bugs"] = False
+        pipeline_health.setdefault("stage_failures", []).append(failure_code)
+        pipeline_health["operator_note"] = (
+            "闭环学习阶段失败；已执行缺陷收据仍保留，但学习产物不可用，需修复后重跑。"
+        )
+        result["pipeline_health"] = pipeline_health
+        funnel = _as_dict(result.get("discovery_funnel"))
+        if funnel:
+            funnel["pipeline_health"] = dict(pipeline_health)
+            result["discovery_funnel"] = funnel
 
     return result
 

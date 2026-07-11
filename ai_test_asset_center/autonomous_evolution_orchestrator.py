@@ -7,7 +7,7 @@ Prevents false evolution (lowering evidence bar to boost numbers).
 
 from __future__ import annotations
 
-import calendar, json, time, hashlib
+import calendar, json, time, hashlib, os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -486,6 +486,10 @@ class EvolutionOrchestrator:
 def run_evolution_orchestrated(
     project_id: str = "real_project_demo",
     max_evolution_cycles: int = 1,
+    *,
+    evaluation_manifest_path: str | Path | None = None,
+    evaluation_output_root: str | Path | None = None,
+    workspace_root: str | Path | None = None,
 ) -> dict:
     """Run discovery loop + evolution cycle under unified orchestration.
 
@@ -499,6 +503,11 @@ def run_evolution_orchestrated(
       3. Collect evolution signals from results
       4. If signals warrant evolution: generate candidate, evaluate, promote/rollback
       5. Return full report with policy changes
+
+    When ``evaluation_manifest_path`` (or env ``QUALIBUG_EVALUATION_MANIFEST``)
+    points at an evaluator-private commercial-shape manifest, each candidate is
+    evaluated through the observed fixture controller + scan executor path.
+    Without a private manifest the cycle remains ``AWAITING_OBSERVED_REPLAY_SHADOW``.
     """
     result = {
         "orchestrator_version": "phase81-v1",
@@ -570,8 +579,75 @@ def run_evolution_orchestrated(
 
         # A candidate must be evaluated by a separate replay/shadow gate before
         # promotion.  Never promote a policy merely because the generation code ran.
-        # Persist a strict evaluation request. Historical metric estimation is
-        # deliberately excluded because it cannot prove policy execution.
+        manifest_path = Path(
+            str(
+                evaluation_manifest_path
+                or os.environ.get("QUALIBUG_EVALUATION_MANIFEST")
+                or ""
+            ).strip()
+        )
+        if manifest_path.is_file():
+            from .evaluation_fixture_controller import GovernedHttpResetFixtureController
+            from .observed_product_scan_executor import ObservedProductScanExecutor
+            from .scan_operational_metrics import collect_observed_scan_operational_metrics
+
+            workspace = Path(
+                str(
+                    workspace_root
+                    or os.environ.get("QUALIBUG_WORKSPACE_ROOT")
+                    or Path.cwd()
+                )
+            ).resolve()
+            output_root = Path(
+                str(
+                    evaluation_output_root
+                    or os.environ.get("QUALIBUG_EVALUATION_OUTPUT_ROOT")
+                    or (workspace / "_evaluation_runs")
+                )
+            ).resolve()
+            controller = GovernedHttpResetFixtureController(workspace_root=workspace)
+            executor = ObservedProductScanExecutor(
+                workspace_root=workspace,
+                operational_metrics_collector=collect_observed_scan_operational_metrics,
+            )
+            try:
+                observed = orch.evaluate_and_promote_observed_candidate(
+                    candidate_policy_id=candidate_record.policy_id,
+                    manifest_path=str(manifest_path),
+                    output_root=str(output_root),
+                    fixture_controller=controller,
+                    scan_executor=executor,
+                )
+            except Exception as exc:
+                evolution_report.setdefault("candidates", []).append({
+                    "policy_id": candidate_record.policy_id,
+                    "version": candidate_record.policy_version,
+                    "status": "FAILED_SAFE",
+                    "changes": candidate.__dict__,
+                    "reason": f"observed evaluation failed: {type(exc).__name__}: {exc}",
+                    "promotion_block": "observed_replay_shadow_failed",
+                })
+                evolution_report["cycles_completed"] += 1
+                continue
+            evolution_report.setdefault("candidates", []).append({
+                "policy_id": candidate_record.policy_id,
+                "version": candidate_record.policy_version,
+                "status": str(observed.get("promotion_decision") or "observed"),
+                "changes": candidate.__dict__,
+                "reason": "observed paired replay/shadow evaluation completed",
+                "observed_evaluation": {
+                    "evaluation_id": observed.get("evaluation_id"),
+                    "comparison_ref": observed.get("comparison_ref"),
+                    "promotion_decision": observed.get("promotion_decision"),
+                    "activation_performed": bool(observed.get("activation_performed")),
+                },
+            })
+            if observed.get("activation_performed"):
+                evolution_report["promotions"].append(candidate_record.policy_id)
+                active_strategy = registry.get_active_strategy()
+            evolution_report["cycles_completed"] += 1
+            continue
+
         evaluation_request = {
             "schema_version": "qualibug.discovery-policy-evaluation-request.v1",
             "status": "AWAITING_OBSERVED_REPLAY_SHADOW",
@@ -580,6 +656,10 @@ def run_evolution_orchestrated(
             "requires_governed_fixture_controller": True,
             "requires_observed_scan_executor": True,
             "estimated_metrics_allowed": False,
+            "hint": (
+                "Supply evaluation_manifest_path or QUALIBUG_EVALUATION_MANIFEST "
+                "built by tools/build_discovery_evaluation_dataset.py"
+            ),
         }
         evolution_report.setdefault("candidates", []).append({
             "policy_id": candidate_record.policy_id,

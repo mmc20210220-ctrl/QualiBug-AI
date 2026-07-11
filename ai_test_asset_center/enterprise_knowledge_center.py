@@ -42,6 +42,7 @@ from .real_project_onboarding import ROOT, _html_escape, _load_json, _safe_proje
 from .product_ui import _icon, callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
 
 PHASE = "phase58_enterprise_knowledge_unified_ingestion"
+PARSER_RECEIPT_SCHEMA = "qualibug.parser-receipt.v1"
 SOURCE_TYPES = {
     "prd", "mrd", "openapi", "markdown_api", "postman", "har",
     "application_log", "database_schema", "db_field_dictionary",
@@ -127,6 +128,65 @@ def _lexicon_list(name: str) -> list[str]:
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _detected_source_format(filename: str, source_type: str, text: str, payload: Any) -> str:
+    suffix = Path(filename).suffix.lower().lstrip(".")
+    if suffix in {"docx", "pdf", "har", "csv", "sql", "svg", "log", "xml", "html", "htm"}:
+        return suffix
+    if payload is not None:
+        return "json"
+    if suffix in {"yaml", "yml"}:
+        return "yaml"
+    if source_type == "markdown_api" or re.search(r"(?m)^#{1,6}\s+", text or ""):
+        return "markdown"
+    return suffix or "text"
+
+
+def _parser_receipt(
+    *,
+    source_id: str,
+    filename: str,
+    source_type: str,
+    parser: str,
+    detected_format: str,
+    text_hash: str,
+    text_length: int,
+    outputs: dict[str, int],
+    errors: list[dict[str, Any]],
+    parse_status: str,
+    started_at_utc: str,
+) -> dict[str, Any]:
+    fidelity = "full"
+    if parse_status == "metadata_only":
+        fidelity = "metadata_only"
+    elif errors:
+        fidelity = "degraded"
+    receipt_key = {
+        "source_id": source_id,
+        "text_hash": text_hash,
+        "parser": parser,
+        "detected_format": detected_format,
+        "parse_status": parse_status,
+        "errors": errors,
+    }
+    return {
+        "schema_version": PARSER_RECEIPT_SCHEMA,
+        "receipt_id": "parser_" + _short_hash(receipt_key, 20),
+        "source_id": source_id,
+        "source_type": source_type,
+        "source_locator": filename,
+        "detected_format": detected_format,
+        "parser": parser,
+        "parser_status": "degraded" if errors and parse_status != "failed" else parse_status,
+        "fidelity": fidelity,
+        "text_hash": text_hash,
+        "text_length": int(text_length),
+        "outputs": dict(outputs),
+        "errors": list(errors),
+        "started_at_utc": started_at_utc,
+        "completed_at_utc": _now(),
+    }
 
 
 def _hash_bytes(value: bytes) -> str:
@@ -917,6 +977,82 @@ def _csv_rows(text: str) -> list[dict[str, str]]:
         return []
 
 
+def _markdown_table_rows(text: str) -> list[dict[str, str]]:
+    """Parse ordinary Markdown tables without assuming a document language."""
+    lines = [line.strip() for line in str(text or "").splitlines()]
+    rows: list[dict[str, str]] = []
+    index = 0
+    while index + 1 < len(lines):
+        header_line = lines[index]
+        separator_line = lines[index + 1]
+        if "|" not in header_line or "|" not in separator_line:
+            index += 1
+            continue
+        headers = [cell.strip() for cell in header_line.strip("|").split("|")]
+        separators = [cell.strip() for cell in separator_line.strip("|").split("|")]
+        if (
+            not headers
+            or len(headers) != len(separators)
+            or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in separators)
+        ):
+            index += 1
+            continue
+        index += 2
+        while index < len(lines) and "|" in lines[index]:
+            values = [cell.strip() for cell in lines[index].strip("|").split("|")]
+            if len(values) == len(headers) and any(values):
+                rows.append(dict(zip(headers, values)))
+            index += 1
+    return rows
+
+
+def _permission_field(item: dict[str, Any], aliases: set[str]) -> Any:
+    for key, value in item.items():
+        if _norm(key).replace(" ", "_") in aliases:
+            return value
+    return ""
+
+
+def _permission_resource_aliases(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    normalized = _norm(text)
+    if not normalized:
+        return []
+    aliases: list[str] = []
+    for source_token, target_tokens in _lexicon_dict("entity_token_lexicon").items():
+        candidates = [source_token, *target_tokens]
+        if any(_norm(token) and _norm(token) in normalized for token in candidates):
+            aliases.extend(str(token).strip().lower() for token in target_tokens if str(token).strip())
+    return list(dict.fromkeys(aliases))
+
+
+def _permission_action_aliases(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    normalized = _norm(text)
+    if not normalized:
+        return []
+    actions: list[str] = []
+    for source_token, target_tokens in _lexicon_dict("verb_action_lexicon").items():
+        candidates = [source_token, *target_tokens]
+        if any(_norm(token) and _norm(token) in normalized for token in candidates):
+            actions.extend(str(token).strip().lower() for token in target_tokens if str(token).strip())
+    for method in (*SAFE_METHODS, *WRITE_METHODS):
+        if method.lower() in normalized.split():
+            actions.append(method)
+    return list(dict.fromkeys(actions))
+
+
+def _permission_scope(value: Any) -> str:
+    normalized = _norm(value)
+    if any(token in normalized for token in ("自己的", "本人", "own", "self", "owned")):
+        return "own"
+    if any(token in normalized for token in ("tenant", "租户", "organization", "组织")):
+        return "tenant"
+    if any(token in normalized for token in ("所有", "全部", "all", "global")):
+        return "all"
+    return "unspecified"
+
+
 def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
@@ -928,19 +1064,63 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
     elif isinstance(payload, list):
         candidates.extend([item for item in payload if isinstance(item, dict)])
     candidates.extend(_csv_rows(text))
+    candidates.extend(_markdown_table_rows(text))
     for idx, item in enumerate(candidates):
-        role = str(item.get("role") or item.get("actor") or item.get("user_role") or "").strip()
-        resource = str(item.get("resource") or item.get("module") or item.get("object") or item.get("path") or "").strip()
-        actions = item.get("actions") or item.get("action") or item.get("permissions") or item.get("operation") or ""
-        if isinstance(actions, list):
-            actions_list = [str(x) for x in actions]
-        else:
-            actions_list = [x.strip() for x in re.split(r"[,/|;]", str(actions)) if x.strip()]
-        scope = str(item.get("scope") or item.get("data_scope") or item.get("tenant_scope") or "").strip()
-        if role and resource:
-            rows.append({"permission_id": f"perm:{source_id}:{idx+1}", "source_id": source_id, "role": role, "resource": resource, "actions": actions_list or ["read"], "scope": scope or "unspecified", "evidence": _redact_text(str(item), 280)})
+        role = str(_permission_field(item, {"role", "actor", "user_role", "principal", "角色", "用户角色"}) or "").strip()
+        resource = str(_permission_field(item, {"resource", "module", "object", "path", "endpoint", "资源", "模块", "对象", "接口"}) or "").strip()
+        actions = _permission_field(item, {"actions", "action", "permissions", "permission", "operation", "allowed_actions", "权限", "权限说明", "操作", "能力"})
+        scope_value = _permission_field(item, {"scope", "data_scope", "tenant_scope", "范围", "数据范围"})
+        if not role or (not resource and not str(actions or "").strip()):
+            continue
+        narrative = str(actions or resource).strip()
+        normalized_narrative = _norm(narrative)
+        if any(marker in normalized_narrative for marker in ("所有权限", "全部权限", "all permissions", "full access")):
+            rows.append({
+                "permission_id": f"perm:{source_id}:{idx+1}:all",
+                "source_id": source_id,
+                "role": role,
+                "resource": "*",
+                "resource_aliases": ["*"],
+                "actions": ["*"],
+                "scope": "all",
+                "evidence": _redact_text(str(item), 280),
+            })
+            continue
+        clauses = [part.strip() for part in re.split(r"[,;，；、。]", narrative) if part.strip()]
+        if resource:
+            clauses = [narrative]
+        for clause_index, clause in enumerate(clauses or [narrative]):
+            resource_aliases = _permission_resource_aliases(resource or clause)
+            if resource and not resource_aliases:
+                resource_aliases = [resource.strip().lower()]
+            if not resource_aliases:
+                continue
+            if isinstance(actions, list):
+                action_values = [str(value).strip() for value in actions if str(value).strip()]
+            else:
+                action_values = _permission_action_aliases(clause)
+            if {str(value).lower() for value in action_values} & {"read", "view", "list", "query", "get"}:
+                action_values = [
+                    value for value in action_values
+                    if str(value).lower() in {"read", "view", "list", "query", "get"}
+                ]
+            clause_norm = _norm(clause)
+            if any(marker in clause_norm for marker in ("只读", "read only", "readonly")):
+                action_values.extend(["GET", "HEAD", "OPTIONS", "read", "view", "list"])
+            action_values = list(dict.fromkeys(action_values)) or ["read"]
+            for resource_index, resource_alias in enumerate(resource_aliases):
+                rows.append({
+                    "permission_id": f"perm:{source_id}:{idx+1}:{clause_index+1}:{resource_index+1}",
+                    "source_id": source_id,
+                    "role": role,
+                    "resource": resource_alias,
+                    "resource_aliases": resource_aliases,
+                    "actions": action_values,
+                    "scope": str(scope_value or "").strip() or _permission_scope(clause),
+                    "evidence": _redact_text(str(item), 280),
+                })
     if rows:
-        return rows
+        return _dedupe_by_id(rows, "permission_id")
     for idx, line in enumerate(text.splitlines()):
         normalized = _norm(line)
         if not normalized or not any(marker in normalized for marker in ("权限", "permission", "role", "访问", "只能", "tenant")):
@@ -1088,6 +1268,8 @@ def _state_machines_from_text(text: str, source_id: str) -> list[dict[str, Any]]
 
 
 def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) -> dict[str, Any]:
+    started_at_utc = _now()
+    parse_errors: list[dict[str, Any]] = []
     suffix = Path(filename).suffix.lower()
     if suffix == ".docx":
         text = _decode_docx(blob)
@@ -1098,7 +1280,41 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
             text = _decode_pdf(fake, blob)
     else:
         text = blob.decode("utf-8", errors="replace")
-    payload = _json_or_none(text) if suffix == ".json" or source_type in {"openapi", "postman", "permission_matrix", "historical_bug", "ticket"} else None
+    payload = None
+    _structured_source = suffix in {".json", ".yaml", ".yml"} or (
+        source_type in {"openapi", "postman", "historical_bug", "ticket"}
+        and text.lstrip().startswith(("{", "["))
+    )
+    if suffix in {".yaml", ".yml"}:
+        try:
+            import yaml
+
+            payload = yaml.safe_load(text)
+            if payload is not None and not isinstance(payload, (dict, list)):
+                raise ValueError("YAML root must be an object or array")
+        except Exception as exc:
+            parse_errors.append({
+                "stage": "parse",
+                "code": "YAML_PARSE_FAILED",
+                "identity": source_id,
+                "retryability": "after_source_fix",
+                "operator_action": "validate YAML syntax and document root",
+                "detail": f"{type(exc).__name__}: {exc}"[:500],
+            })
+    elif _structured_source:
+        payload = _json_or_none(text)
+        if text.strip() and payload is None:
+            parse_errors.append({
+                "stage": "parse",
+                "code": "JSON_PARSE_FAILED",
+                "identity": source_id,
+                "retryability": "after_source_fix",
+                "operator_action": "validate JSON syntax and encoding",
+                "detail": "structured JSON source could not be decoded",
+            })
+    openapi = payload if source_type == "openapi" and isinstance(payload, dict) else {}
+    postman = payload if source_type == "postman" and isinstance(payload, dict) else {}
+    operations = _openapi_operations(openapi, source_id) + _postman_operations(postman, source_id)
     # HAR: parse JSON and extract operations
     har_errors: list[dict[str, Any]] = []
     if source_type == "har":
@@ -1128,6 +1344,14 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
                     for e in har_errors_raw
                 ]
         except Exception as har_err:
+            parse_errors.append({
+                "stage": "parse",
+                "code": "HAR_PARSE_FAILED",
+                "identity": source_id,
+                "retryability": "after_source_or_parser_fix",
+                "operator_action": "validate HAR JSON and parser compatibility",
+                "detail": f"{type(har_err).__name__}: {har_err}"[:500],
+            })
             print(f"  [WARN] HAR parsing failed for {filename}: {har_err}", flush=True, file=sys.stderr)
     # Application logs: run log analysis
     log_errors: list[dict[str, Any]] = []
@@ -1156,20 +1380,61 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
                     "summary": f"P95={s.p95_ms:.0f}ms, err_rate={s.error_rate:.1%}",
                 })
         except Exception as log_err:
+            parse_errors.append({
+                "stage": "parse",
+                "code": "APPLICATION_LOG_PARSE_FAILED",
+                "identity": source_id,
+                "retryability": "after_source_or_parser_fix",
+                "operator_action": "validate log encoding and parser compatibility",
+                "detail": f"{type(log_err).__name__}: {log_err}"[:500],
+            })
             print(f"  [WARN] Log analysis failed for {filename}: {log_err}", flush=True, file=sys.stderr)
-    openapi = payload if source_type == "openapi" and isinstance(payload, dict) else {}
-    postman = payload if source_type == "postman" and isinstance(payload, dict) else {}
-    operations = _openapi_operations(openapi, source_id) + _postman_operations(postman, source_id)
-    if source_type == "markdown_api":
+    if source_type == "markdown_api" or (source_type == "openapi" and suffix in {".md", ".markdown", ".txt"}):
         operations.extend(_markdown_api_operations(text, source_id))
+        if text.strip() and not operations:
+            parse_errors.append({
+                "stage": "parse",
+                "code": "MARKDOWN_API_NO_OPERATIONS",
+                "identity": source_id,
+                "retryability": "after_source_fix",
+                "operator_action": "add source-declared HTTP method and path headings",
+                "detail": "no executable API operation could be parsed from Markdown",
+            })
     tables = _sql_tables(text, source_id) if source_type == "database_schema" else []
     tables += _json_schema_tables(payload, source_id) if source_type in {"database_schema", "openapi"} else []
     field_dictionary = _field_dictionary_entries(text, payload, source_id) if source_type in {"db_field_dictionary", "database_schema"} else []
     if source_type == "db_field_dictionary":
         tables += _field_dictionary_tables(field_dictionary, source_id)
     ui_specs = _uiux_specs_from_text(text, source_id, source_type, filename)
-    permissions = _permission_entries(text, payload, source_id) if source_type == "permission_matrix" else []
+    permissions = _permission_entries(text, payload, source_id)
     tickets = _ticket_rows(text, payload, source_id, source_type) if source_type in {"historical_bug", "ticket"} else []
+    parser = "yaml" if suffix in {".yaml", ".yml"} else "json" if payload is not None else suffix.lstrip(".") or "text"
+    parse_status = "parsed" if text.strip() else "metadata_only"
+    text_hash = _hash_bytes(text.encode("utf-8"))
+    outputs = {
+        "operations": len(operations),
+        "tables": len(tables),
+        "fields": len(field_dictionary),
+        "ui_specs": len(ui_specs),
+        "permissions": len(permissions),
+        "tickets": len(tickets),
+        "rules": len(_rules_from_text(text, source_id, source_type)),
+        "roles": len(_roles_from_text(text, source_id)),
+        "state_machines": len(_state_machines_from_text(text, source_id)),
+    }
+    receipt = _parser_receipt(
+        source_id=source_id,
+        filename=filename,
+        source_type=source_type,
+        parser=parser,
+        detected_format=_detected_source_format(filename, source_type, text, payload),
+        text_hash=text_hash,
+        text_length=len(text),
+        outputs=outputs,
+        errors=parse_errors,
+        parse_status=parse_status,
+        started_at_utc=started_at_utc,
+    )
     return {
         "text": text,
         "payload": payload,
@@ -1185,17 +1450,46 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "rules": _rules_from_text(text, source_id, source_type),
         "roles": _roles_from_text(text, source_id),
         "state_machines": _state_machines_from_text(text, source_id),
-        "parse_status": "parsed" if text.strip() else "metadata_only",
-        "parser": "json" if payload is not None else suffix.lstrip(".") or "text",
-        "text_hash": _hash_bytes(text.encode("utf-8")),
+        "parse_status": parse_status,
+        "parser": parser,
+        "text_hash": text_hash,
         "text_length": len(text),
+        "parser_receipt": receipt,
+        "parse_errors": parse_errors,
     }
 
 
 def _record_parse(record: dict[str, Any], root: Path) -> dict[str, Any]:
     stored = root / str(record.get("stored_path") or "")
     if not stored.exists():
-        return {"text": "", "payload": None, "openapi": {}, "operations": [], "tables": [], "field_dictionary": [], "ui_specs": [], "permissions": [], "tickets": [], "har_errors": [], "log_errors": [], "rules": [], "roles": [], "state_machines": [], "parse_status": "missing_source", "parser": "none", "text_hash": "", "text_length": 0}
+        source_id = str(record.get("source_id") or "")
+        error = {
+            "stage": "parse",
+            "code": "SOURCE_BYTES_MISSING",
+            "identity": source_id,
+            "retryability": "after_source_restore",
+            "operator_action": "restore the immutable source blob or register a new source version",
+        }
+        return {
+            "text": "", "payload": None, "openapi": {}, "operations": [], "tables": [],
+            "field_dictionary": [], "ui_specs": [], "permissions": [], "tickets": [],
+            "har_errors": [], "log_errors": [], "rules": [], "roles": [], "state_machines": [],
+            "parse_status": "failed", "parser": "none", "text_hash": "", "text_length": 0,
+            "parse_errors": [error],
+            "parser_receipt": _parser_receipt(
+                source_id=source_id,
+                filename=str(record.get("original_name") or stored.name),
+                source_type=str(record.get("source_type") or "other_document"),
+                parser="none",
+                detected_format=Path(str(record.get("original_name") or stored.name)).suffix.lstrip(".") or "unknown",
+                text_hash="",
+                text_length=0,
+                outputs={},
+                errors=[error],
+                parse_status="failed",
+                started_at_utc=_now(),
+            ),
+        }
     return _parse_source(stored.read_bytes(), str(record.get("original_name") or stored.name), str(record.get("source_type") or "other_document"), str(record.get("source_id") or ""))
 
 
@@ -1252,7 +1546,44 @@ def ingest_enterprise_knowledge_documents(
             storage_name = f"{source_id}_v{version}_{_safe_slug(filename)}"
             stored = paths["source_dir"] / storage_name
             stored.write_bytes(blob)
-            parsed = _parse_source(blob, filename, source_type, source_id)
+            try:
+                parsed = _parse_source(blob, filename, source_type, source_id)
+            except Exception as exc:
+                parse_error = {
+                    "stage": "parse",
+                    "code": "SOURCE_PARSE_FAILED",
+                    "identity": source_id,
+                    "retryability": "after_source_or_parser_fix",
+                    "operator_action": "inspect the parser receipt and register a corrected source version",
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                }
+                errors.append({
+                    "index": index,
+                    "filename": filename,
+                    "source_id": source_id,
+                    "code": "SOURCE_PARSE_FAILED",
+                    "error": parse_error["detail"],
+                })
+                parsed = {
+                    "text": "", "payload": None, "openapi": {}, "operations": [], "tables": [],
+                    "field_dictionary": [], "ui_specs": [], "permissions": [], "tickets": [],
+                    "har_errors": [], "log_errors": [], "rules": [], "roles": [], "state_machines": [],
+                    "parse_status": "failed", "parser": "none", "text_hash": "", "text_length": 0,
+                    "parse_errors": [parse_error],
+                    "parser_receipt": _parser_receipt(
+                        source_id=source_id,
+                        filename=filename,
+                        source_type=source_type,
+                        parser="none",
+                        detected_format=Path(filename).suffix.lstrip(".") or "unknown",
+                        text_hash="",
+                        text_length=0,
+                        outputs={},
+                        errors=[parse_error],
+                        parse_status="failed",
+                        started_at_utc=_now(),
+                    ),
+                }
             record = {
                 "source_id": source_id,
                 "logical_key": logical_key,
@@ -1278,6 +1609,9 @@ def ingest_enterprise_knowledge_documents(
                     "permission_count": len(parsed["permissions"]),
                     "rule_count": len(parsed["rules"]),
                     "ticket_count": len(parsed["tickets"]),
+                    "fidelity": str((parsed.get("parser_receipt") or {}).get("fidelity") or "unknown"),
+                    "errors": list(parsed.get("parse_errors") or []),
+                    "receipt": dict(parsed.get("parser_receipt") or {}),
                 },
             }
             registry["sources"].append(record)
@@ -1680,13 +2014,99 @@ def _evidence_bundle(asset: dict[str, Any], probes: list[dict[str, Any]]) -> dic
     }
 
 
+def _declared_project_source_files(project: str, root: Path) -> list[Path]:
+    """Discover project-scoped source material while excluding credential/data files."""
+    supported_suffixes = set(TEXT_SUFFIXES) | {".docx", ".pdf"}
+    secret_name_tokens = {
+        "credential", "credentials", "secret", "secrets", "password", "passwords",
+        "token", "tokens", "private_key", "apikey", "api_key", "test_account", "test_accounts",
+    }
+    data_seed_tokens = {"seed", "seeds", "fixture", "fixtures", "dump", "backup", "sample_data"}
+    input_roots = (
+        root / "platform_inputs" / project,
+        root / "projects" / project / "input",
+        root / "platform_workspace" / project / "input",
+    )
+    discovered: list[Path] = []
+    seen: set[str] = set()
+    for input_root in input_roots:
+        if not input_root.is_dir():
+            continue
+        for candidate in sorted(input_root.rglob("*")):
+            if not candidate.is_file() or candidate.suffix.lower() not in supported_suffixes:
+                continue
+            name_tokens = {
+                token for token in re.split(r"[^a-z0-9_]+", candidate.stem.lower()) if token
+            }
+            normalized_stem = re.sub(r"[^a-z0-9]+", "_", candidate.stem.lower()).strip("_")
+            if candidate.name.lower() == ".env" or secret_name_tokens.intersection(name_tokens) or normalized_stem in secret_name_tokens:
+                continue
+            if candidate.suffix.lower() == ".sql" and (
+                data_seed_tokens.intersection(name_tokens) or normalized_stem in data_seed_tokens
+            ):
+                continue
+            resolved = str(candidate.resolve())
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            discovered.append(candidate)
+    return discovered
+
+
+def _sync_declared_project_sources(project: str, root: Path, registry: dict[str, Any]) -> dict[str, Any]:
+    """Ingest source files declared in the existing project input locations."""
+    active_hashes = {
+        str(row.get("content_hash") or "")
+        for row in registry.get("sources") or []
+        if isinstance(row, dict) and row.get("status") == "active"
+    }
+    pending: list[Path] = []
+    for candidate in _declared_project_source_files(project, root):
+        blob = candidate.read_bytes()
+        if len(blob) > MAX_SOURCE_BYTES:
+            raise ValueError(f"declared source exceeds {MAX_SOURCE_BYTES // (1024 * 1024)}MB limit: {candidate}")
+        if _hash_bytes(blob) not in active_hashes:
+            pending.append(candidate)
+    if not pending:
+        return registry
+    result = ingest_enterprise_knowledge_files(
+        project,
+        pending,
+        root=root,
+        actor={"name": "knowledge_builder", "role": "knowledge_admin"},
+    )
+    errors = [row for row in result.get("errors") or [] if isinstance(row, dict)]
+    if errors:
+        raise RuntimeError(f"declared enterprise source ingestion failed: {json.dumps(errors, ensure_ascii=False)}")
+    return _load_registry(project, root)
+
+
 def build_enterprise_business_knowledge_asset(project_id: str = "real_project_demo", root: Path | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
     root = root or ROOT
     project = _safe_project_id(project_id)
     options = options or {}
     registry = _load_registry(project, root)
+    if options.get("sync_declared_sources", True):
+        registry = _sync_declared_project_sources(project, root, registry)
     active = [row for row in registry.get("sources") or [] if isinstance(row, dict) and row.get("status") == "active"]
     parsed_rows = [(source, _record_parse(source, root)) for source in active]
+    parser_receipts = [
+        dict(parsed.get("parser_receipt") or {})
+        for _, parsed in parsed_rows
+        if isinstance(parsed.get("parser_receipt"), dict)
+    ]
+    parse_coverage_gaps = [
+        {
+            "kind": "SOURCE_PARSE_DEGRADED" if str(receipt.get("parser_status") or "") == "degraded" else "SOURCE_PARSE_FAILED",
+            "source_id": receipt.get("source_id"),
+            "source_locator": receipt.get("source_locator"),
+            "parser_receipt_id": receipt.get("receipt_id"),
+            "errors": list(receipt.get("errors") or []),
+            "operator_action": "inspect_parser_receipt",
+        }
+        for receipt in parser_receipts
+        if str(receipt.get("parser_status") or "") in {"degraded", "failed"}
+    ]
     source_texts = {f"{source.get('source_type')}:{source.get('original_name')}": parsed.get("text") or "" for source, parsed in parsed_rows if parsed.get("text")}
     openapi_parts = [parsed.get("openapi") for _, parsed in parsed_rows if isinstance(parsed.get("openapi"), dict) and parsed.get("openapi")]
     merged_openapi = _merge_openapi(openapi_parts)
@@ -1791,6 +2211,8 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         "project_id": project,
         "generated_at_utc": _now(),
         "source_inventory": active,
+        "parser_receipts": parser_receipts,
+        "coverage_gaps": parse_coverage_gaps,
         "module_tree": _module_tree(interfaces, rules, tables, objects),
         "business_objects": objects,
         "roles": roles,
@@ -1831,6 +2253,9 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     asset["relationships"] = _dedupe_by_id(relation_edges, "edge_id")
     asset["summary"] = {
         "active_source_count": len(active),
+        "source_parse_succeeded": sum(1 for row in parser_receipts if str(row.get("parser_status") or "") == "parsed"),
+        "source_parse_degraded": sum(1 for row in parser_receipts if str(row.get("parser_status") or "") == "degraded"),
+        "source_parse_failed": sum(1 for row in parser_receipts if str(row.get("parser_status") or "") == "failed"),
         "source_type_distribution": dict(Counter(str(x.get("source_type") or "unknown") for x in active)),
         "module_count": len(asset["module_tree"]),
         "business_object_count": len(asset["business_objects"]),

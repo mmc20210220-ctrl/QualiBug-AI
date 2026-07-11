@@ -19,6 +19,7 @@ def test_scan_body_builds_campaign_context_from_frontend_contract() -> None:
             "ui_base_url_source": "connector_registry.test_profile.ui_base_url",
             "scope_id": "checkout-scope",
             "environment_ref": "staging-env",
+            "environment_type": "staging",
             "execution_approval_id": "approval-001",
             "execution_mode": "safe_read_only",
             "test_data_contract": {"strategy": "blocked_with_testability_gap"},
@@ -67,6 +68,7 @@ def test_scan_body_prefers_registered_source_content_over_connector_fallback(tmp
             "base_url": "http://127.0.0.1:8000",
             "scope_id": "checkout-scope",
             "environment_ref": "staging-env",
+            "environment_type": "staging",
         },
     )
     context = build_campaign_context_from_scan_body(prepared)
@@ -126,6 +128,7 @@ def test_scan_body_defaults_to_write_sandbox_only_for_non_production_targets() -
             "base_url": "http://127.0.0.1:8000",
             "scope_id": "checkout-scope",
             "environment_ref": "local-benchmark",
+            "environment_type": "test",
         }
     )
 

@@ -218,7 +218,15 @@ export function CoverageMatrix() {
   const invariants = normalizeInvariantEntries(matrix).sort(([, a], [, b]) => asNum(a.coverage_rate) - asNum(b.coverage_rate));
   const gaps = Array.isArray(record.coverage_gaps) ? record.coverage_gaps.map(asRecord).filter((item) => asText(item.kind) === 'RISK_FAMILY_COVERAGE_GAP') : [];
   const benchmark = asRecord(scanMeta.benchmark_metrics);
-  const benchmarkActive = Boolean(benchmark.benchmark_active && benchmark.ground_truth_available);
+  const externalEvaluation = asRecord(
+    Object.keys(asRecord(record.external_evaluation)).length > 0
+      ? record.external_evaluation
+      : scanMeta.external_evaluation,
+  );
+  const qualityClaimStatus = asText(record.quality_claim_status) || asText(scanMeta.quality_claim_status) || asText(externalEvaluation.measurement_status) || 'NOT_MEASURED';
+  const externalMeasured = qualityClaimStatus === 'MEASURED' && asText(externalEvaluation.measurement_status) === 'MEASURED';
+  const qualitySuppressed = !externalMeasured || Boolean(asRecord(externalEvaluation.display).suppress_quality_score) || Boolean(benchmark.commercial_quality_suppressed);
+  const benchmarkActive = Boolean(benchmark.benchmark_active && benchmark.ground_truth_available) && !qualitySuppressed;
 
   if (families.length === 0 && invariants.length === 0 && !steeringStatus && !regressionStatus && !hasRegressionRun) {
     return <section className="state-panel"><div className="state-panel-badge">覆盖矩阵</div><h2>当前尚未生成风险覆盖矩阵</h2><p>运行一次标准扫描后，系统会根据真实 findings/candidates 生成风险家族与业务不变量覆盖矩阵。</p></section>;
@@ -246,7 +254,7 @@ export function CoverageMatrix() {
         <article className={`customer-summary-card tone-${steeringTone(steeringStatus)}`}><span>缺口调度</span><strong>{steeringStatus === 'applied' ? '已启用' : '待启用'}</strong><small>{steeringStatus ? steeringStatusLabel(steeringStatus, steeringReason) : '暂无调度诊断'}</small></article>
         <article className={`customer-summary-card tone-${regressionRefreshTone(regressionStatus)}`}><span>回归义务</span><strong>{regressionStatus === 'refreshed' ? asNum(regressionSummary.total_probe_count) : '待生成'}</strong><small>{regressionStatus ? regressionRefreshLabel(regressionStatus, regressionReason) : '暂无回归刷新诊断'}</small></article>
         <article className={`customer-summary-card tone-${regressionRunTone(regressionGateStatus)}`}><span>最近回归</span><strong>{hasRegressionRun ? regressionRunLabel(regressionGateStatus, regressionRunStatus) : '未执行'}</strong><small>{hasRegressionRun ? `通过 ${asNum(regressionRun.passed_count)} · 失败 ${asNum(regressionRun.failed_count)} · 复核 ${asNum(regressionRun.needs_review_count)}` : '客户运行回归后显示结果'}</small></article>
-        <article className={`customer-summary-card ${benchmarkActive ? 'tone-success' : 'tone-warning'}`}><span>Benchmark 状态</span><strong>{benchmarkActive ? '已启用' : '未启用'}</strong><small>{benchmarkActive ? `召回率 ${pct(benchmark.recall)} · 精度 ${pct(benchmark.precision)}` : '当前矩阵不能当作召回率或 99% 能力证明'}</small></article>
+        <article className={`customer-summary-card ${benchmarkActive ? 'tone-success' : 'tone-warning'}`}><span>外部质量评测</span><strong>{qualitySuppressed ? '尚未评测' : (benchmarkActive ? '已启用' : '未启用')}</strong><small>{qualitySuppressed ? (asText(asRecord(externalEvaluation.display).quality_label) || '尚未完成外部质量评测；不显示召回/精度') : (benchmarkActive ? `召回率 ${pct(benchmark.recall)} · 精度 ${pct(benchmark.precision)}` : '当前矩阵不能当作召回率或商业能力证明')}</small></article>
       </div>
 
       <section className="customer-value-grid mb-4">

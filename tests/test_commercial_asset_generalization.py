@@ -52,21 +52,34 @@ def test_scan_materializes_commercial_assets_for_customer_ready_validated_findin
             },
             "findings": [
                 {
+                    "candidate_id": "candidate-BUG-COM-1",
+                    "slice_id": "slice-BUG-COM-1",
+                    "obligation_id": "obligation-BUG-COM-1",
+                    "experiment_id": "experiment-BUG-COM-1",
+                    "execution_id": "execution-BUG-COM-1",
+                    "evidence_id": "evidence-BUG-COM-1",
                     "finding_id": "BUG-COM-1",
                     "title": "cancel endpoint violates paid-order invariant",
                     "risk_type": "business_invariant",
                     "severity": "P1",
                     "method": "POST",
                     "path": "/api/orders/ord_1/cancel",
+                    "bug_status": "reproduced",
                     "execution_status": "executed",
                     "confirmation_status": "confirmed",
+                    "customer_delivery_status": "defect",
                     "gate_passed": True,
                     "actor": "qa_lead",
                     "semantic_verdict": "SEMANTIC_CONFIRMED",
                     "business_evidence_status": "VALIDATED",
                     "timestamp": "2026-07-07T12:00:00Z",
                     "failed_assertions": ["支付后订单不可取消"],
-                    "reproduction": {"method": "POST", "path": "/api/orders/ord_1/cancel"},
+                    "reproduction": {
+                        "method": "POST",
+                        "path": "/api/orders/ord_1/cancel",
+                        "is_synthetic": False,
+                        "har_evidence": {"status_code": 200, "response_body": {"status": "cancelled"}},
+                    },
                     "reproduction_steps": ["POST /api/orders/ord_1/cancel", "observe paid order became cancelled"],
                     "evidence_quality": {
                         "level": "validated",
@@ -74,6 +87,12 @@ def test_scan_materializes_commercial_assets_for_customer_ready_validated_findin
                         "missing": [],
                         "next_actions": [],
                         "can_reproduce": True,
+                    },
+                    "evidence_status": {
+                        "semantic_verdict": "SEMANTIC_CONFIRMED",
+                        "business_evidence_status": "VALIDATED",
+                        "final_review_status": "VALIDATED_CANDIDATE",
+                        "missing_requirements": [],
                     },
                     "evidence": {
                         "request": "POST /api/orders/ord_1/cancel",
@@ -84,9 +103,16 @@ def test_scan_materializes_commercial_assets_for_customer_ready_validated_findin
                         "actor": "qa_lead",
                     },
                     "raw_evidence": {
+                        "has_real_evidence": True,
                         "timestamp": "2026-07-07T12:00:00Z",
                         "request_raw": {"method": "POST", "path": "/api/orders/ord_1/cancel", "actor": "qa_lead", "body": {"actor": "buyer"}},
                         "response_raw": {"status_code": 200, "body": {"status": "cancelled"}},
+                        "sandbox_write": {
+                            "cleanup": {
+                                "status": "completed",
+                                "receipt_ref": "audit://cleanup/BUG-COM-1",
+                            }
+                        },
                     },
                     "evidence_package": {
                         "status": "packaged",

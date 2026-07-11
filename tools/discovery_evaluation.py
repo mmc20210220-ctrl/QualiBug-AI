@@ -22,8 +22,10 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from ai_test_asset_center.discovery_evaluation_contract import (
     RECEIPT_SCHEMA,
+    REPORT_SCHEMA,
     aggregate_evaluation_receipts,
     assess_commercial_dataset_shape,
+    assess_discovery_goal_status,
     build_runtime_view,
     evaluate_completed_scan,
     load_evaluation_manifest,
@@ -122,6 +124,27 @@ def _command_aggregate(args: argparse.Namespace) -> dict[str, Any]:
     return {"report_path": str(persisted), "report": report}
 
 
+def _command_goal_status(args: argparse.Namespace) -> dict[str, Any]:
+    report = None
+    if args.report:
+        report = _load_object(Path(args.report), "evaluation report")
+        if report.get("schema_version") != REPORT_SCHEMA:
+            raise ValueError(f"not an evaluation report: {args.report}")
+    baseline = args.baseline_cost_per_true_positive_usd
+    windows = args.consecutive_non_regressive_windows
+    status = assess_discovery_goal_status(
+        evaluation_report=report,
+        baseline_cost_per_true_positive_usd=baseline,
+        consecutive_non_regressive_windows=windows,
+    )
+    if args.output:
+        destination = Path(args.output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"status_path": str(destination), "status": status}
+    return {"status": status}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluator-private, hidden-ground-truth discovery quality measurement"
@@ -153,6 +176,30 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate_parser.add_argument("--receipt-dir", type=Path)
     aggregate_parser.add_argument("--output", required=True, type=Path)
     aggregate_parser.set_defaults(handler=_command_aggregate)
+
+    goal_parser = subparsers.add_parser(
+        "goal-status",
+        help="assess Goal gates A/B/C readiness and absolute D/pilot/GA thresholds",
+    )
+    goal_parser.add_argument(
+        "--report",
+        type=Path,
+        help="optional MEASURED aggregate evaluation report; omit to report NOT_MEASURED for D/pilot/GA",
+    )
+    goal_parser.add_argument(
+        "--baseline-cost-per-true-positive-usd",
+        type=float,
+        default=None,
+        help="frozen baseline unit cost required for Gate D cost-improvement check",
+    )
+    goal_parser.add_argument(
+        "--consecutive-non-regressive-windows",
+        type=int,
+        default=None,
+        help="count of consecutive frozen non-regressive evaluation windows for GA",
+    )
+    goal_parser.add_argument("--output", type=Path, help="optional path to persist the goal-status JSON")
+    goal_parser.set_defaults(handler=_command_goal_status)
     return parser
 
 

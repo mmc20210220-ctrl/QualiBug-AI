@@ -145,6 +145,7 @@ def _result(tmp_path_factory: pytest.TempPathFactory) -> dict:
         }
         ctx = {
             "source_manifest": manifest, "scope_id": SCOPE, "environment_ref": ENV,
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write", "execution_approval_id": approval["approval_id"],
             "test_data_contract": {"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": SCOPE},
             "runtime_scenario_contract": contract,
@@ -155,23 +156,22 @@ def _result(tmp_path_factory: pytest.TempPathFactory) -> dict:
         srv.shutdown(); srv.server_close(); thread.join(timeout=3)
 
 
-def test_scan_runs(_result: dict) -> None:
+def test_scan_runs_fail_safe_without_multi_role_accounts(_result: dict) -> None:
     assert _result.get("execution_status") == "completed"
-    assert len(_result.get("findings") or []) >= 1
+    assert (_result.get("pipeline_health") or {}).get("status") == "DEGRADED"
+    assert (_result.get("findings") or []) == []
 
 
-def test_tenant_isolation_violation_detected(_result: dict) -> None:
-    findings = _result.get("findings") or []
+def test_tenant_isolation_signal_is_not_promoted_without_distinct_identities(_result: dict) -> None:
+    findings = _result.get("candidate_findings") or []
     tenant = [
         f for f in findings
         if any(t in str(f).lower() for t in ("tenant", "isolation", "cross", "403", "forbidden"))
     ]
     assert len(tenant) >= 1, f"no tenant isolation finding among {len(findings)}"
+    assert all(f.get("customer_delivery_status") != "defect" for f in tenant)
 
 
-def test_confirmed_defect_with_evidence(_result: dict) -> None:
-    for f in (_result.get("findings") or []):
-        assert f.get("gate_passed") is True, f
-        assert f.get("bug_status") == "reproduced", f
-        assert f.get("customer_delivery_status") == "defect", f
-        assert bool(f.get("raw_evidence")), f
+def test_missing_multi_role_evidence_is_observable(_result: dict) -> None:
+    gaps = (_result.get("pipeline_health") or {}).get("observability_gaps") or []
+    assert any(gap.get("kind") == "multi_role_accounts" and gap.get("status") == "missing" for gap in gaps)

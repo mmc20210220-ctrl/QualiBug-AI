@@ -155,7 +155,7 @@ def test_finalize_after_cleanup_preserves_recovered_failure_count(monkeypatch, t
     )
     monkeypatch.setattr(
         "ai_test_asset_center.customer_delivery_gate.apply_governed_campaign_cleanup",
-        lambda items, receipt: ([{"title": "readjudicated"}], []),
+        lambda items, receipt: ([{"title": "readjudicated", "evidence": {"cleanup": {"status": "completed", "receipt_ref": "cleanup-1"}}}], []),
     )
 
     result = executor.finalize_after_cleanup(
@@ -163,15 +163,74 @@ def test_finalize_after_cleanup_preserves_recovered_failure_count(monkeypatch, t
             "findings": [{"title": "cleanup-only"}],
             "candidates": [],
             "operational_metrics": {"cleanup_failures": 4, "dirty_test_environments": 1},
+            "pipeline_health": {
+                "status": "DEGRADED",
+                "cleanup_failure_count": 4,
+                "empty_findings_means_no_bugs": False,
+                "unexecuted_candidate_signal": {
+                    "stop_reason": "",
+                    "pending_slice_count": 0,
+                    "binding_or_precondition_blocks": 0,
+                },
+                "usage_cost_unknown": False,
+                "operator_note": "4 条 finding cleanup 未成功",
+            },
         },
         cleanup_receipt={
             "status": "SUCCEEDED",
             "audit_receipt_id": "cleanup-1",
             "after_cleanup_observation_ref": "state:clean",
+            "dirty_environment": False,
         },
     )
 
-    assert result["findings"] == [{"title": "readjudicated"}]
-    assert result["operational_metrics"]["cleanup_failures"] == 0
-    assert result["operational_metrics"]["dirty_test_environments"] == 0
-    assert result["operational_metrics"]["scenario_cleanup_failures_recovered_by_campaign_reset"] == 4
+    assert result["findings"][0]["title"] == "readjudicated"
+    assert result["operational_metrics"]["cleanup_failures"] == 4
+    assert result["operational_metrics"]["environment_restored"] is True
+    assert result["operational_metrics"]["scenario_cleanup_failures_before_campaign_reset"] == 4
+    assert result["campaign_cleanup_finalization"]["cleanup_failures_preserved"] is True
+    assert result["pipeline_health"]["cleanup_failure_count"] == 4
+    assert result["pipeline_health"]["environment_restored"] is True
+    assert result["pipeline_health"].get("campaign_cleanup_recovered") is False
+
+
+def test_finalize_after_cleanup_keeps_degraded_when_other_signals_remain(monkeypatch, tmp_path: Path) -> None:
+    executor = ObservedProductScanExecutor(
+        workspace_root=tmp_path,
+        operational_metrics_collector=_operational_metrics,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.customer_delivery_gate.apply_governed_campaign_cleanup",
+        lambda items, receipt: ([{"title": "ok", "evidence": {"cleanup": {"status": "completed", "receipt_ref": "c1"}}}], []),
+    )
+
+    result = executor.finalize_after_cleanup(
+        scan_output={
+            "findings": [{"title": "x"}],
+            "candidates": [],
+            "operational_metrics": {"cleanup_failures": 2, "dirty_test_environments": 1},
+            "pipeline_health": {
+                "status": "DEGRADED",
+                "cleanup_failure_count": 2,
+                "execution_reason": "preflight_health_failed",
+                "unexecuted_candidate_signal": {
+                    "stop_reason": "",
+                    "pending_slice_count": 0,
+                    "binding_or_precondition_blocks": 0,
+                },
+                "preflight": {"all_checks_passed": False},
+                "operator_note": "preflight failed",
+            },
+        },
+        cleanup_receipt={
+            "status": "SUCCEEDED",
+            "audit_receipt_id": "cleanup-1",
+            "after_cleanup_observation_ref": "state:clean",
+            "dirty_environment": False,
+        },
+    )
+
+    assert result["pipeline_health"]["status"] == "DEGRADED"
+    assert result["pipeline_health"]["cleanup_failure_count"] == 2
+    assert result["operational_metrics"]["cleanup_failures"] == 2
+    assert result["operational_metrics"]["environment_restored"] is True

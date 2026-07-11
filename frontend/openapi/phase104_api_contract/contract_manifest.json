@@ -3,20 +3,20 @@
     {
       "bytes": 49942,
       "path": "openapi.json",
-      "sha256": "e59ff5ee39b4c88c485a922b4aad7fe02dd840fa57164d0bba93f1a65c01e8fb"
+      "sha256": "669e0020f6aa1844bb034ffc28b76dfc614dc1e3df4961c8b2a41df62a4a7035"
     },
     {
       "bytes": 3493,
       "path": "API_CONTRACT.md",
-      "sha256": "2940d27ba6b2e5a325b83b114d8f2520acf3354c1462ab74ccb524911a16706f"
+      "sha256": "1e39012fd4f040c3c7c5190bc13b0328ab872b573a370a762d97e9bcd620916d"
     },
     {
       "bytes": 3914,
       "path": "frontend_api_client.ts",
-      "sha256": "1c8828af07fc4a52b15c1f26e3f0d88d382fdf6a4f4df8529374eae35c6fdb3a"
+      "sha256": "e22af124045a8fe4a9033e1bb08c82a3f1034fcfd4b09f18700d1646a7c0619b"
     }
   ],
-  "generated_at": "2026-06-29T09:27:45Z",
+  "generated_at": "2026-07-11T02:05:08Z",
   "redaction_status": "safe",
   "route_count": 23,
   "runtime_version": "phase104a-command-center-http-api-v1",

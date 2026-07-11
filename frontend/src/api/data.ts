@@ -4,7 +4,6 @@ import type { CommercialAssets, Finding, KnowledgeSource, ReleaseCheck, TestTask
 import { toWorkspaceOptions } from '../lib/customer';
 
 const SCAN_COMPLETED_EVENT = 'qualibug:scan-completed';
-const CUSTOMER_READY_MIN_EVIDENCE_SCORE = 90;
 
 type JsonRecord = Record<string, unknown>;
 type ScanCompletedDetail = { project: string };
@@ -58,8 +57,16 @@ export function useScanCompletedRefresh(project: string, refresh: () => void): v
 }
 
 function getResolvedProjectId(raw: unknown): string { const record = asRecord(raw); return (asString(record.resolvedProjectId) || asString(record.projectId)).trim(); }
-function getReportFindings(raw: unknown): Finding[] { return asArray(field(raw, 'defects')).map(findingFrom).filter((value): value is Finding => value !== null); }
-function getReportClues(raw: unknown): Finding[] { return asArray(field(raw, 'clues')).map(findingFrom).filter((value): value is Finding => value !== null); }
+function classifiedRows(raw: unknown, classification: 'deliverable' | 'candidate' | 'rejected', fallback: string): unknown[] {
+  const record = asRecord(raw);
+  const projected = asRecord(record.finding_classification);
+  return Array.isArray(projected[classification])
+    ? asArray(projected[classification])
+    : asArray(record[fallback]);
+}
+function getReportFindings(raw: unknown): Finding[] { return classifiedRows(raw, 'deliverable', 'defects').map(findingFrom).filter((value): value is Finding => value !== null); }
+function getReportClues(raw: unknown): Finding[] { return classifiedRows(raw, 'candidate', 'clues').map(findingFrom).filter((value): value is Finding => value !== null); }
+function getReportRejected(raw: unknown): Finding[] { return classifiedRows(raw, 'rejected', 'rejected_findings').map(findingFrom).filter((value): value is Finding => value !== null); }
 function parseCommercialReleaseGate(raw: unknown): CommercialAssets['release_gate'] | undefined {
   const gate = asRecord(raw);
   if (!Object.keys(gate).length) return undefined;
@@ -148,6 +155,7 @@ function normalizeCampaignSnapshot(raw: unknown): JsonRecord {
   const currentRun = asRecord(continuous.current_run);
   const summary = asRecord(continuous.summary);
   const existingScanMeta = asRecord(record.scan_meta);
+  const formalCounts = asRecord(record.formal_count_projection);
   const currentCampaignScope = asRecord(
     existingScanMeta.current_campaign_scope || record.current_campaign_scope || {
       campaign_id: asString(campaign.campaign_id || summary.campaign_id || currentRun.campaign_id),
@@ -165,6 +173,7 @@ function normalizeCampaignSnapshot(raw: unknown): JsonRecord {
     existingScanMeta.total_findings,
   );
   const currentScopeDefectCount = firstFiniteNumber(
+    formalCounts.formal_customer_deliverable_count,
     summary.current_campaign_customer_ready_defect_count,
     currentRun.current_campaign_customer_ready_defect_count,
     existingScanMeta.current_report_customer_ready_defect_count,
@@ -209,34 +218,15 @@ function buildProjectSummary(raw: unknown, project: string): ProjectSummary {
   const record = asRecord(normalized);
   const findings = getReportFindings(raw);
   const scanMeta = asRecord(field(normalized, 'scan_meta'));
+  const formalCounts = asRecord(field(normalized, 'formal_count_projection'));
   return {
     resolvedProjectId: getResolvedProjectId(normalized),
     projectName: (asString(record.project_name) || asString(record.projectName) || project).trim() || '未选择客户',
     findingsCount: findings.length,
-    currentDefectCount: firstFiniteNumber(scanMeta.current_report_customer_ready_defect_count, scanMeta.customer_ready_defects),
+    currentDefectCount: firstFiniteNumber(formalCounts.formal_customer_deliverable_count, scanMeta.formal_customer_deliverable_count, findings.length),
     clueCount: getReportClues(raw).length,
     p0Count: findings.filter((finding) => finding.severity === 'P0').length,
   };
-}
-
-function hasValidatedEvidenceQuality(finding: Finding): boolean {
-  const quality = finding?.evidence_quality;
-  const level = String(quality?.level || '').toLowerCase();
-  const score = asFiniteNumber(quality?.score);
-  return level === 'validated' && score >= CUSTOMER_READY_MIN_EVIDENCE_SCORE && Boolean(quality?.can_reproduce);
-}
-
-function hasPassedBusinessEvidenceStatus(finding: Finding): boolean {
-  const status = finding?.evidence_status;
-  if (!status) return false;
-  const semantic = String(status.semantic_verdict || '').toUpperCase();
-  const business = String(status.business_evidence_status || '').toUpperCase();
-  const finalReview = String(status.final_review_status || '').toUpperCase();
-  if (semantic !== 'SEMANTIC_CONFIRMED') return false;
-  if (business !== 'VALIDATED') return false;
-  if (!['PENDING_REVIEW', 'VALIDATED_CANDIDATE', 'CUSTOMER_READY'].includes(finalReview)) return false;
-  const missing = Array.isArray(status.missing_requirements) ? status.missing_requirements : [];
-  return missing.length === 0;
 }
 
 function hasExplicitFailureAssertion(finding: Finding): boolean {
@@ -249,22 +239,12 @@ function hasExplicitFailureAssertion(finding: Finding): boolean {
   return Boolean(expected && actual && expected !== actual);
 }
 
-/** Require explicit execution and full evidence before customer delivery. */
+/** Trust backend delivery gate projection; do not recompute commercial readiness locally. */
 export function isCustomerReadyFinding(finding: Finding): boolean {
-  if (!finding || finding.customer_delivery_status !== 'defect' || finding.bug_status !== 'reproduced' || !finding.gate_passed || finding.reproduction?.is_synthetic) return false;
-  const record = asRecord(finding);
-  const executionStatus = asString(record.execution_status).toLowerCase();
-  const confirmationStatus = asString(record.confirmation_status).toLowerCase();
-  const evidenceLevel = asString(record.evidence_level).toLowerCase();
-  const executionSource = asString(record.execution_source).toLowerCase();
-  if (['simulation', 'simulated', 'demo', 'synthetic', 'mock'].some((value) => evidenceLevel.includes(value) || executionSource.includes(value))) return false;
-  if (executionStatus && executionStatus !== 'executed') return false;
-  if (confirmationStatus && !['confirmed', 'validated_candidate'].includes(confirmationStatus)) return false;
-  const consistency = asRecord(record.evidence_consistency);
-  if (['rejected', 'missing'].includes(asString(consistency.verdict).toLowerCase())) return false;
-  const lane = `${asString(record.value_lane)} ${asString(record._value_lane)} ${asString(record.execution_block)} ${asString(record.block_reason)}`.toLowerCase();
-  if (['route_blocked', 'auth_blocked', 'environment_blocked', 'coverage_gap', 'validation_lead', 'not_reproduced'].some((value) => lane.includes(value))) return false;
-  return hasValidatedEvidenceQuality(finding) && hasPassedBusinessEvidenceStatus(finding) && hasRealReplayAsset(finding) && hasCustomerFacingHardEvidence(finding);
+  if (!finding) return false;
+  if (finding.customer_delivery_status !== 'defect') return false;
+  if (finding.bug_status !== 'reproduced' || !finding.gate_passed || finding.reproduction?.is_synthetic) return false;
+  return true;
 }
 
 export function hasCustomerFacingHardEvidence(finding: Finding): boolean {
@@ -301,15 +281,33 @@ export function usePipelineData(project: string) {
 }
 
 export function useFindingsData(project: string) {
-  const [findings, setFindings] = useState<Finding[]>([]); const [clues, setClues] = useState<Finding[]>([]); const [commercialAssets, setCommercialAssets] = useState<CommercialAssets | null>(null); const [scanMeta, setScanMeta] = useState<JsonRecord>({}); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = useCallback(() => { setLoading(true); setError(''); getFindings(project).then((raw) => { const record = asRecord(raw); setFindings(getReportFindings(raw)); setClues(getReportClues(raw)); setCommercialAssets(getCommercialAssets(raw)); setScanMeta(asRecord(record.scan_meta)); }).catch((caught: unknown) => { setFindings([]); setClues([]); setCommercialAssets(null); setScanMeta({}); setError(caught instanceof Error ? caught.message : '加载失败'); }).finally(() => setLoading(false)); }, [project]);
+  const [findings, setFindings] = useState<Finding[]>([]); const [clues, setClues] = useState<Finding[]>([]); const [rejected, setRejected] = useState<Finding[]>([]); const [commercialAssets, setCommercialAssets] = useState<CommercialAssets | null>(null); const [scanMeta, setScanMeta] = useState<JsonRecord>({}); const [obligationProjection, setObligationProjection] = useState<JsonRecord>({}); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
+  const load = useCallback(() => { setLoading(true); setError(''); getFindings(project).then((raw) => { const record = asRecord(raw); const meta = asRecord(record.scan_meta); setFindings(getReportFindings(raw)); setClues(getReportClues(raw)); setRejected(getReportRejected(raw)); setCommercialAssets(getCommercialAssets(raw)); setScanMeta(meta); setObligationProjection(asRecord(record.obligation_execution_projection || meta.obligation_execution_projection)); }).catch((caught: unknown) => { setFindings([]); setClues([]); setRejected([]); setCommercialAssets(null); setScanMeta({}); setObligationProjection({}); setError(caught instanceof Error ? caught.message : '加载失败'); }).finally(() => setLoading(false)); }, [project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { findings, clues, commercialAssets, scanMeta, loading, error, refetch: load };
+  return { findings, clues, rejected, commercialAssets, scanMeta, obligationProjection, loading, error, refetch: load };
 }
 
 function parseKnowledgeSources(raw: unknown): KnowledgeSource[] {
   const record = asRecord(raw); const asset = asRecord(record.knowledge_asset); const sources = asArray(record.sources || asset.sources || asset.source_inventory);
-  return sources.map((value) => { const source = asRecord(value); return { source_id: asString(source.source_id) || asString(source.id), filename: asString(source.filename) || asString(source.original_name) || asString(source.name), source_type: asString(source.source_type) || asString(source.type), status: asString(source.status) || 'active', size_bytes: asFiniteNumber(source.size_bytes), uploaded_at: asString(source.uploaded_at) || asString(source.created_at_utc) || asString(source.created_at) }; }).filter((source) => source.status.trim() !== 'deleted');
+  return sources.map((value) => {
+    const source = asRecord(value);
+    const parse = asRecord(source.parse);
+    const receipt = asRecord(parse.receipt || parse.parser_receipt || source.parser_receipt);
+    const parserStatus = asString(receipt.parser_status || parse.parser_status || parse.parse_status);
+    const sourceStatus = asString(source.status) || 'active';
+    const visibleStatus = ['failed', 'degraded'].includes(parserStatus) ? parserStatus : sourceStatus;
+    return {
+      source_id: asString(source.source_id) || asString(source.id),
+      filename: asString(source.filename) || asString(source.original_name) || asString(source.name),
+      source_type: asString(source.source_type) || asString(source.type),
+      status: visibleStatus,
+      size_bytes: asFiniteNumber(source.size_bytes),
+      uploaded_at: asString(source.uploaded_at) || asString(source.created_at_utc) || asString(source.created_at),
+      parser_status: parserStatus,
+      parser_fidelity: asString(receipt.fidelity || parse.fidelity),
+      parser_errors: asArray(receipt.errors || parse.errors).map(asRecord),
+    };
+  }).filter((source) => source.status.trim() !== 'deleted');
 }
 
 export function useKnowledgeData(project: string) {
@@ -420,13 +418,16 @@ export function useReleaseData(project: string) {
 
 export function useTestTaskBoard(project: string) {
   const [board, setBoard] = useState<TestTaskBoard | null>(null);
+  const [obligationProjection, setObligationProjection] = useState<JsonRecord>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const load = useCallback(() => {
-    if (!project) { setBoard(null); setLoading(false); return; }
+    if (!project) { setBoard(null); setObligationProjection({}); setLoading(false); return; }
     setLoading(true); setError('');
     getFindings(project).then((raw) => {
       const record = asRecord(raw);
+      const meta = asRecord(record.scan_meta);
+      setObligationProjection(asRecord(record.obligation_execution_projection || meta.obligation_execution_projection));
       const boardRaw = asRecord(record.test_task_board);
       if (!boardRaw || (Object.keys(boardRaw).length === 0)) { setBoard(null); setLoading(false); return; }
       const ledger = asRecord(boardRaw.ledger);
@@ -480,11 +481,11 @@ export function useTestTaskBoard(project: string) {
         evidence_chains_saved: asFiniteNumber(boardRaw.evidence_chains_saved),
       });
     }).catch((caught: unknown) => {
-      setBoard(null); setError(caught instanceof Error ? caught.message : '加载失败');
+      setBoard(null); setObligationProjection({}); setError(caught instanceof Error ? caught.message : '加载失败');
     }).finally(() => setLoading(false));
   }, [project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { board, loading, error, refetch: load };
+  return { board, obligationProjection, loading, error, refetch: load };
 }
 
 export function useLiveStatus(project: string, intervalMs = 30000) {

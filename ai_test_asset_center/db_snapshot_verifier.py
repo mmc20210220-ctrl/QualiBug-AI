@@ -70,7 +70,7 @@ class DBSnapshotVerifier:
     """通用数据库快照验证器 — 支持 SQLite / PostgreSQL / MySQL / Oracle / SQL Server。
 
     配置方式 (任选其一):
-      1. QUALIBUG_DB_DSN="postgresql://user:pass@host:5432/db"
+      1. QUALIBUG_DB_DSN="postgresql://host:5432/db"
       2. QUALIBUG_DB_TYPE=postgresql + QUALIBUG_DB_HOST/NAME/USER/PASS
 
     用法:

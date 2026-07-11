@@ -241,8 +241,13 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
         if c.severity == "error"
     ]
     warns = [c for c in checks if c.severity == "warn"]
-    all_ok = len(errors) == 0
     ready = len(errors) == 0
+    if errors:
+        summary = f"存在{len(errors)}个错误，修复后才能开始扫描"
+    elif warns:
+        summary = f"存在{len(warns)}个警告，扫描可以继续但覆盖范围受限"
+    else:
+        summary = "所有检查通过，可以开始扫描"
 
     return {
         "ready": ready,
@@ -250,9 +255,7 @@ def run_preflight(config: dict, api_doc: str | None = None) -> dict:
         "checks": [c.to_dict() for c in checks],
         "errors": len(errors),
         "warnings": len(warns),
-        "summary": "所有检查通过，可以开始扫描" if ready else
-                    f"存在{len(errors)}个错误需修复后才能扫描" if errors else
-                    f"存在{len(warns)}个警告，扫描可能部分功能受限"
+        "summary": summary,
     }
 
 

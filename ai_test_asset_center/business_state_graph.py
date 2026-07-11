@@ -304,6 +304,80 @@ def _route_narrative_action(
     return (best[1], best[2]) if best[0] > 0 else ("", "")
 
 
+def _state_action_candidates(state: str) -> set[str]:
+    """Derive generic operation stems from a target state token.
+
+    Requirements often use terse arrows (``PAID -> SHIPPED``) without naming
+    the triggering verb.  English morphology supplies a source-agnostic bridge
+    to documented operation tails (``ship``, ``cancel``, ``approve``) without a
+    per-industry state table.  The route catalog remains the authority: these
+    candidates only rank documented endpoints and never invent one.
+    """
+    token = _entity(state).lower()
+    if not token:
+        return set()
+    candidates = {token}
+    if token.endswith("ies") and len(token) > 4:
+        candidates.add(token[:-3] + "y")
+    if token.endswith("ied") and len(token) > 4:
+        candidates.add(token[:-3] + "y")
+    # Common irregular past-tense form (paid -> pay, laid -> lay).
+    if token.endswith("id") and len(token) > 3:
+        candidates.add(token[:-2] + "y")
+    if token.endswith("ed") and len(token) > 3:
+        stem = token[:-2]
+        candidates.add(stem)
+        if stem.endswith("v") or stem.endswith("t") or stem.endswith("l") or stem.endswith("p"):
+            candidates.add(stem + "e")
+        # English past-tense forms may double the final consonant before
+        # ``-ed`` (cancelled -> cancel, submitted -> submit, stopped -> stop).
+        # These candidates only rank already documented routes; they never
+        # invent an endpoint.
+        if len(stem) >= 2 and stem[-1] == stem[-2] and stem[-1] in "bdgklmnprt":
+            candidates.add(stem[:-1])
+    if token.endswith("s") and len(token) > 3:
+        candidates.add(token[:-1])
+    return {item for item in candidates if item}
+
+
+def _route_state_target_action(
+    state: str,
+    endpoints: list[dict[str, str]],
+    *,
+    entity: str = "",
+) -> tuple[str, str]:
+    """Route a terse transition target to a documented mutation endpoint."""
+    candidates = _state_action_candidates(state)
+    if not candidates:
+        return "", ""
+    entity_e = _entity(entity) if entity else ""
+    best: tuple[int, str, str] = (0, "", "")
+    for item in endpoints:
+        method = str(item.get("method") or "").upper()
+        if method not in {"POST", "PUT", "PATCH"}:
+            continue
+        action = _entity(str(item.get("action") or "").lower())
+        path = str(item.get("path") or "")
+        path_tail = _entity(path.rstrip("/").split("/")[-1]) if path else ""
+        summary = " ".join(str(item.get(key) or "").lower() for key in ("summary", "action", "path"))
+        score = 0
+        selected = action or path_tail
+        if action in candidates:
+            score += 4
+        if path_tail in candidates:
+            score += 3
+            selected = path_tail
+        if any(candidate and candidate in summary for candidate in candidates):
+            score += 1
+        if score and entity_e:
+            item_entity = _entity(item.get("entity") or "")
+            if item_entity == entity_e or item_entity.startswith(entity_e) or entity_e.startswith(item_entity):
+                score += 2
+        if score > best[0]:
+            best = (score, selected, path)
+    return (best[1], best[2]) if best[0] > 0 else ("", "")
+
+
 @dataclass
 class StateNode:
     entity: str
@@ -644,6 +718,15 @@ class BusinessStateGraphBuilder:
                 # (language resource, not domain hardcoding) to a concrete endpoint.
                 if not action and not endpoint:
                     action, endpoint = _route_narrative_action(_extract_narrative_verb(row["line"]), endpoints, entity=entity)
+                if not action and not endpoint:
+                    # Arrow-style requirements frequently omit the action verb
+                    # (for example ``PAID -> SHIPPED``).  Use the target state
+                    # only to rank an already documented mutation route.
+                    action, endpoint = _route_state_target_action(
+                        row.get("after") or "",
+                        endpoints,
+                        entity=entity,
+                    )
                 # ── Route-aware risk scoring ──
                 # A transition detected from narrative PRD text that cannot be
                 # mapped to a concrete API endpoint is still structurally valid

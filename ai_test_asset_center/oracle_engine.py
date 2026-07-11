@@ -22,6 +22,68 @@ from typing import Any
 _COLLECTION_RESPONSE_KEYS = {"items", "rows", "records", "results", "list", "series", "buckets"}
 
 
+def _is_harness_support_step(step: dict[str, Any]) -> bool:
+    """Return whether a trace step prepares the probe rather than tests it.
+
+    Resolver, login and bootstrap calls can fail because the harness could not
+    construct the target preconditions.  Treating those failures as if they
+    came from the behavior slice's intended endpoint creates a real HTTP
+    observation with a false defect attribution.
+    """
+    action = str(step.get("action") or "").strip().lower()
+    path = str(step.get("path") or "").split("?", 1)[0].rstrip("/").lower()
+    return (
+        action == "login"
+        or action.startswith("login_")
+        or action.startswith("resolve_")
+        or action.startswith("bootstrap_create_")
+        or path.endswith("/login")
+    )
+
+
+_STATE_FIELD_NAMES = {"status", "state", "order_status", "task_status", "lifecycle_state"}
+_IDENTITY_FIELD_RE = re.compile(r"(?:^id$|^uuid$|^sku$|^code$|_id$|id$)", re.I)
+
+
+def _nested_field_values(value: Any, *, field_kind: str, depth: int = 0) -> set[str]:
+    """Collect bounded state or identity values from a runtime response."""
+    if depth > 6:
+        return set()
+    values: set[str] = set()
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            key = str(raw_key or "").strip()
+            matched = (
+                key.lower() in _STATE_FIELD_NAMES
+                if field_kind == "state"
+                else bool(_IDENTITY_FIELD_RE.search(key))
+            )
+            if matched and isinstance(child, (str, int, float)) and str(child).strip():
+                values.add(str(child).strip())
+            if isinstance(child, (dict, list)):
+                values.update(_nested_field_values(child, field_kind=field_kind, depth=depth + 1))
+    elif isinstance(value, list):
+        for child in value[:200]:
+            values.update(_nested_field_values(child, field_kind=field_kind, depth=depth + 1))
+    return values
+
+
+def _step_response_body(step: dict[str, Any]) -> Any:
+    response = step.get("response") if isinstance(step.get("response"), dict) else {}
+    return response.get("body")
+
+
+def _step_identity_targets(step: dict[str, Any]) -> set[str]:
+    request = step.get("request") if isinstance(step.get("request"), dict) else {}
+    targets = _nested_field_values(request.get("body"), field_kind="identity")
+    targets.update(_nested_field_values(_step_response_body(step), field_kind="identity"))
+    for segment in str(step.get("path") or "").split("?", 1)[0].split("/"):
+        text = segment.strip()
+        if text and "{" not in text and not text.startswith(":"):
+            targets.add(text)
+    return targets
+
+
 @dataclass
 class OracleResult:
     passed: bool
@@ -33,15 +95,25 @@ class OracleResult:
     severity: str = "P1"
     confidence: float = 0.5
     explanation: str = ""
+    oracle_tier: str = ""
+    customer_deliverable: bool | None = None
+    demotion_reason: str = ""
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "passed": self.passed, "layer": self.layer,
             "oracle_name": self.oracle_name, "oracle": self.oracle_name,
             "violated_rule": self.violated_rule, "expected": self.expected,
             "actual": self.actual, "severity": self.severity,
             "confidence": self.confidence, "explanation": self.explanation,
         }
+        if self.oracle_tier:
+            payload["oracle_tier"] = self.oracle_tier
+        if self.customer_deliverable is not None:
+            payload["customer_deliverable"] = self.customer_deliverable
+        if self.demotion_reason:
+            payload["demotion_reason"] = self.demotion_reason
+        return payload
 
 
 class BaseOracle(ABC):
@@ -63,7 +135,17 @@ class HttpStatusOracle(BaseOracle):
     trigger_keywords = []; priority = 10  # Always run
 
     def evaluate(self, scenario, trace, snapshots=None):
+        scenario_signals = " ".join([
+            str(scenario.get("category") or ""),
+            str(scenario.get("behavior_slice_kind") or ""),
+            " ".join(str(item or "") for item in scenario.get("oracle_rules", []) or []),
+        ]).lower()
+        permission_probe = "permissionoracle" in scenario_signals or "permission" in scenario_signals or "isolation" in scenario_signals
+        replay_probe = "concurrencyoracle" in scenario_signals or "idempotencyoracle" in scenario_signals or "concurrency" in scenario_signals or "idempotency" in scenario_signals
+        state_probe = "stateoracle" in scenario_signals or "state_machine" in scenario_signals or "transition" in scenario_signals
         for s in trace.get("steps", []):
+            if not isinstance(s, dict) or _is_harness_support_step(s):
+                continue
             status = s.get("response", {}).get("status_code", 0) if isinstance(s.get("response"), dict) else s.get("status", 0)
             if status >= 500:
                 return OracleResult(False, "HttpStatusOracle", "L1", "server_5xx",
@@ -83,9 +165,21 @@ class HttpStatusOracle(BaseOracle):
                 # "expected success" unless a create-specific rule already fired.
                 if 200 <= expected_i < 300 and 200 <= status_i < 300:
                     continue
-                action = str(s.get("action") or "").strip().lower()
-                # Fixture bootstrap / resolve steps are harness, not the probe.
-                if action.startswith("bootstrap_create_") or action.startswith("resolve_"):
+                # Permission/isolation scenarios need semantic evidence, not a
+                # literal status-code equality. A different 4xx is inconclusive
+                # (validation may run before authorization), while a 2xx denial
+                # bypass is handled by PermissionOracle below.
+                if permission_probe:
+                    continue
+                # Repeated-write status expectations are not universal REST
+                # contracts. Idempotency/Concurrency oracles decide whether an
+                # externally observable duplicate side effect actually exists.
+                if replay_probe and expected_i == 409:
+                    continue
+                # A forbidden state transition is a semantic claim. Only the
+                # StateOracle can confirm that the same entity was proven in
+                # the required source state and reached the forbidden target.
+                if state_probe and expected_i >= 400:
                     continue
                 return OracleResult(False, "HttpStatusOracle", "L1", "expected_status_mismatch",
                     f"应返回 HTTP {expected}", f"实际返回 HTTP {status}", "P1", 0.90)
@@ -346,11 +440,34 @@ class MoneyOracle(BaseOracle):
     name = "MoneyOracle"; layer = "L3"
     trigger_keywords = ["支付", "退款", "金额", "价格", "费用", "余额", "结算", "payment", "refund", "amount"]
 
+    @staticmethod
+    def _numeric_field(body: Any, names: tuple[str, ...]) -> float | None:
+        if not isinstance(body, dict):
+            return None
+        for name in names:
+            val = body.get(name)
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, str):
+                try:
+                    return float(val.strip())
+                except (ValueError, TypeError):
+                    continue
+        return None
+
     def evaluate(self, scenario, trace, snapshots=None):
-        for s in trace.get("steps", []):
+        steps = trace.get("steps", []) if isinstance(trace, dict) else []
+        money_fields = (
+            "amount", "total_price", "total", "price", "balance", "fee",
+            "payableAmount", "payable_amount", "amountPaid", "amount_paid",
+            "paidAmount", "refundAmount", "refund_amount", "available_qty", "stock",
+        )
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
             body = s.get("response", {}).get("body", {}) if isinstance(s.get("response"), dict) else {}
             if isinstance(body, dict):
-                for field in ("amount", "total_price", "total", "price", "balance", "fee"):
+                for field in money_fields:
                     val = body.get(field)
                     if val is not None:
                         try:
@@ -359,8 +476,98 @@ class MoneyOracle(BaseOracle):
                                     f"{field} >= 0", f"{field} = {val}", "P0", 0.95, f"负金额: {field}={val}")
                         except (ValueError, TypeError, AttributeError):
                             pass  # non-numeric value — can't compare, skip
-        refunds = [s for s in trace.get("steps", []) if "refund" in str(s.get("action","")).lower()]
-        if len(refunds) >= 2 and refunds[-1].get("response", {}).get("status_code", 0) == 200:
+
+        # Successful pay/refund whose request amount disagrees with the resource
+        # payable/paid field — classic money_quantity_conservation defect.
+        paid_amounts: list[float] = []
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            method = str(s.get("method") or "").upper()
+            if method not in {"POST", "PUT", "PATCH"}:
+                continue
+            resp = s.get("response") if isinstance(s.get("response"), dict) else {}
+            status = int(s.get("status") or resp.get("status_code") or 0)
+            if not (200 <= status < 300):
+                continue
+            path_l = str(s.get("path") or "").lower()
+            action_l = str(s.get("action") or "").lower()
+            req = s.get("request") if isinstance(s.get("request"), dict) else {}
+            req_body = req.get("body") if isinstance(req.get("body"), dict) else {}
+            resp_body = resp.get("body") if isinstance(resp.get("body"), dict) else {}
+            req_amount = self._numeric_field(
+                req_body, ("amount", "payAmount", "pay_amount", "refundAmount", "refund_amount"),
+            )
+            if req_amount is None:
+                continue
+            is_pay = any(tok in path_l or tok in action_l for tok in ("pay", "payment", "settle", "charge"))
+            is_refund = "refund" in path_l or "refund" in action_l
+            if is_pay:
+                paid_amounts.append(req_amount)
+                payable = self._numeric_field(
+                    resp_body,
+                    (
+                        "payableAmount", "payable_amount", "orderAmount", "order_amount",
+                        "totalAmount", "total_amount", "amountDue", "amount_due",
+                    ),
+                )
+                if payable is not None and abs(payable - req_amount) > 0.009:
+                    return OracleResult(
+                        False, "MoneyOracle", "L3", "payment_amount_mismatch",
+                        "支付金额必须等于应付金额",
+                        f"request.amount={req_amount} payable={payable}",
+                        "P0", 0.90,
+                        f"支付金额与应付不一致: {req_amount} vs {payable}",
+                    )
+            if is_refund:
+                paid = self._numeric_field(
+                    resp_body,
+                    ("amountPaid", "amount_paid", "paidAmount", "paid_amount", "payableAmount", "payable_amount"),
+                )
+                baseline = paid if paid is not None else (max(paid_amounts) if paid_amounts else None)
+                if baseline is not None and req_amount > baseline + 0.009:
+                    return OracleResult(
+                        False, "MoneyOracle", "L3", "refund_exceeds_paid",
+                        "退款金额不得超过已付金额",
+                        f"refund={req_amount} paid={baseline}",
+                        "P0", 0.92,
+                        f"超付退款: refund={req_amount} > paid={baseline}",
+                    )
+
+        # Before/after observe bookends: money fields must not go negative and
+        # must not invent balance from thin air on a no-op observe pair.
+        before_steps = [
+            s for s in steps
+            if isinstance(s, dict) and str(s.get("action") or "").startswith("observe_money")
+            and "after" not in str(s.get("action") or "").lower()
+        ]
+        after_steps = [
+            s for s in steps
+            if isinstance(s, dict) and "observe_money_after" in str(s.get("action") or "").lower()
+        ]
+        if before_steps and after_steps:
+            before_body = (before_steps[0].get("response") or {}).get("body") if isinstance(before_steps[0].get("response"), dict) else {}
+            after_body = (after_steps[-1].get("response") or {}).get("body") if isinstance(after_steps[-1].get("response"), dict) else {}
+            for field in ("balance", "available_qty", "stock", "quantity", "amount"):
+                b = self._numeric_field(before_body if isinstance(before_body, dict) else {}, (field,))
+                a = self._numeric_field(after_body if isinstance(after_body, dict) else {}, (field,))
+                if a is not None and a < 0:
+                    return OracleResult(
+                        False, "MoneyOracle", "L3", "negative_amount_after_write",
+                        f"{field} >= 0 after write", f"{field}={a}", "P0", 0.93,
+                        f"写后负值: {field}={a}",
+                    )
+                if b is not None and a is not None and a > b * 10 + 1000 and b >= 0:
+                    # Extreme inflation without a matching credit signal — soft
+                    # conservation alarm (inventory/balance explosion).
+                    return OracleResult(
+                        False, "MoneyOracle", "L3", "quantity_explosion",
+                        f"{field} 不应无依据暴涨", f"{field}: {b}→{a}", "P1", 0.70,
+                        f"数量异常膨胀: {field} {b}→{a}",
+                    )
+
+        refunds = [s for s in steps if isinstance(s, dict) and "refund" in str(s.get("action", "")).lower()]
+        if len(refunds) >= 2 and isinstance(refunds[-1].get("response"), dict) and refunds[-1].get("response", {}).get("status_code", 0) == 200:
             return OracleResult(False, "MoneyOracle", "L3", "double_refund",
                 "重复退款应被拒绝", f"第{len(refunds)}次退款成功", "P0", 0.92)
         return OracleResult(True, "MoneyOracle", "L3")
@@ -401,6 +608,87 @@ class StateOracle(BaseOracle):
         steps = trace.get("steps", [])
         if not steps: return OracleResult(True, "StateOracle", "L3")
 
+        if is_forbidden:
+            hints = scenario.get("runtime_hints") if isinstance(scenario.get("runtime_hints"), dict) else {}
+            source_state = str(hints.get("source_state") or "").strip().upper()
+            target_state = str(hints.get("target_state") or "").strip().upper()
+            treatment_index = -1
+            treatment: dict[str, Any] = {}
+            for index, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    continue
+                action = str(step.get("action") or "").strip().lower()
+                method = str(step.get("method") or "").upper()
+                expected = int(step.get("expected_status") or 0)
+                if action.startswith("transition_") or (
+                    method in {"POST", "PUT", "PATCH", "DELETE"} and expected >= 400
+                ):
+                    treatment_index = index
+                    treatment = step
+            if treatment_index < 0 or not treatment:
+                trace.setdefault("oracle_evidence_gaps", []).append({
+                    "code": "STATE_TRANSITION_TREATMENT_MISSING",
+                    "operator_action": "inspect_scenario_transition_step",
+                })
+                return OracleResult(True, "StateOracle", "L3")
+
+            target_identities = _step_identity_targets(treatment)
+            source_proven = False
+            if source_state and target_identities:
+                for step in steps[:treatment_index]:
+                    if not isinstance(step, dict):
+                        continue
+                    states = {
+                        value.upper()
+                        for value in _nested_field_values(_step_response_body(step), field_kind="state")
+                    }
+                    identities = _nested_field_values(_step_response_body(step), field_kind="identity")
+                    if source_state in states and identities.intersection(target_identities):
+                        source_proven = True
+                        break
+            if not source_proven:
+                trace.setdefault("precondition_not_met", []).append({
+                    "required_source_state": source_state or "UNDECLARED",
+                    "target_identity_sample": sorted(target_identities)[:3],
+                    "reason": "source_state_identity_not_proven",
+                })
+                return OracleResult(True, "StateOracle", "L3")
+
+            treatment_response = treatment.get("response") if isinstance(treatment.get("response"), dict) else {}
+            treatment_status = int(treatment_response.get("status_code") or treatment.get("status") or 0)
+            effect_proven = not target_state
+            if target_state:
+                for step in steps[treatment_index:]:
+                    if not isinstance(step, dict):
+                        continue
+                    states = {
+                        value.upper()
+                        for value in _nested_field_values(_step_response_body(step), field_kind="state")
+                    }
+                    identities = _nested_field_values(_step_response_body(step), field_kind="identity")
+                    if target_state in states and identities.intersection(target_identities):
+                        effect_proven = True
+                        break
+            if 200 <= treatment_status < 300 and effect_proven:
+                return OracleResult(
+                    False,
+                    "StateOracle",
+                    "L3",
+                    "forbidden_transition",
+                    "Forbidden state transition must be rejected",
+                    f"HTTP {treatment_status}",
+                    "P0",
+                    0.93,
+                    f"Forbidden path accepted: {scenario.get('title', '')}",
+                )
+            if 200 <= treatment_status < 300 and not effect_proven:
+                trace.setdefault("oracle_evidence_gaps", []).append({
+                    "code": "STATE_TRANSITION_EFFECT_NOT_PROVEN",
+                    "required_target_state": target_state or "UNDECLARED",
+                    "operator_action": "add_bound_post_transition_observer",
+                })
+            return OracleResult(True, "StateOracle", "L3")
+
         # Extract status fields from step responses to check transitions
         observed_statuses: list[str] = []
         for s in steps:
@@ -411,15 +699,6 @@ class StateOracle(BaseOracle):
                     if val and isinstance(val, str):
                         observed_statuses.append(val)
                         break
-
-        # Check forbidden transitions
-        if is_forbidden:
-            last_resp = steps[-1].get("response", {}) if isinstance(steps[-1], dict) else {}
-            status = last_resp.get("status_code", 0) if isinstance(last_resp, dict) else 0
-            if status == 200:
-                return OracleResult(False, "StateOracle", "L3", "forbidden_transition",
-                    "禁止的状态转换应被阻止", "HTTP 200", "P0", 0.93,
-                    f"禁止路径: {scenario.get('title','')}")
 
         # Check: if there are multiple statuses, did any go backwards?
         # Simple heuristic: "completed"/"cancelled" → "pending" = regression
@@ -566,10 +845,12 @@ class PermissionOracle(BaseOracle):
 
     def evaluate(self, scenario, trace, snapshots=None):
         for s in trace.get("steps", []):
+            if not isinstance(s, dict) or _is_harness_support_step(s):
+                continue
             resp = s.get("response", {}) if isinstance(s, dict) else {}
             status = resp.get("status_code", 0) if isinstance(resp, dict) else s.get("status", 0)
             expected = s.get("expected_status", 200)
-            if expected in (401, 403) and status == 200:
+            if expected in (401, 403) and 200 <= int(status or 0) < 300:
                 return OracleResult(False, "PermissionOracle", "L4", "unauthorized_access",
                     f"应返回{expected}", f"HTTP {status}", "P0", 0.95, f"权限绕过: {s.get('action','?')}")
         return OracleResult(True, "PermissionOracle", "L4")
@@ -652,6 +933,14 @@ class AuthSessionOracle(BaseOracle):
 # L5 — 运行时行为Oracle (4 types)
 # ═══════════════════════════════════════════════════
 
+def _contract_activation_for_business_oracle(scenario: dict) -> bool:
+    try:
+        from .contract_oracles import scenario_has_contract_activation
+        return scenario_has_contract_activation(scenario if isinstance(scenario, dict) else {})
+    except Exception:
+        return False
+
+
 class IdempotencyOracle(BaseOracle):
     name = "IdempotencyOracle"; layer = "L5"
     trigger_keywords = ["幂等", "重复提交", "idempotent", "duplicate"]
@@ -671,7 +960,18 @@ class IdempotencyOracle(BaseOracle):
             for s in group:
                 resp = s.get("response", {}) if isinstance(s.get("response"), dict) else {}
                 statuses.add(resp.get("status_code", s.get("status", 0)))
-            if statuses <= {200, 201}:  # all succeeded — non-idempotent
+            if statuses <= {200, 201}:  # all succeeded — non-idempotent signal
+                # Dual/multi-2xx without contract effect is clue-tier only (Spec §5.4 / Phase 3).
+                if not _contract_activation_for_business_oracle(scenario):
+                    return OracleResult(
+                        False, "IdempotencyOracle", "L5", "non_idempotent_heuristic",
+                        f"重复{method} {path} 应返回幂等响应(409/相同结果)",
+                        f"{len(group)}次请求均返回成功", "P2", 0.45,
+                        explanation="http_status_heuristic_insufficient_for_customer_delivery",
+                        oracle_tier="internal_clue",
+                        customer_deliverable=False,
+                        demotion_reason="heuristic_idempotency_without_contract_effect",
+                    )
                 return OracleResult(False, "IdempotencyOracle", "L5", "non_idempotent",
                     f"重复{method} {path} 应返回幂等响应(409/相同结果)",
                     f"{len(group)}次请求均返回成功", "P0", 0.80)
@@ -686,6 +986,15 @@ class ConcurrencyOracle(BaseOracle):
         if scenario.get("flags", {}).get("concurrent"):
             successes = [s for s in trace.get("steps", []) if s.get("response", {}).get("status_code", 0) == 200]
             if len(successes) >= 2:
+                if not _contract_activation_for_business_oracle(scenario):
+                    return OracleResult(
+                        False, "ConcurrencyOracle", "L5", "race_condition_heuristic",
+                        "并发操作应互斥", f"{len(successes)}次成功", "P2", 0.45,
+                        explanation="http_status_heuristic_insufficient_for_customer_delivery",
+                        oracle_tier="internal_clue",
+                        customer_deliverable=False,
+                        demotion_reason="heuristic_concurrency_without_contract_effect",
+                    )
                 return OracleResult(False, "ConcurrencyOracle", "L5", "race_condition",
                     "并发操作应互斥", f"{len(successes)}次成功", "P0", 0.85)
         return OracleResult(True, "ConcurrencyOracle", "L5")

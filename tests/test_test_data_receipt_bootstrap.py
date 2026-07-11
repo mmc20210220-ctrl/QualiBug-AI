@@ -375,6 +375,7 @@ def test_bootstrap_rejects_login_only_fixture_surface_before_authentication(tmp_
         campaign={"campaign_id": "CMP_LOGIN_ONLY", "scope_id": "scope", "environment_ref": "test"},
         selected_slices=[],
         contract={"strategy": "create_disposable", "write_approved": True},
+        environment_kind="test",
     )
 
     assert result["status"] == "blocked"
@@ -428,6 +429,7 @@ def test_bootstrap_receipts_issue_real_creation_and_cleanup_receipts(tmp_path, m
         campaign={"campaign_id": "CMP_1", "scope_id": "scope-a", "environment_ref": "test-a"},
         selected_slices=[{"slice_id": "slice-1", "endpoints": ["/api/orders/:order_id"]}],
         contract={"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": "sandbox-a"},
+        environment_kind="test",
     )
 
     creation_ref = str(result["contract"]["creation_receipt_ref"])
@@ -500,6 +502,7 @@ def test_bootstrap_blocks_production_and_unknown_before_login_or_write(tmp_path,
     production = bootstrap_test_data_receipts_for_campaign(
         **common,
         campaign={"campaign_id": "CMP_PROD", "scope_id": "scope", "environment_ref": "customer-production"},
+        environment_kind="production",
     )
     unknown = bootstrap_test_data_receipts_for_campaign(
         **common,
@@ -555,6 +558,7 @@ def test_bootstrap_retries_next_control_account_when_first_fixture_attempt_is_fo
         campaign={"campaign_id": "CMP_2", "scope_id": "scope-b", "environment_ref": "test-b"},
         selected_slices=[{"slice_id": "slice-1", "endpoints": ["/api/orders/:order_id"]}],
         contract={"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": "sandbox-b"},
+        environment_kind="test",
     )
 
     assert result["status"] == "ready"
@@ -611,6 +615,7 @@ def test_bootstrap_control_account_order_uses_configured_default_without_role_na
         campaign={"campaign_id": "CMP_3", "scope_id": "scope-c", "environment_ref": "test-c"},
         selected_slices=[{"slice_id": "slice-1", "endpoints": ["/api/orders/:order_id"]}],
         contract={"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": "sandbox-c"},
+        environment_kind="test",
     )
 
     assert result["status"] == "ready"
@@ -689,6 +694,7 @@ def test_scan_promotes_bootstrapped_contract_into_ready_test_data_plan(tmp_path,
         campaign_context={
             "scope_id": "service-a",
             "environment_ref": "test-a",
+            "environment_type": "test",
             "test_data_contract": {
                 "strategy": "create_disposable",
                 "write_approved": True,
@@ -780,6 +786,7 @@ def test_scan_infers_create_disposable_contract_before_bootstrap(tmp_path, monke
         campaign_context={
             "scope_id": "service-a",
             "environment_ref": "test-a",
+            "environment_type": "test",
             "source_manifest": {
                 "source_id": "api-contract",
                 "source_hash": hashlib.sha256(API_SPEC.encode("utf-8")).hexdigest(),

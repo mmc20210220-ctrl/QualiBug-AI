@@ -137,6 +137,7 @@ def _result(tmp_path_factory: pytest.TempPathFactory) -> dict:
         }
         ctx = {
             "source_manifest": manifest, "scope_id": SCOPE, "environment_ref": ENV,
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write", "execution_approval_id": approval["approval_id"],
             "test_data_contract": {"strategy": "create_disposable", "write_approved": True, "disposable_scope_ref": SCOPE},
             "runtime_scenario_contract": contract,

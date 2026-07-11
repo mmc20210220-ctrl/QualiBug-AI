@@ -3,10 +3,27 @@ import os
 os.environ.setdefault("QUALIBUG_JWT_SECRET", "test-private-pilot-secret")
 
 from ai_test_asset_center.__main__ import _scan_preflight_guide
+from ai_test_asset_center.target_policy import build_target_policy_decision
 
 
 def _approved_runtime_contract() -> dict:
-    return {"status": "approved"}
+    decision = build_target_policy_decision(
+        requested_base_url="http://127.0.0.1:8011",
+        approved_base_url="http://127.0.0.1:8011",
+        environment_type="staging",
+        environment_ref="staging",
+        execution_mode="approved_sandbox_write",
+        runtime_status="approved",
+    )
+    return {
+        "status": "approved",
+        "approved_base_url": "http://127.0.0.1:8011",
+        "requested_base_url": "http://127.0.0.1:8011",
+        "environment_type": "staging",
+        "environment_ref": "staging",
+        "execution_mode": "approved_sandbox_write",
+        "target_policy_decision": decision,
+    }
 
 
 def _manifest() -> dict:
@@ -18,6 +35,7 @@ def test_scan_preflight_guide_blocks_healthy_claim_when_service_credentials_unve
         context={
             "scope_id": "orders-scope",
             "environment_ref": "staging",
+            "environment_type": "staging",
             "test_data_contract": {"strategy": "reuse_verified_existing"},
             "services": [
                 {
@@ -49,6 +67,7 @@ def test_scan_preflight_guide_allows_healthy_claim_when_service_credentials_veri
         context={
             "scope_id": "orders-scope",
             "environment_ref": "staging",
+            "environment_type": "staging",
             "test_data_contract": {"strategy": "reuse_verified_existing"},
             "services": [
                 {

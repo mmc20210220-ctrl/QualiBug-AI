@@ -1,4 +1,4 @@
-﻿# QualiBug Phase104B API 合同
+# QualiBug Phase104B API 合同
 
 - Contract Version: `phase104b-api-contract-exporter-v1`
 - Runtime Version: `phase104a-command-center-http-api-v1`
@@ -50,4 +50,3 @@
 ## 脱敏规范
 
 合同示例只包含脱敏占位和状态字段，不包含原始凭证。Credential 类字段只允许进入本地运行时，不能进入报告、静态前端或交付包。
-

@@ -86,6 +86,13 @@ def _manifest(root: Path) -> Path:
 
 def _finding(target_id: str) -> dict[str, Any]:
     return {
+        "candidate_id": f"candidate-{target_id}",
+        "slice_id": f"slice-{target_id}",
+        "obligation_id": f"obligation-{target_id}",
+        "experiment_id": f"experiment-{target_id}",
+        "execution_id": f"execution-{target_id}",
+        "evidence_id": f"evidence-{target_id}",
+        "finding_id": f"finding-{target_id}",
         "title": f"alpha beta gamma delta on {target_id}",
         "severity": "P1",
         "bug_status": "reproduced",

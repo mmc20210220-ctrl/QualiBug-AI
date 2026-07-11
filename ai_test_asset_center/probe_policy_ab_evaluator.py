@@ -124,7 +124,7 @@ def run_policy_ab_evaluation(
     rows = []
     for policy in unique_policies:
         with patched_env(DEFECT_DISCOVERY_MODE="blind", PROBE_POLICY_PROFILE=policy):
-            config = DiscoveryConfig(project=project, public_artifacts=public_artifacts, discovery_mode="blind", benchmark_compat_enabled=False)
+            config = DiscoveryConfig(project=project, public_artifacts=public_artifacts, discovery_mode="blind")
             DefectDiscoveryRunner(config).run()
             policy_out = output_dir / policy
             scorecard = evaluate(

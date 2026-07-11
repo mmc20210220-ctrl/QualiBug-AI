@@ -101,7 +101,7 @@ function isImageArtifact(type: string, ref: string): boolean {
 export function EvidenceChain() {
   usePageTitle('证据链');
   const [params] = useSearchParams(); const project = params.get('project')?.trim() || '';
-  const { findings, clues, commercialAssets, scanMeta, loading } = useFindingsData(project);
+  const { findings, clues, rejected, commercialAssets, scanMeta, obligationProjection, loading } = useFindingsData(project);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [personaByFinding, setPersonaByFinding] = useState<Record<string, PersonaView>>({});
   const [filter, setFilter] = useState<EvidenceFilter>('all');
@@ -109,20 +109,25 @@ export function EvidenceChain() {
 
   const customerFindings = findings.filter(isCustomerReadyFinding);
   const withEvidence = customerFindings.filter((finding) => hasCustomerFacingHardEvidence(finding) && finding.evidence_chain.length > 0);
-  const currentScanDefects = asNum(scanMeta.current_report_customer_ready_defect_count, asNum(scanMeta.customer_ready_defects, customerFindings.length));
-  const familyShelfDefects = asNum(scanMeta.family_customer_ready_defect_count, findings.length);
+  const currentScanDefects = asNum(scanMeta.formal_customer_deliverable_count, customerFindings.length);
+  const familyShelfDefects = currentScanDefects;
   const shelfWithoutEvidence = Math.max(0, familyShelfDefects - withEvidence.length);
   const replayReady = withEvidence.filter((finding) => acceptanceDecision(finding).label === '可进入客户复验').length;
   const apiEvidence = withEvidence.filter(hasRealReplayAsset).length;
   const dbEvidence = withEvidence.filter(hasDatabaseEvidence).length;
   const documentEvidence = withEvidence.filter((finding) => !hasRealReplayAsset(finding) && !hasDatabaseEvidence(finding)).length;
   const validated = withEvidence.filter((finding) => finding.evidence_quality.level === 'validated').length;
+  const oblTotal = asNum(obligationProjection.obligation_total);
+  const oblCompiled = asNum(obligationProjection.obligation_compiled);
+  const oblExecuted = asNum(obligationProjection.obligation_executed);
+  const qualityClaim = asString(scanMeta.quality_claim_status) || 'NOT_MEASURED';
+  const fingerprints = asRecord(obligationProjection.fingerprints);
   const closedLoop = Math.round((validated / Math.max(withEvidence.length, 1)) * 100);
   const display = withEvidence.filter((finding) => filter === 'all' || filter === 'API' && hasRealReplayAsset(finding) || filter === 'DB' && hasDatabaseEvidence(finding) || filter === '文档' && !hasRealReplayAsset(finding) && !hasDatabaseEvidence(finding));
 
   return <div>
     <section className="customer-showcase evidence-showcase mb-4">
-      <div className="customer-showcase-main"><span className="panel-kicker">客户验收证据包</span><h1>{acceptanceHeadline(withEvidence.length, replayReady, clues.length)}</h1><p>{withEvidence.length ? `当前扫描确认 ${currentScanDefects} 条客户缺陷，累计 defect shelf 为 ${familyShelfDefects} 条；其中 ${withEvidence.length} 条已形成客户证据包，${replayReady} 条具备真实复验入口，${validated} 条达到高质量证据标准。平台只提供缺陷事实、证据链、复验入口、客户修复后的回归结果和发布状态，不提供修复建议。` : clues.length ? `当前有 ${clues.length} 条线索仍在补采真实请求、响应、日志、数据观测或文档出处，它们不会包装成客户验收材料。` : '当前项目尚未形成客户可验收的证据包。'}</p><div className="page-summary-strip"><span className="summary-pill strong">本轮缺陷 {currentScanDefects}</span><span className="summary-pill">缺陷货架 {familyShelfDefects}</span><span className="summary-pill">可验收证据包 {withEvidence.length}</span><span className="summary-pill">真实复验入口 {replayReady}</span><span className="summary-pill">闭环率 {closedLoop}%</span><span className="summary-pill">待验证线索 {clues.length}</span>{commercialAssets && <span className="summary-pill">商业交付 {commercialHandoffLabel(commercialAssets)}</span>}</div><div className="customer-showcase-actions"><Link className="btn btn-primary" to={buildProjectPath('/findings', project)}>查看缺陷闭环清单</Link>{clues.length > 0 && <Link className="btn btn-secondary" to={buildProjectPath('/clues', project)}>查看内部线索</Link>}<Link className="btn btn-secondary" to={buildProjectPath('/materials', project)}>查看企业资料</Link></div></div>
+      <div className="customer-showcase-main"><span className="panel-kicker">客户验收证据包</span><h1>{acceptanceHeadline(withEvidence.length, replayReady, clues.length)}</h1><p>{withEvidence.length ? `当前扫描确认 ${currentScanDefects} 条客户缺陷，其中 ${withEvidence.length} 条已形成客户证据包，${replayReady} 条具备真实复验入口，${validated} 条达到高质量证据标准。平台只提供缺陷事实、证据链、复验入口、客户修复后的回归结果和发布状态，不提供修复建议。` : clues.length ? `当前有 ${clues.length} 条线索仍在补采真实请求、响应、日志、数据观测或文档出处，它们不会包装成客户验收材料。` : '当前项目尚未形成客户可验收的证据包。'}</p><div className="page-summary-strip"><span className="summary-pill strong">可交付 {currentScanDefects}</span><span className="summary-pill">候选 {clues.length}</span><span className="summary-pill">已拒绝 {rejected.length}</span><span className="summary-pill">可验收证据包 {withEvidence.length}</span><span className="summary-pill">真实复验入口 {replayReady}</span><span className="summary-pill">闭环率 {closedLoop}%</span>{commercialAssets && <span className="summary-pill">商业交付 {commercialHandoffLabel(commercialAssets)}</span>}</div>{(oblTotal > 0 || qualityClaim === 'NOT_MEASURED') && <div className="page-summary-strip" style={{ marginTop: 8 }}>{oblTotal > 0 && <span className="summary-pill">义务 {oblTotal}</span>}{oblTotal > 0 && <span className="summary-pill">已编译 {oblCompiled}</span>}{oblTotal > 0 && <span className="summary-pill">已执行 {oblExecuted}</span>}<span className="summary-pill">{qualityClaim === 'MEASURED' ? '外部质量已评测' : '尚未完成外部质量评测'}</span>{Boolean(fingerprints.source_hash) && <span className="summary-pill">source {String(fingerprints.source_hash).slice(0, 8)}</span>}</div>}<div className="customer-showcase-actions"><Link className="btn btn-primary" to={buildProjectPath('/findings', project)}>查看缺陷闭环清单</Link>{clues.length > 0 && <Link className="btn btn-secondary" to={buildProjectPath('/clues', project)}>查看内部线索</Link>}<Link className="btn btn-secondary" to={buildProjectPath('/materials', project)}>查看企业资料</Link></div></div>
       <div className="customer-showcase-side"><div className={`customer-status-card ${replayReady ? 'success' : withEvidence.length ? 'warning' : 'danger'}`}><span>验收状态</span><strong>{replayReady ? '可进入客户复验' : withEvidence.length ? '复验入口未闭合' : '当前不交付验收'}</strong><p>{replayReady ? `${replayReady} 条证据包已具备真实客户复验入口。` : '没有完整真实证据时，不能把候选或模拟结果作为客户缺陷交付。'}</p></div><div className="customer-status-card neutral"><span>责任边界</span><strong>不提供修复建议</strong><p>QualiBug-AI 只确认问题是否存在、客户修复后是否回归通过，以及当前发布/交付状态。</p></div><div className="customer-status-meta"><span><em>API 证据</em><b>{apiEvidence}</b></span><span><em>数据证据</em><b>{dbEvidence}</b></span><span><em>文档证据</em><b>{documentEvidence}</b></span>{commercialAssets && <><span><em>商业交付</em><b>{commercialHandoffLabel(commercialAssets)}</b></span><span><em>Tracker 同步</em><b>{trackerSyncLabel(commercialAssets)}</b></span></>}</div></div>
     </section>
 

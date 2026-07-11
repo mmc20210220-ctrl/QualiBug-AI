@@ -30,16 +30,20 @@ from .enterprise_campaign import (
     source_snapshot_hash,
 )
 from .real_id_resolver import (
+    alternate_collection_paths,
     bind_entity_fields,
     bind_path_params_from_documented_body,
+    collection_path,
     infer_path_params,
     normalize_path_placeholders,
+    param_field_candidates,
     path_has_placeholders,
 )
 from .enterprise_project_config import (
     match_production_data_exclusion,
     _load_execution_safety_boundary,
 )
+from .target_policy import build_target_policy_decision
 
 _v12_har_entries: list[dict[str, Any]] = []
 # NOTE: _v12_har_entries is a module-level global. It is reset at the start of each
@@ -50,6 +54,64 @@ _v12_har_entries: list[dict[str, Any]] = []
 # If multi-scan concurrency is ever enabled, replace this with threading.local().
 _SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_AUTH_ACCEPTANCE_KEY_TOKENS = (
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "auth_token",
+    "jwt",
+    "token",
+    "session",
+    "session_id",
+    "sessionid",
+    "bearer",
+)
+_AUTH_SUCCESS_BOOL_KEYS = {
+    "authenticated",
+    "authorized",
+    "logged_in",
+    "login_success",
+    "success",
+    "ok",
+}
+_AUTH_PRINCIPAL_KEYS = {"user", "account", "principal", "profile", "identity"}
+_AUTH_ACCEPTANCE_HEADER_TOKENS = {"authorization", "set-cookie", "x-auth-token", "x-session-id"}
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b")
+
+
+def _auth_value_present(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return value not in (None, "", [], {})
+
+
+def _auth_acceptance_observed(body: Any, headers: dict[str, Any] | None = None, *, _depth: int = 0) -> bool:
+    """True when an auth response actually accepts the login, not just HTTP 200."""
+
+    if _depth == 0:
+        for key, value in (headers or {}).items():
+            key_l = str(key or "").strip().lower()
+            if key_l in _AUTH_ACCEPTANCE_HEADER_TOKENS and str(value or "").strip():
+                return True
+    if _depth > 8:
+        return False
+    if isinstance(body, dict):
+        for key, value in body.items():
+            key_l = str(key or "").strip().lower().replace("-", "_")
+            if any(token in key_l for token in _AUTH_ACCEPTANCE_KEY_TOKENS) and _auth_value_present(value):
+                return True
+            if key_l in _AUTH_SUCCESS_BOOL_KEYS and value is True:
+                return True
+            if key_l in _AUTH_PRINCIPAL_KEYS and isinstance(value, dict) and bool(value):
+                return True
+            if _auth_acceptance_observed(value, None, _depth=_depth + 1):
+                return True
+        return False
+    if isinstance(body, list):
+        return any(_auth_acceptance_observed(item, None, _depth=_depth + 1) for item in body[:20])
+    if isinstance(body, str):
+        return bool(_JWT_RE.search(body))
+    return False
 
 
 def _record_v12_har(method: str, url: str, status: int, body: Any, actor: str = "", elapsed_ms: float = 0.0) -> None:
@@ -774,8 +836,22 @@ def _discover_coupon_validation_samples(dsn: str) -> tuple[dict[str, dict[str, A
     finally:
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            result["phases"]["api_spec_normalization"] = {
+                "status": "degraded",
+                "input_count": 1,
+                "output_count": 0,
+                "lost_count": 1,
+                "duration_ms": 0,
+                "errors": [{
+                    "stage": "api_spec_normalization",
+                    "code": "API_SPEC_NORMALIZATION_FAILED",
+                    "identity": "submitted_api_spec_text",
+                    "retryability": "after_source_fix",
+                    "operator_action": "validate the submitted API specification format",
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                }],
+            }
 
 
 def _coupon_validation_samples(dsn: str) -> dict[str, dict[str, Any]]:
@@ -852,30 +928,19 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
     environment_ref = str(context.get("environment_ref") or context.get("target_environment") or "").strip()
     environment_kind = str(
         context.get("environment_kind")
+        or context.get("environment_type")
         or context.get("environment_class")
-        or context.get("target_environment")
         or ""
-    ).strip()
+    ).strip().lower()
+    execution_mode = str(context.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
     if not base_url:
         return {
             "status": "plan_only",
             "reason": "runtime_target_missing",
             "approved_base_url": "",
             "environment_ref": environment_ref,
-            "source_manifest": manifest,
-            "source_issues": source_issues,
-        }
-    # Test/local environment: skip campaign scope requirements when
-    # targeting localhost in test-write mode.  The safety boundary
-    # (production-data exclusion) still applies.
-    if str(base_url).startswith(("http://127.0.0.1", "http://localhost")) and _is_test_write_allowed():
-        return {
-            "status": "approved",
-            "reason": "local_test_environment",
-            "missing_requirements": [],
-            "approved_base_url": str(base_url).rstrip("/"),
-            "environment_ref": environment_ref or "local",
-            "environment_kind": environment_kind or "local",
+            "environment_kind": environment_kind,
+            "execution_mode": execution_mode,
             "source_manifest": manifest,
             "source_issues": source_issues,
         }
@@ -884,6 +949,25 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         missing.append("CAMPAIGN_SCOPE_MISSING")
     if not environment_ref:
         missing.append("ENVIRONMENT_REFERENCE_MISSING")
+    if execution_mode == "approved_sandbox_write" and not environment_kind:
+        missing.append("UNKNOWN_ENVIRONMENT")
+    explicitly_approved_url = str(
+        context.get("approved_base_url")
+        or _dict(context.get("target_policy")).get("approved_base_url")
+        or (base_url if not missing else "")
+    ).strip()
+    decision = build_target_policy_decision(
+        requested_base_url=base_url,
+        approved_base_url=explicitly_approved_url,
+        environment_type=environment_kind,
+        environment_ref=environment_ref,
+        execution_mode=execution_mode,
+        runtime_status="approved" if not missing else "blocked",
+    )
+    if execution_mode == "approved_sandbox_write" and not decision.get("write_allowed"):
+        missing.extend(str(code) for code in decision.get("blocking_codes") or [])
+    elif not decision.get("read_allowed"):
+        missing.extend(str(code) for code in decision.get("blocking_codes") or [])
     if missing:
         return {
             "status": "blocked",
@@ -891,16 +975,22 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "missing_requirements": sorted(set(missing)),
             "approved_base_url": "",
             "environment_ref": environment_ref,
+            "environment_kind": environment_kind,
+            "execution_mode": execution_mode,
             "source_manifest": manifest,
+            "target_policy_decision": decision,
         }
     return {
         "status": "approved",
         "reason": "",
         "missing_requirements": [],
-        "approved_base_url": str(base_url).rstrip("/"),
+        "requested_base_url": str(base_url).rstrip("/"),
+        "approved_base_url": explicitly_approved_url.rstrip("/"),
         "environment_ref": environment_ref,
         "environment_kind": environment_kind,
+        "execution_mode": execution_mode,
         "source_manifest": manifest,
+        "target_policy_decision": decision,
     }
 
 
@@ -916,34 +1006,43 @@ def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCa
         return {"status": "not_required", "reason": "runtime_target_missing"}
     execution_mode = str(context.get("execution_mode") or "safe_read_only").strip()
     if execution_mode == "safe_read_only":
-        return {"status": "approved", "execution_mode": execution_mode}
+        return {"status": "approved", "execution_mode": execution_mode, "write_allowed": False}
     from .sandbox_write_executor import (
-        is_production_environment,
-        is_test_or_sandbox_environment,
         resolve_environment_kind,
     )
 
     environment_ref = str(campaign.environment_ref or context.get("environment_ref") or "").strip()
     environment_kind = str(
         context.get("environment_kind")
+        or context.get("environment_type")
         or context.get("environment_class")
-        or context.get("target_environment")
         or ""
     ).strip()
     if not environment_kind:
-        # Fall back to project-declared environment (real_project_config) and
-        # environment_ref tokens such as ``benchmark_mall_test``.
+        # Project configuration is an explicit declaration. environment_ref is
+        # never interpreted as an environment class.
         environment_kind = resolve_environment_kind(
             root,
             str(getattr(campaign, "project_id", "") or context.get("project") or ""),
-            {**dict(context or {}), "environment_ref": environment_ref},
+            dict(context or {}),
         )
-    if not environment_ref:
-        return {"status": "blocked", "code": "ENVIRONMENT_REFERENCE_MISSING", "execution_mode": execution_mode}
-    if is_production_environment(environment_kind):
-        return {"status": "blocked", "code": "PRODUCTION_WRITE_BLOCKED", "execution_mode": execution_mode}
-    if not is_test_or_sandbox_environment(environment_kind):
-        return {"status": "blocked", "code": "ENVIRONMENT_NOT_RECOGNIZED_NONPROD", "execution_mode": execution_mode}
+    decision = build_target_policy_decision(
+        requested_base_url=base_url,
+        approved_base_url=str(context.get("approved_base_url") or base_url),
+        environment_type=environment_kind,
+        environment_ref=environment_ref,
+        execution_mode=execution_mode,
+        runtime_status="approved",
+    )
+    if not decision.get("write_allowed"):
+        codes = list(decision.get("blocking_codes") or [])
+        return {
+            "status": "blocked",
+            "code": str(codes[0] if codes else "TARGET_POLICY_BLOCKED"),
+            "blocking_codes": codes,
+            "execution_mode": execution_mode,
+            "target_policy_decision": decision,
+        }
     approval_id = str(context.get("execution_approval_id") or "").strip()
     return {
         "status": "approved",
@@ -952,6 +1051,8 @@ def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCa
         "environment_ref": environment_ref,
         "environment_kind": environment_kind,
         "authorization_basis": "source_bound_nonproduction_campaign",
+        "write_allowed": True,
+        "target_policy_decision": decision,
     }
 
 
@@ -969,13 +1070,14 @@ def _persist_evidence_chain(root: Path, project: str, evidence: dict[str, Any]) 
     (主链 8). Returns the written path, or '' when the evidence has no id."""
     evidence_id = str(evidence.get("evidence_id") or "").strip()
     if not evidence_id:
-        return ""
+        raise ValueError("EVIDENCE_ID_MISSING")
     path = _evidence_chain_path(root, project, evidence_id)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        return ""
+        from .artifact_redactor import write_json_redacted
+
+        write_json_redacted(path, evidence)
+    except Exception as exc:
+        raise RuntimeError(f"EVIDENCE_CHAIN_PERSIST_FAILED:{evidence_id}:{type(exc).__name__}") from exc
     return str(path)
 
 
@@ -1084,10 +1186,11 @@ def _persist_confirmed_findings(root: Path, project: str, findings: list[dict[st
         saved += 1
     if saved:
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            return 0
+            from .artifact_redactor import write_json_redacted
+
+            write_json_redacted(path, ledger)
+        except Exception as exc:
+            raise RuntimeError(f"CONFIRMED_FINDING_PERSIST_FAILED:{type(exc).__name__}") from exc
     return saved
 
 
@@ -1181,10 +1284,9 @@ def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> N
         "stop_reason": str(ledger.get("stop_reason") or ""),
         "updated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    from .artifact_redactor import write_json_redacted
+
+    write_json_redacted(path, safe)
 
 
 def _history_item_counts_as_attempted(item: dict[str, Any]) -> bool:
@@ -2216,6 +2318,124 @@ def _record_pipeline_failure(result: dict[str, Any], exc: Exception) -> None:
             "pending_slice_ids": pending_ids,
             "stop_reason": "pipeline_failed_before_selection",
         }
+def _extract_api_operations_for_ir(api_spec_text: str) -> list[dict[str, Any]]:
+    """Derive generic operation facts from API docs for Behavior IR.
+
+    Uses existing parsers only; never hardcodes industry paths.
+    """
+    text = str(api_spec_text or "")
+    if not text.strip():
+        return []
+    operations: list[dict[str, Any]] = []
+    try:
+        from .universal_api_parser import parse_api_document
+
+        parsed = parse_api_document(text)
+        if isinstance(parsed, dict):
+            for item in parsed.get("operations") or parsed.get("endpoints") or []:
+                if isinstance(item, dict):
+                    operations.append(item)
+    except Exception:
+        operations = []
+    if operations:
+        return operations[:500]
+    import re as _re
+
+    cleaned: list[dict[str, Any]] = []
+    for match in _re.finditer(
+        r"(?im)^(?:\s*#{1,6}\s*)?(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)",
+        text,
+    ):
+        method = match.group(1).upper()
+        path = match.group(2).strip().rstrip("`").rstrip(",").rstrip(")")
+        cleaned.append({
+            "method": method,
+            "path": path,
+            "operation_id": f"{method.lower()}:{path}",
+            "source_id": "api_spec_text",
+            "side_effect_class": "write" if method in {"POST", "PUT", "PATCH", "DELETE"} else "read",
+        })
+    if not cleaned:
+        # Also accept OpenAPI paths blocks via parse_to_openapi when available.
+        try:
+            from .universal_api_parser import parse_to_openapi
+
+            spec = parse_to_openapi(text)
+            paths = spec.get("paths") if isinstance(spec, dict) else {}
+            if isinstance(paths, dict):
+                for path, methods in paths.items():
+                    if not isinstance(methods, dict):
+                        continue
+                    for method, op in methods.items():
+                        m = str(method or "").upper()
+                        if m not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                            continue
+                        op_dict = op if isinstance(op, dict) else {}
+                        cleaned.append({
+                            "method": m,
+                            "path": str(path),
+                            "operation_id": str(op_dict.get("operationId") or f"{m.lower()}:{path}"),
+                            "source_id": "api_spec_openapi",
+                            "summary": str(op_dict.get("summary") or ""),
+                            "description": str(op_dict.get("description") or ""),
+                            "tags": list(op_dict.get("tags") or []),
+                            "side_effect_class": "write" if m in {"POST", "PUT", "PATCH", "DELETE"} else "read",
+                            "parameters": list(op_dict.get("parameters") or []),
+                            "request_schema": op_dict.get("requestBody"),
+                            "response_schema": op_dict.get("responses"),
+                        })
+        except Exception:
+            pass
+    return cleaned[:500]
+
+
+def _extract_runtime_actors_for_ir(root: Path, project: str, context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Load declared test actors as secret_ref-only IR actors."""
+    actors: list[dict[str, Any]] = []
+    accounts_path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
+    payload: Any = {}
+    if accounts_path.exists():
+        try:
+            payload = json.loads(accounts_path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+    rows = []
+    if isinstance(payload, dict):
+        rows = payload.get("accounts") or payload.get("actors") or payload.get("users") or []
+        if not rows and payload:
+            # mapping of role -> account object
+            rows = [
+                {**(value if isinstance(value, dict) else {"name": key}), "account_ref": key}
+                for key, value in payload.items()
+                if isinstance(value, dict) and key not in {"schema", "schema_version", "meta"}
+            ]
+    elif isinstance(payload, list):
+        rows = payload
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or row.get("name") or row.get("id") or "").strip()
+        if not role:
+            continue
+        account_ref = str(row.get("account_ref") or row.get("email") or row.get("username") or row.get("id") or role).strip()
+        actors.append({
+            "role": role,
+            "account_ref": account_ref,
+            "tenant": row.get("tenant") or row.get("scope"),
+            "secret_ref": f"secret_ref:test_accounts:{account_ref}",
+            "status": str(row.get("status") or "active"),
+        })
+    # Context-declared actor
+    scenario = _dict(context.get("runtime_scenario_contract"))
+    declared = _dict(scenario.get("actor"))
+    role = str(declared.get("role") or declared.get("name") or declared.get("id") or "").strip()
+    if role and not any(a.get("role") == role for a in actors):
+        actors.append({
+            "role": role,
+            "secret_ref": f"secret_ref:context:{role}",
+            "status": "active",
+        })
+    return actors
 
 
 def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2224,6 +2444,9 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     started = time.time()
     context = _dict(campaign_context)
     submitted_api_spec_text = api_spec_text
+    # Campaign identity fingerprints immutable source inputs, not the derived
+    # knowledge-planning text appended later in this function.
+    campaign_prd_text = prd_text
     runtime_contract = _runtime_contract(context, base_url, submitted_api_spec_text)
     approved_base_url = str(runtime_contract.get("approved_base_url") or "")
     result: dict[str, Any] = {
@@ -2259,34 +2482,196 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         # customer's uploaded docs) into the planning text so business rules,
         # permission boundaries and historical-bug patterns drive the live test
         # plan. Additive only — when no asset exists the pipeline is unchanged.
+        _permission_matrix: list[dict[str, Any]] = []
+        _behavior_ir: dict[str, Any] = {}
+        _obligation_compile: dict[str, Any] = {}
+        _experiment_compile: dict[str, Any] = {}
+        _obligation_plan: dict[str, Any] = {}
+        _adapter_matrix: dict[str, Any] = {}
         try:
             from .enterprise_knowledge_center import (
                 build_enterprise_business_knowledge_asset,
-                load_enterprise_business_knowledge_asset,
             )
-            _asset = load_enterprise_business_knowledge_asset(project, root)
-            if _asset is None:
-                _asset = build_enterprise_business_knowledge_asset(project, root)
+            # Rebuild from the current declared project inputs so a stale or
+            # reset registry cannot silently disconnect enterprise materials
+            # from discovery planning.
+            _asset = build_enterprise_business_knowledge_asset(project, root)
             if _asset:
+                _parser_receipts = [
+                    dict(item) for item in (_asset.get("parser_receipts") or [])
+                    if isinstance(item, dict)
+                ]
+                _parse_gaps = [
+                    dict(item) for item in (_asset.get("coverage_gaps") or [])
+                    if isinstance(item, dict) and str(item.get("kind") or "").startswith("SOURCE_PARSE_")
+                ]
+                result["phases"]["knowledge_asset"] = {
+                    "status": "degraded" if _parse_gaps else "completed",
+                    "input_count": len(_parser_receipts),
+                    "output_count": sum(1 for item in _parser_receipts if str(item.get("parser_status") or "") == "parsed"),
+                    "lost_count": len(_parse_gaps),
+                    "duration_ms": int((time.time() - graph_started) * 1000),
+                    "error_codes": sorted({
+                        str(error.get("code") or "SOURCE_PARSE_FAILED")
+                        for item in _parser_receipts
+                        for error in (item.get("errors") or [])
+                        if isinstance(error, dict)
+                    }),
+                    "identity_samples": [str(item.get("receipt_id") or "") for item in _parser_receipts[:5]],
+                    "operator_action": "inspect parser receipts and replace only damaged source versions" if _parse_gaps else "none",
+                    "parser_receipts": _parser_receipts,
+                    "coverage_gaps": _parse_gaps,
+                }
+                if _parse_gaps:
+                    result.setdefault("coverage_gaps", []).extend(_parse_gaps)
+                _permission_matrix = [
+                    dict(item)
+                    for item in (_asset.get("permission_matrix") or [])
+                    if isinstance(item, dict)
+                ]
                 _enrich = _knowledge_asset_planning_text(_asset)
                 if _enrich:
                     prd_text = (prd_text or "") + "\n\n" + _enrich
+                # Phase 1–4 vertical slice: structured Behavior IR → obligations →
+                # experiments → adaptive plan on the real V12 main chain.
+                try:
+                    from .behavior_ir import behavior_ir_summary, build_behavior_ir_from_knowledge_asset
+                    from .obligation_compiler import compile_obligations_from_behavior_ir
+                    from .experiment_compiler import compile_experiments
+                    from .adaptive_discovery_planner import plan_obligation_round
+                    from .execution_adapter import build_adapter_capability_matrix
+                    from .policy_registry import get_policy_registry
+
+                    _env_type = str(
+                        _dict(context.get("runtime") or {}).get("environment_type")
+                        or context.get("environment_kind")
+                        or context.get("environment_type")
+                        or ""
+                    ).strip().lower()
+                    # Missing environment must fail closed — never default to "test".
+                    _behavior_ir = build_behavior_ir_from_knowledge_asset(
+                        _asset,
+                        project_id=project,
+                        source_snapshot_hash=str(
+                            _dict(context.get("source_manifest")).get("source_hash") or ""
+                        ),
+                        api_operations=_extract_api_operations_for_ir(
+                            submitted_api_spec_text or api_spec_text
+                        ),
+                        runtime_actors=_extract_runtime_actors_for_ir(root, project, context),
+                    )
+                    _obligation_compile = compile_obligations_from_behavior_ir(_behavior_ir)
+                    _experiment_compile = compile_experiments(
+                        list(_obligation_compile.get("obligations") or []),
+                        behavior_ir=_behavior_ir,
+                        environment_type=_env_type,
+                        policy_version=str(getattr(get_policy_registry().get_active(), "policy_version", "") or ""),
+                    )
+                    from .fixture_dag import attach_fixture_dag_to_experiments
+
+                    _experiment_compile = attach_fixture_dag_to_experiments(
+                        _experiment_compile,
+                        behavior_ir=_behavior_ir,
+                    )
+                    _exp_by_obl = {
+                        str(item.get("obligation_id") or ""): item
+                        for item in list(_experiment_compile.get("experiments") or [])
+                        if isinstance(item, dict)
+                    }
+                    _obligation_plan = plan_obligation_round(
+                        list(_obligation_compile.get("obligations") or []),
+                        experiments_by_obligation=_exp_by_obl,
+                        budget=int(_behavior_slice_settings().get("slice_budget") or 20),
+                    )
+                    _adapter_matrix = build_adapter_capability_matrix(
+                        ui_available=False,
+                        db_available=bool(str((__import__("os").environ.get("QUALIBUG_DB_DSN") or "")).strip()),
+                        log_available=False,
+                    )
+                    # Selected experiment → fixture → governed HTTP → observers →
+                    # typed assertions → contract oracle (every item gets a receipt).
+                    from .experiment_executor import execute_selected_experiments
+
+                    _experiment_execution = execute_selected_experiments(
+                        list(_obligation_plan.get("selected") or []),
+                        experiments_by_obligation=_exp_by_obl,
+                        behavior_ir=_behavior_ir,
+                        root=root,
+                        project=project,
+                        base_url=approved_base_url,
+                        runtime_contract=runtime_contract,
+                        campaign_id=str(_dict(context).get("campaign_id") or ""),
+                    )
+                    for _finding in list(_experiment_execution.get("findings") or []):
+                        if isinstance(_finding, dict):
+                            result["findings"].append(_finding)
+                    result["behavior_ir"] = {
+                        "summary": behavior_ir_summary(_behavior_ir),
+                        "model_id": _behavior_ir.get("model_id"),
+                        "schema_version": _behavior_ir.get("schema_version"),
+                        "coverage_gaps": list(_behavior_ir.get("coverage_gaps") or [])[:50],
+                    }
+                    result["test_obligations"] = {
+                        "count": int(_obligation_compile.get("obligation_count") or 0),
+                        "by_family": dict(_obligation_compile.get("by_family") or {}),
+                        "obligations": list(_obligation_compile.get("obligations") or [])[:200],
+                    }
+                    result["experiment_compile"] = {
+                        "compiled_count": int(_experiment_compile.get("compiled_count") or 0),
+                        "blocked_count": int(_experiment_compile.get("blocked_count") or 0),
+                        "block_reason_counts": dict(_experiment_compile.get("block_reason_counts") or {}),
+                        "experiments": list(_experiment_compile.get("experiments") or [])[:100],
+                        "blocked_experiments": list(_experiment_compile.get("blocked_experiments") or [])[:100],
+                    }
+                    result["obligation_plan"] = _obligation_plan
+                    result["experiment_execution"] = {
+                        "selected_count": int(_experiment_execution.get("selected_count") or 0),
+                        "executed_count": int(_experiment_execution.get("executed_count") or 0),
+                        "blocked_count": int(_experiment_execution.get("blocked_count") or 0),
+                        "harness_failure_count": int(_experiment_execution.get("harness_failure_count") or 0),
+                        "cleanup_failures": int(_experiment_execution.get("cleanup_failures") or 0),
+                        "every_experiment_has_receipt": bool(
+                            _experiment_execution.get("every_experiment_has_receipt")
+                        ),
+                        "results": list(_experiment_execution.get("results") or [])[:100],
+                    }
+                    result["execution_adapters"] = _adapter_matrix
+                    result["phases"]["behavior_ir"] = {
+                        "status": "completed",
+                        "model_id": _behavior_ir.get("model_id"),
+                        "obligation_count": int(_obligation_compile.get("obligation_count") or 0),
+                        "compiled_experiments": int(_experiment_compile.get("compiled_count") or 0),
+                        "blocked_experiments": int(_experiment_compile.get("blocked_count") or 0),
+                        "experiment_executed": int(_experiment_execution.get("executed_count") or 0),
+                        "experiment_blocked": int(_experiment_execution.get("blocked_count") or 0),
+                        "environment_type": _env_type or "MISSING",
+                    }
+                except Exception as _ir_exc:
+                    import sys as _sys
+                    _sys.stderr.write(f"[v12_behavior_ir] project={project} compile failed: {_ir_exc}\n")
+                    _sys.stderr.flush()
+                    result["phases"]["behavior_ir"] = {
+                        "status": "FAILED_SAFE",
+                        "error": f"{type(_ir_exc).__name__}: {str(_ir_exc)[:200]}",
+                    }
         except Exception as _ka_exc:
             import sys as _sys
-            try:
-                _sys.stderr.write(f"[v12_knowledge_asset] project={project} enrichment skipped: {_ka_exc}\n")
-                _sys.stderr.flush()
-            except Exception:
-                pass
+            _sys.stderr.write(f"[v12_knowledge_asset] project={project} enrichment failed: {_ka_exc}\n")
+            _sys.stderr.flush()
+            result["phases"]["knowledge_asset"] = {
+                "status": "FAILED",
+                "error": f"{type(_ka_exc).__name__}: {str(_ka_exc)[:500]}",
+            }
+            raise RuntimeError(f"enterprise knowledge asset unavailable for project {project}") from _ka_exc
         builder = BusinessStateGraphBuilder()
         graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
         graphs = builder.build(prd_text, graph_api_doc, db_schema_text)
         behavior_contract = builder.behavior_contract()
         settings = _behavior_slice_settings()
-        campaign, campaign_store, campaign_mode = _campaign_context(project, prd_text, api_spec_text, db_schema_text, approved_base_url, settings, context, root, submitted_api_spec_text)
+        campaign, campaign_store, campaign_mode = _campaign_context(project, campaign_prd_text, api_spec_text, db_schema_text, approved_base_url, settings, context, root, submitted_api_spec_text)
         campaign, campaign_store, campaign_mode = _maybe_start_behavior_contract_rerun(
             project,
-            prd_text,
+            campaign_prd_text,
             api_spec_text,
             db_schema_text,
             approved_base_url,
@@ -2345,14 +2730,23 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     graph_api_doc = _enriched_doc
             except Exception:
                 pass
-            supp = generate_supplementary_slices(root, project, graph_api_doc)
+            supp = generate_supplementary_slices(
+                root,
+                project,
+                graph_api_doc,
+                permission_matrix=_permission_matrix,
+            )
             if supp:
                 ranked_behavior_slices = list(ranked_behavior_slices) + supp
                 behavior_contract["slices"] = ranked_behavior_slices
                 behavior_contract["summary"]["total_slices"] = len(ranked_behavior_slices)
                 behavior_contract["summary"]["supplementary_slices"] = len(supp)
-        except Exception:
-            pass  # Supplementary coverage best-effort; never blocks the scan
+        except Exception as _supp_exc:
+            result["phases"]["supplementary_behavior_slices"] = {
+                "status": "FAILED",
+                "error": f"{type(_supp_exc).__name__}: {str(_supp_exc)[:500]}",
+            }
+            raise RuntimeError("source-grounded supplementary behavior generation failed") from _supp_exc
         # ── 主链统一: 分析器 + LLM Reasoner 候选并入同一执行队列 ──
         # 加法、可开关、源绑定；关闭时行为与现状一致。
         try:
@@ -2514,6 +2908,25 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             selection = _schedule_behavior_slices(ranked_behavior_slices, settings, history)
         selected_ids = set(selection["selected_slice_ids"])
         result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
+        # Behavior-IR experiments are compiled before campaign scheduling, so
+        # bind the final campaign identity onto every execution/evidence/finding
+        # receipt once the authoritative campaign exists. No selected item may
+        # disappear from the continuity ledger with an empty campaign_id.
+        _experiment_results = _dict(result.get("experiment_execution")).get("results")
+        if isinstance(_experiment_results, list):
+            for _execution_row in _experiment_results:
+                if not isinstance(_execution_row, dict):
+                    continue
+                _execution_row["campaign_id"] = campaign.campaign_id
+                _execution_receipt = _execution_row.get("execution_receipt")
+                if isinstance(_execution_receipt, dict):
+                    _execution_receipt["campaign_id"] = campaign.campaign_id
+                _execution_finding = _execution_row.get("finding")
+                if isinstance(_execution_finding, dict):
+                    _execution_finding["campaign_id"] = campaign.campaign_id
+        for _result_finding in result.get("findings") or []:
+            if isinstance(_result_finding, dict) and _result_finding.get("execution_id"):
+                _result_finding["campaign_id"] = campaign.campaign_id
         result["behavior_slice_ledger"] = {
             "campaign_id": campaign.campaign_id,
             "campaign_status": campaign.status,
@@ -2573,11 +2986,27 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         selected_paths = {str(path) for item in selection["selected"] for path in item.get("endpoints", []) if str(path)}
         attempted_slice_ids: set[str] = set()
         catalog: list[dict[str, Any]] = []
-        if approved_base_url and api_spec_text:
+        if approved_base_url and (api_spec_text or submitted_api_spec_text):
             try:
+                from .api_doc_assets import enrich_api_spec_text
                 from .route_catalog_builder import RouteCatalogBuilder
 
-                catalog = [entry.to_dict() for entry in RouteCatalogBuilder().build(api_spec_text)]
+                # Merge OpenAPI + Markdown API materials so sandbox cleanup can
+                # see compensating routes (e.g. POST …/{id}/cancel) that a
+                # partial openapi.json alone may omit.
+                catalog_source = str(submitted_api_spec_text or api_spec_text or "")
+                try:
+                    catalog_source = enrich_api_spec_text(root, project, catalog_source) or catalog_source
+                except Exception:
+                    pass
+                catalog = [
+                    entry.to_dict()
+                    for entry in RouteCatalogBuilder().build(
+                        catalog_source,
+                        str(api_spec_text or ""),
+                        str(submitted_api_spec_text or ""),
+                    )
+                ]
             except Exception:
                 catalog = []
         fuzz_started = time.time()
@@ -2875,16 +3304,39 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                             for step in trace.get("steps", []):
                                 if not isinstance(step, dict):
                                     continue
-                                st = int((step.get("response") or {}).get("status_code") or step.get("status") or 0)
+                                _step_response = step.get("response") if isinstance(step.get("response"), dict) else {}
+                                st = int(_step_response.get("status_code") or step.get("status") or 0)
                                 if 200 <= st < 300:
                                     _step_method = str(step.get("method") or "").upper()
                                     _step_path = str(step.get("path") or "")
+                                    _resp_body = _step_response.get("body", {})
+                                    _resp_headers = _step_response.get("headers", {})
+                                    _action_name = str(step.get("action") or "").strip().lower()
+                                    _is_login_step = (
+                                        _action_name == "login"
+                                        or _action_name.startswith("login_")
+                                        or _step_path.rstrip("/").lower().endswith("/login")
+                                    )
+                                    if _is_login_step and not _auth_acceptance_observed(_resp_body, _resp_headers):
+                                        continue
                                     _disabled_key = (_role, _step_method, _step_path)
                                     if _disabled_key in _disabled_finding_keys:
                                         continue
                                     _disabled_finding_keys.add(_disabled_key)
-                                    _resp_body = (step.get("response") or {}).get("body", {}) if isinstance(step.get("response"), dict) else {}
                                     _ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                                    _evidence_id = f"EVID_DISABLED_{_role}_{int(time.time())}"
+                                    _expected_text = f"{_account_status} account must be rejected before business access or credentials/session are granted (HTTP 401/403)."
+                                    _actual_text = (
+                                        f"HTTP {st} issued a login acceptance signal."
+                                        if _is_login_step
+                                        else f"HTTP {st} allowed a DISABLED/LOCKED account request."
+                                    )
+                                    _failed_assertion = f"Expected {_expected_text} Actual {_actual_text}"
+                                    _step_request = step.get("request") if isinstance(step.get("request"), dict) else {}
+                                    _raw_request = {"method": _step_method, "path": _step_path, "actor": _role}
+                                    if "body" in _step_request:
+                                        _raw_request["body"] = _redact(_step_request.get("body"))
+                                    _reproduction_steps = [f"{_step_method} {_step_path}"]
                                     result["findings"].append({
                                         "severity": "P0",
                                         "title": f"[账号状态绕过] DISABLED/LOCKED账号 {_role} 访问成功 HTTP {st}",
@@ -2900,33 +3352,60 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                                         "gate_passed": True,
                                         "customer_delivery_status": "defect",
                                         "bug_status": "reproduced",
-                                        "expected": "DISABLED/LOCKED账号应被拒绝 (401/403)",
-                                        "actual": f"HTTP {st}",
+                                        "expected": _expected_text,
+                                        "actual": _actual_text,
+                                        "timestamp": _ts,
+                                        "failed_assertions": [_failed_assertion],
+                                        "expected_actual_comparison": {
+                                            "expected": _expected_text,
+                                            "actual": _actual_text,
+                                            "difference": "Disabled or locked account was accepted by the target.",
+                                        },
                                         "method": _step_method,
                                         "path": _step_path,
-                                        "evidence_id": f"EVID_DISABLED_{_role}_{int(time.time())}",
+                                        "evidence_id": _evidence_id,
                                         "evidence": {
                                             "request": f"{_step_method} {_step_path}",
-                                            "response": {"status_code": st, "body": _resp_body},
+                                            "response": {"status_code": st, "headers": _resp_headers, "body": _resp_body},
                                             "assertion": "DISABLED/LOCKED account must be rejected (401/403)",
                                             "timestamp": _ts,
                                             "target": _step_path,
                                             "actor": _role,
-                                            "reproduction_steps": [f"{_step_method} {_step_path}"],
+                                            "reproduction_steps": _reproduction_steps,
                                         },
                                         "raw_evidence": {
+                                            "has_real_evidence": True,
                                             "actor_role": _role,
                                             "account_status": _account_status,
-                                            "request_raw": {"method": _step_method, "path": _step_path, "actor": _role},
-                                            "response_raw": {"status_code": st, "body": _resp_body},
+                                            "request_raw": _raw_request,
+                                            "response_raw": {"status_code": st, "headers": _resp_headers, "body": _resp_body},
+                                            "execution_trace": {"evidence_id": _evidence_id, "layers": ["runtime_http_authz_status"]},
                                             "timestamp": _ts,
                                         },
                                         "reproduction": {
                                             "method": _step_method,
                                             "path": _step_path,
                                             "actor": _role,
-                                            "reproduction_steps": [f"{_step_method} {_step_path}"],
+                                            "is_synthetic": False,
+                                            "reproduction_steps": _reproduction_steps,
+                                            "har_evidence": {"status_code": st, "response_headers": _resp_headers, "response_body": _resp_body},
                                         },
+                                        "evidence_quality": {
+                                            "level": "validated",
+                                            "score": 95,
+                                            "can_reproduce": True,
+                                            "evidence_strength": "runtime_http_authz_status",
+                                        },
+                                        "evidence_status": {
+                                            "semantic_verdict": "SEMANTIC_CONFIRMED",
+                                            "business_evidence_status": "VALIDATED",
+                                            "final_review_status": "VALIDATED_CANDIDATE",
+                                            "missing_requirements": [],
+                                        },
+                                        "final_review_status": "VALIDATED_CANDIDATE",
+                                        "business_evidence_status": "VALIDATED",
+                                        "evidence_strength": "runtime_http_authz_status",
+                                        "reproduction_steps": _reproduction_steps,
                                         "system_promise_id": f"AUTO-DISABLED-{_role}",
                                         "regression_contract": {"contract_type": "system_behavior_promise_regression", "promise_id": f"AUTO-DISABLED-{_role}", "dimensions": ["authorization_access_control"], "surface_plan": ["api", "auth"], "source_family": "authorization_access_control"},
                                         "system_behavior_dimensions": ["authorization_access_control"],
@@ -3190,13 +3669,47 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "pre_oracle_findings": _pre_oracle_findings,
             "duration_ms": int((time.time() - oracle_started) * 1000),
         }
+        # Phase 3: demote heuristic business-oracle hits lacking contract evidence
+        # to internal clues (never silently keep them as customer defects).
+        try:
+            from .contract_oracles import demote_heuristic_business_oracle_finding
+
+            result["findings"] = [
+                demote_heuristic_business_oracle_finding(item)
+                if isinstance(item, dict) else item
+                for item in (result.get("findings") or [])
+            ]
+        except Exception as _demote_exc:
+            result["phases"]["oracle"]["contract_oracle_demotion_error"] = (
+                f"{type(_demote_exc).__name__}: {str(_demote_exc)[:160]}"
+            )
         # 主链 7: persist every collected evidence chain keyed by its stable
         # evidence_id so it is retrievable for regression (主链 9) & delivery.
         _evidence_chains_saved = 0
+        _evidence_persistence_errors: list[dict[str, Any]] = []
         for _eg in result["evidence_graphs"]:
-            if isinstance(_eg, dict) and _persist_evidence_chain(root, project, _eg):
-                _evidence_chains_saved += 1
+            if not isinstance(_eg, dict):
+                continue
+            try:
+                if _persist_evidence_chain(root, project, _eg):
+                    _evidence_chains_saved += 1
+            except Exception as exc:
+                _evidence_persistence_errors.append({
+                    "stage": "evidence_persistence",
+                    "code": str(exc).split(":", 1)[0],
+                    "identity": str(_eg.get("evidence_id") or _eg.get("scenario_id") or "unknown"),
+                    "retryability": "after_storage_or_identity_fix",
+                    "operator_action": "inspect evidence identity and artifact storage",
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                })
         result["phases"]["oracle"]["evidence_chains_saved"] = _evidence_chains_saved
+        if _evidence_persistence_errors:
+            result["phases"]["oracle"]["status"] = "degraded"
+            result["phases"]["oracle"]["evidence_persistence_errors"] = _evidence_persistence_errors
+            result.setdefault("coverage_gaps", []).extend(
+                {"kind": "EVIDENCE_PERSISTENCE_FAILED", **item}
+                for item in _evidence_persistence_errors
+            )
         # 主链 9 Gap B1: persist deliverable confirmed defects keyed by their
         # stable evidence_id so the regression runner can re-verify them.
         result["phases"]["oracle"]["confirmed_findings_saved"] = _persist_confirmed_findings(
@@ -3205,8 +3718,16 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         try:
             from .risk_clue_pool import save_risk_clues
             result["risk_clues_saved"] = save_risk_clues(project, root, result["findings"]).get("new_this_scan", 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            result.setdefault("coverage_gaps", []).append({
+                "kind": "RISK_CLUE_PERSISTENCE_FAILED",
+                "stage": "evidence_persistence",
+                "code": "RISK_CLUE_PERSISTENCE_FAILED",
+                "identity": str(campaign.campaign_id),
+                "retryability": "after_storage_fix",
+                "operator_action": "inspect risk clue storage",
+                "detail": f"{type(exc).__name__}: {exc}"[:500],
+            })
         execution_status = str(result["phases"]["execution"].get("status") or "")
         if not skip_history_persistence:
             campaign.record_cycle(
@@ -3244,8 +3765,17 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     if ledger_for_persistence is not None and not result.get("error"):
         try:
             _persist_slice_ledger(root, project, ledger_for_persistence)
-        except Exception:
-            pass
+        except Exception as _ledger_exc:
+            logger.exception("persist slice ledger failed")
+            result["slice_ledger_persist_error"] = (
+                f"{type(_ledger_exc).__name__}: {str(_ledger_exc)[:200]}"
+            )
+            # Critical path failure must degrade health — never silent pass.
+            if not result.get("error"):
+                result["discovery_funnel_error"] = (
+                    result.get("discovery_funnel_error")
+                    or f"slice_ledger_persist_failed:{type(_ledger_exc).__name__}"
+                )
     result["total_duration_ms"] = int((time.time() - started) * 1000)
     result["auto_har"] = _v12_har_report()
     try:
@@ -3328,6 +3858,148 @@ def _resolve_get_candidates(path: str) -> list[str]:
     return list(dict.fromkeys(item for item in candidates if item.startswith("/")))
 
 
+def _read_observer_action(action_name: str) -> bool:
+    action = str(action_name or "").strip().lower()
+    return (
+        action.startswith("observe_")
+        or action.startswith("verify_")
+        or "observer" in action
+        or "observation" in action
+    )
+
+
+def _entity_candidates_from_response(body: Any) -> list[dict[str, Any]]:
+    if isinstance(body, list):
+        return [dict(item) for item in body if isinstance(item, dict)]
+    if not isinstance(body, dict):
+        return []
+    for field in ("records", "data", "items", "results", "list", "rows"):
+        value = body.get(field)
+        if isinstance(value, list):
+            rows = [dict(item) for item in value if isinstance(item, dict)]
+            if rows:
+                return rows
+        if isinstance(value, dict):
+            nested = _entity_candidates_from_response(value)
+            if nested:
+                return nested
+    for value in body.values():
+        nested = _entity_candidates_from_response(value)
+        if nested:
+            return nested
+    return []
+
+
+def _identity_binding_keys(path_template: str, bindings: dict[str, Any]) -> list[str]:
+    params = infer_path_params(path_template)
+    if params:
+        return params
+    priority = ["id", "uuid", "code", "sku", "orderId", "order_id"]
+    discovered = [
+        str(key)
+        for key, value in bindings.items()
+        if value not in (None, "", [], {})
+        and (
+            str(key).lower() in {"id", "uuid", "code", "sku"}
+            or str(key).lower().endswith("id")
+            or str(key).lower().endswith("_id")
+        )
+    ]
+    return list(dict.fromkeys([*priority, *discovered]))
+
+
+def _binding_value_for_key(key: str, bindings: dict[str, Any]) -> Any:
+    for alias in param_field_candidates(key):
+        value = bindings.get(alias)
+        if value not in (None, "", [], {}):
+            return value
+    value = bindings.get(key)
+    if value not in (None, "", [], {}):
+        return value
+    return None
+
+
+def _entity_matches_runtime_binding(entity: dict[str, Any], key: str, expected: Any) -> bool:
+    if expected in (None, "", [], {}):
+        return False
+    expected_text = str(expected)
+    for field in param_field_candidates(key):
+        value = entity.get(field)
+        if value not in (None, "", [], {}) and str(value) == expected_text:
+            return True
+    return False
+
+
+def _project_bound_observer_entity(
+    body: Any,
+    *,
+    path_template: str,
+    bindings: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Return the bound entity from a collection response, preserving trace metadata."""
+
+    candidates = _entity_candidates_from_response(body)
+    if not candidates:
+        return None, {}
+    keys = _identity_binding_keys(path_template, bindings)
+    matched_keys: list[str] = []
+    for key in keys:
+        expected = _binding_value_for_key(key, bindings)
+        if expected in (None, "", [], {}):
+            continue
+        for index, entity in enumerate(candidates):
+            if _entity_matches_runtime_binding(entity, key, expected):
+                matched_keys.append(key)
+                return dict(entity), {
+                    "projection": "bound_entity_from_collection",
+                    "matched_key": key,
+                    "matched_value": str(expected),
+                    "candidate_index": index,
+                    "candidate_count": len(candidates),
+                }
+    return None, {
+        "projection": "bound_entity_from_collection_not_found",
+        "candidate_count": len(candidates),
+        "binding_keys": keys,
+    }
+
+
+def _declared_get_hints(scenario: Any) -> set[str]:
+    hints = getattr(scenario, "runtime_hints", {}) or {}
+    if not isinstance(hints, dict):
+        return set()
+    values = hints.get("declared_get_paths") or hints.get("declared_read_paths") or []
+    if not isinstance(values, list):
+        return set()
+    return {
+        normalize_path_placeholders(str(item or "")).split("?", 1)[0]
+        for item in values
+        if str(item or "").startswith("/")
+    }
+
+
+def _observer_collection_fallback_paths(path_template: str, concrete_path: str, scenario: Any) -> list[str]:
+    normalized_template = normalize_path_placeholders(path_template).split("?", 1)[0]
+    if not path_has_placeholders(normalized_template):
+        return []
+    primary = collection_path(normalized_template)
+    candidates = [primary] if primary else []
+    candidates.extend(alternate_collection_paths(normalized_template))
+    declared = _declared_get_hints(scenario)
+    concrete = str(concrete_path or "").split("?", 1)[0].rstrip("/")
+    filtered: list[str] = []
+    for candidate in candidates:
+        path = normalize_path_placeholders(str(candidate or "")).split("?", 1)[0]
+        if not path.startswith("/") or path_has_placeholders(path):
+            continue
+        if path.rstrip("/") == concrete:
+            continue
+        if declared and path not in declared:
+            continue
+        filtered.append(path)
+    return list(dict.fromkeys(filtered))
+
+
 def _encoded_request_url(base_url: str, path: str) -> str:
     """Percent-encode non-ASCII route/query text without changing separators."""
 
@@ -3341,6 +4013,85 @@ def _encoded_request_url(base_url: str, path: str) -> str:
 def _body_has_unbound_placeholders(body: Any) -> list[str]:
     text = json.dumps(body, ensure_ascii=False) if body else ""
     return list(dict.fromkeys(re.findall(r"\{([A-Za-z_]\w*)\}", text)))
+
+
+def _coerce_runtime_amount(value: Any, original: Any) -> Any:
+    text = str(value).strip()
+    if not text:
+        return original
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return value
+    if isinstance(original, int) and not isinstance(original, bool) and number.is_integer():
+        return int(number)
+    if isinstance(original, float):
+        return float(number)
+    if number.is_integer():
+        return int(number)
+    return number
+
+
+def _runtime_amount_binding(bindings: dict[str, Any]) -> Any:
+    for key in (
+        "payable_amount",
+        "payableAmount",
+        "amount_due",
+        "amountDue",
+        "due_amount",
+        "dueAmount",
+        "total_amount",
+        "totalAmount",
+        "amount",
+    ):
+        value = bindings.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _is_money_control_step(scenario: Any, action_name: str) -> bool:
+    category = str(getattr(scenario, "category", "") or "").strip().lower()
+    if "money" in category or "financial" in category or "conservation" in category:
+        return True
+    action = str(action_name or "").lower()
+    return any(
+        token in action
+        for token in (
+            "money",
+            "payment",
+            "refund",
+            "pay",
+            "charge",
+            "capture",
+            "settle",
+            "checkout",
+        )
+    )
+
+
+def _bind_runtime_amount_controls(body: Any, bindings: dict[str, Any], scenario: Any, action_name: str) -> Any:
+    if not isinstance(body, dict) or not _is_money_control_step(scenario, action_name):
+        return body
+    amount = _runtime_amount_binding(bindings)
+    if amount in (None, "", [], {}):
+        return body
+    out: dict[str, Any] = {}
+    for key, value in body.items():
+        key_l = str(key).strip().lower()
+        if isinstance(value, dict):
+            out[key] = _bind_runtime_amount_controls(value, bindings, scenario, action_name)
+        elif isinstance(value, list):
+            out[key] = [
+                _bind_runtime_amount_controls(item, bindings, scenario, action_name)
+                if isinstance(item, dict) else item
+                for item in value
+            ]
+        elif key_l == "amount" or key_l.endswith("amount") or key_l.endswith("_amount"):
+            out[key] = _coerce_runtime_amount(amount, value)
+        else:
+            out[key] = value
+    return out
 
 
 def __execute_scenario_once(
@@ -3382,12 +4133,13 @@ def __execute_scenario_once(
             _db_verifier = None
     for step in getattr(scenario, "steps", []) or []:
         method = str(getattr(step, "api_method", "") or "").upper()
-        path, body = str(getattr(step, "api_path", "") or ""), getattr(step, "body_template", {}) or {}
+        raw_path = str(getattr(step, "api_path", "") or "")
+        path_template = normalize_path_placeholders(raw_path)
+        path, body = path_template, getattr(step, "body_template", {}) or {}
         if not method or not path.startswith("/"):
             trace["errors"].append("invalid_source_bound_step")
             continue
         # Normalize placeholders FIRST (:id → {id}) so _replace can match them
-        path = normalize_path_placeholders(path)
         path, body = _replace(path, bindings), _replace(body, bindings)
         if path_has_placeholders(path) and body and method not in {"GET", "HEAD"}:
             from .policy_wiring import get_policy_value
@@ -3525,6 +4277,9 @@ def __execute_scenario_once(
                 "skipped_reason": reason,
             })
             break
+        action_name = str(getattr(step, "action", "") or "").strip().lower()
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and body:
+            body = _bind_runtime_amount_controls(body, bindings, scenario, action_name)
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
         headers = {"Accept": "application/json"}
         if data is not None:
@@ -3540,7 +4295,6 @@ def __execute_scenario_once(
             token = str(bindings["token"])
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        action_name = str(getattr(step, "action", "") or "").strip().lower()
         write_event_id: Any = None
         if method in {"POST", "PUT", "PATCH", "DELETE"} and action_name != "login" and write_observer is not None:
             write_event_id = write_observer(
@@ -3561,6 +4315,8 @@ def __execute_scenario_once(
         )
         status, response_body, response_headers = 0, {}, {}
         url = _encoded_request_url(base_url, path)
+        har_recorded = False
+        observer_projection: dict[str, Any] = {}
         for attempt_path in resolve_attempt_paths:
             url = _encoded_request_url(base_url, attempt_path)
             try:
@@ -3607,7 +4363,97 @@ def __execute_scenario_once(
             if attempt_path == resolve_attempt_paths[-1]:
                 path = attempt_path
                 break
-        _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
+        if method == "GET" and _read_observer_action(action_name):
+            if status in {404, 405}:
+                fallback_paths = _observer_collection_fallback_paths(path_template, path, scenario)
+                if fallback_paths:
+                    original_event = {
+                        "source": "read_observer_collection_fallback",
+                        "reason": f"observer_detail_http_{status}",
+                        "original_path": path,
+                        "original_status": status,
+                        "candidate_paths": list(fallback_paths),
+                    }
+                    _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
+                    har_recorded = True
+                    trace.setdefault("observer_fallback_events", []).append(dict(original_event))
+                    for fallback_path in fallback_paths:
+                        fallback_started = time.time()
+                        fallback_url = _encoded_request_url(base_url, fallback_path)
+                        fallback_status, fallback_body, fallback_headers = 0, {}, {}
+                        fallback_error = ""
+                        try:
+                            request = urllib.request.Request(fallback_url, method=method, headers=headers)
+                            with urllib.request.urlopen(request, timeout=10) as response:
+                                raw = response.read(300_000).decode("utf-8", errors="replace")
+                                fallback_status = int(response.status)
+                                fallback_body = _json_or_text(raw)
+                                fallback_headers = dict(response.headers.items())
+                        except urllib.error.HTTPError as exc:
+                            raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
+                            fallback_status = int(exc.code)
+                            fallback_body = _json_or_text(raw)
+                            fallback_headers = dict(exc.headers.items()) if exc.headers else {}
+                        except Exception as exc:
+                            fallback_status = 0
+                            fallback_body = {"error": str(exc)}
+                            fallback_headers = {}
+                            fallback_error = str(exc)
+                        _record_v12_har(
+                            method,
+                            fallback_url,
+                            fallback_status,
+                            _redact(fallback_body),
+                            actor,
+                            (time.time() - fallback_started) * 1000,
+                        )
+                        event = {
+                            "source": "read_observer_collection_fallback",
+                            "original_path": path,
+                            "original_status": status,
+                            "fallback_path": fallback_path,
+                            "fallback_status": fallback_status,
+                        }
+                        if fallback_error:
+                            event["fallback_error"] = fallback_error
+                        selected, projection = _project_bound_observer_entity(
+                            fallback_body,
+                            path_template=path_template,
+                            bindings=bindings,
+                        )
+                        if projection:
+                            event.update(projection)
+                        trace.setdefault("observer_fallback_events", []).append(event)
+                        if 200 <= fallback_status < 300 and selected is not None:
+                            observer_projection = {
+                                **event,
+                                "original_response": {
+                                    "status_code": status,
+                                    "body": _redact(response_body),
+                                },
+                            }
+                            path = fallback_path
+                            url = fallback_url
+                            status = fallback_status
+                            response_body = selected
+                            response_headers = fallback_headers
+                            break
+            if 200 <= status < 300 and not observer_projection:
+                selected, projection = _project_bound_observer_entity(
+                    response_body,
+                    path_template=path_template,
+                    bindings=bindings,
+                )
+                if selected is not None:
+                    observer_projection = {
+                        **projection,
+                        "source": "read_observer_collection_projection",
+                        "observer_path": path,
+                    }
+                    trace.setdefault("observer_projection_events", []).append(dict(observer_projection))
+                    response_body = selected
+        if not har_recorded:
+            _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
         if write_event_id is not None and write_observer is not None:
             write_observer(
                 "after",
@@ -3625,6 +4471,21 @@ def __execute_scenario_once(
             value = _extract(response_body, str(field))
             if value not in (None, "", [], {}):
                 bindings[str(field)] = value
+        # When extract asked for orderId/sku/... but the body only exposed id,
+        # mirror the primary identity onto those alias fields so later body
+        # placeholders like {orderId} bind without a second round-trip.
+        if method == "GET" and 200 <= status < 300:
+            primary = bindings.get("id")
+            if primary not in (None, ""):
+                from .real_id_resolver import param_field_candidates
+
+                for field in getattr(step, "extract_from_response", []) or []:
+                    field_name = str(field or "").strip()
+                    if not field_name or bindings.get(field_name) not in (None, ""):
+                        continue
+                    aliases = {c.lower() for c in param_field_candidates(field_name)}
+                    if "id" in aliases or field_name.lower() in aliases:
+                        bindings[field_name] = str(primary)
         # Resolve steps / list GETs: bind all identity fields needed by later
         # path placeholders (sku, orderId, id, ...), not just the first "id".
         if method == "GET" and 200 <= status < 300 and (
@@ -3637,7 +4498,7 @@ def __execute_scenario_once(
         # ── Auto-extract: POST responses that create resources ──
         # If a POST/PUT step succeeded (2xx) and the response contains an "id"
         # field, bind it for subsequent steps.  This enables multi-step flows
-        # like: POST /api/orders → bind id → POST /api/payments/pay.
+        # like: create a source-derived entity → bind its ID → invoke a related operation.
         if method in ("POST", "PUT") and 200 <= status < 300:
             for key, value in bind_entity_fields(response_body, path).items():
                 bindings[key] = value
@@ -3647,6 +4508,49 @@ def __execute_scenario_once(
                     if auto_val not in (None, "", [], {}):
                         bindings[str(auto_field)] = str(auto_val)
                         bindings.setdefault("id", str(auto_val))
+            # Bootstrap creates name the target path param in the action
+            # (bootstrap_create_orderId). Mirror the created id onto that param
+            # and its REST aliases so later steps can bind {orderId}/{id}.
+            if action_name.startswith("bootstrap_create_"):
+                created_param = action_name[len("bootstrap_create_"):].strip()
+                created_value = (
+                    _extract(response_body, created_param)
+                    or _extract(response_body, "id")
+                    or _extract(response_body, "uuid")
+                    or bindings.get("id")
+                )
+                if created_param and created_value not in (None, ""):
+                    bindings[created_param] = str(created_value)
+                    bindings["id"] = str(created_value)
+                    from .real_id_resolver import param_field_candidates
+
+                    for alias in param_field_candidates(created_param):
+                        bindings[alias] = str(created_value)
+            if isinstance(response_body, dict):
+                for amount_field in (
+                    "payable_amount",
+                    "payableAmount",
+                    "amount_due",
+                    "amountDue",
+                    "due_amount",
+                    "dueAmount",
+                    "total_amount",
+                    "totalAmount",
+                    "amount",
+                ):
+                    amount_val = response_body.get(amount_field)
+                    if amount_val not in (None, "", [], {}):
+                        bindings[amount_field] = amount_val
+            # Also honor extract_from_response aliases when the body only has id.
+            for field in getattr(step, "extract_from_response", []) or []:
+                field_name = str(field)
+                if bindings.get(field_name) not in (None, ""):
+                    continue
+                if bindings.get("id") not in (None, ""):
+                    from .real_id_resolver import param_field_candidates
+
+                    if "id" in {c.lower() for c in param_field_candidates(field_name)} or field_name.lower() in {"id", "uuid"}:
+                        bindings[field_name] = str(bindings["id"])
         # Filtered extraction: pick items in a GET list whose attribute
         # matches a where= clause, then extract their ids.  This lets a
         # precondition resolver bind a concrete entity id when the state
@@ -3668,7 +4572,7 @@ def __execute_scenario_once(
             if not bindings.get("id"):
                 trace.setdefault("precondition_not_met", list(trace.get("precondition_not_met", [])))
                 trace["precondition_not_met"].append(step_where)
-        trace["steps"].append({
+        step_record = {
             "action": getattr(step, "action", ""),
             "method": method,
             "path": path,
@@ -3676,8 +4580,10 @@ def __execute_scenario_once(
             "request": {"body": _redact(body)} if body else {},
             "response": {"status_code": status, "headers": _redact(response_headers), "body": _redact(response_body)},
             "expected_status": getattr(step, "expected_status", 0),
-        })
-
+        }
+        if observer_projection:
+            step_record["observer_projection"] = observer_projection
+        trace["steps"].append(step_record)
     # ── DB evidence: snapshot after all steps and diff against the before state ──
     if _db_verifier is not None:
         try:
@@ -3822,6 +4728,9 @@ def _summarize_execution_skip_telemetry(traces: list[tuple[Any, dict[str, Any]]]
             cleanup_error = str(cleanup.get("error") or "").strip()
             if cleanup_error:
                 cleanup_failure_reasons[cleanup_error] = cleanup_failure_reasons.get(cleanup_error, 0) + 1
+            cleanup_warning = str(cleanup.get("warning") or "").strip()
+            if cleanup_warning and cleanup_status in {"failed", "not_reversible", "cleanup_incomplete"}:
+                cleanup_failure_reasons[cleanup_warning] = cleanup_failure_reasons.get(cleanup_warning, 0) + 1
             for phase in ("before", "after"):
                 observation = sandbox.get(phase) if isinstance(sandbox.get(phase), dict) else {}
                 ref = str(observation.get("ref") or "")
@@ -3928,6 +4837,19 @@ def _evidence_quality_score(gate_passed: bool, evidence_strength: str, *, full_r
     }.get(evidence_strength, 92 if full_runtime_receipt else 65)
 
 
+def _is_harness_support_step(step: dict[str, Any]) -> bool:
+    """True for fixture/auth/resolver calls that are not the tested action."""
+    action = str(step.get("action") or "").strip().lower()
+    path = str(step.get("path") or "").split("?", 1)[0].rstrip("/").lower()
+    return (
+        action == "login"
+        or action.startswith("login_")
+        or action.startswith("resolve_")
+        or action.startswith("bootstrap_create_")
+        or path.endswith("/login")
+    )
+
+
 def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, Any]:
     steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
     if not steps:
@@ -3938,7 +4860,13 @@ def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, 
     # repeated *write* call (the duplicate that should have been rejected),
     # never a trailing read-only observation appended for state capture.
     if rule in {"non_idempotent", "replay", "idempotency"}:
-        write_steps = [s for s in steps if isinstance(s, dict) and str(s.get("method") or "").upper() in _writes]
+        write_steps = [
+            s
+            for s in steps
+            if isinstance(s, dict)
+            and not _is_harness_support_step(s)
+            and str(s.get("method") or "").upper() in _writes
+        ]
         if len(write_steps) >= 2:
             return write_steps[-1]
         if write_steps:
@@ -3946,7 +4874,7 @@ def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, 
     # Otherwise prefer the last step whose observed status contradicts the
     # expected status (the actual assertion failure).
     for step in reversed(steps):
-        if not isinstance(step, dict):
+        if not isinstance(step, dict) or _is_harness_support_step(step):
             continue
         status = int(step.get("status") or 0)
         expected = int(step.get("expected_status") or 0)
@@ -3954,9 +4882,59 @@ def _trace_primary_step(trace: dict[str, Any], oracle_result: Any) -> dict[str, 
             return step
     # Fall back to the last *write* step before any trailing observe read.
     for step in reversed(steps):
-        if isinstance(step, dict) and str(step.get("method") or "").upper() in _writes:
+        if (
+            isinstance(step, dict)
+            and not _is_harness_support_step(step)
+            and str(step.get("method") or "").upper() in _writes
+        ):
             return step
-    return steps[-1] if isinstance(steps[-1], dict) else {}
+    for step in reversed(steps):
+        if isinstance(step, dict) and not _is_harness_support_step(step):
+            return step
+    return {}
+
+
+def _oracle_primary_step_gap(step: dict[str, Any], oracle_result: Any) -> str:
+    """Ensure an HTTP oracle verdict describes the selected target step.
+
+    This is deliberately a delivery gate in addition to the oracle-level
+    support-step filter.  It protects persisted/third-party oracle results and
+    future oracle implementations from attaching a bootstrap failure to a
+    successful target mutation.
+    """
+    oracle_name = str(getattr(oracle_result, "oracle_name", "") or "").strip()
+    if oracle_name != "HttpStatusOracle":
+        return ""
+    if not step:
+        return "ORACLE_PRIMARY_STEP_MISSING"
+    method = str(step.get("method") or "").upper()
+    path = str(step.get("path") or "")
+    response = step.get("response") if isinstance(step.get("response"), dict) else {}
+    status = int(response.get("status_code") or step.get("status") or 0)
+    if not method or not path or not status:
+        return "ORACLE_PRIMARY_STEP_MISSING"
+
+    rule = str(getattr(oracle_result, "violated_rule", "") or "").strip().lower()
+    expected = int(step.get("expected_status") or 0)
+    body = response.get("body")
+    if rule == "server_5xx" and status < 500:
+        return "ORACLE_PRIMARY_STEP_MISMATCH"
+    if rule == "expected_status_mismatch" and (not expected or status == expected):
+        return "ORACLE_PRIMARY_STEP_MISMATCH"
+    if rule == "wrong_create_status" and not (
+        method in {"POST", "PUT"} and expected == 201 and status == 204
+    ):
+        return "ORACLE_PRIMARY_STEP_MISMATCH"
+    if rule == "200_with_error" and not (
+        status == 200 and isinstance(body, dict) and body.get("ok") is False
+    ):
+        return "ORACLE_PRIMARY_STEP_MISMATCH"
+
+    actual = str(getattr(oracle_result, "actual", "") or "")
+    actual_status_match = re.search(r"\bHTTP\s+(\d{3})\b", actual, flags=re.IGNORECASE)
+    if actual_status_match and int(actual_status_match.group(1)) != status:
+        return "ORACLE_PRIMARY_STEP_MISMATCH"
+    return ""
 
 
 def _status_confirmation_gap(
@@ -3994,6 +4972,20 @@ def _trace_has_valid_success_control(trace: dict[str, Any], failing_step: dict[s
     failing_path = str(failing_step.get("path") or "").split("?", 1)[0]
     if not failing_method or not failing_path:
         return False
+
+    def _control_path_shape(path: str) -> str:
+        # Compare contracts by shape so a prior success on the same route with a
+        # different concrete id still counts as a valid control (UUID / long int).
+        text = str(path or "").split("?", 1)[0]
+        text = re.sub(
+            r"/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}",
+            "/{id}",
+            text,
+        )
+        text = re.sub(r"/\d{6,}", "/{id}", text)
+        return text
+
+    failing_shape = _control_path_shape(failing_path)
     for item in steps:
         if not isinstance(item, dict) or id(item) == failing_id:
             continue
@@ -4010,12 +5002,15 @@ def _trace_has_valid_success_control(trace: dict[str, Any], failing_step: dict[s
         # A successful bootstrap on another endpoint proves only that some
         # authentication and fixture operation worked. It does not prove the
         # failing endpoint's payload, permissions or state preconditions.
-        if method == failing_method and path == failing_path:
+        action = str(item.get("action") or "").strip().lower()
+        if action.startswith("bootstrap_create_"):
+            continue
+        if method == failing_method and _control_path_shape(path) == failing_shape:
             return True
     return False
 
 
-def _trace_before_after_snapshot(trace: dict[str, Any]) -> dict[str, Any]:
+def _trace_before_after_snapshot(trace: dict[str, Any], primary_step: dict[str, Any] | None = None) -> dict[str, Any]:
     steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
     runtime_steps = [step for step in steps if isinstance(step, dict) and isinstance(step.get("response"), dict)]
     if not runtime_steps:
@@ -4032,12 +5027,74 @@ def _trace_before_after_snapshot(trace: dict[str, Any]) -> dict[str, Any]:
             "expected_status": int(step.get("expected_status") or 0),
         }
 
+    def _successful_observer_read(step: dict[str, Any]) -> bool:
+        response = step.get("response") if isinstance(step.get("response"), dict) else {}
+        status_code = int(response.get("status_code") or step.get("status") or 0)
+        return (
+            str(step.get("method") or "").upper() in {"GET", "HEAD"}
+            and not _is_harness_support_step(step)
+            and 200 <= status_code < 300
+        )
+
     before_step = runtime_steps[0]
     after_step = runtime_steps[-1]
+    if primary_step:
+        primary_index = next(
+            (index for index, item in enumerate(steps) if isinstance(item, dict) and item is primary_step),
+            -1,
+        )
+        if primary_index >= 0:
+            before_candidates = [
+                item
+                for item in steps[:primary_index]
+                if isinstance(item, dict) and isinstance(item.get("response"), dict) and _successful_observer_read(item)
+            ]
+            after_candidates = [
+                item
+                for item in steps[primary_index + 1 :]
+                if isinstance(item, dict) and isinstance(item.get("response"), dict) and _successful_observer_read(item)
+            ]
+            before_step = before_candidates[-1] if before_candidates else before_step
+            after_step = after_candidates[-1] if after_candidates else primary_step
     return {
         "before": _snapshot(before_step),
         "after": _snapshot(after_step),
     }
+
+
+def _runtime_contract_evidence_from_snapshot(
+    before_after_snapshot: dict[str, Any],
+    primary_step: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose source-bound before/after observations to the contract gate."""
+
+    before = before_after_snapshot.get("before") if isinstance(before_after_snapshot.get("before"), dict) else {}
+    after = before_after_snapshot.get("after") if isinstance(before_after_snapshot.get("after"), dict) else {}
+    if not after:
+        return {}
+    after_body = after.get("body")
+    after_status = int(after.get("status_code") or 0)
+    if not (200 <= after_status < 300) or after_body in (None, {}, []):
+        return {}
+    evidence: dict[str, Any] = {
+        "final_state_observation": after_body,
+        "treatment_observation": after,
+        "business_effect_observed": True,
+    }
+    before_body = before.get("body")
+    before_status = int(before.get("status_code") or 0)
+    if 200 <= before_status < 300 and before_body not in (None, {}, []):
+        evidence["control_observation"] = before
+    response = primary_step.get("response") if isinstance(primary_step.get("response"), dict) else {}
+    primary_status = int(response.get("status_code") or primary_step.get("status") or 0)
+    if primary_status:
+        evidence["treatment_result"] = {
+            "method": str(primary_step.get("method") or "").upper(),
+            "path": str(primary_step.get("path") or ""),
+            "status_code": primary_status,
+            "body": response.get("body"),
+        }
+    return evidence
 
 
 def _confirmed_oracle_finding(
@@ -4075,9 +5132,10 @@ def _confirmed_oracle_finding(
     assertion = str(getattr(oracle_result, "expected", "") or "").strip()
     actual = str(getattr(oracle_result, "actual", "") or "").strip()
     target = (base_url.rstrip("/") + path) if base_url and path.startswith("/") else (base_url or path)
-    before_after_snapshot = _trace_before_after_snapshot(trace)
+    before_after_snapshot = _trace_before_after_snapshot(trace, primary_step=step)
     if not before_after_snapshot and isinstance(trace.get("before_after_snapshot"), dict):
         before_after_snapshot = dict(trace.get("before_after_snapshot") or {})
+    runtime_contract_evidence = _runtime_contract_evidence_from_snapshot(before_after_snapshot, step)
     business_invariant_evaluation = (
         dict(trace.get("business_invariant_evaluation") or {})
         if isinstance(trace.get("business_invariant_evaluation"), dict)
@@ -4093,6 +5151,7 @@ def _confirmed_oracle_finding(
     )
     db_captured = db_status == "captured" or (_has_before_after_db and db_status != "unavailable")
     status_confirmation_gap = _status_confirmation_gap(step, trace, oracle_result)
+    oracle_primary_step_gap = _oracle_primary_step_gap(step, oracle_result)
     evidence_strength = "runtime"
     if before_after_snapshot and db_captured:
         evidence_strength = "runtime_and_db"
@@ -4117,6 +5176,9 @@ def _confirmed_oracle_finding(
         # Expected-success 4xx mismatches need a known-valid control. Otherwise
         # they are usually probe/test-data artifacts and must stay candidates.
         and not status_confirmation_gap
+        # The oracle violation must be evidenced by the selected target step,
+        # never by a failed fixture/bootstrap request elsewhere in the trace.
+        and not oracle_primary_step_gap
         # 主链 6 × 主链 1/5: a step blocked by the production-data safety
         # boundary was never executed, so any "violation" derived from its
         # absent response is not a confirmed target defect. Force candidate.
@@ -4130,6 +5192,13 @@ def _confirmed_oracle_finding(
         confirmation_status = "candidate"
         gate_passed = False
     bug_status = "reproduced" if gate_passed else "suspected"
+    oracle_tier = str(getattr(oracle_result, "oracle_tier", "") or "").strip()
+    oracle_customer_deliverable = getattr(oracle_result, "customer_deliverable", None)
+    if oracle_customer_deliverable is False or oracle_tier == "internal_clue":
+        # Contract-gated heuristic business oracles must not enter customer delivery.
+        confirmation_status = "candidate"
+        gate_passed = False
+        bug_status = "suspected"
     raw_request = {"method": method, "path": path}
     if actor_label:
         raw_request["actor"] = actor_label
@@ -4140,6 +5209,15 @@ def _confirmed_oracle_finding(
         # protocol failures from materially different mutations are not merged.
         raw_request["body"] = step_request.get("body")
     raw_response = {"status_code": status, "body": response.get("body")}
+    delivery_status = (
+        "blocked_safety_boundary"
+        if safety_boundary_blocked
+        else (
+            "clue"
+            if oracle_customer_deliverable is False or oracle_tier == "internal_clue"
+            else ("defect" if gate_passed else "candidate")
+        )
+    )
     finding = {
         "severity": getattr(oracle_result, "severity", "P1"),
         "title": f"[V12 {getattr(oracle_result, 'oracle_name', 'Oracle')}] {getattr(scenario, 'title', '')}",
@@ -4152,15 +5230,17 @@ def _confirmed_oracle_finding(
         "behavior_slice_id": getattr(scenario, "behavior_slice_id", ""),
         "discovery_round": discovery_round,
         "campaign_id": campaign_id,
+        "source_refs": [
+            dict(item)
+            for item in (getattr(scenario, "source_refs", []) or [])
+            if isinstance(item, dict)
+        ],
         "execution_status": "executed",
         "confirmation_status": confirmation_status,
         "gate_passed": gate_passed,
         "bug_status": bug_status,
-        "customer_delivery_status": (
-            "blocked_safety_boundary"
-            if safety_boundary_blocked
-            else ("defect" if gate_passed else "candidate")
-        ),
+        "customer_delivery_status": delivery_status,
+        "oracle_tier": oracle_tier or ("internal_clue" if delivery_status == "clue" else ""),
         "blocked_by_safety_boundary": safety_boundary_blocked,
         "blocked_reason": safety_boundary_reason if safety_boundary_blocked else "",
         "expected": assertion,
@@ -4175,6 +5255,13 @@ def _confirmed_oracle_finding(
             "target": target,
             "actor": actor_label,
             "reproduction_steps": reproduction_steps,
+            "dual_2xx": bool(
+                oracle_tier == "internal_clue"
+                and (
+                    "idempot" in str(getattr(oracle_result, "oracle_name", "") or "").lower()
+                    or "concurr" in str(getattr(oracle_result, "oracle_name", "") or "").lower()
+                )
+            ),
         },
         "raw_evidence": {
             "has_real_evidence": bool(method and path and status),
@@ -4204,7 +5291,9 @@ def _confirmed_oracle_finding(
             "semantic_verdict": "SEMANTIC_CONFIRMED" if gate_passed else "SEMANTIC_CANDIDATE",
             "business_evidence_status": "VALIDATED" if gate_passed else "PENDING_EVIDENCE",
             "final_review_status": "VALIDATED_CANDIDATE" if gate_passed else "NEEDS_MORE_EVIDENCE",
-            "missing_requirements": [status_confirmation_gap] if status_confirmation_gap else [],
+            "missing_requirements": [
+                gap for gap in (status_confirmation_gap, oracle_primary_step_gap) if gap
+            ],
         },
         "final_review_status": "VALIDATED_CANDIDATE" if gate_passed else "NEEDS_MORE_EVIDENCE",
         "business_evidence_status": "VALIDATED" if gate_passed else "PENDING_EVIDENCE",
@@ -4214,10 +5303,29 @@ def _confirmed_oracle_finding(
         "db_evidence": db_evidence,
         "evidence_strength": evidence_strength,
     }
+    if runtime_contract_evidence:
+        finding["evidence"].update(runtime_contract_evidence)
     # Attach sandbox write evidence (before/after/cleanup) when present on the trace.
     sandbox = trace.get("sandbox_write") if isinstance(trace.get("sandbox_write"), dict) else {}
     sandbox_evidence = sandbox.get("evidence") if isinstance(sandbox.get("evidence"), dict) else {}
     trace_evidence = trace.get("evidence") if isinstance(trace.get("evidence"), dict) else {}
+    # Preserve typed contract observations for the downstream contract-oracle
+    # gate.  A runtime State/Permission/Concurrency result is not customer
+    # deliverable merely because an HTTP response looked wrong; when the
+    # governed observer explicitly records a control or invariant result, keep
+    # that fact attached to the finding instead of dropping it at normalization.
+    for contract_key in (
+        "control_succeeded",
+        "authorized_control",
+        "effect_count",
+        "invariant_held",
+        "control_observation",
+        "treatment_observation",
+        "treatment_result",
+        "observer_ids",
+    ):
+        if contract_key in trace_evidence:
+            finding["evidence"][contract_key] = trace_evidence[contract_key]
     before_ref = str(
         sandbox_evidence.get("before_snapshot_ref")
         or trace_evidence.get("before_snapshot_ref")

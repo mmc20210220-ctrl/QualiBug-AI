@@ -236,6 +236,30 @@ def load_evaluation_manifest(path: Path | str) -> EvaluationManifest:
             fingerprints["ground_truth_fingerprint"] = _artifact_fingerprint(
                 target.ground_truth_ref, manifest_path, f"{target.target_id}.ground_truth_ref"
             )
+            # Enforce declared ground_truth_bug_count when present (prevents 71↔131 swaps).
+            # Enforce per-target declared ground_truth_bug_count (prevents 71↔131 swaps).
+            evaluator_declared = None
+            for item in raw_targets:
+                if isinstance(item, dict) and str(item.get("target_id") or "") == target.target_id:
+                    evaluator = item.get("evaluator") if isinstance(item.get("evaluator"), dict) else {}
+                    evaluator_declared = evaluator.get("ground_truth_bug_count")
+                    break
+            if evaluator_declared is not None:
+                gt_path = _resolve_ref(target.ground_truth_ref, manifest_path)
+                try:
+                    gt_raw = json.loads(gt_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise EvaluationContractError(
+                        f"unable to load ground truth for count check: {gt_path}: {exc}"
+                    ) from exc
+                bugs = gt_raw.get("bugs") if isinstance(gt_raw, dict) else gt_raw
+                actual_count = len(bugs) if isinstance(bugs, list) else -1
+                if int(evaluator_declared) != actual_count:
+                    raise EvaluationContractError(
+                        f"ground_truth_bug_count mismatch for {target.target_id}: "
+                        f"declared {evaluator_declared}, file has {actual_count}. "
+                        "Champion/candidate comparisons must use the same frozen GT."
+                    )
         target_fingerprints[target.target_id] = fingerprints
         private_fingerprint_material[target.target_id] = fingerprints
 
@@ -450,7 +474,18 @@ def evaluate_completed_scan(
             measurement_status = "NOT_MEASURED"
             not_measured_reason = str(metrics.get("reason") or "benchmark_not_active")
         metrics.pop("ground_truth_source", None)
+        # Isolate hidden ground truth: receipts expose aggregate counts only.
+        for _leak_key in (
+            "matched_bugs",
+            "missed_bug_ids",
+            "bug_type_breakdown",
+            "risk_family_breakdown",
+            "false_positive_findings",
+            "true_positive_findings",
+        ):
+            metrics.pop(_leak_key, None)
         metrics["ground_truth_fingerprint"] = fingerprints.get("ground_truth_fingerprint", "")
+        metrics["ground_truth_bug_count"] = int(metrics.get("ground_truth_bug_count") or 0)
         metrics["formal_findings_evaluated"] = len(deliverable_findings)
         metrics["non_delivery_findings_excluded"] = max(0, len(findings) - len(deliverable_findings))
         if validated_trace_ledger is not None and metrics.get("benchmark_active") is True:
@@ -471,6 +506,7 @@ def evaluate_completed_scan(
                 ),
                 "scoring_contract": "diagnostic_only_never_changes_tp_fp_fn",
             }
+        metrics["aggregate_only"] = True
     elif measurement_status == "MEASURED":
         deliverable = [item for item in findings if isinstance(item, dict) and is_customer_deliverable_defect(item)]
         high_value = [
@@ -1089,3 +1125,575 @@ def persist_evaluation_report(report: dict[str, Any], path: Path | str) -> Path:
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary, destination)
     return destination
+
+
+# ---------------------------------------------------------------------------
+# Commercial Goal stage gates (SSOT thresholds from DISCOVERY_HARNESS_EVOLUTION_GOAL)
+# ---------------------------------------------------------------------------
+
+GOAL_GATE_STATUS_SCHEMA = "qualibug.discovery-goal-gate-status.v1"
+
+# Frozen product ports — discovery/harness evolution must never retarget these.
+PRODUCT_FRONTEND_PORT = 5174
+PRODUCT_BACKEND_PORT = 8088
+
+# Absolute measured thresholds. Missing measurement never becomes a pass.
+CAPABILITY_BREAKTHROUGH_THRESHOLDS: dict[str, float | int] = {
+    "held_out_macro_industry_recall": 0.30,
+    "held_out_micro_precision": 0.50,
+    "reproduction_success_rate": 0.90,
+    "held_out_min_industry_recall": 0.15,
+    "clean_critical_high_false_positives": 0,
+    "unit_cost_improvement_ratio": 0.40,
+}
+
+CONTROLLED_COMMERCIAL_PILOT_THRESHOLDS: dict[str, float | int] = {
+    "held_out_macro_industry_recall": 0.50,
+    "held_out_micro_precision": 0.70,
+    "reproduction_success_rate": 0.95,
+    "cleanup_failures": 0,
+    "production_http_requests": 0,
+    "clean_critical_high_false_positives": 0,
+}
+
+FULL_AUTONOMY_GA_THRESHOLDS: dict[str, float | int] = {
+    "held_out_macro_industry_recall": 0.70,
+    "held_out_micro_precision": 0.80,
+    "held_out_min_industry_recall": 0.50,
+    "reproduction_success_rate": 0.97,
+    "execution_success_rate": 0.95,
+    "engine_success_rate": 0.95,
+    "evidence_completeness_rate": 1.0,
+    "cleanup_failures": 0,
+    "production_http_requests": 0,
+    "safety_incidents": 0,
+    "dirty_test_environments": 0,
+    "clean_critical_high_false_positives": 0,
+}
+
+
+def _module_export_present(module_name: str, attr_name: str) -> bool:
+    try:
+        module = __import__(module_name, fromlist=[attr_name])
+    except Exception:
+        return False
+    return callable(getattr(module, attr_name, None)) or hasattr(module, attr_name)
+
+
+def assess_implementation_stage_gates() -> dict[str, Any]:
+    """Gate A/B/C inventory: required contracts must exist and be importable.
+
+    These gates certify engineering readiness, not commercial discovery quality.
+    Quality claims remain NOT_MEASURED until a private measured report is supplied.
+    """
+
+    gate_a_checks = [
+        {
+            "name": "evaluation_manifest_loader",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_evaluation_contract", "load_evaluation_manifest"
+            ),
+            "detail": "evaluator-private manifest loader with non-production fail-closed",
+        },
+        {
+            "name": "runtime_view_redaction",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_evaluation_contract", "build_runtime_view"
+            ),
+            "detail": "discovery receives runtime view only; ground truth stays evaluator-private",
+        },
+        {
+            "name": "completed_scan_evaluator",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_evaluation_contract", "evaluate_completed_scan"
+            ),
+            "detail": "formal customer-deliverable findings only enter commercial scoring",
+        },
+        {
+            "name": "paired_promotion_evidence",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_evaluation_contract", "build_paired_evaluation_evidence"
+            ),
+            "detail": "champion/challenger replay+shadow fingerprints must match before promotion",
+        },
+        {
+            "name": "policy_promotion_gate",
+            "passed": _module_export_present(
+                "ai_test_asset_center.policy_evaluation_gate", "PolicyPromotionGate"
+            ),
+            "detail": "non-regressive measured promotion with hard safety blockers",
+        },
+        {
+            "name": "external_evaluation_cli",
+            "passed": Path(__file__).resolve().parents[1].joinpath("tools", "discovery_evaluation.py").is_file(),
+            "detail": "external CLI is the only layer that opens hidden ground truth",
+        },
+        {
+            "name": "customer_delivery_gate",
+            "passed": _module_export_present(
+                "ai_test_asset_center.customer_delivery_gate", "is_customer_deliverable_defect"
+            ),
+            "detail": "formal evidence threshold is frozen and independent of harness proposals",
+        },
+        {
+            "name": "sandbox_write_fail_closed",
+            "passed": _module_export_present(
+                "ai_test_asset_center.sandbox_write_executor", "is_production_environment"
+            ),
+            "detail": "production and unknown environments remain fail-closed for writes",
+        },
+    ]
+    gate_b_checks = [
+        {
+            "name": "trace_ledger_builder",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_trace_ledger", "build_discovery_trace_ledger"
+            ),
+            "detail": "cross-stage redacted identity from generation through formal accounting",
+        },
+        {
+            "name": "weakness_miner",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_weakness_miner", "mine_discovery_weaknesses"
+            ),
+            "detail": "verifier-grounded failure clustering with editable-surface proposals",
+        },
+    ]
+    gate_c_checks = [
+        {
+            "name": "bounded_harness_proposer",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_harness_proposer", "propose_harness_candidates"
+            ),
+            "detail": "minimal evidence-bound StrategyBundle edits; frozen surfaces rejected",
+        },
+        {
+            "name": "strategy_guardrails",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_harness_proposer", "validate_strategy_guardrails"
+            ),
+            "detail": "timeout/token floors, hypothesis/worker caps, and evidence thresholds stay frozen",
+        },
+        {
+            "name": "observed_policy_evaluation_runner",
+            "passed": _module_export_present(
+                "ai_test_asset_center.discovery_policy_evaluation_runner",
+                "DiscoveryPolicyEvaluationRunner",
+            ),
+            "detail": "four real champion/challenger replay+shadow passes; no estimated metrics",
+        },
+        {
+            "name": "product_ports_frozen",
+            "passed": PRODUCT_FRONTEND_PORT == 5174 and PRODUCT_BACKEND_PORT == 8088,
+            "detail": f"frontend={PRODUCT_FRONTEND_PORT}, backend={PRODUCT_BACKEND_PORT}",
+        },
+    ]
+
+    def _gate(gate_id: str, title: str, checks: list[dict[str, Any]]) -> dict[str, Any]:
+        passed = all(bool(item.get("passed")) for item in checks)
+        return {
+            "gate_id": gate_id,
+            "title": title,
+            "status": "PASSED" if passed else "FAILED",
+            "passed": passed,
+            "measurement_status": "IMPLEMENTED",
+            "checks": checks,
+        }
+
+    return {
+        "gate_a_evaluation_integrity": _gate(
+            "A", "Evaluation integrity", gate_a_checks
+        ),
+        "gate_b_trace_and_weakness_mining": _gate(
+            "B", "Trace and weakness mining", gate_b_checks
+        ),
+        "gate_c_bounded_proposal_and_real_runner": _gate(
+            "C", "Bounded proposal and real runner", gate_c_checks
+        ),
+    }
+
+
+def _metric_check(
+    name: str,
+    *,
+    actual: Any,
+    threshold: float | int,
+    comparator: str,
+    detail: str,
+) -> dict[str, Any]:
+    if actual is None:
+        return {
+            "name": name,
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "actual": None,
+            "threshold": threshold,
+            "comparator": comparator,
+            "detail": detail,
+            "reason": "metric_missing",
+        }
+    try:
+        value = float(actual)
+    except (TypeError, ValueError):
+        return {
+            "name": name,
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "actual": actual,
+            "threshold": threshold,
+            "comparator": comparator,
+            "detail": detail,
+            "reason": "metric_not_numeric",
+        }
+    if comparator == ">=":
+        passed = value + 1e-12 >= float(threshold)
+    elif comparator == "<=":
+        passed = value - 1e-12 <= float(threshold)
+    elif comparator == "==":
+        passed = abs(value - float(threshold)) <= 1e-12
+    else:
+        raise EvaluationContractError(f"unsupported goal-gate comparator: {comparator}")
+    return {
+        "name": name,
+        "passed": passed,
+        "measurement_status": "MEASURED",
+        "actual": value,
+        "threshold": threshold,
+        "comparator": comparator,
+        "detail": detail,
+        "reason": "" if passed else "threshold_not_met",
+    }
+
+
+def assess_measured_capability_gate(
+    evaluation_report: dict[str, Any] | None,
+    *,
+    gate_id: str,
+    thresholds: dict[str, float | int],
+    baseline_cost_per_true_positive_usd: float | None = None,
+) -> dict[str, Any]:
+    """Score one absolute commercial gate from a MEASURED aggregate report.
+
+    Incomplete, degraded, or missing reports produce NOT_MEASURED — never a
+    fabricated zero-Bug or zero-FP commercial claim.
+    """
+
+    titles = {
+        "D": "Capability breakthrough",
+        "PILOT": "Controlled commercial pilot exit",
+        "GA": "Full-autonomy GA",
+    }
+    title = titles.get(gate_id, gate_id)
+    if not isinstance(evaluation_report, dict):
+        return {
+            "gate_id": gate_id,
+            "title": title,
+            "status": "NOT_MEASURED",
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "reason": "evaluation_report_missing",
+            "checks": [],
+            "thresholds": dict(thresholds),
+        }
+    if evaluation_report.get("schema_version") != REPORT_SCHEMA:
+        raise EvaluationContractError(
+            f"goal gate {gate_id} requires current evaluation report schema"
+        )
+    if evaluation_report.get("claim_status") != "MEASURED":
+        return {
+            "gate_id": gate_id,
+            "title": title,
+            "status": "NOT_MEASURED",
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "reason": "evaluation_report_not_measured",
+            "claim_status": evaluation_report.get("claim_status"),
+            "not_measured_targets": list(evaluation_report.get("not_measured_targets") or []),
+            "checks": [],
+            "thresholds": dict(thresholds),
+        }
+    if evaluation_report.get("evaluation_complete") is not True:
+        return {
+            "gate_id": gate_id,
+            "title": title,
+            "status": "NOT_MEASURED",
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "reason": "evaluation_incomplete",
+            "checks": [],
+            "thresholds": dict(thresholds),
+        }
+    shape = _as_dict(evaluation_report.get("commercial_shape"), "commercial_shape")
+    if shape.get("commercial_shape_ready") is not True:
+        return {
+            "gate_id": gate_id,
+            "title": title,
+            "status": "NOT_MEASURED",
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "reason": "commercial_dataset_shape_not_ready",
+            "commercial_shape": shape,
+            "checks": [],
+            "thresholds": dict(thresholds),
+        }
+
+    held_out = _as_dict(evaluation_report.get("held_out"), "held_out")
+    clean = _as_dict(evaluation_report.get("clean"), "clean")
+    evidence = _as_dict(evaluation_report.get("evidence_quality"), "evidence_quality")
+    operational = _as_dict(evaluation_report.get("operational"), "operational")
+    if operational.get("complete") is not True:
+        return {
+            "gate_id": gate_id,
+            "title": title,
+            "status": "NOT_MEASURED",
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "reason": "operational_metrics_incomplete",
+            "checks": [],
+            "thresholds": dict(thresholds),
+        }
+
+    checks: list[dict[str, Any]] = []
+    metric_sources: dict[str, Any] = {
+        "held_out_macro_industry_recall": evaluation_report.get("held_out_macro_industry_recall"),
+        "held_out_micro_precision": held_out.get("micro_precision"),
+        "held_out_min_industry_recall": evaluation_report.get("held_out_min_industry_recall"),
+        "reproduction_success_rate": evidence.get("reproduction_success_rate"),
+        "evidence_completeness_rate": evidence.get("evidence_completeness_rate"),
+        "clean_critical_high_false_positives": clean.get("critical_high_false_positives"),
+        "cleanup_failures": operational.get("cleanup_failures"),
+        "production_http_requests": operational.get("production_http_requests"),
+        "safety_incidents": operational.get("safety_incidents"),
+        "dirty_test_environments": operational.get("dirty_test_environments"),
+        "execution_success_rate": operational.get("execution_success_rate"),
+        "engine_success_rate": operational.get("engine_success_rate"),
+    }
+
+    for name, threshold in thresholds.items():
+        if name == "unit_cost_improvement_ratio":
+            actual_cost = operational.get("cost_per_true_positive_usd")
+            if baseline_cost_per_true_positive_usd is None:
+                checks.append(
+                    {
+                        "name": name,
+                        "passed": False,
+                        "measurement_status": "NOT_MEASURED",
+                        "actual": actual_cost,
+                        "threshold": threshold,
+                        "comparator": ">=",
+                        "detail": "unit cost must improve >=40% vs frozen baseline",
+                        "reason": "baseline_cost_per_true_positive_usd_missing",
+                    }
+                )
+                continue
+            if actual_cost is None or float(baseline_cost_per_true_positive_usd) <= 0:
+                checks.append(
+                    {
+                        "name": name,
+                        "passed": False,
+                        "measurement_status": "NOT_MEASURED",
+                        "actual": actual_cost,
+                        "threshold": threshold,
+                        "comparator": ">=",
+                        "detail": "unit cost must improve >=40% vs frozen baseline",
+                        "reason": "cost_per_true_positive_not_measurable",
+                    }
+                )
+                continue
+            improvement = 1.0 - (float(actual_cost) / float(baseline_cost_per_true_positive_usd))
+            checks.append(
+                _metric_check(
+                    name,
+                    actual=improvement,
+                    threshold=threshold,
+                    comparator=">=",
+                    detail="unit cost improvement vs frozen baseline",
+                )
+            )
+            continue
+
+        comparator = (
+            "<="
+            if name
+            in {
+                "cleanup_failures",
+                "production_http_requests",
+                "safety_incidents",
+                "dirty_test_environments",
+                "clean_critical_high_false_positives",
+            }
+            else ">="
+        )
+        checks.append(
+            _metric_check(
+                name,
+                actual=metric_sources.get(name),
+                threshold=threshold,
+                comparator=comparator,
+                detail=f"absolute Goal gate threshold for {name}",
+            )
+        )
+
+    measured_complete = all(item.get("measurement_status") == "MEASURED" for item in checks)
+    passed = measured_complete and all(bool(item.get("passed")) for item in checks)
+    if not measured_complete:
+        status = "NOT_MEASURED"
+        reason = "one_or_more_metrics_not_measured"
+    elif passed:
+        status = "PASSED"
+        reason = ""
+    else:
+        status = "FAILED"
+        reason = "absolute_thresholds_not_met"
+    return {
+        "gate_id": gate_id,
+        "title": title,
+        "status": status,
+        "passed": passed,
+        "measurement_status": "MEASURED" if measured_complete else "NOT_MEASURED",
+        "reason": reason,
+        "checks": checks,
+        "thresholds": dict(thresholds),
+        "dataset_id": evaluation_report.get("dataset_id"),
+        "dataset_version": evaluation_report.get("dataset_version"),
+        "policy_id": evaluation_report.get("policy_id"),
+        "evaluation_mode": evaluation_report.get("evaluation_mode"),
+    }
+
+
+def assess_discovery_goal_status(
+    *,
+    evaluation_report: dict[str, Any] | None = None,
+    baseline_cost_per_true_positive_usd: float | None = None,
+    consecutive_non_regressive_windows: int | None = None,
+) -> dict[str, Any]:
+    """Single machine-checkable status for the commercial discovery Goal.
+
+    Gate A/B/C report engineering readiness. Gate D / pilot / GA report absolute
+    measured quality and remain NOT_MEASURED until a complete private evaluation
+    report is supplied. Never invent commercial quality numbers.
+    """
+
+    implementation = assess_implementation_stage_gates()
+    gate_d = assess_measured_capability_gate(
+        evaluation_report,
+        gate_id="D",
+        thresholds=CAPABILITY_BREAKTHROUGH_THRESHOLDS,
+        baseline_cost_per_true_positive_usd=baseline_cost_per_true_positive_usd,
+    )
+    gate_pilot = assess_measured_capability_gate(
+        evaluation_report,
+        gate_id="PILOT",
+        thresholds=CONTROLLED_COMMERCIAL_PILOT_THRESHOLDS,
+        baseline_cost_per_true_positive_usd=None,
+    )
+    gate_ga = assess_measured_capability_gate(
+        evaluation_report,
+        gate_id="GA",
+        thresholds=FULL_AUTONOMY_GA_THRESHOLDS,
+        baseline_cost_per_true_positive_usd=None,
+    )
+    if consecutive_non_regressive_windows is None:
+        ga_window_check = {
+            "name": "consecutive_non_regressive_windows",
+            "passed": False,
+            "measurement_status": "NOT_MEASURED",
+            "actual": None,
+            "threshold": 3,
+            "comparator": ">=",
+            "detail": "GA requires at least three consecutive frozen evaluation windows with no measured regression",
+            "reason": "consecutive_windows_not_supplied",
+        }
+    else:
+        ga_window_check = _metric_check(
+            "consecutive_non_regressive_windows",
+            actual=consecutive_non_regressive_windows,
+            threshold=3,
+            comparator=">=",
+            detail="GA requires at least three consecutive frozen evaluation windows with no measured regression",
+        )
+    gate_ga = {
+        **gate_ga,
+        "checks": list(gate_ga.get("checks") or []) + [ga_window_check],
+    }
+    ga_measured = all(
+        item.get("measurement_status") == "MEASURED" for item in (gate_ga.get("checks") or [])
+    )
+    ga_passed = ga_measured and all(bool(item.get("passed")) for item in (gate_ga.get("checks") or []))
+    if not ga_measured:
+        gate_ga["status"] = "NOT_MEASURED"
+        gate_ga["passed"] = False
+        gate_ga["measurement_status"] = "NOT_MEASURED"
+        gate_ga["reason"] = "one_or_more_metrics_not_measured"
+    elif ga_passed:
+        gate_ga["status"] = "PASSED"
+        gate_ga["passed"] = True
+        gate_ga["measurement_status"] = "MEASURED"
+        gate_ga["reason"] = ""
+    else:
+        gate_ga["status"] = "FAILED"
+        gate_ga["passed"] = False
+        gate_ga["measurement_status"] = "MEASURED"
+        gate_ga["reason"] = "absolute_thresholds_not_met"
+
+    implementation_ready = all(
+        bool(implementation[key]["passed"])
+        for key in (
+            "gate_a_evaluation_integrity",
+            "gate_b_trace_and_weakness_mining",
+            "gate_c_bounded_proposal_and_real_runner",
+        )
+    )
+    # Higher commercial claims require every lower absolute gate to pass. A
+    # missing Gate D baseline must not silently unlock pilot/GA eligibility.
+    commercial_claim_status = "NOT_MEASURED"
+    if gate_d["passed"] and gate_pilot["passed"] and gate_ga["passed"]:
+        commercial_claim_status = "FULL_AUTONOMY_GA_ELIGIBLE"
+    elif gate_d["passed"] and gate_pilot["passed"]:
+        commercial_claim_status = "CONTROLLED_PILOT_ELIGIBLE"
+    elif gate_d["passed"]:
+        commercial_claim_status = "CAPABILITY_BREAKTHROUGH_REACHED"
+    elif evaluation_report is not None and gate_d.get("measurement_status") == "MEASURED":
+        commercial_claim_status = "MEASURED_BELOW_GATE_D"
+
+    blockers: list[str] = []
+    if not implementation_ready:
+        blockers.append("implementation_stage_gates_incomplete")
+    if gate_d.get("measurement_status") != "MEASURED":
+        blockers.append(str(gate_d.get("reason") or "gate_d_not_measured"))
+    elif not gate_d.get("passed"):
+        blockers.append("gate_d_thresholds_not_met")
+    if gate_pilot.get("measurement_status") == "MEASURED" and not gate_pilot.get("passed"):
+        blockers.append("controlled_pilot_thresholds_not_met")
+    if gate_ga.get("measurement_status") == "MEASURED" and not gate_ga.get("passed"):
+        blockers.append("full_autonomy_ga_thresholds_not_met")
+
+    return {
+        "schema_version": GOAL_GATE_STATUS_SCHEMA,
+        "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "product_ports": {
+            "frontend": PRODUCT_FRONTEND_PORT,
+            "backend": PRODUCT_BACKEND_PORT,
+        },
+        "implementation_ready": implementation_ready,
+        "commercial_claim_status": commercial_claim_status,
+        "blockers": blockers,
+        "gates": {
+            **implementation,
+            "gate_d_capability_breakthrough": gate_d,
+            "controlled_commercial_pilot": gate_pilot,
+            "full_autonomy_ga": gate_ga,
+        },
+        "north_star_metrics": [
+            "held_out_macro_industry_recall",
+            "held_out_micro_precision",
+            "reproduction_success_rate",
+            "clean_critical_high_false_positives",
+            "cost_per_true_positive_usd",
+        ],
+        "notes": [
+            "Internal candidate/confirmed/validated funnel counts are diagnostic only and never commercial claims.",
+            "Missing ground truth, incomplete receipts, or degraded pipelines yield NOT_MEASURED.",
+            "Harness proposals may edit StrategyBundle surfaces only; evaluator, evidence threshold, sandbox boundary, and ports stay frozen.",
+        ],
+    }

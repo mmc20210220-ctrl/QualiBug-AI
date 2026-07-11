@@ -204,15 +204,16 @@ def _load_truth_bugs(gt_path: Path) -> list[dict[str, Any]]:
     return []
 
 
-_API_PATH_RE = re.compile(r"/(?:api/)?[a-zA-Z0-9_{}:/.-]+")
+_API_PATH_RE = re.compile(r"/[^\s\"'<>]+")
 
 
 def _extract_api_paths(text: str) -> set[str]:
     paths: set[str] = set()
     for match in _API_PATH_RE.findall(str(text or "")):
-        cleaned = match.split("?")[0].rstrip("/").lower()
+        cleaned = match.split("?")[0].rstrip("/),.;:，。；：").lower()
         cleaned = re.sub(r":[a-zA-Z_][a-zA-Z0-9_]*", "/*", cleaned)
         cleaned = re.sub(r"\{[^}]+\}", "/*", cleaned)
+        cleaned = re.sub(r"/{2,}", "/", cleaned)
         if cleaned.startswith("/"):
             paths.add(cleaned)
     return paths
@@ -305,6 +306,7 @@ def _match_finding_to_gt(
     """Keyword + API-path + semantic match (post-scan scoring only — never fed into discovery)."""
     blob = _finding_text_blob(finding)
     f_paths = _finding_paths(finding)
+    finding_family = _risk_family_for_item(finding)
     best: tuple[float, dict[str, Any]] | None = None
 
     for gt in truth_bugs:
@@ -324,12 +326,34 @@ def _match_finding_to_gt(
             else:
                 gt_paths |= _extract_api_paths(str(endpoint))
         gt_paths |= _extract_api_paths(" ".join(str(k) for k in keywords))
-        if _paths_overlap(f_paths, gt_paths):
-            score += 0.45
+        path_matches = _paths_overlap(f_paths, gt_paths)
+        if path_matches:
+            # Endpoint overlap proves where a probe ran, not which defect it
+            # found. Keep it below the acceptance threshold so broad
+            # permission/concurrency oracles cannot earn a true positive merely
+            # by touching every documented endpoint.
+            score += 0.30
+        ground_truth_family = _risk_family_for_item(gt)
+        family_matches = (
+            finding_family != "unclassified"
+            and ground_truth_family != "unclassified"
+            and finding_family == ground_truth_family
+        )
+        if family_matches:
+            score += 0.35
+        elif (
+            finding_family != "unclassified"
+            and ground_truth_family != "unclassified"
+            and finding_family != ground_truth_family
+        ):
+            score -= 0.20
         gt_title = str(gt.get("title") or "").lower()
         if gt_title and any(tok in blob for tok in gt_title.split() if len(tok) >= 4):
             score += 0.12
-        if score < 0.38:
+        # Require endpoint plus semantic evidence, or sufficiently strong
+        # non-endpoint semantic evidence. Endpoint-only matches are benchmark
+        # coverage, never a detected bug.
+        if score < 0.58 or (path_matches and not family_matches and score < 0.70):
             continue
         if best is None or score > best[0]:
             best = (score, gt)

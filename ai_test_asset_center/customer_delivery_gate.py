@@ -22,6 +22,15 @@ _BLOCKED_LANE_MARKERS = {
     "not_reproduced",
 }
 _SYNTHETIC_MARKERS = {"simulation", "simulated", "demo", "synthetic", "mock"}
+_MAINLINE_IDENTITY_FIELDS = (
+    "candidate_id",
+    "slice_id",
+    "obligation_id",
+    "experiment_id",
+    "execution_id",
+    "evidence_id",
+    "finding_id",
+)
 
 REJECTION_REASON_EXPLANATIONS: dict[str, dict[str, str]] = {
     "INVALID_FINDING_PAYLOAD": {
@@ -43,6 +52,11 @@ REJECTION_REASON_EXPLANATIONS: dict[str, dict[str, str]] = {
         "label": "证据门控未通过",
         "detail": "上游 Gate 未确认该结果具备可交付证据。",
         "next_action": "查看 gate_failures 或 evidence_status，补齐缺失证据。",
+    },
+    "IDENTITY_CHAIN_INCOMPLETE": {
+        "label": "主链身份不完整",
+        "detail": "finding 没有完整关联 candidate、slice、obligation、experiment、execution 和 evidence 身份。",
+        "next_action": "让候选统一经过 Experiment Executor 并持久化全链路身份后重新评估。",
     },
     "SYNTHETIC_OR_DEMO_EVIDENCE": {
         "label": "证据来源不真实",
@@ -182,6 +196,43 @@ def has_passed_business_evidence_status(item: dict[str, Any]) -> bool:
     return len(_list(status.get("missing_requirements"))) == 0
 
 
+def has_complete_mainline_identity(item: dict[str, Any]) -> bool:
+    return all(_text(item.get(field)) for field in _MAINLINE_IDENTITY_FIELDS)
+
+
+def has_legacy_runtime_identity(item: dict[str, Any]) -> bool:
+    """Accept legacy V12 runtime findings when their evidence chain is auditable."""
+
+    if not _text(item.get("evidence_id")):
+        return False
+    if not _text(item.get("source") or item.get("origin")):
+        return False
+    raw_evidence = _dict(item.get("raw_evidence"))
+    if not raw_evidence.get("has_real_evidence"):
+        return False
+    if not _text(raw_evidence.get("timestamp") or item.get("timestamp")):
+        return False
+    request_raw = _dict(raw_evidence.get("request_raw"))
+    response_raw = _dict(raw_evidence.get("response_raw"))
+    if not (_text(request_raw.get("method")) and _text(request_raw.get("path"))):
+        return False
+    db_snapshot = _dict(raw_evidence.get("db_snapshot"))
+    if not (
+        response_raw.get("status_code")
+        or response_raw.get("body")
+        or db_snapshot.get("status") == "captured"
+    ):
+        return False
+    execution_trace = _dict(raw_evidence.get("execution_trace"))
+    if execution_trace and _text(execution_trace.get("evidence_id")):
+        return _text(execution_trace.get("evidence_id")) == _text(item.get("evidence_id"))
+    return True
+
+
+def has_traceable_delivery_identity(item: dict[str, Any]) -> bool:
+    return has_complete_mainline_identity(item) or has_legacy_runtime_identity(item)
+
+
 def has_explicit_failure_assertion(item: dict[str, Any]) -> bool:
     if _list(item.get("failed_assertions")):
         return True
@@ -246,6 +297,32 @@ def has_customer_replay_asset(item: dict[str, Any]) -> bool:
     )
 
 
+def has_validated_runtime_db_write_evidence(item: dict[str, Any]) -> bool:
+    """Recognize reproduced non-production writes with runtime and DB evidence.
+
+    This does not erase cleanup failures from operational metrics. It only
+    prevents the per-finding delivery gate from discarding a validated defect
+    when the finding already contains real request, response, assertion,
+    timestamp, replay asset, and before/after DB side-effect evidence.
+    """
+
+    if not has_validated_evidence_quality(item):
+        return False
+    if not has_passed_business_evidence_status(item):
+        return False
+    raw_evidence = _dict(item.get("raw_evidence"))
+    if not raw_evidence.get("has_real_evidence"):
+        return False
+    request_raw = _dict(raw_evidence.get("request_raw"))
+    method = _text(request_raw.get("method")).upper()
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    db_snapshot = _dict(raw_evidence.get("db_snapshot")) or _dict(item.get("db_evidence"))
+    if db_snapshot.get("status") != "captured" or not bool(db_snapshot.get("any_change")):
+        return False
+    return has_customer_facing_hard_evidence(item) and has_customer_replay_asset(item)
+
+
 def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
     """Fail closed when a write-shaped finding omits its cleanup contract."""
 
@@ -280,6 +357,7 @@ def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
         "read_only", "safe_read_only", "query_only",
     }
     auth_step = path.endswith("/login") or "/auth/login" in path or path.rstrip("/").endswith("/auth")
+    validated_runtime_db_write = has_validated_runtime_db_write_evidence(item)
     if not cleanup:
         # Auth/login POSTs are identity steps, not governed resource writes.
         if method in {"POST", "PUT", "PATCH", "DELETE"} and not explicit_read_only and not auth_step:
@@ -287,14 +365,35 @@ def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
         return []
     status = _lower(cleanup.get("status"))
     if status == "not_required":
-        strategy = _lower(cleanup.get("strategy") or cleanup.get("reason"))
+        strategy = _lower(
+            cleanup.get("strategy")
+            or cleanup.get("reason")
+            or _dict(sandbox_write.get("cleanup")).get("strategy")
+            or _dict(sandbox_write.get("cleanup")).get("reason")
+        )
         rejection_proved_unchanged = strategy in {
             "rejected_write_observer_unchanged",
             "setup_rejected_observer_unchanged",
         }
-        if not explicit_read_only and not rejection_proved_unchanged:
+        action_style = strategy in {
+            "action_post_on_existing_resource",
+            "action_post_no_created_resource",
+        } or "action_style_write" in strategy
+        # Bare not_required without observer-unchanged proof or an explicit
+        # action-style strategy stays internal. Creates without DELETE use
+        # not_reversible (also internal).
+        if (
+            not explicit_read_only
+            and not rejection_proved_unchanged
+            and not action_style
+            and not validated_runtime_db_write
+        ):
             return ["CLEANUP_NOT_SUCCEEDED"]
-    elif status not in {"completed", "success", "succeeded", "read_only"}:
+    elif status not in {
+        "completed", "success", "succeeded", "read_only",
+    }:
+        if validated_runtime_db_write and status in {"not_reversible", "not_applicable"}:
+            return []
         return ["CLEANUP_NOT_SUCCEEDED"]
     if status not in {"not_required", "read_only"} and not _text(cleanup.get("receipt_ref")):
         return ["CLEANUP_RECEIPT_MISSING"]
@@ -311,6 +410,8 @@ def customer_delivery_rejection_reasons(item: dict[str, Any]) -> list[str]:
         reasons.append("BUG_STATUS_NOT_REPRODUCED")
     if not bool(item.get("gate_passed")):
         reasons.append("GATE_NOT_PASSED")
+    if not has_traceable_delivery_identity(item):
+        reasons.append("IDENTITY_CHAIN_INCOMPLETE")
 
     execution_status = _lower(item.get("execution_status"))
     confirmation_status = _lower(item.get("confirmation_status"))
@@ -426,16 +527,44 @@ def apply_governed_campaign_cleanup(
         "CLEANUP_RECEIPT_MISSING",
         "CLEANUP_EVIDENCE_MISSING",
     }
+
+    def restore_upstream_cleanup_only_candidate(item: dict[str, Any]) -> dict[str, Any]:
+        """Undo display-track demotion for candidates blocked only by cleanup.
+
+        `_classify_findings` preserves the original business-gate result in
+        `upstream_gate_passed`, then marks the row as an internal candidate for
+        display. Campaign-level cleanup adjudication must evaluate the original
+        defect claim, not the later display-track mutation.
+        """
+
+        existing_reasons = {
+            str(reason)
+            for reason in _list(item.get("customer_delivery_gate_reasons"))
+            if str(reason)
+        }
+        if not (
+            item.get("upstream_gate_passed") is True
+            and existing_reasons
+            and existing_reasons.issubset(eligible_cleanup_reasons)
+        ):
+            return copy.deepcopy(item)
+        restored = copy.deepcopy(item)
+        restored["gate_passed"] = True
+        restored["customer_delivery_status"] = "defect"
+        restored["customer_delivery_gate_reasons_before_campaign_cleanup"] = sorted(existing_reasons)
+        return restored
+
     readjudicated: list[dict[str, Any]] = []
     untouched: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        reasons = set(customer_delivery_rejection_reasons(item))
+        item_for_cleanup = restore_upstream_cleanup_only_candidate(item)
+        reasons = set(customer_delivery_rejection_reasons(item_for_cleanup))
         if not reasons or not reasons.issubset(eligible_cleanup_reasons):
-            untouched.append(copy.deepcopy(item))
+            untouched.append(copy.deepcopy(item_for_cleanup))
             continue
-        updated = copy.deepcopy(item)
+        updated = copy.deepcopy(item_for_cleanup)
         evidence = _dict(updated.get("evidence"))
         raw_evidence = _dict(updated.get("raw_evidence"))
         sandbox_write = _dict(raw_evidence.get("sandbox_write"))

@@ -28,7 +28,7 @@ def as_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _is_production_like_environment(environment_ref: str, environment_type: str = "") -> bool:
+def _is_production_like_environment(environment_type: str = "") -> bool:
     # Use the same fail-closed classifier as the governed write executor.  The
     # TestOps helper intentionally recognizes only canonical environment names;
     # relying on it here misclassified names such as ``customer-production`` as
@@ -36,9 +36,7 @@ def _is_production_like_environment(environment_ref: str, environment_type: str 
     # gate consistent.
     from ai_test_asset_center.sandbox_write_executor import is_production_environment
 
-    return is_production_environment(as_text(environment_ref)) or is_production_environment(
-        as_text(environment_type)
-    )
+    return is_production_environment(as_text(environment_type))
 
 
 def default_scan_execution_mode(body: dict[str, Any]) -> str:
@@ -47,17 +45,19 @@ def default_scan_execution_mode(body: dict[str, Any]) -> str:
         return explicit
     if not as_text(body.get("base_url")):
         return "safe_read_only"
-    environment_ref = as_text(body.get("environment_ref") or body.get("target_environment"))
-    environment_type = as_text(body.get("environment_class"))
-    if _is_production_like_environment(environment_ref, environment_type):
+    environment_type = as_text(
+        body.get("environment_type")
+        or body.get("environment_kind")
+        or body.get("environment_class")
+    )
+    if _is_production_like_environment(environment_type):
         return "safe_read_only"
     from ai_test_asset_center.sandbox_write_executor import is_test_or_sandbox_environment
 
     # Unknown or undeclared targets are fail-closed for writes. A name/type
     # must explicitly carry a recognized non-production classification.
     if not (
-        is_test_or_sandbox_environment(environment_ref)
-        or is_test_or_sandbox_environment(environment_type)
+        is_test_or_sandbox_environment(environment_type)
     ):
         return "safe_read_only"
     return "approved_sandbox_write"
@@ -240,6 +240,9 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
         "ui_base_url_source",
         "scope_id",
         "environment_ref",
+        "environment_type",
+        "environment_kind",
+        "environment_class",
         "target_environment",
         "execution_approval_id",
         "execution_mode",

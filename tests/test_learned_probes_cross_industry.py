@@ -21,10 +21,9 @@ def _ops(*rows: tuple[str, str, str]) -> list[dict]:
     return out
 
 
-def test_normalize_synthetic_probe_path_strips_mall_ids():
-    assert normalize_synthetic_probe_path("/orders/o900") == "/orders/{order_id}"
-    assert normalize_synthetic_probe_path("/products/p100") == "/products/{product_id}"
-    assert normalize_synthetic_probe_path("/orders/{order_id}") == "/orders/{order_id}"
+def test_normalize_probe_path_never_rewrites_source_identifiers():
+    assert normalize_synthetic_probe_path("/lab/samples/sample-001") == "/lab/samples/sample-001"
+    assert normalize_synthetic_probe_path("/work-items/{work_ref}") == "/work-items/{work_ref}"
 
 
 def test_feedback_learning_binds_to_healthcare_openapi_without_mall_paths():
@@ -121,3 +120,38 @@ def test_adaptive_and_feedback_adjusted_normalize_paths(monkeypatch, tmp_path):
     })
     assert adjusted
     assert adjusted[0]["path"] == "/cart/apply-coupon"
+
+
+def test_adaptive_strategy_without_route_binds_to_current_project_operation(monkeypatch):
+    monkeypatch.setattr(
+        "ai_test_asset_center.defect_discovery.build_learned_probe_policy",
+        lambda root: {
+            "template_policies": [{
+                "template_id": "generic-isolation",
+                "priority_score": 0.9,
+                "recommended_variants": 1,
+                "strategy": "cross_actor_read",
+                "probe_type": "adaptive_isolation_probe",
+                "risk_type": "idor",
+                "severity": "P0",
+                "actor": "operator",
+                "method": "GET",
+                "expected_status": 403,
+            }]
+        },
+    )
+    model = {
+        "operations": [{
+            "path": "/api/lab-samples/{sample_ref}",
+            "method": "GET",
+            "summary": "read owned sample",
+            "resource": "lab-samples",
+            "risk_hints": ["idor"],
+        }]
+    }
+
+    adaptive = generate_adaptive_policy_probes(model)
+
+    assert len(adaptive) == 1
+    assert adaptive[0]["path"] == "/api/lab-samples/{sample_ref}"
+    assert adaptive[0]["risk_type"] == "idor"

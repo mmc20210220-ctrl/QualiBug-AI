@@ -62,6 +62,57 @@ def test_cleanliness_guard_archives_fully_clean_prior_audit(tmp_path: Path) -> N
     )["status"] == "clean_no_prior_write_audit"
 
 
+def test_cleanliness_guard_treats_observer_unchanged_not_required_as_clean(tmp_path: Path) -> None:
+    path = _audit_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-10T01:00:00Z",
+                        "cleanup_status": "not_required",
+                        "cleanup_strategy": "rejected_write_observer_unchanged",
+                    }
+                ),
+                json.dumps({"timestamp": "2026-07-10T01:01:00Z", "cleanup_status": "completed"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = assert_benchmark_target_clean(
+        root=tmp_path,
+        project="benchmark",
+        target_base_url="http://127.0.0.1:8080",
+    )
+    assert result["status"] == "clean_all_prior_writes_cleaned"
+    assert not path.exists()
+
+
+def test_cleanliness_guard_still_requires_reset_for_action_not_required(tmp_path: Path) -> None:
+    path = _audit_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-07-10T01:00:00Z",
+                "cleanup_status": "not_required",
+                "cleanup_strategy": "action_post_on_existing_resource",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="benchmark_target_dirty_reset_receipt_required"):
+        assert_benchmark_target_clean(
+            root=tmp_path,
+            project="benchmark",
+            target_base_url="http://127.0.0.1:8080",
+        )
+
+
 def test_cleanliness_guard_verifies_and_archives_reset_receipt(tmp_path: Path) -> None:
     path = _audit_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)

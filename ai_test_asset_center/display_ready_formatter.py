@@ -2153,6 +2153,7 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
     runtime_obs = _best_runtime_observation(finding)
     inv = finding.get("investigation_guidance") if isinstance(finding.get("investigation_guidance"), dict) else {}
     evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+    original_raw = finding.get("raw_evidence") if isinstance(finding.get("raw_evidence"), dict) else {}
     db_ev = _extract_verified_db_evidence(finding)
 
     trace_id = _clean(inv.get("trace_id")) or _clean(_deep_get(finding, "evidence", "trace_id"))
@@ -2251,6 +2252,29 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
     }
     if ui_artifacts:
         raw_evidence["ui_artifacts"] = ui_artifacts
+    # Preserve only the governance proof needed by the delivery gate. The
+    # formatter must not erase a real cleanup receipt and accidentally demote a
+    # governed write, nor copy the full audit payload into customer responses.
+    sandbox_write = original_raw.get("sandbox_write") if isinstance(original_raw.get("sandbox_write"), dict) else {}
+    cleanup = sandbox_write.get("cleanup") if isinstance(sandbox_write.get("cleanup"), dict) else {}
+    if not cleanup and isinstance(evidence.get("cleanup"), dict):
+        cleanup = evidence.get("cleanup")
+    if cleanup:
+        raw_evidence["sandbox_write"] = {
+            "cleanup": {
+                key: cleanup.get(key)
+                for key in ("status", "strategy", "reason", "receipt_ref")
+                if cleanup.get(key) not in (None, "")
+            },
+            "governed_write_receipt_count": int(sandbox_write.get("governed_write_receipt_count") or 0),
+        }
+    execution_semantics = _clean(
+        original_raw.get("execution_semantics")
+        or evidence.get("execution_semantics")
+        or finding.get("execution_semantics")
+    )
+    if execution_semantics:
+        raw_evidence["execution_semantics"] = execution_semantics
     return raw_evidence
 
 
@@ -2543,6 +2567,13 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
 
     return {
         "id": risk_id,
+        "candidate_id": _clean(finding.get("candidate_id")),
+        "slice_id": _clean(finding.get("slice_id")),
+        "obligation_id": _clean(finding.get("obligation_id")),
+        "experiment_id": _clean(finding.get("experiment_id")),
+        "execution_id": _clean(finding.get("execution_id")),
+        "evidence_id": _clean(finding.get("evidence_id")),
+        "finding_id": _clean(finding.get("finding_id")),
         "title": title,
         "severity": severity,
         "risk_type": risk_type,

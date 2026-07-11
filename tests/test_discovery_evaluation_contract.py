@@ -10,6 +10,7 @@ from ai_test_asset_center.discovery_evaluation_contract import (
     MANIFEST_SCHEMA,
     aggregate_evaluation_receipts,
     assess_commercial_dataset_shape,
+    assess_discovery_goal_status,
     build_paired_evaluation_evidence,
     build_runtime_view,
     evaluate_completed_scan,
@@ -102,6 +103,13 @@ def _matched_finding(target_id: str) -> dict:
 
 def _customer_deliverable_clean_finding() -> dict:
     return {
+        "candidate_id": "candidate-clean",
+        "slice_id": "slice-clean",
+        "obligation_id": "obligation-clean",
+        "experiment_id": "experiment-clean",
+        "execution_id": "execution-clean",
+        "evidence_id": "evidence-clean",
+        "finding_id": "finding-clean",
         "title": "clean target false positive",
         "severity": "P1",
         "bug_status": "reproduced",
@@ -438,3 +446,85 @@ def test_paired_evidence_rejects_target_fingerprint_drift(tmp_path: Path) -> Non
             champion_shadow=champion_shadow,
             challenger_shadow=challenger_shadow,
         )
+
+
+def test_goal_status_reports_implementation_ready_without_inventing_quality(tmp_path: Path) -> None:
+    status = assess_discovery_goal_status()
+
+    assert status["schema_version"] == "qualibug.discovery-goal-gate-status.v1"
+    assert status["product_ports"] == {"frontend": 5174, "backend": 8088}
+    assert status["implementation_ready"] is True
+    assert status["gates"]["gate_a_evaluation_integrity"]["passed"] is True
+    assert status["gates"]["gate_b_trace_and_weakness_mining"]["passed"] is True
+    assert status["gates"]["gate_c_bounded_proposal_and_real_runner"]["passed"] is True
+    assert status["gates"]["gate_d_capability_breakthrough"]["status"] == "NOT_MEASURED"
+    assert status["gates"]["controlled_commercial_pilot"]["status"] == "NOT_MEASURED"
+    assert status["gates"]["full_autonomy_ga"]["status"] == "NOT_MEASURED"
+    assert status["commercial_claim_status"] == "NOT_MEASURED"
+    assert "evaluation_report_missing" in status["blockers"]
+
+
+def test_goal_status_fail_closed_when_baseline_cost_missing(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    report = _policy_report(manifest, "policy-champion", "replay")
+
+    status = assess_discovery_goal_status(evaluation_report=report)
+
+    gate_d = status["gates"]["gate_d_capability_breakthrough"]
+    assert gate_d["status"] == "NOT_MEASURED"
+    assert any(
+        item["name"] == "unit_cost_improvement_ratio"
+        and item["reason"] == "baseline_cost_per_true_positive_usd_missing"
+        for item in gate_d["checks"]
+    )
+    assert status["commercial_claim_status"] == "NOT_MEASURED"
+
+
+def test_goal_status_passes_gate_d_only_with_measured_absolute_thresholds(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    report = _policy_report(manifest, "policy-champion", "replay")
+
+    status = assess_discovery_goal_status(
+        evaluation_report=report,
+        baseline_cost_per_true_positive_usd=10.0,
+        consecutive_non_regressive_windows=3,
+    )
+
+    gate_d = status["gates"]["gate_d_capability_breakthrough"]
+    assert gate_d["measurement_status"] == "MEASURED"
+    assert gate_d["passed"] is True
+    assert status["commercial_claim_status"] in {
+        "CAPABILITY_BREAKTHROUGH_REACHED",
+        "CONTROLLED_PILOT_ELIGIBLE",
+        "FULL_AUTONOMY_GA_ELIGIBLE",
+    }
+    assert status["product_ports"]["frontend"] == 5174
+    assert status["product_ports"]["backend"] == 8088
+
+
+def test_goal_status_blocks_clean_target_p0_p1_false_positives(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    receipts = []
+    for target in manifest.targets:
+        findings = (
+            [_customer_deliverable_clean_finding()]
+            if target.expectation == "clean"
+            else [_matched_finding(target.target_id)]
+        )
+        receipts.append(_receipt(manifest, target.target_id, findings))
+    report = aggregate_evaluation_receipts(manifest, receipts)
+
+    status = assess_discovery_goal_status(
+        evaluation_report=report,
+        baseline_cost_per_true_positive_usd=10.0,
+    )
+
+    gate_d = status["gates"]["gate_d_capability_breakthrough"]
+    assert gate_d["status"] == "FAILED"
+    assert gate_d["passed"] is False
+    clean_check = next(
+        item for item in gate_d["checks"] if item["name"] == "clean_critical_high_false_positives"
+    )
+    assert clean_check["passed"] is False
+    assert clean_check["actual"] == 1.0
+    assert status["commercial_claim_status"] == "MEASURED_BELOW_GATE_D"

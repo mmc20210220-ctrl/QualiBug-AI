@@ -42,6 +42,7 @@ def test_scan_authorizes_nonproduction_without_per_probe_approval_but_requires_r
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write",
             "source_manifest": manifest,
         },
@@ -125,6 +126,7 @@ def test_scan_auto_issues_local_execution_approval_for_loopback_runtime(tmp_path
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "source_manifest": manifest,
             "execution_mode": "approved_sandbox_write",
         },
@@ -228,6 +230,7 @@ def test_scan_refreshes_stale_local_execution_approval_when_campaign_mismatch(tm
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "source_manifest": manifest,
             "execution_mode": "approved_sandbox_write",
             "execution_approval_id": "eap_stale",

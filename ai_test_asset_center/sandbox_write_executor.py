@@ -11,6 +11,7 @@ normal executor cannot expose the required per-write hook.
 """
 from __future__ import annotations
 
+import base64
 import inspect
 import json
 import os
@@ -24,6 +25,12 @@ from typing import Any, Callable
 from .enterprise_project_config import match_production_data_exclusion
 from .real_id_resolver import collection_path as documented_collection_path
 from .real_id_resolver import normalize_path_placeholders, path_has_placeholders
+from .target_policy import (
+    build_target_policy_decision,
+    is_nonproduction_environment as _policy_is_nonproduction_environment,
+    is_production_environment as _policy_is_production_environment,
+    primary_write_block,
+)
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Non-production environment kinds where read+write probing is the product's
@@ -170,6 +177,17 @@ def is_test_or_sandbox_environment(env_kind: str) -> bool:
     return any(part in token for part in _TEST_ENV_TOKENS)
 
 
+# These wrappers deliberately override the legacy token classifiers above.
+# Keeping the compatibility names avoids a broad call-site migration while the
+# Target Policy module remains the only implementation of the classification.
+def is_production_environment(env_kind: str) -> bool:
+    return _policy_is_production_environment(env_kind)
+
+
+def is_test_or_sandbox_environment(env_kind: str) -> bool:
+    return _policy_is_nonproduction_environment(env_kind)
+
+
 def resolve_environment_kind(
     root: Path,
     project: str,
@@ -186,13 +204,28 @@ def resolve_environment_kind(
         value = _text(rc.get(key)).lower()
         if value:
             return value
-    # Legacy configurations sometimes stored a literal class token (for
-    # example ``qa``) in environment_ref. Preserve only that narrow case; an
-    # opaque identity or URL remains unknown and therefore fail-closed.
-    legacy_ref = _text(rc.get("environment_ref")).lower()
-    if is_production_environment(legacy_ref) or is_test_or_sandbox_environment(legacy_ref):
-        return legacy_ref
+    # environment_ref is an identity, not a safety classification.  Never
+    # infer write authorization from a name such as ``customer-qa``.
     return ""
+
+
+def target_policy_decision(
+    *,
+    root: Path,
+    project: str,
+    runtime_contract: dict[str, Any],
+) -> dict[str, Any]:
+    rc = _as_dict(runtime_contract)
+    approved_base_url = _text(rc.get("approved_base_url"))
+    requested_base_url = _text(rc.get("requested_base_url")) or approved_base_url
+    return build_target_policy_decision(
+        requested_base_url=requested_base_url,
+        approved_base_url=approved_base_url,
+        environment_type=resolve_environment_kind(root, project, rc),
+        environment_ref=rc.get("environment_ref"),
+        execution_mode=rc.get("execution_mode"),
+        runtime_status=rc.get("status"),
+    )
 
 
 def sandbox_write_allowed(
@@ -215,6 +248,21 @@ def sandbox_write_allowed(
         return False, "production_mode_blocks_write"
     if not sandbox_write_enabled():
         return False, "write_probing_disabled_by_operator"
+    decision = target_policy_decision(root=root, project=project, runtime_contract=runtime_contract)
+    if not bool(decision.get("write_allowed")):
+        code = primary_write_block(decision)
+        legacy_reason = {
+            "PRODUCTION_WRITE_BLOCKED": "production_environment_blocked",
+            "UNKNOWN_ENVIRONMENT": "environment_kind_undeclared",
+            "TARGET_URL_APPROVAL_MISMATCH": "target_url_approval_mismatch",
+            "TARGET_NOT_APPROVED": "approved_base_url_missing",
+            "TARGET_URL_MISSING_OR_INVALID": "approved_base_url_missing",
+            "ENVIRONMENT_REFERENCE_MISSING": "environment_reference_missing",
+            "RUNTIME_CONTRACT_NOT_APPROVED": "runtime_contract_not_approved",
+            "READ_ONLY_MODE": "execution_mode_read_only",
+            "EXECUTION_MODE_UNSUPPORTED": "execution_mode_unsupported",
+        }
+        return False, legacy_reason.get(code, code.lower())
     if str(_as_dict(runtime_contract).get("status") or "") != "approved":
         return False, "runtime_contract_not_approved"
     if _text(_as_dict(runtime_contract).get("execution_mode")).lower() == "safe_read_only":
@@ -442,6 +490,262 @@ def _is_fixture_bootstrap_step(step: Any) -> bool:
     """Identity bootstrap POSTs are fixtures, not the scenario's primary write."""
     action = _text(getattr(step, "action", "") or "").strip().lower()
     return action.startswith("bootstrap_create_")
+
+
+_IDENTITY_RESOURCE_RE = re.compile(
+    r"(?:^|/|_|-)(?:auth|identity|user|users|account|accounts|member|members|"
+    r"customer|customers|profile|profiles)(?:/|_|-|$)",
+    re.I,
+)
+_PROTECTED_IDENTITY_MUTATION_RE = re.compile(
+    r"(?:^|/|_|-)(?:status|state|password|credential|credentials|secret|role|roles|"
+    r"permission|permissions|balance|disable|disabled|deactivate|suspend|lock|locked|"
+    r"unlock|reset|freeze|unfreeze|activate|enable)(?:/|_|-|$)",
+    re.I,
+)
+_IDENTITY_CREATION_RE = re.compile(
+    r"(?:^|/|_|-)(?:register|signup|sign-up|create|invite|enroll)(?:/|_|-|$)",
+    re.I,
+)
+_PROTECTED_IDENTITY_BODY_KEYS = frozenset({
+    "status",
+    "state",
+    "account_status",
+    "password",
+    "newpassword",
+    "new_password",
+    "oldpassword",
+    "old_password",
+    "credential",
+    "credentials",
+    "secret",
+    "role",
+    "roles",
+    "permission",
+    "permissions",
+    "balance",
+    "enabled",
+    "disabled",
+    "locked",
+    "active",
+})
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    parts = _text(token).split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((payload + padding).encode("ascii"))
+        parsed = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _iter_account_rows(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if isinstance(raw, dict):
+        return [item for item in raw.values() if isinstance(item, dict)]
+    return []
+
+
+def _protected_runtime_identity_values(root: Path, project: str) -> set[str]:
+    """Return stable identifiers for configured runtime accounts.
+
+    These are the credentials the product itself relies on to keep a campaign
+    executable.  Mutating their status/password/role/balance during a probe
+    destroys later scenarios and turns real recall work into self-inflicted
+    401/403 noise.  Values are not logged and are used only for pre-write
+    safety decisions.
+    """
+    identities: set[str] = set()
+    candidates = [
+        root / "platform_inputs" / project / "test_accounts.json",
+        root / "platform_workspace" / project / "test_accounts.json",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for row in _iter_account_rows(raw):
+            for key in ("id", "user_id", "userId", "account_id", "accountId", "email", "username", "login", "account"):
+                value = _text(row.get(key))
+                if value:
+                    identities.add(value.lower())
+            payload = _decode_jwt_payload(_text(row.get("token")))
+            for key in ("id", "sub", "user_id", "userId", "account_id", "accountId", "email", "username", "login", "account"):
+                value = _text(payload.get(key))
+                if value:
+                    identities.add(value.lower())
+    return {item for item in identities if len(item) >= 6}
+
+
+def _body_has_protected_identity(value: Any, protected: set[str]) -> bool:
+    if not protected:
+        return False
+    if isinstance(value, dict):
+        return any(_body_has_protected_identity(v, protected) for v in value.values())
+    if isinstance(value, list):
+        return any(_body_has_protected_identity(v, protected) for v in value)
+    text = _text(value).lower()
+    return bool(text and text in protected)
+
+
+def _scrub_protected_identities_from_body(value: Any, protected: set[str]) -> Any:
+    """Remove seeded/protected identity literals from a probe body.
+
+    API docs often reuse demo accounts in request examples. Using those values
+    on identity-mutation routes is hard-blocked; scrubbing them lets the probe
+    still reach HTTP as an authorization/contract check without mutating a
+    protected runtime account.
+    """
+    if not protected:
+        return value
+    if isinstance(value, dict):
+        scrubbed: dict[str, Any] = {}
+        for key, child in value.items():
+            cleaned = _scrub_protected_identities_from_body(child, protected)
+            if cleaned is None:
+                continue
+            if isinstance(cleaned, str) and not cleaned.strip():
+                continue
+            scrubbed[key] = cleaned
+        return scrubbed
+    if isinstance(value, list):
+        return [
+            cleaned
+            for cleaned in (_scrub_protected_identities_from_body(item, protected) for item in value)
+            if cleaned is not None and not (isinstance(cleaned, str) and not cleaned.strip())
+        ]
+    text = _text(value)
+    if text and text.lower() in protected:
+        return None
+    return value
+
+
+def _apply_body_to_primary_write_step(scenario: Any, body: Any) -> None:
+    """Keep scenario step templates aligned with the scrubbed probe body."""
+    for step in getattr(scenario, "steps", []) or []:
+        if _is_authentication_step(step) or _is_fixture_bootstrap_step(step):
+            continue
+        method = _text(getattr(step, "api_method", "") or "").upper()
+        path = _text(getattr(step, "api_path", "") or "")
+        if method in _WRITE_METHODS and path.startswith("/"):
+            try:
+                step.body_template = dict(body) if isinstance(body, dict) else body
+            except Exception:
+                setattr(step, "body_template", body)
+            return
+
+
+def _body_has_protected_identity_mutation_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = re.sub(r"[^a-z0-9_]+", "", str(key).strip().lower())
+            if normalized in _PROTECTED_IDENTITY_BODY_KEYS:
+                return True
+            if _body_has_protected_identity_mutation_key(child):
+                return True
+    elif isinstance(value, list):
+        return any(_body_has_protected_identity_mutation_key(item) for item in value)
+    return False
+
+
+def _body_has_concrete_identity_target(value: Any) -> bool:
+    """True when the body names a concrete (non-placeholder) identity locator.
+
+    Used to decide whether an identity-mutation write must carry a disposable
+    fixture. Probe-only writes with empty/unbound bodies can still execute to
+    observe authorization gaps without targeting a known account.
+    """
+    if isinstance(value, list):
+        return any(_body_has_concrete_identity_target(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    locator_keys = {
+        "email",
+        "user",
+        "userid",
+        "user_id",
+        "username",
+        "login",
+        "account",
+        "accountid",
+        "account_id",
+        "phone",
+        "mobile",
+        "id",
+        "uuid",
+    }
+    for key, child in value.items():
+        normalized = re.sub(r"[^a-z0-9_]+", "", str(key).strip().lower())
+        if normalized in locator_keys or normalized.endswith("email") or normalized.endswith("userid"):
+            text = _text(child)
+            if text and not (text.startswith("{") and text.endswith("}") and len(text) > 2):
+                return True
+        if isinstance(child, (dict, list)) and _body_has_concrete_identity_target(child):
+            return True
+    return False
+
+
+def _looks_like_protected_identity_mutation(method: str, path: str, body: Any) -> bool:
+    method_u = _text(method).upper()
+    if method_u not in _WRITE_METHODS:
+        return False
+    normalized_path = normalize_path_placeholders(_text(path)).lower()
+    if not normalized_path.startswith("/"):
+        return False
+    if _IDENTITY_CREATION_RE.search(normalized_path):
+        return False
+    if not _IDENTITY_RESOURCE_RE.search(normalized_path):
+        return False
+    return bool(
+        _PROTECTED_IDENTITY_MUTATION_RE.search(normalized_path)
+        or _body_has_protected_identity_mutation_key(body)
+    )
+
+
+def _scenario_has_disposable_identity_fixture(scenario: Any) -> bool:
+    for step in getattr(scenario, "steps", []) or []:
+        if not _is_fixture_bootstrap_step(step):
+            continue
+        path = _text(getattr(step, "api_path", "") or "").lower()
+        if _IDENTITY_RESOURCE_RE.search(path) or _IDENTITY_CREATION_RE.search(path):
+            return True
+    return False
+
+
+def _protected_runtime_identity_write_block_reason(
+    *,
+    root: Path,
+    project: str,
+    scenario: Any,
+    method: str,
+    path: str,
+    body: Any,
+) -> str:
+    if not _looks_like_protected_identity_mutation(method, path, body):
+        return ""
+    protected = _protected_runtime_identity_values(root, project)
+    path_l = _text(path).lower()
+    if any(identity in path_l for identity in protected) or _body_has_protected_identity(body, protected):
+        return "protected_runtime_identity_mutation_blocked"
+    if path_has_placeholders(normalize_path_placeholders(path)) and not _scenario_has_disposable_identity_fixture(scenario):
+        return "identity_mutation_requires_disposable_fixture"
+    # Concrete identity locators (email/user id/...) still require a disposable
+    # fixture so seeded accounts are not mutated. Empty/unbound probe bodies do
+    # not — otherwise selected routes like POST /api/auth/password/reset never
+    # reach HTTP and authz gaps stay invisible.
+    if _body_has_concrete_identity_target(body) and not _scenario_has_disposable_identity_fixture(scenario):
+        return "identity_mutation_requires_disposable_fixture"
+    return ""
 
 
 def _scenario_declared_actor_identity(scenario: Any) -> str:
@@ -736,6 +1040,36 @@ def _blocked_write_trace(scenario: Any, reason: str, write_meta: tuple[str, str,
     }
 
 
+# Documented compensating-action terminals (language/API structure vocabulary,
+# shared with auto_test_data_factory cleanup discovery — not business rules).
+_CLEANUP_ACTION_TERMINAL_RE = re.compile(
+    r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|"
+    r"delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|"
+    r"discard|retire|freeze|reset|clear|purge|"
+    r"取消|删除|关闭|作废|停用|冻结|撤销)$",
+    re.I,
+)
+_ACTION_TERMINAL_RE = re.compile(
+    r"^(?:"
+    r"cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|"
+    r"delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|"
+    r"discard|retire|freeze|reset|clear|purge|pay|use|validate|reserve|consume|"
+    r"confirm|ship|approve|adjust|apply|submit|execute|process|trigger|notify|"
+    r"sync|verify|check|bind|unbind|enable|start|stop|pause|resume|retry|replay|"
+    r"lock|unlock|transfer|merge|split|"
+    r"取消|删除|关闭|作废|停用|冻结|撤销|支付|使用|校验|验证|预留|释放|确认|发货|审批|调整"
+    r")$",
+    re.I,
+)
+
+
+def _bind_single_placeholder(route_path: str, resource_id: str) -> str:
+    placeholders = re.findall(r"\{[A-Za-z_]\w*\}", route_path)
+    if len(placeholders) != 1:
+        return ""
+    return route_path.replace(placeholders[0], str(resource_id))
+
+
 def _documented_delete_cleanup_path(
     created_path: str,
     resource_id: str,
@@ -756,11 +1090,58 @@ def _documented_delete_cleanup_path(
         route_collection = documented_collection_path(route_path) or route_path
         if route_collection != created_collection:
             continue
-        placeholders = re.findall(r"\{[A-Za-z_]\w*\}", route_path)
-        if len(placeholders) != 1:
-            continue
-        candidates.append(route_path.replace(placeholders[0], str(resource_id)))
+        bound = _bind_single_placeholder(route_path, resource_id)
+        if bound:
+            candidates.append(bound)
     return sorted(set(candidates), key=lambda item: (item.count("/"), item))[0] if candidates else ""
+
+
+def _documented_compensate_cleanup_operation(
+    created_path: str,
+    resource_id: str,
+    documented_routes: list[dict[str, Any]] | None,
+) -> tuple[str, str]:
+    """Resolve a documented compensating action when DELETE is absent.
+
+    Prefer DELETE. Otherwise accept a source-declared POST/PATCH on the same
+    collection whose terminal segment is a structural cleanup verb
+    (cancel/void/archive/…). Never invent a route that is not in the catalog.
+    """
+    delete_path = _documented_delete_cleanup_path(created_path, resource_id, documented_routes)
+    if delete_path:
+        return "DELETE", delete_path
+    if not resource_id:
+        return "", ""
+    normalized_created = normalize_path_placeholders(created_path).split("?", 1)[0]
+    created_collection = (documented_collection_path(normalized_created) or normalized_created).rstrip("/")
+    best: tuple[int, str, str] = (0, "", "")
+    for route in documented_routes or []:
+        if not isinstance(route, dict):
+            continue
+        method = _text(route.get("method")).upper()
+        if method not in {"POST", "PATCH"}:
+            continue
+        route_path = normalize_path_placeholders(_text(route.get("path"))).split("?", 1)[0]
+        if not route_path.startswith("/") or not path_has_placeholders(route_path):
+            continue
+        if not _CLEANUP_ACTION_TERMINAL_RE.search(route_path.rstrip("/")):
+            continue
+        route_collection = (documented_collection_path(route_path) or route_path).rstrip("/")
+        if route_collection != created_collection and not route_path.startswith(created_collection + "/"):
+            continue
+        bound = _bind_single_placeholder(route_path, resource_id)
+        if not bound:
+            continue
+        score = 20
+        if route_path.startswith(created_collection + "/"):
+            score += 35
+        if method == "POST":
+            score += 5
+        if score > best[0]:
+            best = (score, method, bound)
+    if best[0] >= 20:
+        return best[1], best[2]
+    return "", ""
 
 
 def _is_action_style_write_path(path: str) -> bool:
@@ -769,10 +1150,12 @@ def _is_action_style_write_path(path: str) -> bool:
     Industry-generic: collection POST ``/api/orders`` creates; nested action
     ``/api/orders/{id}/cancel`` mutates an existing entity and does not create a
     new deletable resource identity even if the response echoes ``id``.
+    Verb-terminal collection actions such as ``/api/payments/pay`` are also
+    treated as actions (no created resource to DELETE).
     """
     normalized = normalize_path_placeholders(_text(path)).split("?", 1)[0]
     parts = [p for p in normalized.strip("/").split("/") if p]
-    if len(parts) < 3:
+    if len(parts) < 2:
         return False
     # Identity segment then trailing action verb(s).
     for index, part in enumerate(parts):
@@ -784,6 +1167,9 @@ def _is_action_style_write_path(path: str) -> bool:
             or re.fullmatch(r"\d+", part)
         ):
             return True
+    # Verb-terminal path without an identity segment: action, not create.
+    if len(parts) >= 3 and _ACTION_TERMINAL_RE.match(parts[-1]):
+        return True
     return False
 
 
@@ -814,41 +1200,50 @@ def _cleanup_after_write(
     if method == "POST":
         if _is_action_style_write_path(path):
             return {
-                "status": "not_reversible",
+                "status": "not_required",
                 "strategy": "action_post_on_existing_resource",
                 "receipt_ref": path,
                 "warning": "action_style_write_no_created_resource",
             }
         resource_id = _extract_resource_id(write_body, path)
         if not resource_id:
-            # Action-style POST (validate/pay/reserve) with no created identity.
+            # Collection create accepted without a recoverable identity — cannot
+            # compensate. Keep internal (not_reversible), not action-style.
             return {
                 "status": "not_reversible",
-                "strategy": "action_post_no_created_resource",
+                "strategy": "create_without_recoverable_identity",
                 "receipt_ref": path,
                 "warning": "created_resource_id_missing",
             }
-        delete_path = _documented_delete_cleanup_path(path, resource_id, documented_routes)
-        if not delete_path:
-            # Create succeeded but source docs declare no DELETE cleanup route.
+        cleanup_method, cleanup_path = _documented_compensate_cleanup_operation(
+            path, resource_id, documented_routes
+        )
+        if not cleanup_path:
+            # Create succeeded but source docs declare neither DELETE nor a
+            # compensating action on the same collection.
             return {
                 "status": "not_reversible",
                 "strategy": "delete_created_resource",
                 "receipt_ref": path,
                 "warning": "documented_cleanup_route_missing",
             }
-        receipt, attempts = _cleanup_request("DELETE", base + delete_path)
+        receipt, attempts = _cleanup_request(cleanup_method, base + cleanup_path)
         status = int(receipt.get("status") or 0)
-        ok = 200 <= status < 300 or status in {204, 404}
+        ok = 200 <= status < 300 or (cleanup_method == "DELETE" and status in {204, 404})
+        strategy = (
+            "delete_created_resource"
+            if cleanup_method == "DELETE"
+            else "compensate_created_resource"
+        )
         result = {
             "status": "completed" if ok else "failed",
-            "strategy": "delete_created_resource",
-            "receipt_ref": delete_path,
-            "receipt": {"status": status},
+            "strategy": strategy,
+            "receipt_ref": cleanup_path,
+            "receipt": {"status": status, "method": cleanup_method},
             "attempts": attempts,
         }
         if not ok:
-            result["error"] = f"cleanup_delete_http_{status}"
+            result["error"] = f"cleanup_{cleanup_method.lower()}_http_{status}"
         return result
     if method in {"PUT", "PATCH"}:
         if not isinstance(before_body, dict) or not before_body:
@@ -903,6 +1298,16 @@ def _execute_with_per_write_governance(
             path = _text(payload.get("path"))
             if method not in _WRITE_METHODS or not path.startswith("/"):
                 raise RuntimeError(f"invalid_governed_write_event:{method}:{path}")
+            identity_block = _protected_runtime_identity_write_block_reason(
+                root=root,
+                project=project,
+                scenario=scenario,
+                method=method,
+                path=path,
+                body=payload.get("body"),
+            )
+            if identity_block:
+                raise RuntimeError(identity_block)
             if safety_boundary:
                 exclusion = match_production_data_exclusion(safety_boundary, path, "")
                 if exclusion:
@@ -1023,6 +1428,9 @@ def _execute_with_per_write_governance(
             "before_ref": before_ref,
             "after_ref": after_ref,
             "cleanup_status": cleanup.get("status"),
+            "cleanup_strategy": cleanup.get("strategy") or "",
+            "cleanup_warning": cleanup.get("warning") or "",
+            "cleanup_error": cleanup.get("error") or "",
             "cleanup_receipt_ref": cleanup.get("receipt_ref") or "",
             "operation_accepted": 200 <= status < 300,
             "campaign_id": campaign_id,
@@ -1131,6 +1539,31 @@ def execute_with_sandbox_write(
         return _blocked_write_trace(scenario, reason, write_meta)
 
     method, path, _body = write_meta
+    identity_block = _protected_runtime_identity_write_block_reason(
+        root=root,
+        project=project,
+        scenario=scenario,
+        method=method,
+        path=path,
+        body=_body,
+    )
+    if identity_block == "protected_runtime_identity_mutation_blocked":
+        protected = _protected_runtime_identity_values(root, project)
+        scrubbed_body = _scrub_protected_identities_from_body(_body, protected)
+        if scrubbed_body != _body:
+            _apply_body_to_primary_write_step(scenario, scrubbed_body if isinstance(scrubbed_body, dict) else {})
+            _body = scrubbed_body if isinstance(scrubbed_body, dict) else {}
+            write_meta = (method, path, _body)
+            identity_block = _protected_runtime_identity_write_block_reason(
+                root=root,
+                project=project,
+                scenario=scenario,
+                method=method,
+                path=path,
+                body=_body,
+            )
+    if identity_block:
+        return _blocked_write_trace(scenario, identity_block, write_meta)
     if safety_boundary:
         excl = match_production_data_exclusion(safety_boundary, path, "")
         if excl:
@@ -1183,6 +1616,7 @@ def execute_with_sandbox_write(
 
     write_body: Any = {}
     executed_path = path
+    write_status_code = 0
     for step in trace.get("steps") or []:
         if not isinstance(step, dict) or _text(step.get("method")).upper() != method:
             continue
@@ -1195,20 +1629,33 @@ def execute_with_sandbox_write(
         if step_path.startswith("/") and not path_has_placeholders(normalize_path_placeholders(step_path)):
             executed_path = step_path
         write_body = _as_dict(step.get("response")).get("body")
+        write_status_code = int(_as_dict(step.get("response")).get("status") or step.get("status") or 0)
         break
 
     from .policy_wiring import get_policy_value
 
-    cleanup = _cleanup_after_write(
-        method=method,
-        path=executed_path,
-        base_url=base_url,
-        token=observation_token,
-        before_body=before.get("body"),
-        write_body=write_body,
-        documented_routes=documented_routes,
-        retry_count=int(get_policy_value("execution", "cleanup_retry_count", 1) or 0),
+    observer_proves_unchanged = (
+        200 <= int(before.get("status") or 0) < 300
+        and 200 <= int(after.get("status") or 0) < 300
+        and before.get("body") == after.get("body")
     )
+    if not 200 <= write_status_code < 300 and observer_proves_unchanged:
+        cleanup = {
+            "status": "not_required",
+            "strategy": "rejected_write_observer_unchanged",
+            "receipt_ref": executed_path,
+        }
+    else:
+        cleanup = _cleanup_after_write(
+            method=method,
+            path=executed_path,
+            base_url=base_url,
+            token=observation_token,
+            before_body=before.get("body"),
+            write_body=write_body,
+            documented_routes=documented_routes,
+            retry_count=int(get_policy_value("execution", "cleanup_retry_count", 1) or 0),
+        )
     observer_ref = observe_path or "documented_observer_missing"
     before_ref = f"sandbox_before:{observer_ref}:{before.get('status')}"
     after_ref = f"sandbox_after:{observer_ref}:{after.get('status')}"
@@ -1217,6 +1664,7 @@ def execute_with_sandbox_write(
         "after_snapshot_ref": after_ref,
         "cleanup": {
             "status": cleanup.get("status"),
+            "strategy": cleanup.get("strategy") or "",
             "receipt_ref": cleanup.get("receipt_ref") or "",
         },
         "method": method,
@@ -1230,6 +1678,10 @@ def execute_with_sandbox_write(
         "before_ref": before_ref,
         "after_ref": after_ref,
         "cleanup_status": cleanup.get("status"),
+        "cleanup_strategy": cleanup.get("strategy") or "",
+        "cleanup_warning": cleanup.get("warning") or "",
+        "cleanup_error": cleanup.get("error") or "",
+        "cleanup_receipt_ref": cleanup.get("receipt_ref") or "",
         "campaign_id": campaign_id,
         "slice_id": _text(getattr(scenario, "behavior_slice_id", "") or ""),
         "environment_kind": resolve_environment_kind(root, project, runtime_contract),
@@ -1238,12 +1690,21 @@ def execute_with_sandbox_write(
     audit_path = _append_audit(root, project, audit_record)
 
     cleanup_status = _text(cleanup.get("status")).lower()
-    # Only a completed/verified compensation is a clean terminal state.
-    # ``not_required`` is reserved for a rejected request whose source observer
-    # proves no mutation; this legacy single-write path cannot prove that here.
+    cleanup_strategy = _text(cleanup.get("strategy")).lower()
+    # completed/verified = compensated; not_required when observer proves no
+    # mutation or the write is an explicit action-style strategy (no created resource).
     write_status = (
         "completed"
         if cleanup_status in {"completed", "verified"}
+        or (
+            cleanup_status == "not_required"
+            and cleanup_strategy in {
+                "rejected_write_observer_unchanged",
+                "setup_rejected_observer_unchanged",
+                "action_post_on_existing_resource",
+                "action_post_no_created_resource",
+            }
+        )
         else "cleanup_incomplete"
     )
     trace["sandbox_write"] = {
@@ -1260,6 +1721,7 @@ def execute_with_sandbox_write(
         trace["evidence"]["after_snapshot_ref"] = after_ref
         trace["evidence"]["cleanup"] = {
             "status": cleanup.get("status"),
+            "strategy": cleanup.get("strategy") or "",
             "receipt_ref": cleanup.get("receipt_ref") or "",
         }
     return trace

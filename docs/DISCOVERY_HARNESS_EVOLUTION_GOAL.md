@@ -2,47 +2,174 @@
 
 ## Objective
 
-Turn QualiBug from a static scan pipeline into a governed, evidence-driven Bug discovery system that can improve its surrounding Harness while the model, evaluator, safety boundary, and evidence threshold remain fixed.
+Turn QualiBug from a static scan pipeline into a governed, evidence-driven Bug
+discovery system that can improve its surrounding Harness while the model,
+evaluator, safety boundary, and evidence threshold remain fixed.
+
+The detailed implementation architecture, migration sequence, Grok execution
+protocol, and audit bundle are defined in
+`docs/AUTONOMOUS_BUG_DISCOVERY_CAPABILITY_BREAKTHROUGH_SPEC.md`. This Goal is
+the metric and promotion single source of truth; the implementation Spec is
+subordinate to these gates and must not weaken them.
+
+`QualiBug_AI_真实Bug发现能力提升完整SPEC_v1.0.docx` is a release export only.
+It must be regenerated from the repository documentation and is not an
+independently editable source of truth.
+
+## Gate D implementation checkpoint (2026-07-10)
+
+The repository now exposes the following contracts without changing the Gate D
+measurement status:
+
+- `target_policy.py` is the single target/environment decision for preflight,
+  runtime execution, and governed writes. Hostnames never imply environment
+  safety; a write requires an explicit non-production type, environment
+  identity, and exact approved URL.
+- enterprise material parsing emits versioned `ParserReceipt` records with
+  source hash, parser, format, fidelity, output counts, and structured errors;
+  one damaged source is isolated and remains visible as a coverage gap.
+- selected experiments emit explicit execution receipts and the continuity
+  fields `candidate_id → slice_id → obligation_id → experiment_id →
+  execution_id → evidence_id → finding_id`. Missing binding, actor, fixture,
+  observer, or compensation remains `BLOCKED`.
+- `formal_customer_deliverable_count` and the
+  `deliverable|candidate|rejected` classification projection are the only
+  current-run product defect facts. Historical shelf counts are a separate
+  scope and legacy readiness counters are diagnostic only.
+- project campaign resources and ground-truth-free evaluation submissions are
+  available under `/api/v1`; only an evaluator-owned receipt may change
+  `NOT_MEASURED` to `MEASURED`.
+
+These changes establish the engineering path to Gate D. They do not prove Gate
+D: the evaluator-owned held-in, three held-out industries, clean target, paired
+replay/shadow receipts, and frozen unit-cost baseline are still required.
 
 The two nested loops are:
 
 1. Discovery loop: source-grounded hypothesis → governed execution → runtime evidence → semantic/business verification → formal customer-deliverable defect.
 2. Harness evolution loop: immutable execution traces → verifier-grounded weakness clusters → minimal bounded strategy proposals → paired replay and shadow evaluation → non-regressive promotion or rejection → next iteration.
 
-This is a cross-industry platform goal. Customer names, benchmark answers, fixed endpoint paths, industry-specific workflow names, and hard-coded business rules are prohibited from reusable discovery behavior.
+This is a cross-industry platform goal. Customer names, benchmark answers, fixed
+endpoint paths, industry-specific workflow names, and hard-coded business rules
+are prohibited from reusable discovery behavior.
+
+## Dual-loop module map (real code)
+
+| Loop stage | Module | Status |
+|---|---|---|
+| Discovery execution / V12 pipeline | `ai_test_asset_center/v12_pipeline.py`, scan path in `__main__.py` | Implemented |
+| Formal customer delivery | `customer_delivery_gate.py` | Implemented |
+| Non-production write governance | `sandbox_write_executor.py` | Implemented (prod/unknown fail-closed) |
+| Trace ledger (redacted) | `discovery_trace_ledger.py` | Implemented; wired post-scan in `__main__.py` |
+| Weakness clustering | `discovery_weakness_miner.py` | Implemented; wired post-scan |
+| Bounded Harness proposals | `discovery_harness_proposer.py` | Implemented; StrategyBundle-only edits |
+| Strategy guardrails | `validate_strategy_guardrails` + `policy_wiring.py` | Implemented |
+| Evaluator-private contract | `discovery_evaluation_contract.py` | Implemented |
+| External scoring CLI | `tools/discovery_evaluation.py` | Implemented (`inspect` / `evaluate` / `aggregate` / `goal-status`) |
+| Observed champion/challenger runner | `discovery_policy_evaluation_runner.py` | Implemented (requires commercial-shape private manifest + fixture controller + scan executor) |
+| Promotion gate | `policy_evaluation_gate.py` | Implemented (non-regressive + hard blockers) |
+| Evolution orchestration | `autonomous_evolution_orchestrator.py` | Partial: observed promote path exists; default `run_evolution_orchestrated` still stops at `AWAITING_OBSERVED_REPLAY_SHADOW` unless `evaluation_manifest_path` / `QUALIBUG_EVALUATION_MANIFEST` is supplied |
+| Absolute Goal gate assessment | `assess_discovery_goal_status` in `discovery_evaluation_contract.py` | Implemented |
+| Versioned private commercial GT dataset | evaluator-owned manifest with ≥3 held-out industries | **Missing in-repo** → commercial quality remains `NOT_MEASURED` |
 
 ## Current baseline status
 
+**Commercial claim status: `NOT_MEASURED`.**
+
+Gate A/B/C engineering readiness is implemented and locked by tests. Absolute
+Gate D / controlled pilot / full-autonomy GA quality remains `NOT_MEASURED`
+until an evaluator-private commercial-shape manifest is frozen and four paired
+replay/shadow reports are produced by the observed runner.
+
 The repository does not yet contain a complete versioned private manifest with
 held-in, three-industry held-out, intentionally clean, replay, and shadow run
-receipts. Therefore the current commercial claim status is `NOT_MEASURED`.
+receipts. Therefore no commercial discovery-rate, precision, reproduction, or
+unit-cost claim may be published from this checkout alone.
 
-A completed historical `llm_throughput` artifact is a real single-target
-diagnostic run, but it is not a promotion baseline: it contains 46 saved
-findings, and the current customer-delivery gate accepts only 15 after failing
-closed on missing, failed, or non-reversible cleanup evidence. Historical raw
-single-target Recall/Precision/F1 values in that artifact score findings that do
-not all pass the current formal delivery gate, so they must not be used as a
-commercial capability claim.
+The latest completed `llm_throughput` artifact is a real single-target
+diagnostic run, but it is not a promotion baseline: it contains 91 saved
+findings, and a post-run evaluation with the current customer-delivery gate
+accepts only 34 after failing closed on missing, failed, not-applicable, or
+non-reversible cleanup evidence. Pipeline health is `DEGRADED`; 245 of 249 write
+receipts required the governed post-run target reset. These counts diagnose the
+funnel and cleanup gap only and must not be used as a commercial capability
+claim.
 
-The benchmark runner now emits an evaluator submission and reports
-`NOT_MEASURED`; it does not open ground truth or calculate quality metrics in
-the discovery process. The external evaluator is the only scoring authority.
+Cleanup engineering note (2026-07-10): sandbox create cleanup now prefers a
+source-documented DELETE, then a documented compensating action on the same
+collection (for example `POST …/{id}/cancel` from merged OpenAPI+Markdown
+catalogs). Verb-terminal action POSTs are classified as `not_required` rather
+than irreversible creates. After a proven campaign reset,
+`finalize_after_cleanup` clears cleanup-driven `DEGRADED` when no other
+degradation signals remain. Re-run a real scan to measure the new incomplete
+cleanup rate; do not reuse the 245/249 figure as current capability.
 
-A champion/challenger baseline becomes measured only after the external
-evaluator produces complete replay and shadow reports over the frozen manifest
-defined below.
+The benchmark runner emits an evaluator submission and reports `NOT_MEASURED`;
+it does not open ground truth or calculate quality metrics in the discovery
+process. The external evaluator is the only scoring authority.
+
+Machine-check the current Goal posture without inventing numbers:
+
+```powershell
+python tools/discovery_evaluation.py goal-status
+python tools/discovery_evaluation.py goal-status --report <measured-aggregate-report.json> --baseline-cost-per-true-positive-usd <frozen-baseline> --consecutive-non-regressive-windows <n>
+```
+
+### External private GT (diagnostic only — not commercial Gate D)
+
+When a private ground-truth package already exists outside the repo (for
+example the desktop enterprise benchmark `hidden_ground_truth/bugs.json`),
+score a completed run envelope with the formal matcher. Keep GT paths out of
+discovery runtime prompts and context:
+
+```powershell
+python -c "from pathlib import Path; import json; from ai_test_asset_center.benchmark_compute import compute_benchmark; print(json.dumps(compute_benchmark(findings=json.loads(Path('_funnel_runs/llm_throughput.evaluation_submission.json').read_text(encoding='utf-8'))['scan_result']['findings'], ground_truth_path=r'<EXTERNAL>/hidden_ground_truth/bugs.json'), ensure_ascii=False, indent=2))"
+```
+
+That diagnostic does **not** unlock Gate D. Commercial MEASURED status still
+requires a versioned private multi-industry manifest plus aggregate report.
+
+### Build evaluator-private manifest scaffolding (external paths)
+
+Do not copy GT into the repo. Point the builder at external OpenAPI/PRD/GT
+paths; GT is written only into `evaluator.ground_truth_ref`:
+
+```powershell
+python tools/build_discovery_evaluation_dataset.py `
+  --output-root <PRIVATE_OUTPUT> `
+  --dataset-id cross-industry-private-evaluation `
+  --dataset-version <immutable-version> `
+  --environment-type sandbox `
+  --reset-method POST --reset-path /__reset --observation-path /__state `
+  --external-target "held-in-1|ecommerce|held_in|seeded_defects|<OPENAPI>|<PRD>|<GT_BUGS_JSON>|<BASE_URL>" `
+  --external-target "held-out-1|saas|held_out|seeded_defects|<OPENAPI>|<PRD>|<GT>|<BASE_URL>" `
+  --external-target "held-out-2|mes|held_out|seeded_defects|<OPENAPI>|<PRD>|<GT>|<BASE_URL>" `
+  --external-target "held-out-3|finance|held_out|seeded_defects|<OPENAPI>|<PRD>|<GT>|<BASE_URL>" `
+  --external-target "clean-1|ecommerce|held_out|clean|<OPENAPI>|<PRD>||<CLEAN_BASE_URL>"
+```
+
+Then inspect (runtime views must omit GT) and, after paired observed
+replay/shadow runs produce an aggregate report:
+
+```powershell
+python tools/discovery_evaluation.py inspect --manifest <PRIVATE_OUTPUT>/evaluation_manifest.json
+python tools/discovery_evaluation.py goal-status --report <aggregate-report.json> --baseline-cost-per-true-positive-usd <frozen-baseline> --consecutive-non-regressive-windows <n>
+```
 
 ## Evaluation single source of truth
 
-The evaluator-private dataset manifest uses schema `qualibug.discovery-evaluation-dataset.v1` and separates each target into:
+The evaluator-private dataset manifest uses schema
+`qualibug.discovery-evaluation-dataset.v1` and separates each target into:
 
 - `runtime`: environment identity plus immutable input, fixture, and context artifact references;
 - `evaluator`: hidden ground-truth reference for seeded-defect targets only.
 
-The discovery process receives `build_runtime_view(...)`, which contains no evaluator object, ground-truth path, or ground-truth fingerprint. Ground truth is opened only by the external evaluator after a completed run.
+The discovery process receives `build_runtime_view(...)`, which contains no
+evaluator object, ground-truth path, or ground-truth fingerprint. Ground truth
+is opened only by the external evaluator after a completed run.
 
-Every target must declare a known non-production environment. Production and unknown environment types are rejected when the manifest is loaded.
+Every target must declare a known non-production environment. Production and
+unknown environment types are rejected when the manifest is loaded.
 
 A commercial dataset shape requires:
 
@@ -51,12 +178,17 @@ A commercial dataset shape requires:
 - at least one intentionally clean target;
 - at least three distinct held-out industries.
 
-Missing ground truth, missing pipeline health, a failed-safe pipeline, missing receipts, or incomplete target coverage produces `NOT_MEASURED`; it never produces a zero-Bug or zero-false-positive claim.
+Missing ground truth, missing pipeline health, a failed-safe pipeline, missing
+receipts, or incomplete target coverage produces `NOT_MEASURED`; it never
+produces a zero-Bug or zero-false-positive claim.
 
 ## Required run envelope
 
-The external evaluator accepts a completed run envelope. All operational fields are measured inputs; the evaluator does not invent defaults.
-For per-Bug loss diagnosis, supply the redacted immutable discovery Trace Ledger from the same run with `--trace-ledger` (or embed it as `trace_ledger`). Its run, policy, target, mode, and redaction contract must match exactly.
+The external evaluator accepts a completed run envelope. All operational fields
+are measured inputs; the evaluator does not invent defaults.
+For per-Bug loss diagnosis, supply the redacted immutable discovery Trace Ledger
+from the same run with `--trace-ledger` (or embed it as `trace_ledger`). Its run,
+policy, target, mode, and redaction contract must match exactly.
 
 ```json
 {
@@ -89,9 +221,20 @@ Use the external CLI:
 python tools/discovery_evaluation.py inspect --manifest <private-manifest>
 python tools/discovery_evaluation.py evaluate --manifest <private-manifest> --target-id <target> --run-envelope <run-envelope> --trace-ledger <trace-ledger> --output-root <private-receipt-root>
 python tools/discovery_evaluation.py aggregate --manifest <private-manifest> --receipt-dir <policy-mode-receipts> --output <immutable-report.json>
+python tools/discovery_evaluation.py goal-status --report <immutable-report.json> --baseline-cost-per-true-positive-usd <frozen-baseline>
 ```
 
 The evaluator output deliberately omits the ground-truth source path. When the Trace Ledger is present, `metrics.stage_loss_diagnostics` reports every hidden Bug's first loss stage across hypothesis generation, endpoint binding, selection, execution, Oracle evaluation/resolution, and formal delivery. These diagnostics never change TP/FP/FN scoring.
+
+## North-star metrics (priority order)
+
+Only formal customer-deliverable findings may enter commercial scores. Internal
+candidate / confirmed / validated / funnel counts are diagnostic only.
+
+1. **True Bug discovery rate** — held-out micro/macro recall on deliverable findings vs hidden GT.
+2. **Effective reproduction rate** — `evidence_quality.reproduction_success_rate`.
+3. **False-positive control** — held-out precision + clean-target P0/P1 deliverable FP = 0.
+4. **Unit cost** — `operational.cost_per_true_positive_usd` (and Gate D ≥40% improvement vs frozen baseline).
 
 ## Promotion rule
 
@@ -102,7 +245,9 @@ Promotion requires four complete reports over the exact same frozen target set:
 3. champion shadow;
 4. challenger shadow.
 
-All input, fixture, context, runtime, environment, and manifest fingerprints must match. Each target must have immutable champion and challenger run receipts in both modes.
+All input, fixture, context, runtime, environment, and manifest fingerprints
+must match. Each target must have immutable champion and challenger run receipts
+in both modes.
 
 Hard blockers include:
 
@@ -111,9 +256,15 @@ Hard blockers include:
 - fewer than three held-out industries;
 - any production HTTP request;
 - any safety incident, cleanup failure, dirty test environment, or regression failure;
-- any P0/P1 false positive on an intentionally clean target.
+- any P0/P1 false positive on an intentionally clean target;
+- any degraded target pipeline (`pipeline_degraded_targets > 0`).
 
-Quality is non-regressive across held-in recall/precision/F1, held-out recall/precision/F1, replay and shadow F1, macro/minimum industry recall, evidence completeness, reproducibility, engine/execution success, duplicate rate, unit cost, and wall-clock time. At least one measured discovery split must improve; lower cost alone cannot promote a policy whose discovery ability did not improve.
+Quality is non-regressive across held-in recall/precision/F1, held-out
+recall/precision/F1, replay and shadow F1, macro/minimum industry recall,
+evidence completeness, reproducibility, engine/execution success, duplicate
+rate, unit cost, and wall-clock time. At least one measured discovery split must
+improve; lower cost alone cannot promote a policy whose discovery ability did
+not improve.
 
 ## Bounded editable Harness surfaces
 
@@ -139,32 +290,52 @@ Frozen surfaces:
 
 ## Stage gates
 
+Absolute thresholds are encoded in
+`ai_test_asset_center/discovery_evaluation_contract.py` as
+`CAPABILITY_BREAKTHROUGH_THRESHOLDS`,
+`CONTROLLED_COMMERCIAL_PILOT_THRESHOLDS`, and
+`FULL_AUTONOMY_GA_THRESHOLDS`, and assessed by `assess_discovery_goal_status`.
+
 ### Gate A — Evaluation integrity
 
-- Evaluator-private manifest, runtime redaction, immutable fingerprints, strict formal-defect scoring, clean-target scoring, receipts, aggregate reports, and paired promotion evidence are implemented and tested.
+**Status: IMPLEMENTED (engineering readiness).**
+
+- Evaluator-private manifest, runtime redaction, immutable fingerprints, strict
+  formal-defect scoring, clean-target scoring, receipts, aggregate reports, and
+  paired promotion evidence are implemented and tested.
 
 ### Gate B — Trace and weakness mining
+
+**Status: IMPLEMENTED (engineering readiness).**
 
 - Every candidate has one cross-stage identity from generation through formal accounting.
 - Failures are clustered from verifier outcomes and causal trace signatures, not titles alone.
 - Every cluster contains example trace receipts, impact, recurrence, preserved-good behaviors, and a proposed editable surface.
+- Post-scan wiring persists ledger / weakness / proposal artifacts under `platform_outputs/<project>/discovery_evolution/`.
 
 ### Gate C — Bounded proposal and real runner
 
+**Status: IMPLEMENTED (engineering readiness); commercial runs blocked on private dataset.**
+
 - Each proposal is minimal, evidence-bound, versioned, and rejects edits to frozen surfaces.
-- Champion/challenger replay and shadow execute automatically on identical frozen targets.
-- Reject, promote, lineage, rollback, and post-promotion monitoring receipts are persisted.
+- Champion/challenger replay and shadow execute automatically on identical frozen targets via `DiscoveryPolicyEvaluationRunner` when a commercial-shape private manifest, governed fixture controller, and observed scan executor are supplied.
+- Reject, promote, lineage, rollback, and post-promotion monitoring receipts are persisted by the observed promote path; default orchestrated loop still emits `AWAITING_OBSERVED_REPLAY_SHADOW` when no private manifest is available.
 
 ### Gate D — Capability breakthrough
 
-- Hidden benchmark Recall >= 30%.
-- Precision >= 50%.
-- Reproduction rate >= 90%.
-- Held-out macro industry Recall >= 25%, with no industry below 15%.
-- Clean-target P0/P1 false positives = 0.
-- Unit cost per true positive improves by at least 40% from the frozen baseline.
+**Status: NOT_MEASURED until private commercial evaluation completes.**
 
-### Commercial exit gate
+- Hidden benchmark held-out macro industry Recall >= 30%.
+- Held-out Precision >= 50%.
+- Reproduction rate >= 90%.
+- Held-out minimum industry Recall >= 15%.
+- Clean-target P0/P1 false positives = 0.
+- Unit cost per true positive improves by at least 40% from the frozen baseline
+  (`--baseline-cost-per-true-positive-usd` required; missing baseline → NOT_MEASURED).
+
+### Controlled commercial pilot exit gate
+
+**Status: NOT_MEASURED.**
 
 - Held-out macro industry Recall >= 50%.
 - Precision >= 70%.
@@ -172,3 +343,38 @@ Frozen surfaces:
 - Every customer-visible defect has replayable real evidence and an audit receipt.
 - Cleanup success = 100%; production writes = 0.
 - All claims are generated from the evaluation SSOT and are visibly blocked when measurement is incomplete.
+
+This gate permits a controlled private pilot with human release approval. It
+does not permit a general-availability claim of fully autonomous, cross-industry
+Bug discovery.
+
+### Full-autonomy GA gate
+
+**Status: NOT_MEASURED.**
+
+- Held-out macro industry Recall >= 70%.
+- Precision >= 80%.
+- P0/P1 Recall >= 80% (tracked via benchmark high-value recall when measured).
+- No held-out industry Recall below 50%.
+- Clean-target P0/P1 false positives = 0.
+- Reproduction rate >= 97%.
+- Execution success and engine success are each >= 95%.
+- Evidence completeness, governed write receipt coverage, and cleanup success are each 100%.
+- At least three consecutive frozen evaluation windows show no measured regression
+  (`--consecutive-non-regressive-windows`).
+- Secret leaks, production writes, safety incidents, and dirty environments are all zero.
+
+## Next engineering priorities (impact order)
+
+1. **Freeze an evaluator-private commercial-shape GT dataset** (held-in + ≥3 held-out industries + clean) outside the discovery runtime; without this, Gate D stays NOT_MEASURED and discovery-rate claims are blocked.
+2. **Close the governed write cleanup / multi-write receipt gap** that currently degrades pipeline health and rejects otherwise-real findings at the customer-delivery gate — highest leverage on effective deliverable recall and FP control.
+3. **Wire observed `DiscoveryPolicyEvaluationRunner` end-to-end** from harness proposals (fixture controller + scan executor + private manifest) so challenger policies get real replay/shadow receipts instead of `AWAITING_OBSERVED_REPLAY_SHADOW`.
+4. **Raise runtime path binding / precondition / evidence-completion conversion** using weakness-miner signatures (`RUNTIME_PATH_BINDING_MISSING`, `PRECONDITION_NOT_MET`, `EVIDENCE_GATE_INCOMPLETE`, `REPLAY_EVIDENCE_MISSING`) — direct impact on discovery rate and reproduction rate.
+5. **Instrument unit-cost and wall-clock into every evaluation envelope** so Gate D cost improvement and promotion cost bounds are measurable rather than omitted.
+
+## Non-negotiable product constraints
+
+- Frontend port `5174`, backend port `8088` — never retarget in harness evolution.
+- Non-production write probes only; production and unknown environments fail closed.
+- No industry/customer business hardcoding in detectors, prompts, UI, or services.
+- No fabricated bugs or fabricated evaluation numbers; incomplete measurement must surface as `NOT_MEASURED`.

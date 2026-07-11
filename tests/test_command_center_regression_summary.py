@@ -6,6 +6,7 @@ import os
 os.environ.setdefault("QUALIBUG_JWT_SECRET", "dev-mode-only")
 
 import ai_test_asset_center.private_pilot_service as private_pilot_service
+import ai_test_asset_center.display_ready_formatter as display_ready_formatter
 from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
 from ai_test_asset_center.private_pilot_service import PrivatePilotHandler
 
@@ -13,6 +14,49 @@ from ai_test_asset_center.private_pilot_service import PrivatePilotHandler
 def _write_json(path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _ready_finding(item_id: str, title: str, severity: str) -> dict:
+    path = f"/source-derived-findings/{item_id}"
+    return {
+        "risk_id": item_id,
+        "id": item_id,
+        "candidate_id": f"candidate-{item_id}",
+        "slice_id": f"slice-{item_id}",
+        "obligation_id": f"obligation-{item_id}",
+        "experiment_id": f"experiment-{item_id}",
+        "execution_id": f"execution-{item_id}",
+        "evidence_id": f"evidence-{item_id}",
+        "finding_id": f"finding-{item_id}",
+        "title": title,
+        "severity": severity,
+        "bug_status": "reproduced",
+        "gate_passed": True,
+        "execution_status": "executed",
+        "confirmation_status": "confirmed",
+        "customer_delivery_status": "defect",
+        "expected": "source invariant holds",
+        "actual": "source invariant violated",
+        "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
+        "evidence_status": {
+            "semantic_verdict": "SEMANTIC_CONFIRMED",
+            "business_evidence_status": "VALIDATED",
+            "final_review_status": "VALIDATED_CANDIDATE",
+            "missing_requirements": [],
+        },
+        "raw_evidence": {
+            "has_real_evidence": True,
+            "timestamp": "2026-07-07T21:00:00Z",
+            "request_raw": {"method": "GET", "path": path},
+            "response_raw": {"status_code": 200, "body": {"violated": True}},
+        },
+        "reproduction": {
+            "method": "GET",
+            "path": path,
+            "is_synthetic": False,
+            "har_evidence": {"status_code": 200, "response_body": {"violated": True}},
+        },
+    }
 
 
 def test_build_command_center_exposes_regression_summary_and_finding_status(monkeypatch, tmp_path) -> None:
@@ -25,13 +69,15 @@ def test_build_command_center_exposes_regression_summary_and_finding_status(monk
         "generated_at_utc": "2026-07-07T21:00:00Z",
         "report_source_path": "aggregated:platform_workspace/demo/evidence_bundles/findings.json",
         "real_findings": [
-            {"risk_id": "ISSUE-1", "title": "重复支付仍可触发", "severity": "P0", "bug_status": "reproduced", "gate_passed": True},
-            {"risk_id": "ISSUE-2", "title": "非法取消订单", "severity": "P1", "bug_status": "reproduced", "gate_passed": True},
+            _ready_finding("ISSUE-1", "重复支付仍可触发", "P0"),
+            _ready_finding("ISSUE-2", "非法取消订单", "P1"),
         ],
     })
     monkeypatch.setattr(handler, "_load_enterprise_docs", lambda project_id, root: [])
     monkeypatch.setattr(handler, "_load_knowledge_summary", lambda project_id, root: {})
     monkeypatch.setattr(handler, "_auto_discovery_payload", lambda project_id, root, report: {})
+    monkeypatch.setattr(display_ready_formatter, "format_findings_display_ready", lambda risks, enterprise_ctx, report: (risks, {}))
+    monkeypatch.setattr(display_ready_formatter, "sanitize_customer_evidence_payload", lambda payload: payload)
     monkeypatch.setattr(handler, "_v12_findings", lambda report, enterprise_docs=None: list(report.get("real_findings") or []))
     monkeypatch.setattr(handler, "_load_db_findings", lambda root, project_id: [])
     monkeypatch.setattr(handler, "_load_perf_regressions", lambda root, project_id: [])

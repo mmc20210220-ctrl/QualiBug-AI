@@ -248,22 +248,42 @@ class ObservedProductScanExecutor:
             deduped_candidates.append(item)
         operational = dict(scan_output.get("operational_metrics") or {})
         scenario_cleanup_failures = int(operational.get("cleanup_failures") or 0)
-        operational["scenario_cleanup_failures_recovered_by_campaign_reset"] = scenario_cleanup_failures
-        operational["cleanup_failures"] = 0
-        operational["dirty_test_environments"] = 0
+        # Preserve the original per-scenario cleanup failure count. Global reset
+        # may only record environment_restored — never erase cleanup failures.
+        operational["scenario_cleanup_failures_before_campaign_reset"] = scenario_cleanup_failures
+        operational["cleanup_failures"] = scenario_cleanup_failures
+        environment_restored = bool(
+            cleanup_receipt.get("status") in {"completed", "SUCCEEDED", "succeeded"}
+            or cleanup_receipt.get("dirty_environment") is False
+        )
+        operational["environment_restored"] = environment_restored
+        if environment_restored:
+            operational["dirty_test_environments"] = 0 if scenario_cleanup_failures == 0 else 1
+        from .discovery_funnel import reconcile_pipeline_health_after_campaign_cleanup
+
+        pipeline_health = reconcile_pipeline_health_after_campaign_cleanup(
+            scan_output.get("pipeline_health") if isinstance(scan_output.get("pipeline_health"), dict) else {},
+            findings=defects,
+            scenario_cleanup_failures_recovered=0,
+            environment_restored=environment_restored,
+            original_cleanup_failures=scenario_cleanup_failures,
+        )
         return {
             **scan_output,
             "findings": defects,
             "candidates": deduped_candidates,
             "operational_metrics": operational,
+            "pipeline_health": pipeline_health,
             "campaign_cleanup_finalization": {
-                "status": "SUCCEEDED",
+                "status": "SUCCEEDED" if environment_restored else "FAILED",
+                "environment_restored": environment_restored,
                 "audit_receipt_id": str(cleanup_receipt.get("audit_receipt_id") or ""),
                 "after_cleanup_observation_ref": str(
                     cleanup_receipt.get("after_cleanup_observation_ref") or ""
                 ),
                 "readjudicated_defect_count": len(defects),
                 "residual_candidate_count": len(deduped_candidates),
-                "scenario_cleanup_failures_recovered": scenario_cleanup_failures,
+                "original_cleanup_failures": scenario_cleanup_failures,
+                "cleanup_failures_preserved": True,
             },
         }

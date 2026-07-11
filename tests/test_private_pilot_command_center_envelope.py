@@ -8,9 +8,28 @@ from ai_test_asset_center.private_pilot_server import install_customer_delivery_
 from ai_test_asset_center.private_pilot_service import PrivatePilotHandler, _normalize_command_center_envelope
 
 
+def _identity(item_id: str) -> dict[str, str]:
+    return {
+        "candidate_id": f"candidate-{item_id}",
+        "slice_id": f"slice-{item_id}",
+        "obligation_id": f"obligation-{item_id}",
+        "experiment_id": f"experiment-{item_id}",
+        "execution_id": f"execution-{item_id}",
+        "evidence_id": f"evidence-{item_id}",
+        "finding_id": f"finding-{item_id}",
+    }
+
+
 def _legacy_ready_item() -> dict:
     return {
         "id": "BUG-1",
+        "candidate_id": "candidate-BUG-1",
+        "slice_id": "slice-BUG-1",
+        "obligation_id": "obligation-BUG-1",
+        "experiment_id": "experiment-BUG-1",
+        "execution_id": "execution-BUG-1",
+        "evidence_id": "evidence-BUG-1",
+        "finding_id": "finding-BUG-1",
         "title": "支付金额守恒失败",
         "severity": "P1",
         "bug_status": "reproduced",
@@ -31,6 +50,9 @@ def _legacy_ready_item() -> dict:
             "timestamp": "2026-07-06T12:00:00Z",
             "request_raw": {"method": "POST", "path": "/api/payments"},
             "response_raw": {"status_code": 200, "body": {"paid_amount": 1}},
+            "sandbox_write": {
+                "cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/BUG-1"}
+            },
         },
         "reproduction": {
             "method": "POST",
@@ -100,6 +122,7 @@ def test_v12_findings_keep_confirmed_delivery_fields_for_command_center() -> Non
     findings = handler._v12_findings({
         "findings": [
             {
+                **_identity("V12-1"),
                 "risk_id": "V12-1",
                 "title": "[V12 StateOracle] 非法取消",
                 "severity": "P0",
@@ -125,11 +148,12 @@ def test_v12_findings_keep_confirmed_delivery_fields_for_command_center() -> Non
                     "actor": "readonly",
                     "reproduction_steps": ["GET /api/orders -> HTTP 200", "POST /api/orders/{id}/cancel -> HTTP 200"],
                 },
-                "raw_evidence": {
-                    "has_real_evidence": True,
-                    "timestamp": "2026-07-07T07:00:00Z",
-                    "request_raw": {"method": "POST", "path": "/api/orders/{id}/cancel"},
-                    "response_raw": {"status_code": 200, "body": {"status": "CANCELLED"}},
+                    "raw_evidence": {
+                        "has_real_evidence": True,
+                        "timestamp": "2026-07-07T07:00:00Z",
+                        "request_raw": {"method": "POST", "path": "/api/orders/{id}/cancel"},
+                        "response_raw": {"status_code": 200, "body": {"status": "CANCELLED"}},
+                        "sandbox_write": {"cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/V12-1"}},
                 },
                 "reproduction": {
                     "method": "POST",
@@ -192,6 +216,7 @@ def test_v12_confirmed_semantic_violation_survives_display_ready_formatter_gate(
     findings = handler._v12_findings({
         "findings": [
             {
+                **_identity("V12-SEM-1"),
                 "risk_id": "V12-SEM-1",
                 "title": "[V12 IdempotencyOracle] 重复支付",
                 "severity": "P0",
@@ -223,11 +248,12 @@ def test_v12_confirmed_semantic_violation_survives_display_ready_formatter_gate(
                         "POST /api/payments/pay -> HTTP 201",
                     ],
                 },
-                "raw_evidence": {
-                    "has_real_evidence": True,
-                    "timestamp": "2026-07-07T07:29:42Z",
-                    "request_raw": {"method": "POST", "path": "/api/payments/pay", "actor": "readonly"},
-                    "response_raw": {"status_code": 201, "body": {"status": "SUCCESS"}},
+                    "raw_evidence": {
+                        "has_real_evidence": True,
+                        "timestamp": "2026-07-07T07:29:42Z",
+                        "request_raw": {"method": "POST", "path": "/api/payments/pay", "actor": "readonly"},
+                        "response_raw": {"status_code": 201, "body": {"status": "SUCCESS"}},
+                        "sandbox_write": {"cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/V12-SEM-1"}},
                 },
                 "reproduction": {
                     "method": "POST",
@@ -270,6 +296,7 @@ def test_v12_multistep_confirmed_violation_derives_declared_request_from_claim_a
     findings = handler._v12_findings({
         "findings": [
             {
+                **_identity("V12-MULTI-1"),
                 "risk_id": "V12-MULTI-1",
                 "title": "[V12 IdempotencyOracle] [来源约束不变量] order: CREATED -> /api/payments/pay",
                 "severity": "P0",
@@ -302,11 +329,12 @@ def test_v12_multistep_confirmed_violation_derives_declared_request_from_claim_a
                         "GET /api/orders -> HTTP 200",
                     ],
                 },
-                "raw_evidence": {
-                    "has_real_evidence": True,
-                    "timestamp": "2026-07-07T10:10:07Z",
-                    "request_raw": {"method": "GET", "path": "/api/orders", "actor": "readonly"},
-                    "response_raw": {"status_code": 200, "body": {"status": "PAID"}},
+                    "raw_evidence": {
+                        "has_real_evidence": True,
+                        "timestamp": "2026-07-07T10:10:07Z",
+                        "request_raw": {"method": "GET", "path": "/api/orders", "actor": "readonly"},
+                        "response_raw": {"status_code": 200, "body": {"status": "PAID"}},
+                        "sandbox_write": {"cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/V12-MULTI-1"}},
                 },
                 "reproduction": {
                     "method": "GET",
@@ -336,6 +364,7 @@ def test_external_validated_candidate_survives_display_and_command_center_gate()
     install_customer_delivery_gate_patch()
     findings = [
         {
+            **_identity("EXT-VAL-1"),
             "risk_id": "EXT-VAL-1",
             "title": "退款写入破坏订单状态约束",
             "severity": "P1",
@@ -394,11 +423,12 @@ def test_external_validated_candidate_survives_display_and_command_center_gate()
                 }
             ],
             "runtime_replay": {"status": "executed", "http_status": 500},
-            "raw_evidence": {
-                "has_real_evidence": True,
-                "timestamp": "2026-07-07T18:10:00Z",
-                "request_raw": {"method": "POST", "path": "/api/refunds"},
-                "response_raw": {"status_code": 500, "body": {"error": "boom"}},
+                "raw_evidence": {
+                    "has_real_evidence": True,
+                    "timestamp": "2026-07-07T18:10:00Z",
+                    "request_raw": {"method": "POST", "path": "/api/refunds"},
+                    "response_raw": {"status_code": 500, "body": {"error": "boom"}},
+                    "sandbox_write": {"cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/EXT-VAL-1"}},
             },
             "timestamp": "2026-07-07T18:10:00Z",
             "last_verified_at": "2026-07-07T18:10:00Z",

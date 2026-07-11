@@ -61,6 +61,26 @@ _SIGNATURE_CATALOG: dict[str, dict[str, str]] = {
         "mechanism": "skipped or unbound steps are represented as status zero",
         "severity": "high",
     },
+    "EXPERIMENT_COMPILE_BLOCKED": {
+        "surface": "experiment_compiler",
+        "mechanism": "obligation failed experiment compilation with a stable block reason",
+        "severity": "high",
+    },
+    "OBLIGATION_BINDING_MISSING": {
+        "surface": "runtime_binding",
+        "mechanism": "compiled experiment still has unresolved path/body bindings",
+        "severity": "high",
+    },
+    "CONTRACT_ORACLE_ACTIVATION_MISSING": {
+        "surface": "contract_oracle",
+        "mechanism": "business oracle lacked required control/treatment/observer evidence",
+        "severity": "high",
+    },
+    "HEURISTIC_ORACLE_DEMOTED": {
+        "surface": "contract_oracle",
+        "mechanism": "heuristic business oracle demoted to internal clue without contract evidence",
+        "severity": "medium",
+    },
     "EXECUTION_ERROR": {
         "surface": "failure_recovery",
         "mechanism": "scenario execution terminates with structured execution errors",

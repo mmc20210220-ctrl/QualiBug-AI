@@ -43,6 +43,10 @@ def test_hypotheses_to_slices_binds_real_endpoint_and_drops_unbound():
     assert funnel["input"] == 2
     assert funnel["bound"] == 1
     assert funnel["dropped_no_endpoint"] == 1
+    assert funnel["dropped_reason_counts"] == {"entity_not_in_catalog": 1}
+    assert funnel["dropped_samples"][0]["hypothesis_id"] == "ana_unbound"
+    assert funnel["dropped_samples"][0]["reason"] == "entity_not_in_catalog"
+    assert "request" not in funnel["dropped_samples"][0]
     assert funnel["by_origin"]["analyzer"]["bound"] == 1
     assert len(slices) == 1
 
@@ -98,6 +102,37 @@ def test_hypotheses_to_slices_binds_via_trigger_and_entity_plural():
     assert "/api/orders" in paths
 
 
+def test_hypotheses_to_slices_binds_entity_action_hint_to_endpoint():
+    api_endpoints = [
+        {"entity": "claim", "action": "approve", "path": "/api/claims/:id/approve", "method": "POST"},
+        {"entity": "claim", "action": "list", "path": "/api/claims", "method": "GET"},
+        {"entity": "payment", "action": "pay", "path": "/api/payments/pay", "method": "POST"},
+    ]
+    hypotheses = [
+        {
+            "hypothesis_id": "entity_action_1",
+            "title": "Approval can bypass required checks",
+            "category": "invariant",
+            "severity": "P1",
+            "entity": "Claim.approve",
+        },
+        {
+            "hypothesis_id": "entity_action_2",
+            "title": "Payment amount is not conserved",
+            "category": "money",
+            "severity": "P1",
+            "entity": "Payment.pay",
+        },
+    ]
+
+    slices, funnel = hypotheses_to_slices(hypotheses, api_endpoints=api_endpoints, origin="llm_reasoner")
+
+    assert funnel["bound"] == 2
+    paths = {row["_bound_path"] for row in slices}
+    assert "/api/claims/:id/approve" in paths
+    assert "/api/payments/pay" in paths
+
+
 def test_hypotheses_to_slices_empty_catalog_drops_all():
     hypotheses = [
         {
@@ -111,4 +146,44 @@ def test_hypotheses_to_slices_empty_catalog_drops_all():
     assert slices == []
     assert funnel["bound"] == 0
     assert funnel["dropped_no_endpoint"] == 1
+    assert funnel["dropped_reason_counts"] == {"api_catalog_empty": 1}
+    assert funnel["dropped_samples"][0]["path_hints"] == ["/api/v1/resources"]
     assert funnel["origin"] == "llm_reasoner"
+
+
+def test_hypothesis_drop_reason_distinguishes_missing_operation_and_path():
+    api_endpoints = [
+        {
+            "entity": "order",
+            "action": "list",
+            "path": "/api/orders",
+            "method": "GET",
+            "operation_id": "listOrders",
+        }
+    ]
+    hypotheses = [
+        {
+            "hypothesis_id": "missing_op",
+            "operation_id": "approveRefund",
+            "title": "operation based probe",
+        },
+        {
+            "hypothesis_id": "missing_path",
+            "related_endpoints": ["/api/refunds/{id}/approve"],
+            "title": "path based probe",
+        },
+    ]
+
+    slices, funnel = hypotheses_to_slices(
+        hypotheses, api_endpoints=api_endpoints, origin="llm_reasoner"
+    )
+
+    assert slices == []
+    assert funnel["dropped_reason_counts"] == {
+        "operation_id_not_in_catalog": 1,
+        "path_hint_not_in_catalog": 1,
+    }
+    assert {row["hypothesis_id"] for row in funnel["dropped_samples"]} == {
+        "missing_op",
+        "missing_path",
+    }

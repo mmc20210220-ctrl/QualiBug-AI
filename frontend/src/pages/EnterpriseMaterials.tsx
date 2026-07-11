@@ -425,7 +425,7 @@ export function EnterpriseMaterials() {
   });
   const activeCount = displaySources.filter((item) => item.status === 'active').length;
   const processingCount = displaySources.filter((item) => item.status === 'processing').length;
-  const failedCount = displaySources.filter((item) => item.status === 'failed').length;
+  const failedCount = displaySources.filter((item) => ['failed', 'degraded'].includes(item.status)).length;
   const executableCount = displaySources.filter((item) => EXECUTABLE_SOURCE_TYPES.has(String(item.source_type || '').trim())).length;
   const prdCount = displaySources.filter((item) => String(item.source_type || '').trim() === 'prd').length;
   const apiCount = displaySources.filter((item) => String(item.source_type || '').trim() === 'openapi').length;

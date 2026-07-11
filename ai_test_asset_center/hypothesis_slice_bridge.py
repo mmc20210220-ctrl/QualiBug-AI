@@ -70,6 +70,39 @@ def _entity_variants(entity: str) -> set[str]:
     return variants
 
 
+def _normalized_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "", _text(value).lower())
+
+
+def _entity_action_hint(entity: str) -> tuple[str, str]:
+    """Parse generic Entity.action hints emitted by LLM/analyzer engines."""
+    raw = _text(entity).lower()
+    if not raw:
+        return "", ""
+    raw = re.sub(r"\([^)]*\)", "", raw)
+    parts = [
+        item
+        for item in re.split(r"[\s./:#>]+", raw)
+        if item and item not in {"api", "service", "controller", "handler"}
+    ]
+    if len(parts) < 2:
+        return raw.strip(), ""
+    return parts[0], parts[-1]
+
+
+def _path_action_tokens(path: str) -> set[str]:
+    tokens: set[str] = set()
+    for segment in _text(path).lower().strip("/").split("/"):
+        if not segment or segment.startswith(":") or segment.startswith("{"):
+            continue
+        normalized = _normalized_token(segment)
+        if not normalized:
+            continue
+        tokens.add(normalized)
+        tokens.update(_entity_variants(normalized))
+    return tokens
+
+
 def _method_hint_from_hypothesis(hypothesis: dict[str, Any]) -> str:
     for key in ("method", "http_method", "verb"):
         method = _text(hypothesis.get(key)).upper()
@@ -175,7 +208,12 @@ def _binding_strategies() -> set[str]:
     configured = get_policy_value(
         "discovery",
         "endpoint_binding_strategy",
-        ["source_operation_id", "method_path_shape"],
+        [
+            "source_operation_id",
+            "method_path_shape",
+            "schema_parameter_compatibility",
+            "documented_example_binding",
+        ],
     )
     return {
         _text(item).lower()
@@ -299,6 +337,32 @@ def _bind_endpoint(
                 "method": _text(endpoint.get("method")).upper() or "GET",
                 "entity": _text(endpoint.get("entity")) or entity or "resource",
             }
+    entity_name, action_name = _entity_action_hint(entity)
+    if entity_name and action_name:
+        entity_tokens = {_normalized_token(item) for item in _entity_variants(entity_name)}
+        entity_tokens.discard("")
+        action_tokens = {_normalized_token(item) for item in _entity_variants(action_name)}
+        action_tokens.discard("")
+        action_matches: list[tuple[int, dict[str, Any]]] = []
+        for endpoint in catalog:
+            endpoint_tokens = _path_action_tokens(_text(endpoint.get("path")))
+            endpoint_tokens.update(_tokens(_text(endpoint.get("entity"))))
+            endpoint_tokens.update(_tokens(_text(endpoint.get("action"))))
+            if not (entity_tokens & endpoint_tokens) or not (action_tokens & endpoint_tokens):
+                continue
+            method = _text(endpoint.get("method")).upper() or "GET"
+            method_bonus = 2 if method_hint and method == method_hint else 0
+            tail = _text(endpoint.get("path")).lower().rstrip("/")
+            action_tail_bonus = 1 if any(tail.endswith("/" + token) for token in action_tokens) else 0
+            write_bonus = 1 if method in {"POST", "PUT", "PATCH", "DELETE"} else 0
+            action_matches.append((10 + method_bonus + action_tail_bonus + write_bonus, endpoint))
+        if action_matches:
+            _, endpoint = max(action_matches, key=lambda item: (item[0], _text(item[1].get("path"))))
+            return {
+                "path": _text(endpoint.get("path")),
+                "method": _text(endpoint.get("method")).upper() or "GET",
+                "entity": _text(endpoint.get("entity")) or entity_name,
+            }
     if entity:
         variants = _entity_variants(entity)
         entity_matches = [
@@ -381,6 +445,86 @@ def _bind_endpoint(
     return segment_best[1] if segment_best else None
 
 
+def _binding_drop_reason(
+    hypothesis: dict[str, Any],
+    api_endpoints: list[dict[str, Any]],
+) -> str:
+    """Classify an unbound hypothesis without inventing an endpoint."""
+    catalog = [
+        ep
+        for ep in (api_endpoints or [])
+        if isinstance(ep, dict) and _text(ep.get("path")).startswith("/")
+    ]
+    if not catalog:
+        return "api_catalog_empty"
+    strategies = _binding_strategies()
+    if "source_operation_id" in strategies and _operation_id_hint(hypothesis):
+        return "operation_id_not_in_catalog"
+    if _strategy_paths(hypothesis, strategies):
+        return "path_hint_not_in_catalog"
+    if _text(
+        hypothesis.get("entity")
+        or hypothesis.get("source_entity")
+        or hypothesis.get("resource")
+    ):
+        return "entity_not_in_catalog"
+    blob = " ".join(
+        _text(hypothesis.get(key))
+        for key in ("title", "description", "category", "family")
+    )
+    return "semantic_overlap_not_found" if _tokens(blob) else "binding_signals_missing"
+
+
+def _binding_drop_sample(
+    hypothesis: dict[str, Any],
+    *,
+    origin: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Build a bounded, secret-redacted diagnostic without request payloads."""
+    raw = {
+        "reason": reason,
+        "origin": origin,
+        "hypothesis_id": _text(
+            hypothesis.get("hypothesis_id") or hypothesis.get("id")
+        )[:120],
+        "engine": _text(
+            hypothesis.get("_reasoner_engine") or hypothesis.get("engine")
+        )[:120],
+        "family": _hypothesis_family(hypothesis),
+        "method_hint": _method_hint_from_hypothesis(hypothesis),
+        "operation_id_hint": _operation_id_hint(hypothesis)[:120],
+        "path_hints": _endpoint_paths_from_hypothesis(hypothesis)[:3],
+        "entity_hint": _text(
+            hypothesis.get("entity")
+            or hypothesis.get("source_entity")
+            or hypothesis.get("resource")
+        )[:120],
+        "title_excerpt": _text(hypothesis.get("title"))[:200],
+    }
+    from .artifact_redactor import redact_artifact
+
+    redacted, _ = redact_artifact(raw)
+    return redacted if isinstance(redacted, dict) else {"reason": reason, "origin": origin}
+
+
+def _binding_diagnostic_sample_limit() -> int:
+    from .policy_wiring import get_policy_value
+
+    return max(
+        1,
+        min(
+            int(
+                get_policy_value(
+                    "discovery", "endpoint_binding_diagnostic_sample_limit", 20
+                )
+                or 1
+            ),
+            100,
+        ),
+    )
+
+
 def _source_refs(hypothesis: dict[str, Any], origin: str) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
     engine = _text(hypothesis.get("_reasoner_engine") or hypothesis.get("engine") or hypothesis.get("category"))
@@ -432,6 +576,9 @@ def hypotheses_to_slices(
     items = [h for h in (hypotheses or []) if isinstance(h, dict)]
     slices: list[dict] = []
     dropped = 0
+    dropped_reason_counts: dict[str, int] = {}
+    dropped_samples: list[dict[str, Any]] = []
+    diagnostic_sample_limit = _binding_diagnostic_sample_limit()
     by_origin: dict[str, dict[str, int]] = {
         origin_key: {"input": len(items), "bound": 0, "dropped_no_endpoint": 0},
     }
@@ -441,6 +588,16 @@ def hypotheses_to_slices(
         if not binding or not binding.get("path"):
             dropped += 1
             by_origin[origin_key]["dropped_no_endpoint"] += 1
+            reason = _binding_drop_reason(hypothesis, api_endpoints or [])
+            dropped_reason_counts[reason] = dropped_reason_counts.get(reason, 0) + 1
+            if len(dropped_samples) < diagnostic_sample_limit:
+                dropped_samples.append(
+                    _binding_drop_sample(
+                        hypothesis,
+                        origin=origin_key,
+                        reason=reason,
+                    )
+                )
             continue
 
         family = _hypothesis_family(hypothesis)
@@ -506,6 +663,9 @@ def hypotheses_to_slices(
         "input": len(items),
         "bound": len(slices),
         "dropped_no_endpoint": dropped,
+        "dropped_reason_counts": dict(sorted(dropped_reason_counts.items())),
+        "dropped_samples": dropped_samples,
+        "dropped_samples_truncated": max(0, dropped - len(dropped_samples)),
         "by_origin": by_origin,
         "origin": origin_key,
     }

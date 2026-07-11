@@ -194,6 +194,7 @@ def _base_context(manifest: dict[str, Any], *, execution_mode: str, approval_id:
         "source_manifest": manifest,
         "scope_id": SCOPE_ID,
         "environment_ref": ENVIRONMENT_REF,
+        "environment_type": "test",
         "execution_mode": execution_mode,
         "test_data_contract": {"strategy": "create_disposable" if write_approved else "synthetic_read_only", "write_approved": write_approved},
         "runtime_scenario_contract": contract,

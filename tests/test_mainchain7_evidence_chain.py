@@ -9,6 +9,7 @@
 evidence_id 落盘后可被检索。
 """
 from types import SimpleNamespace
+import pytest
 
 from ai_test_asset_center.oracle_engine import EvidenceGraphBuilder, OracleResult
 from ai_test_asset_center.v12_pipeline import _evidence_chain_path, _persist_evidence_chain
@@ -71,7 +72,7 @@ def test_evidence_chain_persisted_and_retrievable(tmp_path):
     assert loaded.get("execution_trace") == trace
 
 
-def test_persist_skips_evidence_without_id(tmp_path):
+def test_persist_fails_fast_for_evidence_without_id(tmp_path):
     """Fix B: 无 evidence_id 的证据不应写出文件，返回空字符串。"""
-    out = _persist_evidence_chain(tmp_path / "ws", "p", {"evidence_id": "", "foo": 1})
-    assert out == ""
+    with pytest.raises(ValueError, match="EVIDENCE_ID_MISSING"):
+        _persist_evidence_chain(tmp_path / "ws", "p", {"evidence_id": "", "foo": 1})

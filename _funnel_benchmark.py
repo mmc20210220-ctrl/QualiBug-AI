@@ -7,6 +7,7 @@
 走的是产品后端一模一样的入口 ai_test_asset_center.__main__.scan()，
 即 run_v12_pipeline 主链。结果落盘到 _funnel_runs/<mode>.json。
 """
+import atexit
 import hashlib
 import json
 import os
@@ -20,6 +21,87 @@ from dotenv import dotenv_values
 MODE = (sys.argv[1] if len(sys.argv) > 1 else "baseline").strip().lower()
 
 ROOT = Path(r"D:\QualiBug-AI\QualiBug-AI-main")
+
+# Exclusive lock: concurrent funnel_benchmark processes reset the same
+# benchmark_mall DB/workspace and corrupt each other's audits.  Holders set
+# QUALIBUG_FUNNEL_BENCHMARK_LOCK_HOLDER=1; everyone else exits before prep.
+_LOCK_PATH = ROOT / "_funnel_runs" / ".exclusive_benchmark.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    # Windows: signal 0 is not supported by os.kill; use OpenProcess.
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+        )
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_exclusive_benchmark_lock() -> None:
+    if str(os.environ.get("QUALIBUG_FUNNEL_BENCHMARK_LOCK_HOLDER") or "").strip() == "1":
+        return
+    _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(3):
+        if _LOCK_PATH.exists():
+            try:
+                meta = json.loads(_LOCK_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+            holder = int(meta.get("pid") or 0)
+            if holder and holder != os.getpid() and _pid_alive(holder):
+                raise SystemExit(
+                    f"exclusive benchmark lock held by pid={holder} "
+                    f"({meta.get('purpose') or 'unknown'}); refusing to start "
+                    f"and reset shared benchmark_mall state"
+                )
+            # Stale lock — remove and retry.
+            try:
+                _LOCK_PATH.unlink()
+            except OSError:
+                time.sleep(0.2)
+                continue
+        payload = {
+            "pid": os.getpid(),
+            "purpose": f"funnel_benchmark:{MODE}",
+            "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        try:
+            fd = os.open(str(_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False))
+            os.environ["QUALIBUG_FUNNEL_BENCHMARK_LOCK_HOLDER"] = "1"
+
+            def _release() -> None:
+                try:
+                    if _LOCK_PATH.exists():
+                        cur = json.loads(_LOCK_PATH.read_text(encoding="utf-8"))
+                        if int(cur.get("pid") or 0) == os.getpid():
+                            _LOCK_PATH.unlink()
+                except Exception:
+                    pass
+
+            atexit.register(_release)
+            return
+        except FileExistsError:
+            time.sleep(0.2)
+            continue
+    raise SystemExit(f"could not acquire exclusive benchmark lock at {_LOCK_PATH}")
+
+
+_acquire_exclusive_benchmark_lock()
 
 # 隔离每次运行的 mainline_unification 开关
 if MODE == "baseline":
@@ -201,20 +283,132 @@ elapsed = time.time() - started
 
 v12 = result.get("v12", {}) if isinstance(result, dict) else {}
 
-from ai_test_asset_center.customer_delivery_gate import is_customer_deliverable_defect
+from ai_test_asset_center.customer_delivery_gate import (
+    apply_governed_campaign_cleanup,
+    is_customer_deliverable_defect,
+)
+from ai_test_asset_center.artifact_redactor import write_json_redacted
+from ai_test_asset_center.discovery_quality_projection import (
+    attach_quality_projection_to_scan_result,
+    build_formal_count_projection,
+    build_external_evaluation_projection,
+)
 
 # Runtime discovery must never load evaluator-private ground truth.  Persist a
 # completed-run envelope for the separate evaluator and remain NOT_MEASURED
 # until that evaluator emits an integrity-checked receipt.
+if isinstance(result, dict):
+    _cleanup_reset_id = str(
+        (_post_run_cleanliness or {}).get("reset_receipt_id")
+        or ((_post_run_cleanup or {}).get("reset_receipt") or {}).get("receipt_id")
+        or ""
+    )
+    _cleanup_observation_ref = str(
+        (_post_run_cleanliness or {}).get("archived_receipt")
+        or (_post_run_cleanup or {}).get("reset_receipt_path")
+        or ""
+    )
+    if (
+        (_post_run_cleanliness or {}).get("status") == "clean_reset_receipt_verified"
+        and _cleanup_reset_id
+        and _cleanup_observation_ref
+    ):
+        _all_delivery_items = [
+            item
+            for item in list(result.get("findings") or []) + list(result.get("candidate_findings") or [])
+            if isinstance(item, dict)
+        ]
+        _before_formal_count = sum(1 for item in _all_delivery_items if is_customer_deliverable_defect(item))
+        _defects_after_cleanup, _clues_after_cleanup = apply_governed_campaign_cleanup(
+            _all_delivery_items,
+            {
+                "status": "SUCCEEDED",
+                "dirty_environment": False,
+                "audit_receipt_id": _cleanup_reset_id,
+                "after_cleanup_observation_ref": _cleanup_observation_ref,
+            },
+        )
+        _after_formal_count = sum(1 for item in _defects_after_cleanup if is_customer_deliverable_defect(item))
+        result["findings"] = _defects_after_cleanup
+        result["candidate_findings"] = _clues_after_cleanup
+        result["post_run_cleanup_readjudication"] = {
+            "status": "applied",
+            "scope": "cleanup_only_customer_delivery_gate_reasons",
+            "formal_before": _before_formal_count,
+            "formal_after": _after_formal_count,
+            "promoted_by_campaign_cleanup": max(0, _after_formal_count - _before_formal_count),
+            "cleanup_failures_preserved_in_operational_metrics": True,
+            "audit_receipt_id": _cleanup_reset_id,
+            "after_cleanup_observation_ref": _cleanup_observation_ref,
+        }
+result = attach_quality_projection_to_scan_result(result if isinstance(result, dict) else {})
 _formal_findings = [
     finding
     for finding in (result.get("findings") or [])
     if isinstance(finding, dict) and is_customer_deliverable_defect(finding)
 ]
+_counts = build_formal_count_projection(
+    findings=result.get("findings"),
+    candidate_findings=result.get("candidate_findings"),
+    discovery_funnel=result.get("discovery_funnel") if isinstance(result.get("discovery_funnel"), dict) else {},
+)
 _campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
 _pipeline_health = (
     result.get("pipeline_health") if isinstance(result.get("pipeline_health"), dict) else {}
 )
+_ops_metrics: dict = {
+    "elapsed_seconds": round(elapsed, 3),
+    "wall_clock_seconds": round(elapsed, 3),
+    "total_findings": int(result.get("total_findings") or 0),
+    "total_candidates": int(result.get("total_candidates") or 0),
+    "formal_customer_deliverable_count": _counts["formal_customer_deliverable_count"],
+    "discovery_funnel": result.get("discovery_funnel") or {},
+    "formal_count_projection": _counts,
+}
+# Prefer strict observed metrics; never invent cost=0 when usage is unknown.
+try:
+    from ai_test_asset_center.scan_operational_metrics import (
+        OperationalMetricsNotMeasured,
+        collect_observed_scan_operational_metrics,
+    )
+
+    _strict_ops = collect_observed_scan_operational_metrics(
+        scan_result=result,
+        wall_clock_seconds=elapsed,
+        runtime_view={
+            "target": {
+                "runtime": {
+                    "environment_type": "test",
+                    "base_url": BASE_URL,
+                }
+            }
+        },
+    )
+    _ops_metrics.update(_strict_ops)
+    _ops_metrics["operational_metrics_status"] = "MEASURED"
+except Exception as _ops_exc:  # OperationalMetricsNotMeasured or missing fields
+    _ops_metrics["operational_metrics_status"] = "NOT_MEASURED"
+    _ops_metrics["operational_metrics_reason"] = f"{type(_ops_exc).__name__}: {str(_ops_exc)[:200]}"
+    # Explicit nulls — never display unknown cost/usage as 0.
+    _ops_metrics["estimated_cost_usd"] = None
+    _ops_metrics["request_count"] = None
+    _ops_metrics["engine_success_rate"] = None
+    # Still surface cleanup/wall-clock when the run observed them, so envelopes
+    # remain scorable for safety gates even when unit_cost is NOT_MEASURED.
+    try:
+        from ai_test_asset_center.scan_operational_metrics import _cleanup_failure_count
+
+        _ops_metrics["cleanup_failures"] = int(_cleanup_failure_count(v12 if isinstance(v12, dict) else result))
+    except Exception:
+        _ops_metrics.setdefault("cleanup_failures", None)
+    _ops_metrics.setdefault("wall_clock_seconds", round(elapsed, 3))
+    _ph = _pipeline_health if isinstance(_pipeline_health, dict) else {}
+    if _ops_metrics.get("cleanup_failures") is None and _ph.get("cleanup_failure_count") is not None:
+        _ops_metrics["cleanup_failures"] = int(_ph.get("cleanup_failure_count") or 0)
+    _ops_metrics["dirty_test_environments"] = (
+        1 if int(_ops_metrics.get("cleanup_failures") or 0) > 0 else 0
+    )
+
 evaluation_submission = {
     "schema_version": "discovery_evaluation_submission.v1",
     "run_id": str(result.get("scan_id") or _campaign.get("campaign_id") or ""),
@@ -225,18 +419,21 @@ evaluation_submission = {
         "candidate_findings": list(result.get("candidate_findings") or []),
     },
     "pipeline_health": dict(_pipeline_health),
-    "operational_metrics": {
-        "elapsed_seconds": round(elapsed, 3),
-        "total_findings": int(result.get("total_findings") or 0),
-        "total_candidates": int(result.get("total_candidates") or 0),
-        "formal_customer_deliverable_count": len(_formal_findings),
-        "discovery_funnel": result.get("discovery_funnel") or {},
-    },
+    "operational_metrics": _ops_metrics,
     "fixture_governance": {
         "post_run_cleanup": _post_run_cleanup,
         "post_run_cleanliness": _post_run_cleanliness,
     },
+    "formal_count_projection": _counts,
 }
+
+_external = build_external_evaluation_projection(
+    measurement_status="NOT_MEASURED",
+    reason="external_evaluator_receipt_required",
+    formal_customer_deliverable_count=_counts["formal_customer_deliverable_count"],
+)
+_external["commercial_promotion_evidence"] = False
+_external["submission_file"] = f"{MODE}.evaluation_submission.json"
 
 summary = {
     "mode": MODE,
@@ -251,6 +448,8 @@ summary = {
     "execution_status": result.get("execution_status"),
     "total_findings": result.get("total_findings"),
     "total_candidates": result.get("total_candidates"),
+    "formal_customer_deliverable_count": _counts["formal_customer_deliverable_count"],
+    "formal_count_projection": _counts,
     "error": result.get("error"),
     "mainline_unification": v12.get("mainline_unification"),
     "discovery_funnel": result.get("discovery_funnel"),
@@ -260,25 +459,16 @@ summary = {
     else None,
     "multi_round_summary": v12.get("multi_round_summary"),
     "input_gaps": [g.get("code") for g in (result.get("input_gaps") or []) if isinstance(g, dict)],
-    "external_evaluation": {
-        "measurement_status": "NOT_MEASURED",
-        "reason": "external_evaluator_receipt_required",
-        "commercial_promotion_evidence": False,
-        "formal_customer_deliverable_count": len(_formal_findings),
-        "submission_file": f"{MODE}.evaluation_submission.json",
-    },
+    "external_evaluation": _external,
+    "score_semantics": result.get("score_semantics"),
+    "commercial_quality_score": result.get("commercial_quality_score"),
 }
 
 out_dir = ROOT / "_funnel_runs"
 out_dir.mkdir(exist_ok=True)
-(out_dir / f"{MODE}.evaluation_submission.json").write_text(
-    json.dumps(evaluation_submission, ensure_ascii=False, indent=2, default=str),
-    encoding="utf-8",
-)
-(out_dir / f"{MODE}.json").write_text(
-    json.dumps({"summary": summary, "full_result": result}, ensure_ascii=False, indent=2, default=str),
-    encoding="utf-8",
-)
+# Never persist recoverable secrets in evaluator submissions or run dumps.
+write_json_redacted(out_dir / f"{MODE}.evaluation_submission.json", evaluation_submission)
+write_json_redacted(out_dir / f"{MODE}.json", {"summary": summary, "full_result": result})
 
 print("=" * 70)
 print(f"MODE={MODE}  elapsed={elapsed:.1f}s")

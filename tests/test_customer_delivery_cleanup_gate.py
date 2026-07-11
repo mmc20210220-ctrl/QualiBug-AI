@@ -7,10 +7,18 @@ from ai_test_asset_center.customer_delivery_gate import (
     customer_delivery_rejection_reasons,
     is_customer_deliverable_defect,
 )
+from ai_test_asset_center.discovery_quality_projection import attach_quality_projection_to_scan_result
 
 
 def _valid_finding() -> dict:
     return {
+        "candidate_id": "candidate-1",
+        "slice_id": "slice-1",
+        "obligation_id": "obligation-1",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "evidence_id": "evidence-1",
+        "finding_id": "finding-1",
         "title": "observed defect",
         "severity": "P1",
         "bug_status": "reproduced",
@@ -62,6 +70,19 @@ def test_non_reversible_governed_cleanup_blocks_customer_delivery() -> None:
     assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
 
 
+def test_validated_runtime_db_write_evidence_is_not_demoted_by_not_reversible_cleanup() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {"cleanup": {"status": "not_reversible", "receipt_ref": ""}}
+    finding["raw_evidence"]["db_snapshot"] = {
+        "status": "captured",
+        "any_change": True,
+        "changed_tables": [{"table": "orders", "added": 1}],
+    }
+
+    assert "CLEANUP_NOT_SUCCEEDED" not in customer_delivery_rejection_reasons(finding)
+    assert is_customer_deliverable_defect(finding) is True
+
+
 def test_successful_cleanup_requires_receipt() -> None:
     finding = _valid_finding()
     finding["evidence"] = {"cleanup": {"status": "completed", "receipt_ref": ""}}
@@ -106,6 +127,19 @@ def test_action_write_not_required_without_no_mutation_proof_stays_internal() ->
     assert is_customer_deliverable_defect(finding) is False
 
 
+def test_action_style_strategy_allows_not_required_cleanup() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {
+        "cleanup": {
+            "status": "not_required",
+            "strategy": "action_post_on_existing_resource",
+            "receipt_ref": "/api/orders/{id}/cancel",
+        },
+    }
+    assert "CLEANUP_NOT_SUCCEEDED" not in customer_delivery_rejection_reasons(finding)
+    assert is_customer_deliverable_defect(finding) is True
+
+
 def test_rejected_write_with_observer_unchanged_proof_allows_not_required() -> None:
     finding = _valid_finding()
     finding["evidence"] = {
@@ -136,6 +170,79 @@ def test_governed_campaign_reset_readjudicates_only_cleanup_only_finding() -> No
     assert clues == []
     assert defects[0]["evidence"]["cleanup"]["receipt_ref"] == "campaign-cleanup-audit-1"
     assert defects[0]["evidence"]["scenario_cleanup_before_campaign_reset"]["status"] == "failed"
+
+
+def test_governed_campaign_reset_restores_upstream_cleanup_only_candidate() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {"cleanup": {"status": "not_reversible", "receipt_ref": "/api/resources/{id}"}}
+    demoted = deepcopy(finding)
+    demoted["upstream_gate_passed"] = True
+    demoted["gate_passed"] = False
+    demoted["customer_delivery_status"] = "candidate"
+    demoted["customer_delivery_gate_reasons"] = ["CLEANUP_NOT_SUCCEEDED"]
+
+    defects, clues = apply_governed_campaign_cleanup(
+        [demoted],
+        {
+            "status": "SUCCEEDED",
+            "dirty_environment": False,
+            "audit_receipt_id": "campaign-cleanup-audit-1",
+            "after_cleanup_observation_ref": "state:clean",
+        },
+    )
+
+    assert len(defects) == 1
+    assert clues == []
+    assert defects[0]["gate_passed"] is True
+    assert defects[0]["customer_delivery_status"] == "defect"
+    assert defects[0]["customer_delivery_gate_reasons"] == []
+    assert defects[0]["customer_delivery_gate_reasons_before_campaign_cleanup"] == ["CLEANUP_NOT_SUCCEEDED"]
+
+
+def test_campaign_cleanup_readjudication_updates_formal_projection() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {"cleanup": {"status": "not_reversible", "receipt_ref": "/api/resources/{id}"}}
+    demoted = deepcopy(finding)
+    demoted["upstream_gate_passed"] = True
+    demoted["gate_passed"] = False
+    demoted["customer_delivery_status"] = "candidate"
+    demoted["customer_delivery_gate_reasons"] = ["CLEANUP_NOT_SUCCEEDED"]
+    scan_result = {
+        "findings": [],
+        "candidate_findings": [demoted],
+        "discovery_funnel": {
+            "validated_bug_count": 0,
+            "formal_count_projection": {"formal_customer_deliverable_count": 0},
+        },
+    }
+
+    defects, clues = apply_governed_campaign_cleanup(
+        list(scan_result["findings"]) + list(scan_result["candidate_findings"]),
+        {
+            "status": "SUCCEEDED",
+            "dirty_environment": False,
+            "audit_receipt_id": "campaign-cleanup-audit-1",
+            "after_cleanup_observation_ref": "state:clean",
+        },
+    )
+    projected = attach_quality_projection_to_scan_result(
+        {
+            **scan_result,
+            "findings": defects,
+            "candidate_findings": clues,
+        }
+    )
+
+    assert projected["formal_count_projection"]["formal_customer_deliverable_count"] == 1
+    assert projected["discovery_funnel"]["validated_bug_count"] == 1
+    assert projected["discovery_funnel"]["formal_count_projection"]["formal_customer_deliverable_count"] == 1
+    assert projected["discovery_funnel"]["formal_count_projection"]["funnel_validated_bug_count"] == 1
+    assert (
+        projected["discovery_funnel"]["formal_count_projection"]["count_consistency"][
+            "formal_equals_funnel_validated"
+        ]
+        is True
+    )
 
 
 def test_governed_campaign_reset_does_not_promote_other_evidence_gaps() -> None:

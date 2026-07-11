@@ -11,6 +11,7 @@ from ai_test_asset_center.semantic_scenario_generator import (
     ScenarioStep,
     SemanticScenarioGenerator,
 )
+from ai_test_asset_center.supplementary_behavior_slices import generate_permission_slices
 from ai_test_asset_center.test_data_receipt_bootstrap import bootstrap_test_data_receipts_for_campaign
 from ai_test_asset_center.v12_pipeline import _execute_scenario
 
@@ -111,24 +112,43 @@ def test_documented_schema_binding_candidate_changes_real_http_execution(monkeyp
     }
 
 
-def test_precondition_resolution_attempts_changes_generated_resolver_steps() -> None:
+def test_precondition_resolution_attempts_changes_generated_resolver_steps(monkeypatch) -> None:
+    # Isolate policy wiring from the current path's finite resolver catalog: an
+    # attempt limit is an upper bound, so the fixture must expose at least five
+    # distinct candidates to prove that the challenger value takes effect.
+    monkeypatch.setattr(
+        "ai_test_asset_center.semantic_scenario_generator.alternate_collection_paths",
+        lambda _path: [
+            "/api/objects",
+            "/api/object",
+            "/api/entities",
+            "/api/entity",
+            "/api/resources",
+        ],
+    )
     baseline = StrategyBundle()
     challenger = StrategyBundle()
-    challenger.execution.precondition_resolution_attempts = 4
+    challenger.execution.precondition_resolution_attempts = 5
+    resolver_catalog = "\n".join(
+        f"### GET {path}"
+        for path in ("/api/objects", "/api/object", "/api/entities", "/api/entity", "/api/resources")
+    )
 
     with policy_strategy_override(baseline):
         baseline_steps, _ = SemanticScenarioGenerator._resolve_entity_steps(
             "/api/work-orders/{thing_id}/transition",
             actor="operator",
+            api_doc=resolver_catalog,
         )
     with policy_strategy_override(challenger):
         challenger_steps, _ = SemanticScenarioGenerator._resolve_entity_steps(
             "/api/work-orders/{thing_id}/transition",
             actor="operator",
+            api_doc=resolver_catalog,
         )
 
-    assert len(baseline_steps) == 2
-    assert len(challenger_steps) == 4
+    assert len(baseline_steps) == 4
+    assert len(challenger_steps) == 5
 
 
 def test_environment_url_is_identity_not_a_safety_class(tmp_path) -> None:
@@ -161,3 +181,40 @@ def test_test_data_bootstrap_uses_explicit_environment_type_not_target_url(tmp_p
     )
 
     assert result["reason"] == "bootstrap_probe_not_found"
+
+
+def test_permission_generation_does_not_assume_every_non_admin_role_is_denied() -> None:
+    endpoint = {"method": "POST", "path": "/api/records", "entity": "records"}
+    actor = {"role": "normal_user", "email": "normal@example.test"}
+
+    assert generate_permission_slices([endpoint], [actor]) == []
+    assert generate_permission_slices(
+        [endpoint],
+        [actor],
+        permission_matrix=[{
+            "role": "normal_user",
+            "resource": "/api/records",
+            "actions": ["GET"],
+        }],
+    )
+
+
+def test_permission_generation_skips_irreversible_identity_mutations() -> None:
+    endpoint = {
+        "method": "POST",
+        "path": "/api/auth/password/reset",
+        "entity": "auth",
+        "action": "reset",
+        "summary": "admin only password reset",
+    }
+    actor = {"role": "buyer", "email": "buyer@example.test", "password": "Test@123456"}
+
+    assert generate_permission_slices(
+        [endpoint],
+        [actor],
+        permission_matrix=[{
+            "role": "admin",
+            "resource": "/api/auth/password/reset",
+            "actions": ["POST"],
+        }],
+    ) == []

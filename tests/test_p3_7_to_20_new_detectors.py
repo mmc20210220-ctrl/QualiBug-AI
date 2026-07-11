@@ -186,16 +186,40 @@ def test_p3_18_cleanup_verification():
     """P3-18: verify_http_cleanup checks DELETE→GET for fake delete."""
     from ai_test_asset_center.db_snapshot_verifier import verify_http_cleanup
 
-    # Test against httpbin (DELETE /delete returns 200, GET /delete returns 200 too)
-    result = verify_http_cleanup("https://httpbin.org", "/delete", method="DELETE", timeout=8.0)
+    class FakeDeleteHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_: object) -> None:
+            return
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"deleted":true}')
+
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"still_exists":true}')
+
+    server = HTTPServer(("127.0.0.1", 0), FakeDeleteHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = verify_http_cleanup(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            "/delete",
+            method="DELETE",
+            timeout=2.0,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
     assert isinstance(result, dict)
     assert result["resource_path"] == "/delete"
     assert "cleanup_status" in result
     assert "delete_response" in result
     assert result["delete_response"]["status"] > 0
-    # httpbin /delete returns 200 for both DELETE and GET, so it's a "fake_delete"
-    # or at minimum "verified" — we just check the function runs without error
-    assert result["cleanup_status"] in ("verified", "fake_delete", "cleanup_failed")
+    assert result["cleanup_status"] == "fake_delete"
 
 
 # ── P3-19: Multi-Role View Inconsistency ──

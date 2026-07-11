@@ -57,7 +57,7 @@ export function TestTasks() {
   usePageTitle('测试任务看板');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
-  const { board, loading, error } = useTestTaskBoard(project);
+  const { board, obligationProjection, loading, error } = useTestTaskBoard(project);
 
   const stats = useMemo(() => {
     const base: Record<TaskStatus, number> = { pending: 0, running: 0, passed: 0, failed: 0, blocked: 0 };
@@ -93,6 +93,20 @@ export function TestTasks() {
   const boundaryBoostedCount = board?.slices.filter(
     (s) => (s._historical_boundary_boost || 0) > 0
   ).length ?? 0;
+  const oblTotal = Number(obligationProjection.obligation_total || 0);
+  const oblCompiled = Number(obligationProjection.obligation_compiled || 0);
+  const oblBlocked = Number(obligationProjection.obligation_blocked || 0);
+  const oblExecuted = Number(obligationProjection.obligation_executed || 0);
+  const formalDefects = Number(obligationProjection.formal_defect_count || 0);
+  const blockReasons = (obligationProjection.block_reason_counts && typeof obligationProjection.block_reason_counts === 'object')
+    ? Object.entries(obligationProjection.block_reason_counts as Record<string, unknown>).slice(0, 4)
+    : [];
+  const fingerprints = (obligationProjection.fingerprints && typeof obligationProjection.fingerprints === 'object')
+    ? obligationProjection.fingerprints as Record<string, unknown>
+    : {};
+  const adapterHealth = (obligationProjection.adapter_health && typeof obligationProjection.adapter_health === 'object')
+    ? obligationProjection.adapter_health as Record<string, unknown>
+    : {};
 
   return (
     <div>
@@ -109,7 +123,23 @@ export function TestTasks() {
             <span className="summary-pill">已阻断 {stats.blocked}</span>
             {steeredCount > 0 && <span className="summary-pill">学习调度 {steeredCount}</span>}
             {boundaryBoostedCount > 0 && <span className="summary-pill">历史边界 {boundaryBoostedCount}</span>}
+            {oblTotal > 0 && <span className="summary-pill strong">义务 {oblTotal}</span>}
+            {oblTotal > 0 && <span className="summary-pill">已编译 {oblCompiled}</span>}
+            {oblTotal > 0 && <span className="summary-pill">已执行 {oblExecuted}</span>}
+            {oblBlocked > 0 && <span className="summary-pill">编译阻断 {oblBlocked}</span>}
+            {formalDefects > 0 && <span className="summary-pill">正式缺陷 {formalDefects}</span>}
           </div>
+          {(oblTotal > 0 || Object.keys(fingerprints).length > 0) && (
+            <div className="page-summary-strip" style={{ marginTop: 8 }}>
+              {Boolean(fingerprints.behavior_ir_model_id) && <span className="summary-pill">IR {String(fingerprints.behavior_ir_model_id).slice(0, 12)}</span>}
+              {Boolean(fingerprints.source_hash) && <span className="summary-pill">source {String(fingerprints.source_hash).slice(0, 8)}</span>}
+              {Boolean(fingerprints.policy_version) && <span className="summary-pill">policy {String(fingerprints.policy_version)}</span>}
+              {Number(adapterHealth.blocked_count || 0) > 0 && <span className="summary-pill">adapter 阻断 {Number(adapterHealth.blocked_count)}</span>}
+              {blockReasons.map(([reason, count]) => (
+                <span key={reason} className="summary-pill">{reason} · {String(count)}</span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

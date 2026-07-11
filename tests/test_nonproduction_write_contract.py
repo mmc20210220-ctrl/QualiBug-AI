@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,17 +23,25 @@ def _runtime(environment: str, mode: str = "approved_sandbox_write") -> dict[str
     return {
         "status": "approved",
         "approved_base_url": "https://target.invalid",
-        "environment_ref": environment,
-        "environment_kind": environment,
+        "environment_ref": "declared-target",
+        "environment_type": environment,
         "execution_mode": mode,
     }
+
+
+def _unsigned_jwt(payload: dict[str, str]) -> str:
+    def enc(value: dict[str, str]) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{enc({'alg': 'none', 'typ': 'JWT'})}.{enc(payload)}.sig"
 
 
 def test_direct_scan_defaults_declared_nonproduction_to_governed_write() -> None:
     from ai_test_asset_center.__main__ import _apply_scan_execution_defaults
 
     context = _apply_scan_execution_defaults(
-        {"scope_id": "checkout", "environment_ref": "customer-qa"},
+        {"scope_id": "checkout", "environment_ref": "customer-qa", "environment_type": "qa"},
         "https://qa.example.test",
     )
 
@@ -63,7 +73,7 @@ def test_direct_scan_keeps_production_read_only() -> None:
     from ai_test_asset_center.__main__ import _apply_scan_execution_defaults
 
     context = _apply_scan_execution_defaults(
-        {"scope_id": "checkout", "environment_ref": "customer-production"},
+        {"scope_id": "checkout", "environment_ref": "customer-production", "environment_type": "production"},
         "https://prod.example.test",
     )
 
@@ -128,7 +138,7 @@ def test_unknown_environment_write_is_fail_closed(tmp_path: Path) -> None:
 
     assert calls == []
     assert result["sandbox_write"]["status"] == "blocked"
-    assert result["sandbox_write"]["reason"].startswith("environment_not_recognized_nonprod")
+    assert result["sandbox_write"]["reason"] == "environment_kind_undeclared"
 
 
 def test_explicit_read_only_mode_blocks_write_before_executor(tmp_path: Path) -> None:
@@ -184,6 +194,176 @@ def test_nonproduction_write_executes_once_and_records_cleanup(tmp_path: Path, m
     assert result["sandbox_write"]["status"] == "completed"
     assert result["sandbox_write"]["cleanup"]["status"] == "completed"
     assert Path(result["sandbox_write"]["audit_path"]).exists()
+
+
+def test_runtime_account_identity_status_mutation_is_blocked_before_executor(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "platform_inputs" / "project"
+    accounts_dir.mkdir(parents=True)
+    protected_id = "8b1a774c-905e-41b3-9d78-b37c5d05cae7"
+    (accounts_dir / "test_accounts.json").write_text(
+        json.dumps({
+            "buyer01": {
+                "email": "buyer01@example.com",
+                "role": "buyer",
+                "token": _unsigned_jwt({"id": protected_id, "email": "buyer01@example.com"}),
+            }
+        }),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+    scenario = SimpleNamespace(
+        id="identity-status-mutation",
+        actor_token="test-token",
+        actor_role="buyer",
+        behavior_slice_id="slice-identity-status",
+        execution_policy="approved_sandbox_write",
+        steps=[
+            SimpleNamespace(
+                api_method="POST",
+                api_path=f"/api/auth/admin/users/{protected_id}/status",
+                body_template={"status": "DISABLED"},
+            )
+        ],
+    )
+
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        execute_fn=lambda *args, **kwargs: calls.append("called") or {"steps": []},
+    )
+
+    assert calls == []
+    assert result["sandbox_write"]["status"] == "blocked"
+    assert result["sandbox_write"]["reason"] == "protected_runtime_identity_mutation_blocked"
+    assert result["steps"][0]["status"] == 0
+
+
+def test_unbound_identity_status_mutation_requires_disposable_fixture(tmp_path: Path) -> None:
+    calls: list[str] = []
+    scenario = SimpleNamespace(
+        id="unbound-identity-status-mutation",
+        actor_token="test-token",
+        actor_role="buyer",
+        behavior_slice_id="slice-identity-status",
+        execution_policy="approved_sandbox_write",
+        steps=[
+            SimpleNamespace(
+                api_method="POST",
+                api_path="/api/auth/admin/users/{id}/status",
+                body_template={"status": "DISABLED"},
+            )
+        ],
+    )
+
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        execute_fn=lambda *args, **kwargs: calls.append("called") or {"steps": []},
+    )
+
+    assert calls == []
+    assert result["sandbox_write"]["status"] == "blocked"
+    assert result["sandbox_write"]["reason"] == "identity_mutation_requires_disposable_fixture"
+    assert result["steps"][0]["path"] == "/api/auth/admin/users/{id}/status"
+
+
+def test_empty_body_password_reset_probe_does_not_require_disposable_fixture(tmp_path: Path) -> None:
+    """Authz probe writes with no concrete identity target must reach HTTP."""
+    from ai_test_asset_center.sandbox_write_executor import (
+        _protected_runtime_identity_write_block_reason,
+    )
+
+    scenario = SimpleNamespace(steps=[])
+    reason = _protected_runtime_identity_write_block_reason(
+        root=tmp_path,
+        project="project",
+        scenario=scenario,
+        method="POST",
+        path="/api/auth/password/reset",
+        body={},
+    )
+    assert reason == ""
+
+    concrete = _protected_runtime_identity_write_block_reason(
+        root=tmp_path,
+        project="project",
+        scenario=scenario,
+        method="POST",
+        path="/api/auth/password/reset",
+        body={"email": "someone@example.com", "newPassword": "x"},
+    )
+    assert concrete == "identity_mutation_requires_disposable_fixture"
+
+
+def test_documented_demo_account_password_reset_is_scrubbed_not_hard_blocked(tmp_path: Path) -> None:
+    """Demo-account examples in API docs must not permanently block authz probes."""
+    accounts = tmp_path / "platform_inputs" / "project"
+    accounts.mkdir(parents=True)
+    (accounts / "test_accounts.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "buyer01",
+                    "email": "buyer01@example.com",
+                    "role": "buyer",
+                    "token": "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImJ1eWVyMDFAZXhhbXBsZS5jb20iLCJpZCI6ImJ1eWVyLTEifQ.",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict] = []
+    scenario = SimpleNamespace(
+        id="password-reset-demo-account",
+        actor_token="test-token",
+        actor_role="buyer",
+        behavior_slice_id="slice-password-reset",
+        execution_policy="approved_sandbox_write",
+        steps=[
+            SimpleNamespace(
+                api_method="POST",
+                api_path="/api/auth/password/reset",
+                body_template={"email": "buyer01@example.com", "newPassword": "NewPass@123"},
+                action="execute_bound_write",
+            )
+        ],
+    )
+
+    def _execute(sc, base_url, **kwargs):
+        body = sc.steps[0].body_template
+        calls.append({"body": dict(body)})
+        return {
+            "steps": [
+                {
+                    "action": "execute_bound_write",
+                    "method": "POST",
+                    "path": "/api/auth/password/reset",
+                    "status": 200,
+                    "request": {"body": body},
+                    "response": {"status_code": 200, "body": {"ok": True}},
+                }
+            ]
+        }
+
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        execute_fn=_execute,
+    )
+
+    assert calls, result
+    assert "buyer01@example.com" not in json.dumps(calls[0]["body"])
+    assert result.get("sandbox_write", {}).get("status") != "blocked"
+    assert result["steps"][0]["status"] == 200
 
 
 def test_created_resource_identity_uses_source_path_and_generic_id_suffix() -> None:
@@ -387,6 +567,53 @@ def test_post_cleanup_requires_documented_delete_route(monkeypatch) -> None:
     assert completed["status"] == "completed"
     assert completed["receipt_ref"] == "/api/refunds/rf-123"
     assert calls == [("DELETE", "https://target.invalid/api/refunds/rf-123")]
+
+
+def test_post_cleanup_uses_documented_compensate_action_when_delete_missing(monkeypatch) -> None:
+    from ai_test_asset_center.sandbox_write_executor import _cleanup_after_write
+
+    calls: list[tuple[str, str]] = []
+
+    def request(method: str, url: str, **kwargs):
+        calls.append((method, url))
+        return {"status": 200, "body": {"status": "CANCELLED"}, "headers": {}}
+
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor._http_request", request)
+
+    result = _cleanup_after_write(
+        method="POST",
+        path="/api/orders",
+        base_url="https://target.invalid",
+        token="test-token",
+        before_body={},
+        write_body={"id": "ord-42"},
+        documented_routes=[
+            {"method": "POST", "path": "/api/orders"},
+            {"method": "GET", "path": "/api/orders/{id}"},
+            {"method": "POST", "path": "/api/orders/{id}/cancel"},
+        ],
+    )
+    assert result["status"] == "completed"
+    assert result["strategy"] == "compensate_created_resource"
+    assert result["receipt_ref"] == "/api/orders/ord-42/cancel"
+    assert calls == [("POST", "https://target.invalid/api/orders/ord-42/cancel")]
+
+
+def test_verb_terminal_post_is_action_style_not_create_without_identity() -> None:
+    from ai_test_asset_center.sandbox_write_executor import _cleanup_after_write
+
+    result = _cleanup_after_write(
+        method="POST",
+        path="/api/payments/pay",
+        base_url="https://target.invalid",
+        token="test-token",
+        before_body={},
+        write_body={"accepted": True},
+        documented_routes=[{"method": "POST", "path": "/api/payments/pay"}],
+    )
+    assert result["status"] == "not_required"
+    assert result["strategy"] == "action_post_on_existing_resource"
+    assert result["warning"] == "action_style_write_no_created_resource"
 
 
 def test_non_reversible_cleanup_never_reports_completed_lifecycle(tmp_path: Path, monkeypatch) -> None:

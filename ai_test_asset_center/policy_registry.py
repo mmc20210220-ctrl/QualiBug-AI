@@ -107,7 +107,10 @@ class DiscoveryPolicy:
     endpoint_binding_strategy: list[str] = field(default_factory=lambda: [
         "source_operation_id",
         "method_path_shape",
+        "schema_parameter_compatibility",
+        "documented_example_binding",
     ])
+    endpoint_binding_diagnostic_sample_limit: int = 20
     min_source_refs_for_execution: int = 1
     require_documented_endpoint: bool = True
 
@@ -115,6 +118,9 @@ class DiscoveryPolicy:
         self.max_hypotheses_execute = max(1, min(int(self.max_hypotheses_execute or 1), 200))
         self.max_rounds = max(1, min(int(self.max_rounds or 1), 24))
         self.stagnation_limit = max(1, min(int(self.stagnation_limit or 1), 12))
+        self.endpoint_binding_diagnostic_sample_limit = max(
+            1, min(int(self.endpoint_binding_diagnostic_sample_limit or 1), 100)
+        )
         self.min_source_refs_for_execution = max(1, min(int(self.min_source_refs_for_execution or 1), 5))
         self.require_documented_endpoint = True
         self.candidate_ranking_signals = list(dict.fromkeys(
@@ -183,7 +189,7 @@ class ExecutionPolicy:
         "documented_list_response",
         "fixture_receipt",
     ])
-    precondition_resolution_attempts: int = 2
+    precondition_resolution_attempts: int = 4
     cleanup_retry_count: int = 1
     cleanup_created_resource_id_sources: list[str] = field(default_factory=lambda: [
         "response_body_id",

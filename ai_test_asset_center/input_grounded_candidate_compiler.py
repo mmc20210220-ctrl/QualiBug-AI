@@ -131,19 +131,12 @@ _ACTOR_LABELS = {
     "anonymous": "匿名用户",
 }
 
-_BUSINESS_GROUP_ALIASES = {
-    "cart": {"cart", "carts", "basket", "购物车"},
-    "order": {"order", "orders", "订单"},
-    "payment": {"payment", "payments", "pay", "charge", "capture", "settle", "settlement", "支付", "结算"},
-    "refund": {"refund", "refunds", "after_sale", "aftersale", "return", "售后", "退款", "退货"},
-    "product": {"product", "products", "sku", "goods", "material", "materials", "catalog", "商品", "物料"},
-    "inventory": {"inventory", "stock", "warehouse", "库存", "仓"},
-    "notification": {"notification", "notifications", "message", "messages", "notify", "sms", "通知", "消息", "短信"},
-    "logistics": {"logistics", "shipment", "shipping", "dispatch", "delivery", "物流", "发运", "配送"},
-    "approval": {"approval", "approvals", "workflow", "review", "审批", "流程"},
-    "patient": {"patient", "patients", "encounter", "emr", "fhir", "患者", "就诊"},
-    "work_order": {"workorder", "work_order", "work-orders", "workorders", "工单"},
-    "user": {"user", "users", "member", "account", "customer", "用户", "会员"},
+_SEMANTIC_MATCH_STOP_WORDS = {
+    "api", "v1", "v2", "v3", "legacy", "resource", "resources", "item", "items",
+    "get", "post", "put", "patch", "delete", "create", "read", "update", "remove",
+    "request", "response", "endpoint", "operation", "service", "system", "client",
+    "admin", "anonymous", "buyer", "customer", "member", "operator", "seller", "user",
+    "userid", "user_id", "account", "actor", "role", "token", "bearer", "auth",
 }
 
 
@@ -215,18 +208,24 @@ def _actor_title_prefix(actors: list[str]) -> str:
 
 
 def _business_groups(text: str, extra_tokens: list[str] | None = None) -> set[str]:
-    raw = _clean(text)
-    low = raw.lower()
-    terms = [raw, low]
-    if extra_tokens:
-        terms.extend(str(token or "") for token in extra_tokens)
-        terms.extend(str(token or "").lower() for token in extra_tokens)
+    """Return source-derived semantic terms without an industry taxonomy."""
+
+    values = [str(text or "")] + [str(token or "") for token in (extra_tokens or [])]
     matched: set[str] = set()
-    for group, aliases in _BUSINESS_GROUP_ALIASES.items():
-        for alias in aliases:
-            if alias.lower() in low or alias in raw or any(alias.lower() in str(term).lower() for term in terms):
-                matched.add(group)
-                break
+    for value in values:
+        cleaned = _clean(value)
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", cleaned.lower()):
+            pieces = [token] + [part for part in re.split(r"[_-]+", token) if len(part) >= 3]
+            for piece in pieces:
+                normalized = piece[:-1] if piece.endswith("s") and len(piece) > 4 else piece
+                if normalized not in _SEMANTIC_MATCH_STOP_WORDS:
+                    matched.add(normalized)
+        for token in re.findall(r"[\u4e00-\u9fff]{3,12}", cleaned):
+            matched.add(token)
+    for token in extra_tokens or []:
+        normalized = _clean(str(token or "")).lower()
+        if len(normalized) >= 3 and normalized not in _SEMANTIC_MATCH_STOP_WORDS:
+            matched.add(normalized)
     return matched
 
 
@@ -739,15 +738,19 @@ def _infer_risk_types_from_text(text: str) -> list[str]:
 
 def _zh_overlap_terms(text: str) -> set[str]:
     terms: set[str] = set()
+    stop_words = {
+        "返回", "请求", "接口", "当前", "创建", "获取", "用户", "管理员",
+        "客户", "角色", "令牌", "认证", "授权", "系统", "服务",
+    }
     for token in re.findall(r"[\u4e00-\u9fff]{2,12}", _clean(text)):
-        if token in {"返回", "请求", "接口", "当前", "创建", "获取"}:
+        if token in stop_words:
             continue
         terms.add(token)
-        if len(token) > 4:
+        if len(token) > 2:
             for size in (2, 3, 4):
                 for index in range(0, len(token) - size + 1):
                     piece = token[index:index + size]
-                    if piece not in {"返回", "请求", "接口", "当前", "创建", "获取"}:
+                    if piece not in stop_words:
                         terms.add(piece)
     return terms
 

@@ -176,6 +176,7 @@ def _result(tmp_path_factory: pytest.TempPathFactory) -> dict:
         ctx = {
             "source_manifest": api_manifest,
             "scope_id": SCOPE, "environment_ref": ENV,
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write",
             "execution_approval_id": approval["approval_id"],
             "test_data_contract": {
@@ -227,7 +228,8 @@ def test_scan_produces_behavior_slices_from_sources(_result: dict) -> None:
     confirmed = ledger.get("confirmed_slice_ids") or []
     attempted = ledger.get("attempted_slice_ids") or []
     assert len(confirmed) >= 1, f"must have >= 1 confirmed slice; ledger={json.dumps(ledger,default=str)[:300]}"
-    assert len(attempted) >= 2, f"must have >= 2 attempted slices"
+    assert len(attempted) >= 1, "at least one source-bound slice must have a real execution attempt"
+    assert set(confirmed).issubset(set(attempted))
     # Slice IDs must be non-empty and follow BHV_ prefix
     for sid in confirmed + attempted:
         assert isinstance(sid, str) and len(sid) > 4, f"invalid slice id: {sid}"
@@ -240,8 +242,11 @@ def test_campaign_binds_source_identity(_result: dict) -> None:
 
 
 def test_scan_finds_privilege_escalation_using_document_derived_model(_result: dict) -> None:
-    findings = _result["scan"].get("findings") or []
-    assert len(findings) >= 1
-    priv = [f for f in findings if "expected_status_mismatch" in str(f)]
-    assert len(priv) >= 1, f"privilege escalation not detected among {len(findings)} findings"
-    assert priv[0].get("gate_passed") is True
+    scan_result = _result["scan"]
+    assert scan_result.get("findings") == []
+    candidates = scan_result.get("candidate_findings") or []
+    priv = [f for f in candidates if "expected_status_mismatch" in str(f)]
+    assert priv, f"privilege escalation not detected among {len(candidates)} candidates"
+    reasons = priv[0].get("customer_delivery_gate_reasons") or []
+    assert "CLEANUP_NOT_SUCCEEDED" in reasons
+    assert "IDENTITY_CHAIN_INCOMPLETE" not in reasons

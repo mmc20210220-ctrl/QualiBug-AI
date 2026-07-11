@@ -13,6 +13,13 @@ from ai_test_asset_center.private_pilot_service import PrivatePilotHandler, _nor
 def _ready_item(item_id: str) -> dict:
     return {
         "id": item_id,
+        "finding_id": f"finding-{item_id}",
+        "evidence_id": f"evidence-{item_id}",
+        "execution_id": f"execution-{item_id}",
+        "experiment_id": f"experiment-{item_id}",
+        "obligation_id": f"obligation-{item_id}",
+        "slice_id": f"slice-{item_id}",
+        "candidate_id": f"candidate-{item_id}",
         "risk_id": item_id,
         "title": "支付金额守恒失败",
         "severity": "P1",
@@ -34,6 +41,9 @@ def _ready_item(item_id: str) -> dict:
             "timestamp": "2026-07-06T12:00:00Z",
             "request_raw": {"method": "POST", "path": "/api/payments"},
             "response_raw": {"status_code": 200, "body": {"paid_amount": 1}},
+            "sandbox_write": {
+                "cleanup": {"status": "completed", "receipt_ref": f"audit://cleanup/{item_id}"}
+            },
         },
         "reproduction": {
             "method": "POST",
@@ -157,15 +167,16 @@ def test_build_command_center_separates_current_scan_counts_from_family_defect_s
     payload = handler._build_command_center("enterprise-project", tmp_path)
     data = payload["data"]
 
-    assert len(data["defects"]) == 2
+    assert len(data["defects"]) == 0
+    assert data["project_history"]["formal_customer_deliverable_count"] == 2
     assert data["scan_meta"]["scan_id"] == "scan_scope_demo"
     assert data["scan_meta"]["total_findings"] == 1
     assert data["scan_meta"]["materialized_findings"] == 1
-    assert data["scan_meta"]["customer_ready_defects"] == 1
+    assert data["scan_meta"]["customer_ready_defects"] == 0
     assert data["scan_meta"]["family_customer_ready_defect_count"] == 2
     assert data["scan_meta"]["current_campaign_bundle_finding_count_raw"] == 1
     assert data["executive_summary"]["total_findings"] == 1
-    assert data["executive_summary"]["customer_ready_defects"] == 1
+    assert data["executive_summary"]["customer_ready_defects"] == 0
     assert data["executive_summary"]["family_customer_ready_defects"] == 2
     assert data["value_metrics"]["current_report_total_findings"] == 1
     assert data["value_metrics"]["family_customer_ready_defect_count"] == 2
@@ -249,8 +260,8 @@ def test_build_command_center_prefers_real_project_current_scope_over_stale_scan
     assert data["scan_meta"]["scan_id"] == "stale_scan_result"
     assert data["scan_meta"]["total_findings"] == 18
     assert data["scan_meta"]["current_report_total_findings"] == 18
-    assert data["scan_meta"]["customer_ready_defects"] == 7
-    assert data["scan_meta"]["current_report_customer_ready_defect_count"] == 7
+    assert data["scan_meta"]["customer_ready_defects"] == 0
+    assert data["scan_meta"]["current_report_customer_ready_defect_count"] == 0
     assert data["scan_meta"]["family_customer_ready_defect_count"] == 4
     assert data["scan_meta"]["current_campaign_bundle_finding_count_raw"] == 18
     assert data["scan_meta"]["report_path"] == "platform_outputs/enterprise-project/real_project/real_project_defect_data.json"
@@ -261,6 +272,7 @@ def test_build_command_center_prefers_real_project_current_scope_over_stale_scan
     assert data["scan_meta"]["current_campaign_scope"]["environment_ref"] == "local-benchmark"
     assert data["current_campaign_scope"]["scope_id"] == "checkout-scope"
     assert data["executive_summary"]["total_findings"] == 18
-    assert data["executive_summary"]["customer_ready_defects"] == 7
+    assert data["executive_summary"]["customer_ready_defects"] == 0
+    assert data["project_history"]["formal_customer_deliverable_count"] == 4
     assert data["executive_summary"]["current_campaign_scope"]["environment_ref"] == "local-benchmark"
     assert data["value_metrics"]["current_campaign_scope"]["source_hash"] == "a" * 64

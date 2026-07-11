@@ -16,6 +16,26 @@ from ai_test_asset_center.ssrf_guard import SsrfBlockedError
 API_SPEC = '{"openapi":"3.0.0","paths":{"/api/orders":{"get":{"responses":{"200":{"description":"ok"}}}}}}'
 
 
+def test_health_route_is_not_shadowed_by_frontend_fallback(tmp_path, monkeypatch):
+    handler = service.PrivatePilotHandler.__new__(service.PrivatePilotHandler)
+    handler.path = "/health"
+    payloads: list[dict] = []
+    monkeypatch.setattr(handler, "_project", lambda: "demo")
+    monkeypatch.setattr(handler, "_root", lambda: tmp_path)
+    monkeypatch.setattr(handler, "_llm_health", lambda: {"available": False, "status": "offline"})
+    monkeypatch.setattr(handler, "_json", lambda payload: payloads.append(payload))
+    monkeypatch.setattr(
+        handler,
+        "_serve_frontend",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("health route reached SPA fallback")),
+    )
+
+    handler.do_GET()
+
+    assert payloads and payloads[0]["ok"] is True
+    assert payloads[0]["service"] == "qualibug_private_pilot"
+
+
 def test_prepare_v12_scan_body_loads_registered_source_and_runtime_defaults(tmp_path, monkeypatch):
     manifest = register_source_asset("demo", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
     monkeypatch.setenv("QUALIBUG_SCOPE_ID", "checkout-scope")
@@ -53,9 +73,10 @@ def test_prepare_v12_scan_body_auto_issues_local_runtime_approval_for_non_produc
         {
             "api_doc": API_SPEC,
             "base_url": "http://127.0.0.1:8000",
-            "scope_id": "checkout-scope",
-            "environment_ref": "staging-env",
-            "source_manifest": manifest,
+                "scope_id": "checkout-scope",
+                "environment_ref": "staging-env",
+                "environment_type": "staging",
+                "source_manifest": manifest,
         },
         local_dev_mode=True,
     )
@@ -155,6 +176,7 @@ def test_predicted_campaign_binding_matches_scan_campaign_for_markdown_api(tmp_p
             "base_url": "http://127.0.0.1:8000",
             "scope_id": "checkout-scope",
             "environment_ref": "staging-env",
+            "environment_type": "staging",
             "source_manifest": manifest,
         },
         local_dev_mode=True,
@@ -171,6 +193,7 @@ def test_predicted_campaign_binding_matches_scan_campaign_for_markdown_api(tmp_p
         campaign_context={
             "scope_id": prepared["scope_id"],
             "environment_ref": prepared["environment_ref"],
+            "environment_type": prepared["environment_type"],
             "execution_approval_id": prepared["execution_approval_id"],
             "execution_mode": prepared["execution_mode"],
             "source_manifest": prepared["source_manifest"],
@@ -314,6 +337,7 @@ def test_prepare_v12_scan_body_keeps_production_like_targets_read_only(tmp_path)
             "base_url": "http://127.0.0.1:8080",
             "scope_id": "checkout-scope",
             "environment_ref": "prod",
+            "environment_type": "production",
         },
         local_dev_mode=False,
     )

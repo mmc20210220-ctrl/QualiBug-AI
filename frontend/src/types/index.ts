@@ -418,7 +418,7 @@ export interface TechnicalDetails {
 export interface ReleaseCheck { name: string; status: 'pass' | 'fail' | 'pending'; detail: string }
 export type ReleaseGateStatus = { overall_status: 'pass' | 'fail' | 'pending'; checks: ReleaseCheck[] };
 
-export interface KnowledgeSource { source_id: string; filename: string; source_type: string; status: string; size_bytes?: number; uploaded_at?: string }
+export interface KnowledgeSource { source_id: string; filename: string; source_type: string; status: string; size_bytes?: number; uploaded_at?: string; parser_status?: string; parser_fidelity?: string; parser_errors?: Array<Record<string, unknown>> }
 
 export interface TestTaskSlice {
   slice_id: string;

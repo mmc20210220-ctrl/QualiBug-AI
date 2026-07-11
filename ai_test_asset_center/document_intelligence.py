@@ -1193,7 +1193,7 @@ Eve,,eve@test.com,45000
     # Test Dockerfile
     dockerfile = """
 FROM node:18
-ENV API_KEY=sk-1234567890abcdef
+ENV API_KEY=<REDACTED>
 RUN apt-get update && apt-get install -y curl
 RUN pip install requests flask
 COPY . /app

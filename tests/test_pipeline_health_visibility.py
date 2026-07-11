@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from ai_test_asset_center.discovery_funnel import (
     build_funnel,
     build_pipeline_health,
+    effective_execution_status,
     reconcile_product_pipeline_health,
 )
 from ai_test_asset_center.discovery_trace_ledger import build_discovery_trace_ledger
@@ -77,6 +78,44 @@ def test_product_health_degrades_completed_run_when_preflight_failed() -> None:
     assert health["status"] == "DEGRADED"
     assert health["empty_findings_means_no_bugs"] is False
     assert health["execution_reason"] == "preflight_health_failed"
+
+
+def test_experiment_http_receipts_override_legacy_no_traffic_without_hiding_partial_execution() -> None:
+    result = {
+        "phases": {"execution": {"status": "blocked", "executed": 0}},
+        "auto_har": {"status": "no_traffic", "entry_count": 0},
+        "experiment_execution": {
+            "selected_count": 2,
+            "executed_count": 1,
+            "blocked_count": 1,
+            "results": [
+                {
+                    "status": "EXECUTED",
+                    "steps": [{"method": "GET", "path": "/declared", "status_code": 200}],
+                },
+                {"status": "BLOCKED", "steps": []},
+            ],
+        },
+    }
+
+    assert effective_execution_status(result) == "partial"
+    health = build_pipeline_health(result)
+    assert health["status"] == "DEGRADED"
+    assert health["execution_status"] == "partial"
+    assert health["no_real_traffic"] is False
+    assert health["empty_findings_means_no_bugs"] is False
+
+
+def test_product_health_keeps_partial_experiment_run_degraded_not_blocked() -> None:
+    health = reconcile_product_pipeline_health(
+        {"status": "DEGRADED", "empty_findings_means_no_bugs": False},
+        execution_status="partial",
+        preflight_diagnostics={"ready": True, "all_checks_passed": True, "errors": 0},
+    )
+
+    assert health["status"] == "DEGRADED"
+    assert health["execution_status"] == "partial"
+    assert health["execution_reason"] == "partial_execution"
 
 
 def test_build_funnel_embeds_pipeline_health_and_warns_on_zero_bugs():

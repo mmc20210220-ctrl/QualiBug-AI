@@ -51,6 +51,7 @@ def test_enterprise_api_registers_source_plans_scan_and_verifies_evidence(monkey
             "project_id": "enterprise-project",
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "source_manifest": manifest,
         },
     )
@@ -87,6 +88,7 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
             "project_id": "enterprise-project",
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "source_manifest": manifest,
         },
     ).json()
@@ -99,6 +101,7 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
             "base_url": "https://example.invalid",
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "source_manifest": manifest,
         },
     )
@@ -131,6 +134,7 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
             "base_url": "https://example.invalid/path",
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "source_manifest": manifest,
         },
     )

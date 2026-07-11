@@ -46,15 +46,15 @@ REASONER_SYSTEM_PROMPT = r"""你是一个世界级的企业业务系统"风险�
 
 1. **Negative Space（负面空间）**：
    "文档说了 A 应该发生。但文档有没有说 A 只应该发生一次？"
-   "文档说了用户可以创建订单。但文档有没有说用户不能看到别人的订单？"
+   "文档说了主体可以创建资源。但文档有没有说主体不能看到他人的资源？"
    "API Schema 定义了 200 响应。但有没有定义 401、403、409、422 响应？"
    "文档描述了正常流程。但有没有描述失败流程？取消流程？回退流程？"
 
 2. **Cascade Trace（级联追踪）**：
-   不要只看一个实体。追踪影响链：
-   "订单支付成功 → 应生成发货单 → 应扣减库存 → 应记录财务流水"
+   不要只看一个实体。追踪影响链（用当前 IR 中的实体/操作 ID，不要套用固定行业路径）：
+   "资源状态变更 → 应生成关联记录 → 应更新守恒量 → 应写入审计流水"
    如果链条中任何一环缺失，后面的所有环都可能出错。
-   如果中间某一环出错（如扣了两次库存），下游的库存报表必然错误。
+   如果中间某一环出错（如守恒量扣了两次），下游报表必然错误。
 
 3. **Adversarial Lens（对抗视角）**：
    "如果我想让这个系统出错，我会怎么做？"
@@ -69,11 +69,11 @@ REASONER_SYSTEM_PROMPT = r"""你是一个世界级的企业业务系统"风险�
 
 □ 资金守恒：涉及金额的实体，其 total 是否等于 components 之和？
   不只是检查"有没有字段"，而是检查"字段值之间的数学关系是否成立"。
-  例：order.total == sum(line_items.price * line_items.quantity) + shipping - discount
+  例：仅使用资料中声明的聚合字段与组成字段构造守恒表达式。
 
 □ 副作用完整性：状态变更后依赖的记录是否同步生成？
   不只是检查"有没有这个端点"，而是检查"状态变更后，在可接受的时间内，GET 关联端点能否看到副作用"。
-  例：order.status: pending→paid → GET /orders/{id}/payments 应返回非空。
+  例：资料声明的状态迁移完成后，通过接口目录中真实存在的关联观察面验证副作用。
 
 □ 认证强制执行：写操作是否可以在无认证的情况下执行？
   不只是检查"OpenAPI 有没有 securitySchemes"，而是检查"不带认证头发送 POST，是否返回 200"。
@@ -237,27 +237,27 @@ REAL_BUG_EXAMPLES = """
   "hypothesis_id": "CAUSAL-CASCADE-001",
   "rule_type": "causality_coverage",
   "severity": "P0",
-  "title": "订单支付成功但支付记录未生成 → 级联导致退款金额失控",
-  "why_this_matters": "这是一个三级级联 Bug：支付记录缺失(P1) → 退款时无原始支付可追溯(P1) → 退款金额可能超过实际支付(P0)。三个 P1 合并升级为 P0。",
-  "source_entity": "order",
-  "source_state": "paid",
-  "target_entity": "payment → refund（级联路径）",
-  "expected_behavior": "1. order.status=paid 时，payment 记录必须存在且金额匹配。2. 退款时，refund.amount ≤ payment.amount。3. 退款后，order 状态应更新为 refunded 或 cancelled。",
+  "title": "来源约束中的状态迁移缺少关联副作用并触发下游守恒失效",
+  "why_this_matters": "这是从企业资料和 Behavior IR 推导的多级级联：上游副作用缺失会破坏下游可追溯性，并可能使资料声明的守恒约束失效。",
+  "source_entity": "<source-derived-entity>",
+  "source_state": "<documented-state>",
+  "target_entity": "<source-derived-cascade-path>",
+  "expected_behavior": "使用资料声明的状态、关联、副作用与守恒约束；不得补造行业实体或端点。",
   "symptoms_if_broken": [
-    "order 状态为 paid，但 GET /orders/{id}/payments 返回空",
-    "退款时无法关联原始支付 → refund.amount 可能 > 实际支付",
-    "退款后 order 状态仍为 paid → 二次退款可能发生"
+    "来源状态已迁移，但来源定义的关联观察面为空",
+    "下游动作无法关联上游记录，导致资料声明的守恒关系失效",
+    "下游动作完成后来源实体未进入资料声明的最终状态"
   ],
   "verification_method": {
-    "step1": "GET /api/orders?status=paid → 提取第一个 order_id",
-    "step2": "GET /api/orders/{order_id}/payments → 应返回非空列表",
-    "step3": "POST /api/orders/{order_id}/refund → 检查返回的 refund.amount",
-    "step4": "GET /api/orders/{order_id} → 检查状态是否变为 refunded",
-    "cascade_assertion": "如果 step2 返回空 → 级联 Bug 已确认。如果 step3 的 refund.amount > step2 的 payment.amount → 资损 Bug。"
+    "step1": "GET <source-derived-collection>?state=<documented-state> → 提取真实 entity_id",
+    "step2": "GET <source-derived-related-view> → 检查来源约束的关联记录",
+    "step3": "<source-derived-mutation> → 检查文档声明的副作用与守恒字段",
+    "step4": "GET <source-derived-detail> → 检查最终状态与关联视图",
+    "cascade_assertion": "只按来源约束和真实观察证据判断；观察面缺失时标记 BLOCKED，不得猜测结论。"
   },
   "cascade_check": "order.paid → payment 必须存在 → refund 基于 payment → 财务报表基于 refund。链条中任一环断裂，末端报表必然错误。",
   "adversarial_angle": "利用支付记录缺失的窗口期，对同一订单发起多次退款请求，每次获得全额退款。",
-  "similar_known_bugs": ["UNIV-001 状态转换缺副作用", "FINT-001 重复记账", "ECOM-002 金额守恒违反"],
+  "similar_known_bugs": ["状态转换缺副作用", "重复副作用", "来源约束的守恒违反"],
   "confidence": 0.85,
   "false_positive_risk": "支付系统可能异步写入（有延迟）。如果 step2 在支付完成后立即查询可能为空。应加 3 秒 retry。",
   "priority": 1,
@@ -272,12 +272,12 @@ REAL_BUG_EXAMPLES = """
   "hypothesis_id": "CAUSAL-ADV-001",
   "rule_type": "conservation",
   "severity": "P0",
-  "title": "POST /api/settings/save 无认证即可修改 LLM 配置 → 可被利用将 API 调用重定向到攻击者服务器",
+  "title": "来源文档中的敏感配置写操作缺少认证 → 可被未授权主体修改关键配置",
   "why_this_matters": "LLM API Key 是企业最敏感的数据之一。如果可以无认证修改 base_url，攻击者可以将所有 LLM 请求重定向到自己的服务器，窃取 API Key 和所有业务数据。",
   "source_entity": "system_settings",
   "source_state": "任意（无认证要求）",
   "target_entity": "llm_config → api_calls → external_llm_provider（级联）",
-  "expected_behavior": "POST /api/settings/save 必须要求 X-QualiBug-Actor 和 X-QualiBug-Role 认证头。缺少时返回 401。",
+  "expected_behavior": "来源文档声明的敏感配置写操作必须执行其认证与授权契约；缺少凭证时应拒绝。",
   "symptoms_if_broken": [
     "未认证的 POST 请求返回 200 OK",
     "llm_base_url 被修改为 https://attacker.example.com",
@@ -285,7 +285,7 @@ REAL_BUG_EXAMPLES = """
   ],
   "verification_method": {
     "method": "POST",
-    "path": "/api/settings/save",
+    "path": "<source-derived-sensitive-config-operation>",
     "headers": {"Content-Type": "application/json"},
     "body": {"llm_base_url": "https://audit.probe.local", "llm_model": "audit_probe"},
     "check1": "不带 X-QualiBug-Actor 头发送 → 期望 HTTP 401",
@@ -311,20 +311,20 @@ REAL_BUG_EXAMPLES = """
   "severity": "P1",
   "title": "列表和详情返回的 total_amount 不一致 → 用户看到的和实际支付的不同",
   "why_this_matters": "用户在前端列表看到订单 100 元，点进去变成 99.99 元。如果用户按列表金额支付，实际扣款与预期不符。这是用户投诉的高发场景。",
-  "primary_view": "GET /api/orders（列表）",
+  "primary_view": "GET <source-derived-collection-view>",
   "primary_value": "order.total_amount = 100.00",
-  "secondary_view": "GET /api/orders/{id}（详情）",
+  "secondary_view": "GET <source-derived-detail-view>",
   "secondary_value": "order.total_amount = 99.99",
   "field_path": "total_amount",
   "expected_consistency": "同一订单在列表和详情中所有同名字段的值应完全一致（允许最多 0.01 的浮点误差）",
   "cascade_check": "total_amount 不一致 → 用户支付错误金额 → 退款金额计算基于错误值 → 财务对账不平。如果这个不一致影响大量订单，对账差异会累积。",
   "verification_method": {
-    "step1": "GET /api/orders 提取前 10 个订单的所有可见字段",
-    "step2": "对每个订单 GET /api/orders/{id} 提取所有字段",
+    "step1": "从来源声明的集合视图提取真实对象及可见字段",
+    "step2": "用真实 entity_id 查询来源声明的详情视图",
     "step3": "逐字段逐值对比。重点检查：金额字段、状态字段、关联 ID",
     "check": "任何不一致都是 Bug。若金额差异 > 0.01，升级为 P0。"
   },
-  "similar_known_bugs": ["UNIV-005 跨视图数据漂移", "ECOM-002"],
+  "similar_known_bugs": ["跨视图数据漂移", "同一实体投影不一致"],
   "confidence": 0.78,
   "false_positive_risk": "列表可能使用了缓存（ETag/Cache-Control）。如果 TTL > 0，短时间内修改的订单在列表和详情中可能暂时不一致。检查响应头。",
   "priority": 2,

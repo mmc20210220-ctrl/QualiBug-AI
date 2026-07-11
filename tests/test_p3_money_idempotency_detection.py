@@ -212,9 +212,12 @@ def _result(tmp_path_factory: pytest.TempPathFactory) -> dict:
                 "steps": [
                     {"method": "POST", "path": "/api/orders", "expected_status": 201,
                      "body": {"product_id": "p1", "quantity": 1}},
-                    # Second and third steps are idempotent + money conservation probes
-                    # that the buggy SUT violates (returns 200 instead of the expected
-                    # 409/400). HttpStatusOracle + IdempotencyOracle should flag both.
+                    {"method": "POST", "path": "/api/orders/{id}/pay", "expected_status": 200,
+                     "body": {"amount": 100, "idempotency_key": "pay-once"}},
+                    {"method": "POST", "path": "/api/orders/{id}/pay", "expected_status": 409,
+                     "body": {"amount": 100, "idempotency_key": "pay-once"}},
+                    {"method": "POST", "path": "/api/orders/{id}/refund", "expected_status": 400,
+                     "body": {"amount": 250}},
                 ],
                 "cleanup_steps": [
                     {"method": "DELETE", "path": "/api/orders/{id}", "expected_status": 204},
@@ -225,6 +228,7 @@ def _result(tmp_path_factory: pytest.TempPathFactory) -> dict:
         ctx = {
             "source_manifest": manifest,
             "scope_id": SCOPE, "environment_ref": ENV,
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write",
             "execution_approval_id": approval["approval_id"],
             "test_data_contract": {

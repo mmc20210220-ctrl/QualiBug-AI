@@ -12,6 +12,18 @@ from ai_test_asset_center.private_pilot_server import install_customer_delivery_
 from ai_test_asset_center.private_pilot_service import PrivatePilotHandler
 
 
+def _identity(item_id: str) -> dict[str, str]:
+    return {
+        "candidate_id": f"candidate-{item_id}",
+        "slice_id": f"slice-{item_id}",
+        "obligation_id": f"obligation-{item_id}",
+        "experiment_id": f"experiment-{item_id}",
+        "execution_id": f"execution-{item_id}",
+        "evidence_id": f"evidence-{item_id}",
+        "finding_id": f"finding-{item_id}",
+    }
+
+
 def test_build_command_center_exposes_grouped_defect_summary_with_normalized_paths(monkeypatch, tmp_path) -> None:
     install_customer_delivery_gate_patch()
     handler = PrivatePilotHandler.__new__(PrivatePilotHandler)
@@ -25,12 +37,13 @@ def test_build_command_center_exposes_grouped_defect_summary_with_normalized_pat
     monkeypatch.setattr(display_ready_formatter, "sanitize_customer_evidence_payload", lambda payload: payload)
     monkeypatch.setattr(handler, "_v12_findings", lambda report, enterprise_docs=None: [
         {
+            **_identity("BUG-1"),
             "risk_id": "BUG-1",
             "risk_type": "state_machine",
             "bug_status": "reproduced",
             "gate_passed": True,
             "reproduction": {"method": "POST", "path": "/api/orders/ord_123/cancel", "is_synthetic": False, "har_evidence": {"status_code": 200}},
-            "raw_evidence": {"has_real_evidence": True, "timestamp": "2026-07-07T18:20:00Z", "request_raw": {"method": "POST", "path": "/api/orders/ord_123/cancel"}, "response_raw": {"status_code": 200}},
+            "raw_evidence": {"has_real_evidence": True, "timestamp": "2026-07-07T18:20:00Z", "request_raw": {"method": "POST", "path": "/api/orders/ord_123/cancel"}, "response_raw": {"status_code": 200}, "sandbox_write": {"cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/BUG-1"}}},
             "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
             "evidence_status": {"semantic_verdict": "SEMANTIC_CONFIRMED", "business_evidence_status": "VALIDATED", "final_review_status": "VALIDATED_CANDIDATE", "missing_requirements": []},
             "expected": "不应允许取消",
@@ -38,12 +51,13 @@ def test_build_command_center_exposes_grouped_defect_summary_with_normalized_pat
             "regression_suggestions": ["编写针对 POST /api/orders/{id}/cancel 的回归测试"],
         },
         {
+            **_identity("BUG-2"),
             "risk_id": "BUG-2",
             "risk_type": "state_machine",
             "bug_status": "reproduced",
             "gate_passed": True,
             "reproduction": {"method": "POST", "path": "/api/orders/ord_456/cancel", "is_synthetic": False, "har_evidence": {"status_code": 200}},
-            "raw_evidence": {"has_real_evidence": True, "timestamp": "2026-07-07T18:21:00Z", "request_raw": {"method": "POST", "path": "/api/orders/ord_456/cancel"}, "response_raw": {"status_code": 200}},
+            "raw_evidence": {"has_real_evidence": True, "timestamp": "2026-07-07T18:21:00Z", "request_raw": {"method": "POST", "path": "/api/orders/ord_456/cancel"}, "response_raw": {"status_code": 200}, "sandbox_write": {"cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/BUG-2"}}},
             "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
             "evidence_status": {"semantic_verdict": "SEMANTIC_CONFIRMED", "business_evidence_status": "VALIDATED", "final_review_status": "VALIDATED_CANDIDATE", "missing_requirements": []},
             "expected": "不应允许取消",
@@ -51,12 +65,13 @@ def test_build_command_center_exposes_grouped_defect_summary_with_normalized_pat
             "regression_suggestions": ["编写针对 POST /api/orders/{id}/cancel 的回归测试"],
         },
         {
+            **_identity("BUG-3"),
             "risk_id": "BUG-3",
             "risk_type": "concurrency",
             "bug_status": "reproduced",
             "gate_passed": True,
             "reproduction": {"method": "POST", "path": "/api/payments/pay", "is_synthetic": False, "har_evidence": {"status_code": 201}},
-            "raw_evidence": {"has_real_evidence": True, "timestamp": "2026-07-07T18:22:00Z", "request_raw": {"method": "POST", "path": "/api/payments/pay"}, "response_raw": {"status_code": 201}},
+            "raw_evidence": {"has_real_evidence": True, "timestamp": "2026-07-07T18:22:00Z", "request_raw": {"method": "POST", "path": "/api/payments/pay"}, "response_raw": {"status_code": 201}, "sandbox_write": {"cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/BUG-3"}}},
             "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
             "evidence_status": {"semantic_verdict": "SEMANTIC_CONFIRMED", "business_evidence_status": "VALIDATED", "final_review_status": "VALIDATED_CANDIDATE", "missing_requirements": []},
             "expected": "支付应幂等",

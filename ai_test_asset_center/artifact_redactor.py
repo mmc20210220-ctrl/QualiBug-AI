@@ -1,0 +1,280 @@
+"""Unified recursive artifact redaction at every persistence boundary.
+
+All JSON/JSONL/report/evaluator-submission writes must pass through this module
+before hitting disk. Runtime may resolve credentials via secret_ref; persisted
+artifacts keep only secret_present, secret type, irreversible fingerprint, and
+vault reference — never the secret value.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+import time
+from pathlib import Path
+from typing import Any
+
+
+SCHEMA_VERSION = "qualibug.artifact-redactor.v1"
+ARTIFACT_REPLACE_ATTEMPTS = 20
+ARTIFACT_REPLACE_RETRY_SECONDS = 0.1
+
+SENSITIVE_KEY_RE = re.compile(
+    r"(?:password|passwd|pwd|secret|token|authorization|cookie|api[_-]?key|"
+    r"private[_-]?key|access[_-]?key|client[_-]?secret|session|bearer|"
+    r"dsn|connection[_-]?string|credentials?)",
+    re.I,
+)
+# Metadata keys that describe secrets without holding values.
+SAFE_META_KEY_RE = re.compile(
+    r"(?:secret_present|secret_type|secret_ref|vault_ref|fingerprint|"
+    r"hash|redacted|placeholder|status|count|enabled|required|present|"
+    r"path|mode|name|prefix|type)$",
+    re.I,
+)
+JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b")
+BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._\-+=/]{12,}\b", re.I)
+BASIC_RE = re.compile(r"\bBasic\s+[A-Za-z0-9+/=]{12,}\b", re.I)
+API_KEY_RE = re.compile(r"\b(?:sk|pk|rk|ak)-[A-Za-z0-9]{12,}\b")
+PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+)
+DSN_CRED_RE = re.compile(
+    r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|https?)://"
+    r"[^\s:/@]+:[^\s@/]+@"
+)
+COOKIE_HEADER_RE = re.compile(r"(?i)(?:^|[\r\n])Cookie:\s*[^\r\n]+")
+PASSWORD_ASSIGN_RE = re.compile(
+    r'(?i)("?(?:password|passwd|pwd|client_secret|api_key|access_token|token)"?\s*[:=]\s*)(["\']?)([^"\'\s,}\]]+)(\2)'
+)
+SAFE_PLACEHOLDER_RE = re.compile(
+    r"(?:<\s*(?:FILL|REDACTED|TODO|REPLACE|SANDBOX)[^>]*>|\*\*\*|redacted|placeholder|secret_ref:)",
+    re.I,
+)
+
+
+class ArtifactSecretLeakError(RuntimeError):
+    """Raised when a high-confidence secret remains after redaction."""
+
+    def __init__(self, message: str, *, scan_result: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.scan_result = scan_result or {}
+
+
+def _fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def _secret_record(*, secret_type: str, value: str) -> dict[str, Any]:
+    return {
+        "secret_present": True,
+        "secret_type": secret_type,
+        "fingerprint": _fingerprint(value),
+        "value": "<REDACTED>",
+    }
+
+
+def _is_safe_placeholder(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if text == "<REDACTED>" or text.startswith("<REDACTED"):
+        return True
+    return bool(SAFE_PLACEHOLDER_RE.search(text))
+
+
+def _redact_string(text: str) -> tuple[str, list[str]]:
+    hits: list[str] = []
+    out = text
+
+    def _sub(pattern: re.Pattern[str], label: str, replacement: str) -> None:
+        nonlocal out
+        if pattern.search(out):
+            hits.append(label)
+            out = pattern.sub(replacement, out)
+
+    _sub(PRIVATE_KEY_RE, "private_key", "<REDACTED_PRIVATE_KEY>")
+    _sub(JWT_RE, "jwt", "<REDACTED_JWT>")
+    _sub(BEARER_RE, "bearer", "Bearer <REDACTED>")
+    _sub(BASIC_RE, "basic", "Basic <REDACTED>")
+    _sub(API_KEY_RE, "api_key", "<REDACTED_API_KEY>")
+    _sub(DSN_CRED_RE, "dsn_credential", "<REDACTED_DSN>")
+    _sub(COOKIE_HEADER_RE, "cookie", "\nCookie: <REDACTED>")
+    if PASSWORD_ASSIGN_RE.search(out):
+        hits.append("password_assignment")
+        out = PASSWORD_ASSIGN_RE.sub(r'\1\2<REDACTED>\2', out)
+    return out, hits
+
+
+def _redact_value(value: Any, *, key: str = "", depth: int = 0) -> tuple[Any, list[dict[str, Any]]]:
+    events: list[dict[str, Any]] = []
+    if depth > 64:
+        return value, events
+
+    key_l = str(key or "")
+    sensitive_key = bool(SENSITIVE_KEY_RE.search(key_l)) and not bool(SAFE_META_KEY_RE.search(key_l))
+
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for child_key, child_val in value.items():
+            redacted, child_events = _redact_value(child_val, key=str(child_key), depth=depth + 1)
+            out[str(child_key)] = redacted
+            events.extend(child_events)
+        return out, events
+
+    if isinstance(value, list):
+        out_list: list[Any] = []
+        for index, item in enumerate(value):
+            redacted, child_events = _redact_value(item, key=key, depth=depth + 1)
+            out_list.append(redacted)
+            events.extend(child_events)
+            if index >= 5000:
+                out_list.append("<REDACTED_LIST_TRUNCATED>")
+                break
+        return out_list, events
+
+    if isinstance(value, (bytes, bytearray)):
+        text = value.decode("utf-8", errors="replace")
+        redacted, hits = _redact_string(text)
+        if hits or sensitive_key:
+            events.append({"key": key, "hits": hits or ["sensitive_bytes"], "fingerprint": _fingerprint(text)})
+            return redacted.encode("utf-8"), events
+        return value, events
+
+    if isinstance(value, str):
+        if sensitive_key and value.strip() and not _is_safe_placeholder(value):
+            record = _secret_record(secret_type=key_l or "sensitive_field", value=value)
+            events.append({"key": key, "hits": ["sensitive_key"], "fingerprint": record["fingerprint"]})
+            return "<REDACTED>", events
+        redacted, hits = _redact_string(value)
+        if hits:
+            events.append({"key": key, "hits": hits, "fingerprint": _fingerprint(value)})
+            return redacted, events
+        return value, events
+
+    # Non-string scalars under sensitive keys are not secret values (e.g. family
+    # counts keyed by "authorization"). Only strings/bytes hold credentials.
+    return value, events
+
+
+def redact_artifact(payload: Any) -> tuple[Any, dict[str, Any]]:
+    """Return a deep-copied redacted payload plus a redaction receipt."""
+    cloned = copy.deepcopy(payload)
+    redacted, events = _redact_value(cloned)
+    receipt = {
+        "schema_version": SCHEMA_VERSION,
+        "redaction_applied": bool(events),
+        "event_count": len(events),
+        "events": events[:200],
+        "secret_types": sorted({hit for event in events for hit in event.get("hits") or []}),
+    }
+    return redacted, receipt
+
+
+def scan_for_secrets(payload: Any) -> dict[str, Any]:
+    """Post-redaction high-confidence secret scanner. Fail closed on hits."""
+    issues: list[dict[str, Any]] = []
+
+    def walk(value: Any, path: str = "$", key: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child_val in value.items():
+                child_path = f"{path}.{child_key}"
+                key_l = str(child_key)
+                if (
+                    SENSITIVE_KEY_RE.search(key_l)
+                    and not SAFE_META_KEY_RE.search(key_l)
+                    and isinstance(child_val, str)
+                    and child_val.strip()
+                    and not _is_safe_placeholder(child_val)
+                    and child_val != "<REDACTED>"
+                ):
+                    issues.append({
+                        "path": child_path,
+                        "key": key_l,
+                        "reason": "sensitive_key_unredacted",
+                        "preview": child_val[:8] + "…",
+                    })
+                walk(child_val, child_path, key_l)
+            return
+        if isinstance(value, list):
+            for index, item in enumerate(value[:2000]):
+                walk(item, f"{path}[{index}]", key)
+            return
+        if not isinstance(value, str) or _is_safe_placeholder(value):
+            return
+        for label, pattern in (
+            ("jwt", JWT_RE),
+            ("bearer", BEARER_RE),
+            ("basic", BASIC_RE),
+            ("api_key", API_KEY_RE),
+            ("private_key", PRIVATE_KEY_RE),
+            ("dsn_credential", DSN_CRED_RE),
+        ):
+            if pattern.search(value):
+                issues.append({
+                    "path": path,
+                    "key": key,
+                    "reason": f"raw_{label}",
+                    "preview": value[:8] + "…",
+                })
+                break
+
+    walk(payload)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "safe": len(issues) == 0,
+        "issue_count": len(issues),
+        "issues": issues[:100],
+    }
+
+
+def redact_and_validate(payload: Any) -> tuple[Any, dict[str, Any]]:
+    """Redact then scan. Raises ArtifactSecretLeakError on residual secrets."""
+    redacted, receipt = redact_artifact(payload)
+    scan = scan_for_secrets(redacted)
+    combined = {
+        "schema_version": SCHEMA_VERSION,
+        "redaction": receipt,
+        "secret_scan": scan,
+        "safe_to_persist": bool(scan.get("safe")),
+    }
+    if not scan.get("safe"):
+        raise ArtifactSecretLeakError(
+            f"artifact secret scan failed with {scan.get('issue_count')} issue(s)",
+            scan_result=combined,
+        )
+    return redacted, combined
+
+
+def write_json_redacted(path: Path | str, payload: Any, *, indent: int = 2) -> dict[str, Any]:
+    """Write JSON only after recursive redaction and secret scan succeed."""
+    target = Path(path)
+    redacted, receipt = redact_and_validate(payload)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(redacted, ensure_ascii=False, indent=indent, default=str),
+            encoding="utf-8",
+        )
+    except Exception:
+        if temporary.exists():
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+        raise
+
+    for attempt in range(ARTIFACT_REPLACE_ATTEMPTS):
+        try:
+            temporary.replace(target)
+            return receipt
+        except PermissionError as exc:
+            if attempt + 1 >= ARTIFACT_REPLACE_ATTEMPTS:
+                raise PermissionError(
+                    exc.errno or 5,
+                    f"{exc}; recoverable artifact retained at {temporary}",
+                ) from exc
+            time.sleep(ARTIFACT_REPLACE_RETRY_SECONDS)
+    return receipt

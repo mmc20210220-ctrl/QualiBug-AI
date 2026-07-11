@@ -409,6 +409,7 @@ def _build_campaign_context(
         "source_manifest": manifest,
         "scope_id": SCOPE_ID,
         "environment_ref": ENVIRONMENT_REF,
+        "environment_type": "test",
         "execution_mode": "approved_sandbox_write",
         "execution_approval_id": approval_id,
         "test_data_contract": {

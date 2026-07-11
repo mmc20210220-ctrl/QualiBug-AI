@@ -3,6 +3,10 @@
   "purpose": "Configurable semantic hints for enterprise knowledge parsing. Product teams may replace or extend this asset per deployment without changing parser code.",
   "role_words": {
     "admin": ["admin", "administrator", "\u7ba1\u7406\u5458", "\u7cfb\u7edf\u7ba1\u7406\u5458"],
+    "buyer": ["buyer", "customer", "\u4e70\u5bb6", "\u8d2d\u4e70\u8005"],
+    "seller": ["seller", "merchant", "\u5356\u5bb6", "\u5546\u5bb6"],
+    "warehouse": ["warehouse", "stock keeper", "\u4ed3\u5e93", "\u5e93\u7ba1"],
+    "auditor": ["auditor", "audit", "\u5ba1\u8ba1", "\u7a3d\u6838"],
     "operator": ["operator", "\u8fd0\u8425", "\u64cd\u4f5c\u5458", "\u5ba2\u670d"],
     "approver": ["approver", "approve", "\u5ba1\u6279\u4eba", "\u5ba1\u6838\u4eba", "\u590d\u6838\u4eba"],
     "finance": ["finance", "accountant", "\u8d22\u52a1", "\u4f1a\u8ba1", "\u51fa\u7eb3"],
@@ -18,6 +22,7 @@
     "data_conservation": ["balance", "amount", "ledger", "inventory", "stock", "quota", "\u91d1\u989d", "\u4f59\u989d", "\u8d26\u672c", "\u5e93\u5b58", "\u989d\u5ea6", "\u6570\u91cf"],
     "data_reconciliation": ["reconcile", "match", "consistency", "\u5bf9\u8d26", "\u4e00\u81f4", "\u5339\u914d", "\u540c\u6b65"],
     "idempotency": ["idempotent", "duplicate", "retry", "\u5e42\u7b49", "\u91cd\u590d", "\u91cd\u8bd5"],
+    "concurrency": ["concurrent", "concurrency", "parallel", "race condition", "mutual exclusion", "\u5e76\u53d1", "\u7ade\u6001", "\u4e92\u65a5"],
     "async_event": ["callback", "webhook", "event", "message", "notify", "queue", "sms", "back_in_stock", "restock", "inventory_sync", "inventory_restore", "\u56de\u8c03", "\u4e8b\u4ef6", "\u6d88\u606f", "\u901a\u77e5", "\u77ed\u4fe1", "\u5f02\u6b65", "\u5230\u8d27\u63d0\u9192", "\u8865\u8d27\u63d0\u9192", "\u5e93\u5b58\u540c\u6b65", "\u5e93\u5b58\u6062\u590d", "\u6062\u590d\u5e93\u5b58", "\u5e93\u5b58\u56de\u8865"],
     "sensitive_data": ["medical", "patient", "pii", "personal", "\u654f\u611f", "\u75c5\u5386", "\u9690\u79c1", "\u8eab\u4efd\u8bc1"],
     "historical_regression": ["bug", "defect", "incident", "issue", "\u7f3a\u9677", "\u6545\u969c", "\u5de5\u5355", "\u4e8b\u6545"]
@@ -76,7 +81,7 @@
     "\u5220\u9664": ["delete", "remove"],
     "\u767b\u5f55": ["login", "signin", "auth"],
     "\u6ce8\u518c": ["register", "signup"],
-    "\u5ba1\u6279": ["approve"],
+    "\u5ba1\u6279": ["approve", "reject", "review"],
     "\u6279\u51c6": ["approve"],
     "\u9a73\u56de": ["reject"],
     "\u62d2\u7edd": ["reject"],
@@ -94,11 +99,24 @@
     "\u5bfc\u51fa": ["export"],
     "\u5bfc\u5165": ["import"],
     "\u51bb\u7ed3": ["freeze", "lock"],
-    "\u89e3\u51bb": ["unfreeze", "unlock"]
+    "\u89e3\u51bb": ["unfreeze", "unlock"],
+    "\u67e5\u770b": ["read", "view", "list"],
+    "\u6d4f\u89c8": ["read", "view", "list"],
+    "\u67e5\u8be2": ["read", "query", "list"],
+    "\u7ba1\u7406": ["manage"],
+    "\u8c03\u6574": ["adjust", "update"],
+    "\u7533\u8bf7": ["apply", "request", "create"],
+    "\u5904\u7406": ["process", "review", "update"],
+    "read": ["read", "view", "list", "get"],
+    "create": ["create", "add", "post"],
+    "update": ["update", "modify", "edit", "patch"],
+    "delete": ["delete", "remove"],
+    "manage": ["manage"]
   },
   "entity_token_lexicon": {
     "comment": "Language-neutral Chinese->English ENTITY noun bridge. Lets PRD sections written in Chinese (e.g. '退款', '订单') bind to the correct source-derived entity (refund/order) when the API catalog is English-only. Extend per deployment; not domain hardcoding.",
     "\u8ba2\u5355": ["order"],
+    "\u4e0b\u5355": ["order"],
     "\u5546\u54c1": ["product", "item"],
     "\u5e93\u5b58": ["inventory", "stock"],
     "\u4f18\u60e0\u5238": ["coupon"],
@@ -113,6 +131,12 @@
     "\u53d1\u7968": ["invoice"],
     "\u8ba2\u9605": ["subscription"],
     "\u804a\u5929": ["chat", "message"],
-    "\u6587\u4ef6": ["file", "document"]
+    "\u6587\u4ef6": ["file", "document"],
+    "\u5ba1\u8ba1": ["audit"],
+    "\u65e5\u5fd7": ["log"],
+    "\u6d41\u6c34": ["transaction", "ledger"],
+    "\u8d22\u52a1": ["finance"],
+    "\u5bc6\u7801": ["password", "credential"],
+    "\u4f59\u989d": ["balance", "wallet"]
   }
 }

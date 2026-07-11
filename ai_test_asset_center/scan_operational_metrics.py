@@ -36,7 +36,12 @@ def _cleanup_failure_count(value: Any) -> int:
             cleanup = item.get("cleanup")
             if isinstance(cleanup, dict):
                 status = str(cleanup.get("status") or "").strip().lower()
-                if status in {"failed", "cleanup_incomplete", "incomplete"}:
+                if status in {
+                    "failed",
+                    "cleanup_incomplete",
+                    "incomplete",
+                    "not_reversible",
+                }:
                     failures.add(f"{path}.cleanup")
             if str(item.get("status") or "").strip().lower() == "cleanup_incomplete":
                 failures.add(path)

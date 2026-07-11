@@ -385,11 +385,21 @@ export function Dashboard() {
   const regressionSummary = asRecord(record.regression_summary) as unknown as RegressionSummary;
   const valueMetrics = asRecord(record.value_metrics);
   const scanMeta = asRecord(record.scan_meta);
+  const formalCounts = asRecord(record.formal_count_projection);
   const benchmarkMetrics = asRecord(scanMeta.benchmark_metrics);
+  const externalEvaluation = asRecord(
+    Object.keys(asRecord(record.external_evaluation)).length > 0
+      ? record.external_evaluation
+      : scanMeta.external_evaluation,
+  );
+  const qualityClaimStatus = asText(record.quality_claim_status) || asText(scanMeta.quality_claim_status) || asText(externalEvaluation.measurement_status) || 'NOT_MEASURED';
+  const externalMeasured = qualityClaimStatus === 'MEASURED' && asText(externalEvaluation.measurement_status) === 'MEASURED';
+  const externalDisplay = asRecord(externalEvaluation.display);
+  const qualitySuppressed = !externalMeasured || Boolean(externalDisplay.suppress_quality_score) || Boolean(benchmarkMetrics.commercial_quality_suppressed);
   // ── P3: Coverage Matrix from Bug Ontology ──
   const coverageData = asRecord(record.coverage_matrix);
   const evidenceClass = asRecord(record.evidence_classification);
-  const benchmarkActive = Boolean(benchmarkMetrics.benchmark_active);
+  const benchmarkActive = Boolean(benchmarkMetrics.benchmark_active) && !qualitySuppressed;
   const benchmarkFailed = asText(benchmarkMetrics.status) === 'FAILED_SAFE';
   const gatePatch = getGatePatchStatus(record);
   const gatePatchEnabled = Boolean(gatePatch.patched);
@@ -422,15 +432,13 @@ export function Dashboard() {
   const totalRiskCount = findings.length;
   const campaignAttempted = asNum(campaign.attempted_slice_count);
   const campaignConfirmed = firstNum(campaignSummary.current_campaign_confirmed_slice_count, campaignSummary.confirmed_slice_count, campaign.confirmed_slice_count);
-  const campaignCurrentDefects = asNum(campaignSummary.current_campaign_customer_ready_defect_count);
   const campaignCurrentRawFindings = asNum(campaignSummary.current_campaign_bundle_finding_count_raw);
-  const campaignFamilyDefects = asNum(campaignSummary.family_customer_ready_defect_count);
   const p0Count = findings.filter((finding) => finding.severity === 'P0').length;
   const highPriorityCount = p0Count + findings.filter((finding) => finding.severity === 'P1').length;
   // Raw finding counters are internal observability only — never fall back into customer defect counts.
   const currentScanFindings = asNum(scanMeta.current_report_total_findings, asNum(scanMeta.total_findings, campaignCurrentRawFindings));
-  const currentScanDefects = asNum(scanMeta.current_report_customer_ready_defect_count, asNum(scanMeta.customer_ready_defects, campaignCurrentDefects || totalRiskCount));
-  const familyShelfDefects = asNum(scanMeta.family_customer_ready_defect_count, campaignFamilyDefects || totalRiskCount);
+  const currentScanDefects = asNum(formalCounts.formal_customer_deliverable_count, totalRiskCount);
+  const familyShelfDefects = currentScanDefects;
   const currentScanP0Count = Math.min(p0Count, currentScanDefects);
   const currentScanHighPriorityCount = Math.min(highPriorityCount, currentScanDefects);
   const shelfCarryoverCount = Math.max(0, familyShelfDefects - currentScanDefects);
@@ -603,7 +611,7 @@ export function Dashboard() {
             <span><em>范围</em><b>{campaignScope || '待登记'}</b></span>
             <span><em>环境</em><b>{campaignEnvironment || '待登记'}</b></span>
             <span><em>确认回执</em><b>{campaignConfirmed}/{campaignAttempted || 0}</b></span>
-            <span><em>本轮缺陷</em><b>{currentScanDefects || campaignCurrentDefects || 0} 条</b></span>
+            <span><em>本轮缺陷</em><b>{currentScanDefects} 条</b></span>
             <span><em>缺陷货架</em><b>{familyShelfDefects} 条</b></span>
             <span><em>历史延续</em><b>{campaignCarryoverDefects} 条</b></span>
             <span><em>覆盖缺口</em><b>{coverageGaps}</b></span>
@@ -611,7 +619,7 @@ export function Dashboard() {
           {(campaignCurrentRawFindings > 0 || currentScanFindings > currentScanDefects) && (
             <div className="customer-secondary-meta">
               <span><em>内部原始 finding（非客户交付）</em><b>{campaignCurrentRawFindings || Math.max(0, currentScanFindings - currentScanDefects)}</b></span>
-              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮可交付 {currentScanDefects || campaignCurrentDefects || 0} → 货架 {familyShelfDefects}；原始 finding 仅供内部观测</b></span>
+              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮可交付 {currentScanDefects} → 当前正式范围 {familyShelfDefects}；原始 finding 仅供内部观测</b></span>
             </div>
           )}
         </article>
@@ -644,6 +652,23 @@ export function Dashboard() {
           </article>
         );
       })()}
+      {qualitySuppressed && (
+        <article className="customer-secondary-card muted">
+          <span className="customer-value-kicker">外部质量评测</span>
+          <h3>{asText(externalDisplay.quality_label) || '尚未完成外部质量评测'}</h3>
+          <p>
+            商业召回率/精度/质量分仅来自外部隐藏真值评测。当前状态为 {qualityClaimStatus}
+            {asText(externalEvaluation.reason) ? `（${asText(externalEvaluation.reason)}）` : ''}，
+            不显示质量分，也不把内部漏斗计数解读为能力指标。
+          </p>
+          <div className="customer-secondary-meta">
+            <span><em>正式可交付缺陷</em><b>{asNum(externalEvaluation.formal_customer_deliverable_count, asNum(asRecord(record.formal_count_projection).formal_customer_deliverable_count, currentScanDefects))}</b></span>
+            <span><em>漏斗已验证</em><b>{funnelValidated}</b></span>
+            <span><em>内部候选</em><b>{funnelCandidates}</b></span>
+            <span><em>商业质量分</em><b>—</b></span>
+          </div>
+        </article>
+      )}
       {benchmarkFailed && (
         <article className="customer-secondary-card muted">
           <span className="customer-value-kicker">检测能力 Benchmark</span>

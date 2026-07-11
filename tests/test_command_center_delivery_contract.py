@@ -6,6 +6,13 @@ from ai_test_asset_center.command_center_delivery_contract import normalize_comm
 def _ready_finding() -> dict:
     return {
         "id": "BUG-1",
+        "candidate_id": "candidate-BUG-1",
+        "slice_id": "slice-BUG-1",
+        "obligation_id": "obligation-BUG-1",
+        "experiment_id": "experiment-BUG-1",
+        "execution_id": "execution-BUG-1",
+        "evidence_id": "evidence-BUG-1",
+        "finding_id": "finding-BUG-1",
         "title": "支付金额守恒失败",
         "bug_status": "reproduced",
         "gate_passed": True,
@@ -25,6 +32,9 @@ def _ready_finding() -> dict:
             "timestamp": "2026-07-06T12:00:00Z",
             "request_raw": {"method": "POST", "path": "/api/payments"},
             "response_raw": {"status_code": 200, "body": {"paid_amount": 1}},
+            "sandbox_write": {
+                "cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/BUG-1"}
+            },
         },
         "reproduction": {
             "method": "POST",

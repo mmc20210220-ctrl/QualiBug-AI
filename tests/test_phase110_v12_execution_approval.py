@@ -29,6 +29,7 @@ def test_v12_authorizes_source_bound_nonproduction_without_per_probe_approval(tm
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write",
             "source_manifest": SOURCE_MANIFEST,
         },

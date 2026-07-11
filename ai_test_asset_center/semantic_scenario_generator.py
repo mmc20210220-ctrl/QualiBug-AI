@@ -355,6 +355,81 @@ class SemanticScenarioGenerator:
         )
         if runtime_upgrade is not None:
             return runtime_upgrade
+        bound_method = str(slice_meta.get("_bound_method") or "").strip().upper()
+        bound_path = str(slice_meta.get("_bound_path") or "").strip()
+        if (
+            bound_method in {"POST", "PUT", "PATCH", "DELETE"}
+            and bound_path.startswith("/")
+            # A separate documented GET observation can still support a
+            # source-bound mutation scenario (for example a dependency write
+            # whose state is observed through /orders).  The dangerous case is
+            # specifically when the generic fallback has no read surface and
+            # would turn the mutation path itself into GET.
+            and str(observation_path or "").rstrip("/") == bound_path.rstrip("/")
+        ):
+            family = str(slice_meta.get("_hypothesis_family") or "").strip().lower()
+            if family in {"idempotency", "idempotent", "duplicate_submit"}:
+                bound_scenario = self._bound_idempotency_scenario(
+                    slice_meta=slice_meta,
+                    entity=entity,
+                    invariant=invariant,
+                    refs=refs,
+                    discovery_round=discovery_round,
+                    api_doc=api_doc,
+                    method=bound_method,
+                    path=bound_path,
+                )
+                if bound_scenario is not None:
+                    return bound_scenario
+            # Other source-bound mutation hypotheses may still be executable
+            # when their family does not claim a lifecycle precondition. Build
+            # the documented method/body directly instead of silently turning
+            # the route into GET.
+            #
+            # SPC reach fix: previously state/lifecycle families skipped
+            # `_bound_write_scenario` and always fell through to empty
+            # plan_only. That left selected POST routes (e.g. password/reset,
+            # admin user status) never HTTP-executed even when the documented
+            # method/body could be materialized. Prefer documented-method
+            # execution when materialization succeeds; only keep plan_only
+            # when `_bound_write_scenario` cannot build steps (never degrade
+            # to GET of the mutation path).
+            bound_scenario = self._bound_write_scenario(
+                slice_meta=slice_meta,
+                entity=entity,
+                invariant=invariant,
+                refs=refs,
+                discovery_round=discovery_round,
+                api_doc=api_doc,
+                method=bound_method,
+                path=bound_path,
+            )
+            if bound_scenario is not None:
+                return bound_scenario
+            # Never convert a source-bound mutation hypothesis into a GET of the
+            # same action path. Without a materialized write/precondition
+            # contract that changes both the method and the tested behavior and
+            # can produce false customer findings (for example Cannot GET 404).
+            return ExecutableScenario(
+                id=self._id(entity, "bound_write_precondition_missing", bound_method, bound_path),
+                title=f"[Bound write plan gap] {entity}: {bound_method} {bound_path}",
+                description=invariant[:300],
+                category="invariant",
+                severity="P1",
+                entity=entity,
+                preconditions=["source-bound mutation requires executable state/body/actor prerequisites"],
+                actors=[],
+                steps=[],
+                oracle_rules=["ConsistencyOracle.source_grounded_invariant", invariant[:300]],
+                confidence=max(float(slice_meta.get("priority") or 0.0), 0.4),
+                execution_policy="plan_only_requires_fixture",
+                evidence_gaps=["BOUND_WRITE_PRECONDITION_CONTRACT_MISSING"],
+                source_refs=refs,
+                behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+                behavior_slice_kind="invariant",
+                discovery_round=discovery_round,
+                selection_origin="active_slice_fallback_materialized",
+            )
         state_or_rule = states[0] if states else invariant[:120]
         steps: list[ScenarioStep] = []
         observation_path = str(observation_path or "")
@@ -394,6 +469,247 @@ class SemanticScenarioGenerator:
                 selection_origin="active_slice_fallback_materialized",
             )
         return None
+
+    def _bound_idempotency_scenario(
+        self,
+        *,
+        slice_meta: dict[str, Any],
+        entity: str,
+        invariant: str,
+        refs: list[dict[str, str]],
+        discovery_round: int,
+        api_doc: str,
+        method: str,
+        path: str,
+    ) -> ExecutableScenario | None:
+        """Materialize the exact documented mutation twice for idempotency.
+
+        The hypothesis bridge already bound method+path to the source catalog.
+        Revalidate that binding here so scenario generation cannot execute a
+        path introduced only by hypothesis text.
+        """
+        normalized_path = normalize_path_placeholders(path)
+        _, _, endpoints = _api_facts(
+            api_doc,
+            re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I),
+        )
+
+        def shape(value: str) -> str:
+            normalized = normalize_path_placeholders(value)
+            return re.sub(r"\{[A-Za-z_]\w*\}", "{id}", normalized).rstrip("/")
+
+        source_endpoint = next(
+            (
+                item
+                for item in endpoints
+                if str(item.get("method") or "").strip().upper() == method
+                and shape(str(item.get("path") or "")) == shape(normalized_path)
+            ),
+            None,
+        )
+        if source_endpoint is None:
+            return None
+        source_path = normalize_path_placeholders(str(source_endpoint.get("path") or normalized_path))
+        actor = str(
+            slice_meta.get("_permission_actor")
+            or slice_meta.get("_default_actor")
+            or "authenticated"
+        ).strip()
+        steps, resolved_path = self._resolve_entity_steps(
+            source_path,
+            actor=actor,
+            start_order=1,
+            api_doc=api_doc,
+        )
+        body, body_provenance = self._runtime_body_template_with_provenance(
+            api_doc,
+            method,
+            source_path,
+        )
+        body_steps, _ = self._body_binding_resolve_steps(
+            body,
+            actor=actor,
+            start_order=len(steps) + 1,
+            api_doc=api_doc,
+        )
+        steps.extend(body_steps)
+        first_order = len(steps) + 1
+        steps.append(ScenarioStep(
+            order=first_order,
+            action="execute_bound_idempotency_write",
+            api_method=method,
+            api_path=resolved_path,
+            body_template=dict(body),
+            body_provenance=body_provenance,
+            expected_status=200,
+            actor=actor,
+        ))
+        steps.append(ScenarioStep(
+            order=first_order + 1,
+            action="repeat_bound_idempotency_write",
+            api_method=method,
+            api_path=resolved_path,
+            body_template=dict(body),
+            body_provenance=body_provenance,
+            expected_status=200,
+            actor=actor,
+        ))
+        observation_path = next(
+            (
+                str(step.api_path)
+                for step in steps
+                if step.api_method == "GET" and str(step.api_path).startswith("/")
+            ),
+            "",
+        )
+        if observation_path:
+            steps.append(ScenarioStep(
+                order=len(steps) + 1,
+                action="observe_after_bound_idempotency_write",
+                api_method="GET",
+                api_path=observation_path,
+                expected_status=200,
+                actor=actor,
+            ))
+        return ExecutableScenario(
+            id=self._id(entity, "bound_idempotency", method, source_path, invariant),
+            title=f"[Source-bound idempotency] {entity}: repeat {method} {source_path}",
+            description=invariant[:300],
+            category="concurrency",
+            severity="P1",
+            entity=entity,
+            preconditions=[f"bind source prerequisites for {method} {source_path}"],
+            actors=[actor],
+            steps=steps,
+            oracle_rules=[
+                "IdempotencyOracle.duplicate_submit",
+                "ConsistencyOracle.source_grounded_invariant",
+                invariant[:300],
+            ],
+            confidence=max(float(slice_meta.get("priority") or 0.0), 0.65),
+            execution_policy="approved_sandbox_write",
+            evidence_gaps=[],
+            source_refs=refs,
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="invariant",
+            discovery_round=discovery_round,
+            selection_origin="active_slice_fallback_materialized",
+        )
+
+    def _bound_write_scenario(
+        self,
+        *,
+        slice_meta: dict[str, Any],
+        entity: str,
+        invariant: str,
+        refs: list[dict[str, str]],
+        discovery_round: int,
+        api_doc: str,
+        method: str,
+        path: str,
+    ) -> ExecutableScenario | None:
+        """Materialize a source-bound mutation once.
+
+        This path is deliberately conservative about semantics but exact about
+        the source contract: method, route shape and request body come from the
+        documented endpoint.  It is used for cache, tenant, audit, generic
+        consistency, and lifecycle-tagged hypotheses when a dedicated state
+        fixture upgrade is unavailable.  If the documented endpoint cannot be
+        resolved from api_doc, callers must keep the slice plan-only rather
+        than degrading the mutation into a GET of the same path.
+        """
+        normalized_path = normalize_path_placeholders(path)
+        _, _, endpoints = _api_facts(
+            api_doc,
+            re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I),
+        )
+
+        def shape(value: str) -> str:
+            normalized = normalize_path_placeholders(value)
+            return re.sub(r"\{[A-Za-z_]\w*\}", "{id}", normalized).rstrip("/")
+
+        source_endpoint = next(
+            (
+                item
+                for item in endpoints
+                if str(item.get("method") or "").strip().upper() == method
+                and shape(str(item.get("path") or "")) == shape(normalized_path)
+            ),
+            None,
+        )
+        if source_endpoint is None:
+            return None
+        source_path = normalize_path_placeholders(str(source_endpoint.get("path") or normalized_path))
+        actor = str(
+            slice_meta.get("_default_actor")
+            or slice_meta.get("_permission_actor")
+            or "readonly"
+        ).strip()
+        resolve_steps, resolved_path = self._resolve_entity_steps(
+            source_path,
+            actor=actor,
+            start_order=1,
+            api_doc=api_doc,
+        )
+        body, body_provenance = self._runtime_body_template_with_provenance(
+            api_doc,
+            method,
+            source_path,
+        )
+        body_steps, _ = self._body_binding_resolve_steps(
+            body,
+            actor=actor,
+            start_order=len(resolve_steps) + 1,
+            api_doc=api_doc,
+        )
+        steps = [*resolve_steps, *body_steps]
+        steps.append(ScenarioStep(
+            order=len(steps) + 1,
+            action="execute_bound_write",
+            api_method=method,
+            api_path=resolved_path,
+            body_template=dict(body),
+            body_provenance=body_provenance,
+            expected_status=200,
+            actor=actor,
+        ))
+        observation_path = next(
+            (
+                str(step.api_path)
+                for step in resolve_steps
+                if step.api_method in {"GET", "HEAD"} and str(step.api_path).startswith("/")
+            ),
+            "",
+        )
+        if observation_path and observation_path != resolved_path:
+            steps.append(ScenarioStep(
+                order=len(steps) + 1,
+                action="observe_after_bound_write",
+                api_method="GET",
+                api_path=observation_path,
+                expected_status=200,
+                actor=actor,
+            ))
+        return ExecutableScenario(
+            id=self._id(entity, "bound_write", method, source_path, invariant),
+            title=f"[Source-bound write] {entity}: {method} {source_path}",
+            description=invariant[:300],
+            category="invariant",
+            severity="P1",
+            entity=entity,
+            preconditions=[f"source-bound mutation contract for {method} {source_path}"],
+            actors=[actor],
+            steps=steps,
+            oracle_rules=["ConsistencyOracle.source_grounded_invariant", invariant[:300]],
+            confidence=max(float(slice_meta.get("priority") or 0.0), 0.55),
+            execution_policy="approved_sandbox_write",
+            evidence_gaps=[],
+            source_refs=refs,
+            behavior_slice_id=str(slice_meta.get("slice_id") or ""),
+            behavior_slice_kind="invariant",
+            discovery_round=discovery_round,
+            selection_origin="active_slice_fallback_materialized",
+        )
 
     def _build_system_promise_invariant_scenario(
         self,
@@ -755,6 +1071,12 @@ class SemanticScenarioGenerator:
                 discovery_round=discovery_round,
             )
         _, _, endpoints = _api_facts(api_doc, re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I))
+        declared_get_paths = list(dict.fromkeys(
+            normalize_path_placeholders(str(item.get("path") or ""))
+            for item in endpoints
+            if str(item.get("method") or "").upper() == "GET"
+            and str(item.get("path") or "").startswith("/")
+        ))
         steps: list[ScenarioStep] = []
         order = 1
         gaps: list[str] = []
@@ -847,6 +1169,18 @@ class SemanticScenarioGenerator:
             ))
         else:
             gaps.append("READ_ENDPOINT_NOT_SOURCE_BOUND")
+        requires_path_binding = any(
+            path_has_placeholders(normalize_path_placeholders(str(step.api_path or "")))
+            for step in steps
+        )
+        has_path_binding_source = any(
+            str(step.action or "").startswith(("resolve_", "bootstrap_create_"))
+            or str(step.action or "") == "create_entity"
+            for step in steps
+        )
+        binding_ready = not requires_path_binding or has_path_binding_source
+        if not binding_ready:
+            gaps.append("RUNTIME_PATH_BINDING_SOURCE_NOT_DECLARED")
         return ExecutableScenario(
             id=self._id(entity, transition.from_state, transition.to_state, transition.action),
             title=f"[来源约束{kind}] {entity}: {transition.from_state} -> {transition.to_state}",
@@ -860,13 +1194,19 @@ class SemanticScenarioGenerator:
             is_forbidden_path=forbidden,
             is_boundary_path=bool(transition.is_boundary),
             confidence=0.55 if transition.source_refs else 0.35,
-            execution_policy="approved_sandbox_write",
-            steps=steps,
-            evidence_gaps=gaps,
+            execution_policy="approved_sandbox_write" if binding_ready else "plan_only_requires_fixture",
+            steps=steps if binding_ready else [],
+            evidence_gaps=list(dict.fromkeys(gaps)),
             source_refs=list(transition.source_refs),
             behavior_slice_id=slice_id,
             behavior_slice_kind="transition",
             discovery_round=discovery_round,
+            runtime_hints={
+                "declared_get_paths": declared_get_paths,
+                "source_state": transition.from_state,
+                "target_state": transition.to_state,
+                "source_state_proof_required": True,
+            },
         )
 
     # ── Generic helpers for state-transition scenarios (no hardcoding) ──
@@ -924,11 +1264,14 @@ class SemanticScenarioGenerator:
         ]
         with_ph = [p for p in cands if path_has_placeholders(p)]
         no_ph = [p for p in cands if not path_has_placeholders(p)]
-        # Prefer the :id read endpoint (we have an id from the create step).
-        if with_ph:
-            return with_ph[0]
+        # Prefer source-declared collection reads when available. The runtime
+        # observer projects the bound entity out of the list, so post-transition
+        # evidence does not depend on detail routes that may be documented but
+        # unavailable in a specific non-production target.
         if no_ph:
             return no_ph[0]
+        if with_ph:
+            return with_ph[0]
         return ""
 
     @staticmethod
@@ -997,10 +1340,35 @@ class SemanticScenarioGenerator:
     def _convert_doc_body_to_bindings(value: Any) -> Any:
         """Turn API-doc angle-bracket placeholders into runtime ``{field}`` bindings."""
         if isinstance(value, dict):
-            return {
-                str(key): SemanticScenarioGenerator._convert_doc_body_to_bindings(child)
-                for key, child in value.items()
-            }
+            out: dict[str, Any] = {}
+            for key, child in value.items():
+                converted = SemanticScenarioGenerator._convert_doc_body_to_bindings(child)
+                # Prefer the JSON key's own spelling for identity placeholders so
+                # ``{"orderId":"<order_id>"}`` becomes ``{orderId}`` (not
+                # ``{order_id}``). Runtime extract/bootstrap actions then share
+                # one binding name with the request field.
+                if (
+                    isinstance(converted, str)
+                    and converted.startswith("{")
+                    and converted.endswith("}")
+                    and len(converted) > 2
+                ):
+                    placeholder = converted[1:-1]
+                    key_name = str(key or "").strip()
+                    if key_name and placeholder.lower().replace("_", "") == key_name.lower().replace("_", ""):
+                        converted = "{" + key_name + "}"
+                    elif key_name and (
+                        key_name.lower().endswith("id")
+                        or key_name.lower() in {"sku", "code", "uuid"}
+                    ):
+                        # Doc used a sibling spelling (order_id vs orderId).
+                        from .real_id_resolver import param_field_candidates
+
+                        aliases = {c.lower() for c in param_field_candidates(placeholder)}
+                        if key_name.lower() in aliases or "id" in aliases:
+                            converted = "{" + key_name + "}"
+                out[str(key)] = converted
+            return out
         if isinstance(value, list):
             return [SemanticScenarioGenerator._convert_doc_body_to_bindings(child) for child in value]
         if isinstance(value, str):
@@ -1045,10 +1413,11 @@ class SemanticScenarioGenerator:
     def _bootstrap_create_body(api_doc: str, create_path: str) -> dict[str, Any]:
         """Build a create body for identity bootstrap.
 
-        Drops top-level demo string literals (coupon codes, free-text reasons)
-        that are usually optional in API examples and often exhaust after the
-        first successful create. Keeps arrays/objects, numbers, booleans, and
-        ``{placeholder}`` bindings required for identity materialization.
+        Preserve source-documented scalar strings by default. They are often
+        required business keys (SKU, material code, username, etc.) needed to
+        materialize a real runtime ID. Only drop top-level promotional/discount
+        references because those are frequently optional, one-time, or exhausted
+        demo values that make otherwise valid bootstrap creates fail closed.
         """
         raw = SemanticScenarioGenerator._runtime_body_template(api_doc, "POST", create_path)
         if not isinstance(raw, dict) or not raw:
@@ -1059,7 +1428,11 @@ class SemanticScenarioGenerator:
                 stripped = value.strip()
                 if stripped.startswith("{") and stripped.endswith("}") and len(stripped) > 2:
                     minimized[key] = value
-                # Skip bare demo strings at the top level.
+                    continue
+                key_l = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+                if any(token in key_l for token in ("coupon", "promo", "voucher", "discount")):
+                    continue
+                minimized[key] = value
                 continue
             minimized[key] = value
         return minimized if minimized else dict(raw)
@@ -1090,6 +1463,7 @@ class SemanticScenarioGenerator:
                 field,
                 *param_field_candidates(field),
                 "id", "uuid", "code", "sku",
+                "amount", "payableAmount", "payable_amount", "totalAmount", "total_amount",
             ]))
             collections = body_field_collection_paths(field, api_prefix=api_prefix)
             for collection in collections:
@@ -1142,7 +1516,7 @@ class SemanticScenarioGenerator:
                         api_path=create_path,
                         body_template=dict(create_body),
                         extract_from_response=list(extract_fields),
-                        expected_status=201,
+                        expected_status=200,
                         actor=actor,
                     ))
                     order += 1
@@ -1164,10 +1538,27 @@ class SemanticScenarioGenerator:
         body, body_provenance = SemanticScenarioGenerator._runtime_body_template_with_provenance(
             api_doc, method, path,
         )
+        # Drop optional top-level promo/demo string literals that commonly
+        # exhaust or FK-fail on fresh DBs. Keep placeholders, numbers, arrays.
+        if isinstance(body, dict) and body:
+            promo_tokens = ("coupon", "promo", "voucher", "discountcode", "discount_code")
+            cleaned: dict[str, Any] = {}
+            for key, value in body.items():
+                key_l = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+                if (
+                    isinstance(value, str)
+                    and not (value.startswith("{") and value.endswith("}"))
+                    and any(tok in key_l for tok in promo_tokens)
+                ):
+                    continue
+                cleaned[key] = value
+            if cleaned:
+                body = cleaned
         binding_steps, _ = SemanticScenarioGenerator._body_binding_resolve_steps(
             body, actor=actor, start_order=len(steps) + 1, api_doc=api_doc,
         )
         steps.extend(binding_steps)
+        extract_fields = ["id", "status", "state", "orderId", "order_id", "amount", "payableAmount", "payable_amount"]
         steps.append(ScenarioStep(
             order=len(steps) + 1,
             action=action,
@@ -1177,6 +1568,7 @@ class SemanticScenarioGenerator:
             body_provenance=body_provenance,
             expected_status=expected_status,
             actor=actor,
+            extract_from_response=extract_fields,
         ))
 
     def _dependency(
@@ -1801,8 +2193,27 @@ class SemanticScenarioGenerator:
             candidates.append(primary)
         candidates.extend(alternate_collection_paths(normalized))
         candidates = [item for item in dict.fromkeys(candidates) if item.startswith("/")]
-        if not candidates:
-            return [], normalized
+        try:
+            _, _, declared_endpoints = _api_facts(
+                api_doc,
+                re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I),
+            )
+        except Exception:
+            declared_endpoints = []
+        declared_read_paths = {
+            normalize_path_placeholders(str(item.get("path") or ""))
+            for item in declared_endpoints
+            if str(item.get("method") or "").upper() in {"GET", "HEAD"}
+        }
+        declared_post_paths = {
+            normalize_path_placeholders(str(item.get("path") or ""))
+            for item in declared_endpoints
+            if str(item.get("method") or "").upper() == "POST"
+        }
+        candidates = [
+            item for item in candidates
+            if normalize_path_placeholders(item) in declared_read_paths
+        ]
 
         def _resolve_rank(candidate: str) -> tuple[int, int, int, int, int]:
             low = candidate.lower().split("?", 1)[0]
@@ -1894,6 +2305,8 @@ class SemanticScenarioGenerator:
                 if not collections:
                     continue
                 create_path = collections[0]
+                if normalize_path_placeholders(create_path) not in declared_post_paths:
+                    continue
                 create_body = SemanticScenarioGenerator._bootstrap_create_body(
                     api_doc, create_path,
                 )
@@ -1903,6 +2316,9 @@ class SemanticScenarioGenerator:
                 if param in nested or any(p.lower() == param.lower() for p in nested):
                     continue
                 bind_steps, order = SemanticScenarioGenerator._body_binding_resolve_steps(
+                    # Resolve nested identities from seeded lists only. Nested
+                    # bootstrap creates are intentionally disabled here to avoid
+                    # deep create chains that fail closed and leave path params unbound.
                     create_body, actor=actor, start_order=order, api_doc="",
                 )
                 steps.extend(bind_steps)
@@ -1913,7 +2329,7 @@ class SemanticScenarioGenerator:
                     api_path=create_path,
                     body_template=dict(create_body),
                     extract_from_response=list(extract_fields),
-                    expected_status=201,
+                    expected_status=200,
                     actor=actor,
                 ))
                 order += 1
@@ -2267,9 +2683,11 @@ class SemanticScenarioGenerator:
         password = str(slice_meta.get("_default_password") or "").strip()
         login_path = str(slice_meta.get("_login_path") or "").strip()
         login_body = dict(slice_meta.get("_login_body") or {})
-        # Observation endpoint = the parent collection of the write path,
-        # derived purely structurally (no per-project endpoint map).
-        read_path = _adjacent_read_for_entity(entity, path)
+        # Observation endpoint = documented GET near the write path when
+        # available; fall back to structural candidates only when the source
+        # catalog has no read surface for that resource.
+        documented_reads = _documented_observation_read_candidates(path, api_doc)
+        read_path = documented_reads[0] if documented_reads else _adjacent_read_for_entity(entity, path)
         probe_read = read_path
         probe_write = path
         steps: list[ScenarioStep] = []
@@ -2278,22 +2696,30 @@ class SemanticScenarioGenerator:
         if step:
             step.actor = actor_label
             steps.append(step)
-        resolve_target = path if path_has_placeholders(normalize_path_placeholders(path)) else read_path
-        resolve_steps, normalized_target = SemanticScenarioGenerator._resolve_entity_steps(
-            resolve_target, actor=actor_label, start_order=len(steps) + 1, api_doc=api_doc,
-        )
-        steps.extend(resolve_steps)
-        if path_has_placeholders(normalize_path_placeholders(path)):
-            probe_write = normalized_target
-        observe_candidates = _observation_read_candidates(path)
+        path_needs_binding = path_has_placeholders(normalize_path_placeholders(path))
+        read_is_concrete = not path_has_placeholders(normalize_path_placeholders(read_path))
+        resolve_target = path if path_needs_binding else (read_path if read_is_concrete else "")
+        if resolve_target:
+            resolve_steps, normalized_target = SemanticScenarioGenerator._resolve_entity_steps(
+                resolve_target, actor=actor_label, start_order=len(steps) + 1, api_doc=api_doc,
+            )
+            steps.extend(resolve_steps)
+            if path_needs_binding:
+                probe_write = normalized_target
+        observe_candidates = documented_reads or _observation_read_candidates(path)
         if observe_candidates:
             probe_read = observe_candidates[0]
         if path_has_placeholders(normalize_path_placeholders(probe_read)):
             probe_read = normalize_path_placeholders(probe_read)
-        steps.append(ScenarioStep(
-            order=len(steps) + 1, action="observe_money_endpoint",
-            api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
-        ))
+        can_observe_before = (
+            not path_has_placeholders(normalize_path_placeholders(probe_read))
+            or path_has_placeholders(normalize_path_placeholders(path))
+        )
+        if can_observe_before:
+            steps.append(ScenarioStep(
+                order=len(steps) + 1, action="observe_money_endpoint",
+                api_method="GET", api_path=probe_read, expected_status=200, actor=actor_label,
+            ))
         SemanticScenarioGenerator._append_write_probe_step(
             steps,
             action=f"money_probe_{method}",
@@ -2311,15 +2737,18 @@ class SemanticScenarioGenerator:
             id=SemanticScenarioGenerator._id(entity, "money", method, path),
             title=f"[Financial integrity probe] {method} {path}",
             description="验证资金操作的余额一致性、金额非负、无重复扣款",
-            category="money",
+            category="money_quantity_conservation",
             severity="P1",
             entity=entity,
             preconditions=[],
             actors=[actor_label],
             steps=steps,
-            oracle_rules=["MoneyOracle.financial_integrity"],
+            oracle_rules=[
+                "MoneyOracle.financial_integrity",
+                "SystemPromiseOracle.dimension:money_quantity_conservation",
+            ],
             confidence=float(slice_meta.get("priority") or 0.82),
-            execution_policy="safe_read_only",
+            execution_policy="approved_sandbox_write",
             evidence_gaps=[],
             source_refs=[dict(item) for item in (slice_meta.get("source_refs") or [])],
             behavior_slice_id=str(slice_meta.get("slice_id") or ""),
@@ -2415,6 +2844,55 @@ def _adjacent_read_for_entity(entity: str, write_path: str) -> str:
     """
     candidates = _observation_read_candidates(write_path)
     return candidates[0] if candidates else normalize_path_placeholders(str(write_path or ""))
+
+
+def _documented_observation_read_candidates(write_path: str, api_doc: str) -> list[str]:
+    """Return source-declared GET observers related to a write path."""
+    if not str(api_doc or "").strip():
+        return []
+    try:
+        _, _, endpoints = _api_facts(
+            api_doc,
+            re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I),
+        )
+    except Exception:
+        return []
+    write_norm = normalize_path_placeholders(str(write_path or ""))
+    write_parts = [
+        part.lower()
+        for part in write_norm.strip("/").split("/")
+        if part and not part.startswith("{")
+    ]
+    stop = {"api", "v1", "v2", "v3", "admin"}
+    write_tokens = {part for part in write_parts if part not in stop}
+    if not write_tokens:
+        return []
+    write_collection = collection_path(write_norm).rstrip("/")
+    scored: list[tuple[tuple[int, int, int, int], str]] = []
+    for endpoint in endpoints:
+        if str(endpoint.get("method") or "").upper() not in {"GET", "HEAD"}:
+            continue
+        read_path = normalize_path_placeholders(str(endpoint.get("path") or ""))
+        if not read_path.startswith("/"):
+            continue
+        read_parts = [
+            part.lower()
+            for part in read_path.strip("/").split("/")
+            if part and not part.startswith("{")
+        ]
+        read_tokens = {part for part in read_parts if part not in stop}
+        overlap = len(write_tokens & read_tokens)
+        if overlap <= 0:
+            continue
+        prefix_match = 0 if (
+            read_path.rstrip("/") == write_collection
+            or read_path.rstrip("/").startswith(write_collection + "/")
+            or write_norm.rstrip("/").startswith(read_path.rstrip("/") + "/")
+        ) else 1
+        placeholder_count = len(re.findall(r"\{[A-Za-z_]\w*\}", read_path))
+        depth = read_path.count("/")
+        scored.append(((prefix_match, -overlap, placeholder_count, depth), read_path))
+    return list(dict.fromkeys(path for _score, path in sorted(scored, key=lambda item: item[0])))
 
 
 def _observation_read_candidates(write_path: str) -> list[str]:

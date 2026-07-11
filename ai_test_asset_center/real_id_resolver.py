@@ -465,8 +465,16 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
         return {}
     bindings: dict[str, str] = {}
     params = infer_path_params(path) or ["id"]
+    has_multiple_path_identities = len(params) > 1
+    generic_identity_fallbacks = {"id", "uuid", "pk", "code", "sku"}
     for param in params:
         for field_name in param_field_candidates(param):
+            if (
+                has_multiple_path_identities
+                and field_name.lower() in generic_identity_fallbacks
+                and param.lower() not in generic_identity_fallbacks
+            ):
+                continue
             value = source.get(field_name)
             if value not in {None, ""}:
                 text = str(value)
@@ -481,6 +489,20 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
         value = source.get(field_name)
         if value not in {None, ""}:
             bindings.setdefault(field_name, str(value))
+    # When the response only exposes ``id`` but the path asks for a sibling
+    # identity param (orderId, paymentId, …), mirror ``id`` onto that param
+    # if ``id`` is an accepted candidate for it. Scoped to path params only —
+    # never broadcast one resource id onto unrelated *Id names.
+    primary = bindings.get("id")
+    if primary and len(params) == 1:
+        for param in params:
+            if bindings.get(param) not in {None, ""}:
+                continue
+            candidates = {c.lower() for c in param_field_candidates(param)}
+            if "id" in candidates or "uuid" in candidates:
+                bindings[param] = primary
+                for alias in param_field_candidates(param):
+                    bindings.setdefault(alias, primary)
     return bindings
 
 

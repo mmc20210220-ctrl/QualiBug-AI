@@ -174,24 +174,9 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
                 item["_route_availability"] = "no_source_bound_route"
                 item["status"] = "plan_only"
             # ── Server-verified route check ──
-            # Only routes confirmed by live server probing generate executable
-            # scenarios.  Unverified routes → plan_only to avoid ~76% 404 noise.
-            if has_exec_route:
-                _VERIFIED = {
-                    ("GET", "/api/auth/me"), ("POST", "/api/auth/login"), ("POST", "/api/auth/register"),
-                    ("POST", "/api/auth/password/reset"), ("GET", "/api/products"), ("POST", "/api/products/admin"),
-                    ("GET", "/api/cart/items"), ("POST", "/api/cart/items"), ("PATCH", "/api/cart/items/{id}"),
-                    ("GET", "/api/coupons"), ("POST", "/api/coupons/validate"),
-                    ("GET", "/api/orders"), ("POST", "/api/orders"), ("POST", "/api/orders/{id}/cancel"),
-                    ("POST", "/api/payments/pay"), ("POST", "/api/refunds"), ("GET", "/api/reports/sales"),
-                }
-                _any_verified = any(
-                    (str(r.get("method", "")).upper(), str(r.get("path", ""))) in _VERIFIED
-                    for r in routes if isinstance(r, dict)
-                )
-                if not _any_verified:
-                    item["_route_availability"] = "unverified_on_server"
-                    item["status"] = "plan_only"
+            # Route reachability is evaluated by the executor, not this model.
+            # Source-bound routes are compiled without any benchmark whitelist.
+            # Governed execution produces the authoritative reachability receipt.
             deduped[sid] = item
     return [item for _, item in sorted(deduped.items(), key=lambda kv: (-float(kv[1].get("priority") or 0.0), str(kv[1].get("entity") or ""), kv[0]))]
 
@@ -337,7 +322,7 @@ def _build_verification_intent_from_dimensions(
 
     This is the product-critical function that translates system behavior
     promise dimensions into an explicit verification plan — the difference
-    between "GET /api/refunds" and "verify that non-finance roles cannot
+    between a source-derived operation and a source-grounded authorization
     bypass approval, refund amounts are conserved, and audit trails exist."
     """
     dims_lower = {str(d).lower().replace("-", "_").replace(" ", "_") for d in dimensions}
@@ -722,7 +707,7 @@ def _enrich_system_behavior_scenario(
     # (POST/PUT/PATCH/DELETE), upgrade from safe_read_only to approved_test_write
     # and add write steps.  All write data carries the fixture prefix for isolation.
     # A safe_read route is preferred (observe-then-write pattern) but NOT required —
-    # entities with only write routes (e.g., POST /api/payments/pay) can still execute.
+    # entities with only source-derived write routes can still execute.
     write_routes = _write_routes(slice_meta)
     if write_routes and _test_write_allowed():
         if safe_route:
@@ -918,8 +903,22 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
         return OracleResult(False, "SystemPromiseOracle", "L7", rule, expected, actual, severity, confidence, explanation)
 
     # ── Dimension: money / quantity / conservation ──
-    money_like = {"money", "amount", "price", "balance", "refund", "payment", "fee", "total", "quantity", "qty", "stock", "inventory", "conservation"}
-    if dims.intersection({"money", "quantity", "conservation", "data_consistency"}):
+    # Include compound family names (money_quantity_conservation) — exact-set
+    # membership on {"money","quantity"} alone silently skipped the family.
+    money_dim_tokens = (
+        "money", "quantity", "conservation", "data_conservation",
+        "money_quantity_conservation", "data_consistency", "payment", "refund",
+        "inventory", "amount", "balance",
+    )
+    money_dims_active = bool(dims.intersection({
+        "money", "quantity", "conservation", "data_conservation",
+        "money_quantity_conservation", "data_consistency",
+    })) or any(any(tok in d for tok in money_dim_tokens) for d in dims)
+    money_like = {
+        "money", "amount", "price", "balance", "refund", "payment", "fee", "total",
+        "quantity", "qty", "stock", "inventory", "conservation", "payable", "paid",
+    }
+    if money_dims_active:
         for key, value in all_values:
             lowered = key.lower()
             if not any(token in lowered for token in money_like):
@@ -943,6 +942,50 @@ def _direct_system_promise_oracle_result(scenario: dict[str, Any], trace: dict[s
                     return _violation(f"system_promise_zero_total_with_line_items:{promise_id}",
                                       f"系统承诺: {invariant}", f"{key}=0 但存在非零行项",
                                       "P1", 0.72)
+        # Request-vs-response conservation: a successful money write whose body
+        # amount disagrees with the resource's payable/paid field is a finding.
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            method = str(step.get("method") or "").upper()
+            if method not in {"POST", "PUT", "PATCH"}:
+                continue
+            status = int(
+                step.get("status")
+                or ((step.get("response") or {}).get("status_code") if isinstance(step.get("response"), dict) else 0)
+                or 0
+            )
+            if not (200 <= status < 300):
+                continue
+            req = step.get("request") if isinstance(step.get("request"), dict) else {}
+            req_body = req.get("body") if isinstance(req.get("body"), dict) else {}
+            resp = step.get("response") if isinstance(step.get("response"), dict) else {}
+            resp_body = resp.get("body") if isinstance(resp.get("body"), dict) else {}
+            if not isinstance(req_body, dict) or not isinstance(resp_body, dict):
+                continue
+            req_amount = None
+            for ak in ("amount", "payAmount", "pay_amount", "refundAmount", "refund_amount"):
+                if isinstance(req_body.get(ak), (int, float)):
+                    req_amount = float(req_body[ak])
+                    break
+            if req_amount is None:
+                continue
+            for rk in (
+                "payableAmount", "payable_amount", "amountPaid", "amount_paid",
+                "paidAmount", "paid_amount", "orderAmount", "order_amount", "totalAmount", "total_amount",
+            ):
+                rv = resp_body.get(rk)
+                if isinstance(rv, (int, float)) and abs(float(rv) - req_amount) > 0.009:
+                    path_l = str(step.get("path") or "").lower()
+                    if any(tok in path_l for tok in ("pay", "payment", "refund", "settle", "charge")):
+                        return _violation(
+                            f"system_promise_amount_mismatch:{promise_id}",
+                            f"系统承诺金额守恒: {invariant}",
+                            f"request.amount={req_amount} vs response.{rk}={rv}",
+                            "P0",
+                            0.86,
+                        )
+                    break
 
     # ── Dimension: state_machine / lifecycle ──
     _state_keys = {"status", "state", "phase", "stage", "lifecycle"}

@@ -7,8 +7,10 @@ permission/isolation probes degrade and cross-run state pollutes recall.
 from __future__ import annotations
 
 import os
+import locale
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -18,6 +20,40 @@ DEFAULT_BENCHMARK_TARGET_ROOT = Path(
 )
 
 RunFn = Callable[..., subprocess.CompletedProcess]
+
+
+def _decode_process_output(value: object) -> str:
+    """Decode subprocess output without letting Windows codepages kill prep logs."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, (bytes, bytearray)):
+        return str(value)
+    data = bytes(value)
+    encodings = [
+        "utf-8",
+        locale.getpreferredencoding(False),
+        "gbk",
+        "cp936",
+    ]
+    seen: set[str] = set()
+    for encoding in encodings:
+        name = str(encoding or "").strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        try:
+            return data.decode(name)
+        except UnicodeDecodeError:
+            continue
+        except LookupError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _combined_output(completed: subprocess.CompletedProcess) -> str:
+    return (_decode_process_output(completed.stdout) + _decode_process_output(completed.stderr)).strip()
 
 
 def resolve_benchmark_target_root(env: Mapping[str, str] | None = None) -> Path:
@@ -78,10 +114,10 @@ def reset_benchmark_target_db(
         ],
         check=False,
         capture_output=True,
-        text=True,
+        text=False,
     )
     if completed.returncode != 0:
-        stderr = (completed.stderr or completed.stdout or "").strip()[:800]
+        stderr = _combined_output(completed)[:800]
         raise RuntimeError(
             f"benchmark target DB reset failed (exit={completed.returncode}): {stderr}"
         )
@@ -93,28 +129,61 @@ def refresh_test_account_tokens(
     *,
     root: Path,
     runner: RunFn = subprocess.run,
+    retries: int = 5,
+    retry_delay_seconds: float = 3.0,
 ) -> dict:
-    """Refresh tokens for every funnel mode — expired JWT silently kills auth probes."""
+    """Refresh tokens for every funnel mode — expired JWT silently kills auth probes.
+
+    After ``init_db_windows.ps1`` the gateway can briefly refuse connections
+    (HTTP 0 / timeout) while services reattach to the reseeded DB. Retry a few
+    times before failing hard so prep does not flake on a healthy target.
+    """
     script = root / "_refresh_tokens.py"
     if not script.is_file():
         raise FileNotFoundError(f"token refresh script missing: {script}")
 
     print(f"REFRESH_TOKENS: {script}")
-    completed = runner(
-        [sys.executable, str(script)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    out = ((completed.stdout or "") + (completed.stderr or "")).strip()
-    if out:
-        print(out)
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"token refresh failed (exit={completed.returncode}): {out[-800:]}"
+    attempts = max(1, int(retries or 1))
+    delay = max(0.0, float(retry_delay_seconds or 0.0))
+    last_out = ""
+    last_code = 1
+    for attempt in range(1, attempts + 1):
+        completed = runner(
+            [sys.executable, str(script)],
+            check=False,
+            capture_output=True,
+            text=False,
         )
-    print("REFRESH_TOKENS: ok")
-    return {"status": "ok", "script": str(script), "exit_code": 0}
+        out = _combined_output(completed)
+        last_out = out
+        last_code = int(completed.returncode or 0)
+        if out:
+            print(out)
+        if last_code == 0:
+            print("REFRESH_TOKENS: ok")
+            return {
+                "status": "ok",
+                "script": str(script),
+                "exit_code": 0,
+                "attempts": attempt,
+            }
+        # Transient post-reset unavailability — retry before failing the prep.
+        transient = (
+            "login rejected HTTP 0" in out
+            or "timed out" in out.lower()
+            or "connection refused" in out.lower()
+        )
+        if attempt < attempts and transient:
+            print(
+                f"REFRESH_TOKENS: transient failure attempt {attempt}/{attempts}; "
+                f"retrying in {delay:.1f}s"
+            )
+            time.sleep(delay)
+            continue
+        break
+    raise RuntimeError(
+        f"token refresh failed (exit={last_code}): {last_out[-800:]}"
+    )
 
 
 def prepare_funnel_benchmark_target(

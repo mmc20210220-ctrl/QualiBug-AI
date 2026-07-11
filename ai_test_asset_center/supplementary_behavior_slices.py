@@ -24,13 +24,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .artifact_redactor import redact_artifact
 from .business_state_graph import _api_facts, behavior_slice_id
+from .enterprise_knowledge_center import _lexicon_dict
 
 from .real_id_resolver import path_has_placeholders
 
@@ -52,6 +55,219 @@ def _is_auth_endpoint(endpoint: dict[str, str]) -> bool:
     entity = str(endpoint.get("entity") or "").strip().lower()
     tokens = path.split("/") + [entity]
     return bool(_AUTH_ENTITY_TOKENS & set(tokens))
+
+
+def _is_identity_mutation_endpoint(endpoint: dict[str, Any]) -> bool:
+    method = str(endpoint.get("method") or "").upper()
+    action = str(endpoint.get("action") or "").strip().lower()
+    return method in _WRITE_METHODS and _is_auth_endpoint(endpoint) and action not in {"login", "signin"}
+
+
+_AUTH_ACCEPTANCE_KEY_TOKENS = (
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "auth_token",
+    "jwt",
+    "token",
+    "session",
+    "session_id",
+    "sessionid",
+    "bearer",
+)
+_AUTH_SUCCESS_BOOL_KEYS = {
+    "authenticated",
+    "authorized",
+    "logged_in",
+    "login_success",
+    "success",
+    "ok",
+}
+_AUTH_PRINCIPAL_KEYS = {"user", "account", "principal", "profile", "identity"}
+_AUTH_ACCEPTANCE_HEADER_TOKENS = {"authorization", "set-cookie", "x-auth-token", "x-session-id"}
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b")
+
+
+def _redact_probe_artifact(value: Any) -> Any:
+    redacted, _receipt = redact_artifact(value)
+    return redacted
+
+
+def _auth_value_present(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return value not in (None, "", [], {})
+
+
+def _auth_acceptance_observed(body: Any, headers: dict[str, Any] | None = None, *, _depth: int = 0) -> bool:
+    """Return True only when a 2xx login response contains a real accept signal.
+
+    A bare HTTP 200 can still be an application-level rejection envelope.  The
+    account-status probe should become customer-deliverable only when the
+    response issues credentials, a session, a principal, or an explicit success
+    marker.  The signals are protocol/auth-shape based, not project-specific.
+    """
+
+    if _depth == 0:
+        for key, value in (headers or {}).items():
+            key_l = str(key or "").strip().lower()
+            if key_l in _AUTH_ACCEPTANCE_HEADER_TOKENS and str(value or "").strip():
+                return True
+    if _depth > 8:
+        return False
+    if isinstance(body, dict):
+        for key, value in body.items():
+            key_l = str(key or "").strip().lower().replace("-", "_")
+            if any(token in key_l for token in _AUTH_ACCEPTANCE_KEY_TOKENS) and _auth_value_present(value):
+                return True
+            if key_l in _AUTH_SUCCESS_BOOL_KEYS and value is True:
+                return True
+            if key_l in _AUTH_PRINCIPAL_KEYS and isinstance(value, dict) and bool(value):
+                return True
+            if _auth_acceptance_observed(value, None, _depth=_depth + 1):
+                return True
+        return False
+    if isinstance(body, list):
+        return any(_auth_acceptance_observed(item, None, _depth=_depth + 1) for item in body[:20])
+    if isinstance(body, str):
+        return bool(_JWT_RE.search(body))
+    return False
+
+
+def _active_actors(actors: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        actor for actor in actors
+        if isinstance(actor, dict) and _account_status_token(actor) not in {"DISABLED", "LOCKED"}
+    ]
+
+
+def _singular_token(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if token.endswith("ies") and len(token) > 3:
+        return token[:-3] + "y"
+    if token.endswith("ses") and len(token) > 3:
+        return token[:-2]
+    if token.endswith("s") and not token.endswith("ss") and len(token) > 2:
+        return token[:-1]
+    return token
+
+
+def _endpoint_resource_tokens(endpoint: dict[str, Any]) -> set[str]:
+    path = str(endpoint.get("path") or "").lower()
+    values = [endpoint.get("entity"), *path.strip("/").split("/")]
+    return {
+        _singular_token(value)
+        for value in values
+        if value and not str(value).startswith(("{", ":")) and str(value).lower() not in {"api", "v1", "v2", "v3", "admin"}
+    }
+
+
+def _resource_matches_endpoint(row: dict[str, Any], endpoint: dict[str, Any]) -> bool:
+    resources = [row.get("resource"), *(row.get("resource_aliases") or [])]
+    endpoint_path = str(endpoint.get("path") or "").strip().lower()
+    for value in resources:
+        resource_path = str(value or "").strip().lower()
+        if resource_path.startswith("/") and (
+            resource_path == endpoint_path
+            or resource_path.rstrip("/") in endpoint_path.rstrip("/")
+        ):
+            return True
+    normalized = {_singular_token(value) for value in resources if str(value or "").strip()}
+    if "*" in normalized:
+        return True
+    entity = _singular_token(endpoint.get("entity"))
+    if entity:
+        return entity in normalized
+    return bool(normalized & _endpoint_resource_tokens(endpoint))
+
+
+def _endpoint_action_tokens(endpoint: dict[str, Any]) -> set[str]:
+    method = str(endpoint.get("method") or "").upper()
+    method_actions = {
+        "GET": {"GET", "read", "view", "list", "query"},
+        "HEAD": {"HEAD", "read"},
+        "OPTIONS": {"OPTIONS", "read"},
+        "POST": {"POST", "create", "submit", "request"},
+        "PUT": {"PUT", "update", "modify"},
+        "PATCH": {"PATCH", "update", "modify", "adjust"},
+        "DELETE": {"DELETE", "delete", "remove"},
+    }
+    tokens = set(method_actions.get(method, {method} if method else set()))
+    action = str(endpoint.get("action") or "").strip().lower()
+    if action and action != "admin":
+        tokens.add(action)
+    evidence = " ".join((action, str(endpoint.get("summary") or ""))).lower()
+    for source_token, aliases in _lexicon_dict("verb_action_lexicon").items():
+        candidates = [source_token, *aliases]
+        if any(str(token).strip().lower() in evidence for token in candidates if str(token).strip()):
+            tokens.update(str(token).strip().lower() for token in aliases if str(token).strip())
+    return tokens
+
+
+def _declared_actions_allow(actions: set[str], endpoint: dict[str, Any]) -> bool:
+    normalized = {str(action).strip().lower() for action in actions if str(action).strip()}
+    if normalized & {"*", "manage"}:
+        return True
+    return bool(normalized & {token.lower() for token in _endpoint_action_tokens(endpoint)})
+
+
+def _endpoint_declared_roles(endpoint: dict[str, Any], actors: list[dict[str, str]]) -> set[str]:
+    evidence = str(endpoint.get("summary") or "").lower()
+    if not evidence:
+        return set()
+    declared: set[str] = set()
+    role_words = _lexicon_dict("role_words")
+    for actor in actors:
+        role = str(actor.get("role") or "").strip().lower()
+        if not role:
+            continue
+        aliases = [role, *role_words.get(role, [])]
+        if any(
+            re.search(rf"(?<![a-z0-9_]){re.escape(alias.lower())}(?![a-z0-9_])", evidence)
+            if alias.isascii() else alias.lower() in evidence
+            for alias in aliases
+            if alias
+        ):
+            declared.add(role)
+    return declared
+
+
+def _resource_has_declared_boundary(endpoint: dict[str, Any], permission_matrix: list[dict[str, Any]] | None) -> bool:
+    return any(
+        isinstance(row, dict)
+        and str(row.get("resource") or "").strip() != "*"
+        and _resource_matches_endpoint(row, endpoint)
+        for row in permission_matrix or []
+    )
+
+
+def _select_actor_for_endpoint(
+    endpoint: dict[str, Any],
+    actors: list[dict[str, str]],
+    permission_matrix: list[dict[str, Any]] | None,
+    fallback: dict[str, str] | None,
+) -> dict[str, str]:
+    active = _active_actors(actors)
+    declared_roles = _endpoint_declared_roles(endpoint, active)
+    if declared_roles:
+        selected = next((actor for actor in active if str(actor.get("role") or "").strip().lower() in declared_roles), None)
+        if selected is not None:
+            return selected
+    for actor in active:
+        role = str(actor.get("role") or "").strip().lower()
+        actions = _permission_declared_actions(role, endpoint, permission_matrix=permission_matrix)
+        if actions is not None and "*" not in actions and _declared_actions_allow(actions, endpoint):
+            return actor
+    if not _resource_has_declared_boundary(endpoint, permission_matrix):
+        selected = fallback if fallback in active else None
+        if selected is not None:
+            return selected
+    for actor in active:
+        role = str(actor.get("role") or "").strip().lower()
+        actions = _permission_declared_actions(role, endpoint, permission_matrix=permission_matrix)
+        if actions is not None and _declared_actions_allow(actions, endpoint):
+            return actor
+    return {}
 
 
 def load_settings_accounts(root: Path, project: str) -> tuple[list[dict[str, str]], str]:
@@ -180,9 +396,10 @@ def _extract_accounts_from_md(text: str) -> list[dict[str, str]]:
 def generate_permission_slices(
     endpoints: list[dict[str, str]],
     actors: list[dict[str, str]],
-    max_slices: int = 24,
+    max_slices: int = 60,
     login_path: str = "",
     login_body: dict[str, Any] | None = None,
+    permission_matrix: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Actor × endpoint permission matrix.
 
@@ -201,30 +418,105 @@ def generate_permission_slices(
     if not write_endpoints:
         return slices
     # Low-privilege actors are the highest-signal probes for privilege escalation.
-    low_priv = [a for a in actors if not _is_admin_like(a)]
-    probe_actors = low_priv or actors
-    seen_paths: set[str] = set()
+    active = _active_actors(actors)
+    unique_active: list[dict[str, str]] = []
+    seen_roles: set[str] = set()
+    for actor in active:
+        role = str(actor.get("role") or actor.get("email") or "").strip().lower()
+        if role and role not in seen_roles:
+            seen_roles.add(role)
+            unique_active.append(actor)
+    low_priv = [a for a in unique_active if not _is_admin_like(a)]
+    probe_actors = low_priv or unique_active
+    per_actor: list[list[dict[str, Any]]] = []
     for actor in probe_actors:
         actor_label = (actor.get("role") or actor.get("email") or "").strip().lower()
         email = (actor.get("email") or "").strip()
         if not actor_label:
             continue
-        expected_permitted = _expected_permitted_roles(actor_label)
+        role_defaults = _expected_permitted_roles(actor_label)
+        actor_slices: list[dict[str, Any]] = []
         for ep in write_endpoints:
+            declared_actions = _permission_declared_actions(
+                actor_label,
+                ep,
+                permission_matrix=permission_matrix,
+            )
             method = str(ep.get("method") or "").upper()
             path = str(ep.get("path") or "")
             if not method or not path:
                 continue
             entity = str(ep.get("entity") or "resource")
+            declared_roles = _endpoint_declared_roles(ep, active)
+            boundary_declared = bool(
+                declared_actions is not None
+                or declared_roles
+                or _resource_has_declared_boundary(ep, permission_matrix)
+            )
+            if not _permission_boundary_is_declared(
+                actor_label,
+                ep,
+                permission_matrix=permission_matrix,
+                role_defaults=role_defaults,
+                boundary_declared=boundary_declared,
+            ):
+                # A bearer-authenticated write endpoint is not proof that this
+                # particular role must be denied. Do not turn an undocumented
+                # ACL assumption into a customer defect; leave the gap visible
+                # to the planner for a source permission matrix or role policy.
+                continue
+            if declared_roles:
+                permitted = actor_label in declared_roles
+            else:
+                permitted = (
+                    "*" in role_defaults
+                    or (declared_actions is not None and _declared_actions_allow(declared_actions, ep))
+                )
+            if (
+                declared_roles
+                and actor_label not in declared_roles
+                and declared_actions is not None
+                and _declared_actions_allow(declared_actions, ep)
+            ):
+                # Two customer sources disagree about the same role/action.
+                # Do not choose a winner and manufacture a permission defect.
+                continue
+            expected_permitted = [method] if permitted else []
+            permission_source_refs = [
+                {
+                    "kind": "permission_matrix",
+                    "source_id": str(row.get("source_id") or ""),
+                    "quote": str(row.get("evidence") or "")[:240],
+                }
+                for row in permission_matrix or []
+                if isinstance(row, dict)
+                and str(row.get("resource") or "").strip() != "*"
+                and _resource_matches_endpoint(row, ep)
+            ]
+            if declared_roles:
+                permission_source_refs.append({
+                    "kind": "api_permission_contract",
+                    "quote": str(ep.get("summary") or path)[:240],
+                })
             slice_id = behavior_slice_id("permission", entity, actor_label, method, path)
-            slices.append({
+            identity_mutation = _is_identity_mutation_endpoint(ep)
+            if identity_mutation:
+                # Auth/session/account writes can invalidate the very tokens
+                # needed by later probes. Without a source-declared reversible
+                # compensation operation, do not schedule them as permission
+                # probes in the default campaign.
+                continue
+            actor_slices.append({
                 "slice_id": slice_id,
                 "entity": entity,
                 "kind": "permission",
                 "states": [],
                 "endpoints": [path],
                 "priority": 0.72,
-                "source_refs": [{"kind": "test_account", "quote": email}],
+                "source_refs": [
+                    {"kind": "test_account", "quote": email},
+                    *permission_source_refs,
+                ],
                 "evidence_gaps": [],
                 "_permission_actor": actor_label,
                 "_permission_email": email,
@@ -233,11 +525,37 @@ def generate_permission_slices(
                 "_permission_path": path,
                 "_permission_expected_permitted": expected_permitted,
                 "_permission_oracle": "PermissionOracle",
+                "_permission_source_strength": 2 if declared_roles else 1,
+                "_cleanup_risk": 0.0,
+                "_identity_mutation": False,
                 "_login_path": login_path,
                 "_login_body": dict(login_body or {}),
             })
-            if len(slices) >= max_slices:
-                return slices
+        if actor_slices:
+            safe = [row for row in actor_slices if not row.get("_identity_mutation")]
+            risky = [row for row in actor_slices if row.get("_identity_mutation")]
+            safe.sort(key=lambda row: -int(row.get("_permission_source_strength") or 0))
+            diverse: list[dict[str, Any]] = []
+            deferred: list[dict[str, Any]] = []
+            seen_entities: set[str] = set()
+            for row in safe:
+                entity = str(row.get("entity") or "")
+                if entity and entity not in seen_entities:
+                    seen_entities.add(entity)
+                    diverse.append(row)
+                else:
+                    deferred.append(row)
+            per_actor.append([*diverse, *deferred, *risky])
+    safe_groups = [[row for row in group if not row.get("_identity_mutation")] for group in per_actor]
+    safe_limit = max_slices
+    offset = 0
+    while len(slices) < safe_limit and any(offset < len(group) for group in safe_groups):
+        for group in safe_groups:
+            if offset < len(group):
+                slices.append(group[offset])
+                if len(slices) >= safe_limit:
+                    break
+        offset += 1
     return slices
 
 
@@ -252,59 +570,20 @@ def generate_isolation_slices(
     max_slices: int = 12,
     login_path: str = "",
     login_body: dict[str, Any] | None = None,
+    permission_matrix: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Cross-user tenant isolation probes.
 
     UserA authenticates and requests UserB's resources.  The oracle is
     TenantIsolationOracle.
     """
+    actors = _active_actors(actors)
     if len(actors) < 2 or not endpoints:
         return []
     slices: list[dict[str, Any]] = []
     # Entity-owned reads = deeper paths (>=2 non-placeholder segments). No
     # assumption about the API prefix (/api, /v1, /rest, or none) — we select
     # by path depth, which is universal across REST styles.
-    read_endpoints = sorted(
-        {str(e.get("path") or "") for e in endpoints
-         if str(e.get("method") or "").upper() in _READ_METHODS
-         and str(e.get("path") or "").startswith("/")
-         and len([seg for seg in str(e.get("path") or "").strip("/").split("/") if seg and "{" not in seg and ":" not in seg]) >= 2},
-    )
-    if not read_endpoints:
-        return slices
-    for i, viewer in enumerate(actors):
-        owner = actors[(i + 1) % len(actors)]
-        viewer_label = (viewer.get("role") or viewer.get("email") or "").strip().lower()
-        owner_label = (owner.get("role") or owner.get("email") or "").strip().lower()
-        if viewer_label == owner_label:
-            continue
-        for path in read_endpoints[:3]:  # cap per actor pair
-            entity = _path_entity(path)
-            slice_id = behavior_slice_id("isolation", entity, viewer_label, path)
-            slices.append({
-                "slice_id": slice_id,
-                "entity": entity,
-                "kind": "isolation",
-                "states": [],
-                "endpoints": [path],
-                "priority": 0.74,
-                "source_refs": [
-                    {"kind": "test_account", "quote": viewer.get("email", "")},
-                ],
-                "evidence_gaps": [],
-                "_isolation_viewer_role": viewer_label,
-                "_isolation_viewer_email": viewer.get("email", ""),
-                "_isolation_viewer_password": viewer.get("password", ""),
-                "_isolation_owner_role": owner_label,
-                "_isolation_owner_email": owner.get("email", ""),
-                "_isolation_owner_password": owner.get("password", ""),
-                "_isolation_path": path,
-                "_isolation_oracle": "TenantIsolationOracle",
-                "_login_path": login_path,
-                "_login_body": dict(login_body or {}),
-            })
-            if len(slices) >= max_slices:
-                return slices
     identity_path = next(
         (
             str(e.get("path") or "")
@@ -314,50 +593,84 @@ def generate_isolation_slices(
         ),
         "",
     )
-    ownership_paths = sorted({
-        str(e.get("path") or "")
-        for e in endpoints
-        if str(e.get("method") or "").upper() in _READ_METHODS
-        and str(e.get("path") or "").startswith("/")
-        and not path_has_placeholders(str(e.get("path") or ""))
-        and any(token in str(e.get("path") or "").lower() for token in ("address", "order", "cart", "user", "account"))
-    })
-    for i, viewer in enumerate(actors):
-        owner = actors[(i + 1) % len(actors)]
-        viewer_label = (viewer.get("role") or viewer.get("email") or "").strip().lower()
-        owner_label = (owner.get("role") or owner.get("email") or "").strip().lower()
-        if viewer_label == owner_label:
+    actors_by_role: dict[str, list[dict[str, str]]] = {}
+    for actor in actors:
+        role = str(actor.get("role") or "").strip().lower()
+        if role:
+            actors_by_role.setdefault(role, []).append(actor)
+    read_endpoints = [
+        endpoint for endpoint in endpoints
+        if str(endpoint.get("method") or "").upper() in _READ_METHODS
+        and str(endpoint.get("path") or "").startswith("/")
+    ]
+    ownership_markers = ("自己的", "本人", "归属", "own", "owner", "cross-user", "只能查询")
+    for role, role_actors in actors_by_role.items():
+        if len(role_actors) < 2:
             continue
-        for path in ownership_paths[:2]:
-            for query_param in _OWNERSHIP_QUERY_PARAMS[:2]:
-                entity = _path_entity(path)
-                slice_id = behavior_slice_id("isolation", entity, viewer_label, f"{path}?{query_param}")
-                slices.append({
-                    "slice_id": slice_id,
-                    "entity": entity,
-                    "kind": "isolation",
-                    "states": [],
-                    "endpoints": [path],
-                    "priority": 0.86,
-                    "source_refs": [{"kind": "ownership_query_param", "quote": query_param}],
-                    "evidence_gaps": [],
-                    "_isolation_mode": "query_param",
-                    "_isolation_query_param": query_param,
-                    "_isolation_viewer_role": viewer_label,
-                    "_isolation_viewer_email": viewer.get("email", ""),
-                    "_isolation_viewer_password": viewer.get("password", ""),
-                    "_isolation_owner_role": owner_label,
-                    "_isolation_owner_email": owner.get("email", ""),
-                    "_isolation_owner_password": owner.get("password", ""),
-                    "_isolation_path": path,
-                    "_isolation_identity_path": identity_path,
-                    "_isolation_oracle": "TenantIsolationOracle",
-                    "_login_path": login_path,
-                    "_login_body": dict(login_body or {}),
-                })
-                if len(slices) >= max_slices:
-                    return slices
+        owner, viewer = role_actors[0], role_actors[1]
+        own_resources = {
+            _singular_token(value)
+            for row in permission_matrix or []
+            if isinstance(row, dict)
+            and str(row.get("role") or "").strip().lower() == role
+            and str(row.get("scope") or "").strip().lower() in {"own", "self", "owned"}
+            for value in [row.get("resource"), *(row.get("resource_aliases") or [])]
+            if str(value or "").strip()
+        }
+        for endpoint in read_endpoints:
+            path = str(endpoint.get("path") or "")
+            summary = str(endpoint.get("summary") or "")
+            source_declares_ownership = bool(
+                own_resources & _endpoint_resource_tokens(endpoint)
+                or any(marker in summary.lower() for marker in ownership_markers)
+            )
+            if not source_declares_ownership:
+                continue
+            documented_params = [
+                match
+                for match in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", summary)
+                if match.lower().endswith("id") or match.lower().endswith("_id")
+            ]
+            query_param = documented_params[0] if documented_params and not path_has_placeholders(path) else ""
+            if not path_has_placeholders(path) and not query_param:
+                continue
+            entity = str(endpoint.get("entity") or _path_entity(path))
+            slice_key = f"{path}?{query_param}" if query_param else path
+            row = {
+                "slice_id": behavior_slice_id("isolation", entity, role, slice_key),
+                "entity": entity,
+                "kind": "isolation",
+                "states": [],
+                "endpoints": [path],
+                "priority": 0.90,
+                "source_refs": [{"kind": "ownership_contract", "quote": summary[:240] or path}],
+                "evidence_gaps": [],
+                "_isolation_viewer_role": role,
+                "_isolation_viewer_email": viewer.get("email", ""),
+                "_isolation_viewer_password": viewer.get("password", ""),
+                "_isolation_owner_role": role,
+                "_isolation_owner_email": owner.get("email", ""),
+                "_isolation_owner_password": owner.get("password", ""),
+                "_isolation_path": path,
+                "_isolation_identity_path": identity_path,
+                "_isolation_oracle": "TenantIsolationOracle",
+                "_login_path": login_path,
+                "_login_body": dict(login_body or {}),
+            }
+            if query_param:
+                row["_isolation_mode"] = "query_param"
+                row["_isolation_query_param"] = query_param
+            slices.append(row)
+            if len(slices) >= max_slices:
+                return slices
     return slices
+
+
+def _endpoint_declares_concurrency_contract(endpoint: dict[str, Any]) -> bool:
+    evidence = " ".join((str(endpoint.get("summary") or ""), str(endpoint.get("description") or ""))).lower()
+    risk_terms = _lexicon_dict("risk_terms")
+    terms = [*risk_terms.get("idempotency", []), *risk_terms.get("concurrency", [])]
+    return bool(evidence and any(str(term).strip().lower() in evidence for term in terms if str(term).strip()))
 
 
 def generate_concurrency_slices(
@@ -366,6 +679,8 @@ def generate_concurrency_slices(
     login_path: str = "",
     max_slices: int = 4,
     login_body: dict[str, Any] | None = None,
+    actors: list[dict[str, str]] | None = None,
+    permission_matrix: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Concurrent-write (double-write) slices.
 
@@ -380,13 +695,15 @@ def generate_concurrency_slices(
     writes.sort(key=lambda e: str(e.get("path") or "").count("/"))
     slices: list[dict[str, Any]] = []
     seen: set[str] = set()
-    da = default_actor or {}
     for ep in writes:
         method = str(ep.get("method") or "").upper()
         path = str(ep.get("path") or "")
         if not path or path in seen:
             continue
         if _is_auth_endpoint(ep):  # login/register are not resource-contention endpoints
+            continue
+        da = _select_actor_for_endpoint(ep, actors or [], permission_matrix, default_actor)
+        if actors and not da:
             continue
         seen.add(path)
         entity = str(ep.get("entity") or _path_entity(path))
@@ -403,6 +720,7 @@ def generate_concurrency_slices(
             "_concurrency_method": method,
             "_concurrency_path": path,
             "_concurrency_oracle": "ConcurrencyOracle",
+            "_concurrency_contract_declared": _endpoint_declares_concurrency_contract(ep),
             "_login_path": login_path,
             "_login_body": dict(login_body or {}),
             "_default_actor": (da.get("role") or da.get("email") or "").strip().lower(),
@@ -420,6 +738,8 @@ def generate_inventory_slices(
     login_path: str = "",
     max_slices: int = 5,
     login_body: dict[str, Any] | None = None,
+    actors: list[dict[str, str]] | None = None,
+    permission_matrix: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Inventory-integrity slices for stock/reserve/consume endpoints."""
     writes = [
@@ -430,13 +750,15 @@ def generate_inventory_slices(
     writes.sort(key=lambda e: str(e.get("path") or "").count("/"))
     slices: list[dict[str, Any]] = []
     seen: set[str] = set()
-    da = default_actor or {}
     for ep in writes:
         method = str(ep.get("method") or "").upper()
         path = str(ep.get("path") or "")
         if not path or path in seen:
             continue
         if _is_auth_endpoint(ep):
+            continue
+        da = _select_actor_for_endpoint(ep, actors or [], permission_matrix, default_actor)
+        if actors and not da:
             continue
         seen.add(path)
         entity = str(ep.get("entity") or _path_entity(path))
@@ -464,27 +786,59 @@ def generate_inventory_slices(
     return slices
 
 
+# Path/entity tokens that strongly suggest money/quantity conservation probes.
+# Industry-neutral REST vocabulary — not project-specific routes.
+_MONEY_PATH_TOKENS = frozenset({
+    "pay", "payment", "payments", "refund", "refunds", "settle", "settlement",
+    "balance", "wallet", "ledger", "billing", "invoice", "invoices", "charge",
+    "amount", "price", "pricing", "coupon", "coupons", "discount", "promo",
+    "inventory", "stock", "reserve", "release", "consume", "quota", "credit",
+    "debit", "transfer", "checkout", "cart", "order", "orders",
+})
+
+
+def _money_endpoint_rank(endpoint: dict[str, str]) -> tuple[int, int, int]:
+    """Prefer conservation-relevant writes, then shallower paths.
+
+    Without ranking, a tiny ``max_slices`` budget only hits the shallowest
+    POSTs (often create-collection) and starves pay/refund/inventory probes
+    that actually exercise money_quantity_conservation bugs.
+    """
+    path = str(endpoint.get("path") or "").strip().lower()
+    entity = str(endpoint.get("entity") or "").strip().lower()
+    tokens = {part for part in path.strip("/").split("/") if part and not part.startswith("{")}
+    tokens.add(entity)
+    hit = 1 if tokens & _MONEY_PATH_TOKENS else 0
+    # Stronger boost when the leaf action itself is financial (pay/refund/...).
+    leaf = path.rstrip("/").rsplit("/", 1)[-1]
+    leaf_hit = 1 if leaf in _MONEY_PATH_TOKENS else 0
+    depth = path.count("/")
+    return (-leaf_hit, -hit, depth)
+
+
 def generate_money_slices(
     endpoints: list[dict[str, str]],
     default_actor: dict[str, str] | None = None,
     login_path: str = "",
-    max_slices: int = 4,
+    max_slices: int = 12,
     login_body: dict[str, Any] | None = None,
+    actors: list[dict[str, str]] | None = None,
+    permission_matrix: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Financial-integrity slices.
 
-    Applies to write endpoints generically — no domain keyword gate. The
-    MoneyOracle is a response-content oracle: it only raises a finding when a
-    response actually exposes a money-like field that is negative or a
-    duplicate-refund pattern. So there is no need to guess which endpoints are
-    "financial" up front; we probe writes and let the oracle judge. Works for
-    banking, insurance, billing, retail, or any domain.
+    Prefers write endpoints whose path/entity tokens suggest money, payment,
+    refund, inventory, or pricing semantics, then fills remaining budget with
+    other writes. MoneyOracle judges responses — no per-project route map.
     """
-    writes = [e for e in endpoints if str(e.get("method") or "").upper() in _WRITE_METHODS]
-    writes.sort(key=lambda e: str(e.get("path") or "").count("/"))
+    writes = [
+        e for e in endpoints
+        if str(e.get("method") or "").upper() in _WRITE_METHODS
+        and _money_endpoint_rank(e)[1] < 0
+    ]
+    writes.sort(key=_money_endpoint_rank)
     slices: list[dict[str, Any]] = []
     seen: set[str] = set()
-    da = default_actor or {}
     for ep in writes:
         method = str(ep.get("method") or "").upper()
         path = str(ep.get("path") or "")
@@ -492,16 +846,23 @@ def generate_money_slices(
             continue
         if _is_auth_endpoint(ep):  # login/register have no financial semantics
             continue
+        da = _select_actor_for_endpoint(ep, actors or [], permission_matrix, default_actor)
+        if actors and not da:
+            continue
         seen.add(path)
         entity = str(ep.get("entity") or _path_entity(path))
         slice_id = behavior_slice_id("money", entity, method, path)
+        rank = _money_endpoint_rank(ep)
+        # Higher priority for conservation-relevant leaves so budget steering
+        # keeps pay/refund/inventory ahead of generic shallow creates.
+        priority = 0.90 if rank[0] < 0 else (0.86 if rank[1] < 0 else 0.80)
         slices.append({
             "slice_id": slice_id,
             "entity": entity,
             "kind": "money",
             "states": [],
             "endpoints": [path],
-            "priority": 0.82,
+            "priority": priority,
             "source_refs": [{"kind": "api_endpoint", "quote": path}],
             "evidence_gaps": [],
             "_money_method": method,
@@ -533,6 +894,49 @@ def _expected_permitted_roles(actor_label: str) -> list[str]:
     if any(t in label for t in ("read", "view", "audit", "只读")):
         return ["GET", "HEAD", "OPTIONS"]
     return []  # oracle determines this at runtime
+
+
+def _permission_boundary_is_declared(
+    actor_label: str,
+    endpoint: dict[str, Any],
+    *,
+    permission_matrix: list[dict[str, Any]] | None,
+    role_defaults: list[str],
+    boundary_declared: bool = False,
+) -> bool:
+    """Return whether source material declares a role/endpoint boundary."""
+
+    if boundary_declared:
+        return True
+    return _permission_declared_actions(
+        actor_label,
+        endpoint,
+        permission_matrix=permission_matrix,
+    ) is not None
+
+
+def _permission_declared_actions(
+    actor_label: str,
+    endpoint: dict[str, Any],
+    *,
+    permission_matrix: list[dict[str, Any]] | None,
+) -> set[str] | None:
+    matched = False
+    declared: set[str] = set()
+    for row in permission_matrix or []:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or row.get("actor") or row.get("role_id") or "").strip().lower()
+        actions = row.get("actions") or row.get("methods") or row.get("allowed_actions") or []
+        action_values = {
+            str(item).strip()
+            for item in actions
+        } if isinstance(actions, (list, tuple, set)) else {str(actions).strip()}
+        role_matches = bool(role and (role == actor_label or role in actor_label or actor_label in role))
+        if role_matches and _resource_matches_endpoint(row, endpoint):
+            matched = True
+            declared.update(value for value in action_values if value)
+    return declared if matched else None
 
 
 def _path_entity(path: str) -> str:
@@ -661,6 +1065,7 @@ def generate_supplementary_slices(
     root: Path,
     project: str,
     api_spec_text: str,
+    permission_matrix: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Produce all supplementary slices in a single call.
 
@@ -694,19 +1099,41 @@ def generate_supplementary_slices(
     login_body_template = auto_login_body
     # Default actor for un-scoped probes: first non-admin account, else first.
     default_actor: dict[str, str] = {}
-    if actors:
-        default_actor = next((a for a in actors if not _is_admin_like(a)), actors[0])
+    active_actors = _active_actors(actors)
+    if active_actors:
+        default_actor = next((a for a in active_actors if not _is_admin_like(a)), active_actors[0])
     all_slices: list[dict[str, Any]] = []
     if login_path and actors:
         all_slices.extend(generate_account_status_slices(actors, login_path=login_path, login_body=login_body_template))
     if actors and any(str(e.get("method") or "").upper() in _WRITE_METHODS for e in endpoints):
-        all_slices.extend(generate_permission_slices(endpoints, actors, login_path=login_path, login_body=login_body_template))
+        all_slices.extend(generate_permission_slices(
+            endpoints,
+            actors,
+            login_path=login_path,
+            login_body=login_body_template,
+            permission_matrix=permission_matrix,
+        ))
     if len(actors) >= 2 and any(str(e.get("method") or "").upper() in _READ_METHODS for e in endpoints):
-        all_slices.extend(generate_isolation_slices(endpoints, actors, login_path=login_path, login_body=login_body_template))
+        all_slices.extend(generate_isolation_slices(
+            endpoints,
+            actors,
+            login_path=login_path,
+            login_body=login_body_template,
+            permission_matrix=permission_matrix,
+        ))
     if any(str(e.get("method") or "").upper() in _WRITE_METHODS for e in endpoints):
-        all_slices.extend(generate_inventory_slices(endpoints, default_actor, login_path, login_body=login_body_template))
-        all_slices.extend(generate_money_slices(endpoints, default_actor, login_path, login_body=login_body_template))
-        all_slices.extend(generate_concurrency_slices(endpoints, default_actor, login_path, login_body=login_body_template))
+        all_slices.extend(generate_inventory_slices(
+            endpoints, default_actor, login_path, login_body=login_body_template,
+            actors=actors, permission_matrix=permission_matrix,
+        ))
+        all_slices.extend(generate_money_slices(
+            endpoints, default_actor, login_path, login_body=login_body_template,
+            actors=actors, permission_matrix=permission_matrix,
+        ))
+        all_slices.extend(generate_concurrency_slices(
+            endpoints, default_actor, login_path, login_body=login_body_template,
+            actors=actors, permission_matrix=permission_matrix,
+        ))
     try:
         from .historical_behavior_slices import generate_historical_behavior_slices
 
@@ -781,6 +1208,7 @@ def probe_disabled_account_logins(
             with urllib.request.urlopen(request, timeout=10) as response:
                 raw = response.read(300_000).decode("utf-8", errors="replace")
                 http_status = int(response.status)
+                resp_headers = dict(response.headers.items()) if response.headers else {}
                 resp_body: Any
                 try:
                     resp_body = json.loads(raw)
@@ -788,6 +1216,7 @@ def probe_disabled_account_logins(
                     resp_body = {"_raw": raw[:2000]}
         except urllib.error.HTTPError as exc:
             http_status = int(exc.code)
+            resp_headers = dict(exc.headers.items()) if exc.headers else {}
             raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
             try:
                 resp_body = json.loads(raw) if raw else {}
@@ -797,7 +1226,17 @@ def probe_disabled_account_logins(
             continue
         if not (200 <= http_status < 300):
             continue
+        if not _auth_acceptance_observed(resp_body, resp_headers):
+            continue
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        evidence_id = f"EVID_LOGIN_{role}_{int(time.time())}"
+        redacted_body = _redact_probe_artifact(body)
+        redacted_resp_body = _redact_probe_artifact(resp_body)
+        redacted_resp_headers = _redact_probe_artifact(resp_headers)
+        expected_text = f"{status} account login must be rejected before credentials/session are issued (HTTP 401/403)."
+        actual_text = f"HTTP {http_status} issued a login acceptance signal."
+        failed_assertion = f"Expected {expected_text} Actual {actual_text}"
+        reproduction_steps = [f"{method} {login_path} body={json.dumps(redacted_body, ensure_ascii=False)}"]
         findings.append({
             "severity": "P0",
             "title": f"[账号状态登录绕过] {status} 账号 {email} 仍可登录获 token",
@@ -813,32 +1252,59 @@ def probe_disabled_account_logins(
             "gate_passed": True,
             "customer_delivery_status": "defect",
             "bug_status": "reproduced",
-            "expected": f"{status} 账号登录应返回 401/403",
-            "actual": f"HTTP {http_status}",
+            "expected": expected_text,
+            "actual": actual_text,
+            "timestamp": ts,
+            "failed_assertions": [failed_assertion],
+            "expected_actual_comparison": {
+                "expected": expected_text,
+                "actual": actual_text,
+                "difference": "Disabled or locked account received a successful authentication response.",
+            },
             "method": method,
             "path": login_path,
-            "evidence_id": f"EVID_LOGIN_{role}_{int(time.time())}",
+            "evidence_id": evidence_id,
             "evidence": {
                 "request": f"{method} {login_path}",
-                "response": {"status_code": http_status, "body": resp_body},
+                "response": {"status_code": http_status, "headers": redacted_resp_headers, "body": redacted_resp_body},
                 "assertion": f"{status} account must not receive a valid login token",
                 "timestamp": ts,
                 "target": login_path,
                 "actor": role,
-                "reproduction_steps": [f"{method} {login_path} body={json.dumps(body, ensure_ascii=False)}"],
+                "reproduction_steps": reproduction_steps,
             },
             "raw_evidence": {
+                "has_real_evidence": True,
                 "account_status": status,
                 "email": email,
-                "request_raw": {"method": method, "path": login_path, "actor": role, "body": body},
-                "response_raw": {"status_code": http_status, "body": resp_body},
+                "request_raw": {"method": method, "path": login_path, "actor": role, "body": redacted_body},
+                "response_raw": {"status_code": http_status, "headers": redacted_resp_headers, "body": redacted_resp_body},
+                "execution_trace": {"evidence_id": evidence_id, "layers": ["runtime_http_auth_acceptance"]},
                 "timestamp": ts,
             },
             "reproduction": {
                 "method": method,
                 "path": login_path,
                 "actor": role,
-                "reproduction_steps": [f"{method} {login_path}"],
+                "is_synthetic": False,
+                "reproduction_steps": reproduction_steps,
+                "har_evidence": {"status_code": http_status, "response_headers": redacted_resp_headers, "response_body": redacted_resp_body},
             },
+            "evidence_quality": {
+                "level": "validated",
+                "score": 95,
+                "can_reproduce": True,
+                "evidence_strength": "runtime_http_auth_acceptance",
+            },
+            "evidence_status": {
+                "semantic_verdict": "SEMANTIC_CONFIRMED",
+                "business_evidence_status": "VALIDATED",
+                "final_review_status": "VALIDATED_CANDIDATE",
+                "missing_requirements": [],
+            },
+            "final_review_status": "VALIDATED_CANDIDATE",
+            "business_evidence_status": "VALIDATED",
+            "evidence_strength": "runtime_http_auth_acceptance",
+            "reproduction_steps": reproduction_steps,
         })
     return findings

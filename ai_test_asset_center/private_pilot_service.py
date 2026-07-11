@@ -14,6 +14,7 @@ import re
 import time
 import traceback
 import uuid
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +31,7 @@ from . import jwt_auth
 from .real_id_resolver import normalize_path_placeholders
 from .real_project_onboarding import ROOT, _safe_project_id
 from .scan_counter import increment_scan_counter
+from .campaign_api_contract import CampaignContractError, structured_error
 
 
 CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
@@ -647,6 +649,13 @@ def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any
         os.environ.get("QUALIBUG_ENVIRONMENT_REF"),
         os.environ.get("QUALIBUG_TARGET_ENVIRONMENT"),
     )
+    environment_type = _first_text(
+        body.get("environment_type"),
+        body.get("environment_kind"),
+        body.get("environment_class"),
+        os.environ.get("QUALIBUG_ENVIRONMENT_TYPE"),
+        os.environ.get("QUALIBUG_ENVIRONMENT_KIND"),
+    )
     ui_base_url = ""
     ui_base_url_source = ""
     explicit_ui_base_url = _http_url_text(body.get("ui_base_url"))
@@ -681,6 +690,12 @@ def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any
         deployment = resolve_deployment_config(project_id=project, root=root)
     except Exception:
         deployment = {}
+    deployment_sources = deployment.get("_sources") if isinstance(deployment.get("_sources"), dict) else {}
+    deployment_environment_type = (
+        deployment.get("environment_class")
+        if str(deployment_sources.get("environment_class") or "") in {"project_config", "env", "override"}
+        else ""
+    )
     scope_id = _first_text(
         scope_id,
         registry_profile.get("scope_id"),
@@ -696,6 +711,15 @@ def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any
         registry_profile.get("environment"),
         deployment.get("environment_class"),
     )
+    environment_type = _first_text(
+        environment_type,
+        registry_profile.get("environment_type"),
+        registry_profile.get("environment_kind"),
+        registry_profile.get("environment_class"),
+        deployment.get("environment_type"),
+        deployment.get("environment_kind"),
+        deployment_environment_type,
+    )
     ambiguous_ui_targets = False
     if not ui_base_url:
         resolved_ui_base_url, ambiguous_ui_targets, resolved_ui_base_url_source = _resolve_ui_base_url_from_profile(registry_profile)
@@ -704,6 +728,7 @@ def _resolve_scan_runtime_defaults(project: str, root: Path, body: dict[str, Any
     return {
         "scope_id": scope_id[:160],
         "environment_ref": environment_ref[:160],
+        "environment_type": environment_type[:80].lower(),
         "ui_base_url": ui_base_url[:500],
         "ui_base_url_source": ui_base_url_source[:200],
         "ui_target_resolution": "ambiguous" if ambiguous_ui_targets and not ui_base_url else "resolved",
@@ -800,8 +825,11 @@ def _predicted_campaign_binding(project: str, root: Path, body: dict[str, Any]) 
 
         prd_text = str(body.get("prd") or "")
         normalized_api_doc = api_doc
-        if detect_format(api_doc) not in {"openapi3", "unknown"}:
-            normalized = parse_to_openapi(api_doc)
+        from .api_doc_assets import enrich_api_spec_text
+
+        normalized_api_doc = enrich_api_spec_text(root, project, normalized_api_doc) or normalized_api_doc
+        if detect_format(normalized_api_doc) not in {"openapi3", "unknown"}:
+            normalized = parse_to_openapi(normalized_api_doc)
             if normalized.get("paths"):
                 normalized_api_doc = json.dumps(normalized, ensure_ascii=False, default=str)
         schema_text = _load_schema_assets(root, project)
@@ -899,6 +927,10 @@ def _prepare_v12_scan_body(project: str, root: Path, actor: dict[str, str], body
         prepared["scope_id"] = defaults["scope_id"]
     if defaults["environment_ref"] and not str(prepared.get("environment_ref") or "").strip():
         prepared["environment_ref"] = defaults["environment_ref"]
+    if defaults.get("environment_type") and not str(
+        prepared.get("environment_type") or prepared.get("environment_kind") or prepared.get("environment_class") or ""
+    ).strip():
+        prepared["environment_type"] = defaults["environment_type"]
     if defaults.get("ui_base_url") and not str(prepared.get("ui_base_url") or "").strip():
         prepared["ui_base_url"] = str(defaults["ui_base_url"]).strip()
     if defaults.get("ui_base_url_source") and not str(prepared.get("ui_base_url_source") or "").strip():
@@ -1230,7 +1262,7 @@ def _validate_api_path(path: str) -> str:
     if not _re.match(r'^/[a-zA-Z0-9_/{}:.@-]+$', p):
         return ""
     # 排除明显的描述性文本（包含连续的中文标点或描述词）
-    # 例如 "/api/orders两次均返回201" 已被 ASCII 正则过滤
+    # 例如“路径后紧跟中文叙述”已被 ASCII 正则过滤
     # 但 "/OFF_SALE/HIDDEN" 这种仍可能通过——检查是否像真实端点
     segments = [s for s in p.split("/") if s]
     if not segments:
@@ -2920,7 +2952,7 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         # Serve the prebuilt customer pilot SPA for any non-API path (public, before the
         # auth gate so the login page itself is reachable). Known legacy server-rendered
         # pages are excluded so they keep working behind auth.
-        if not parsed.path.startswith("/api"):
+        if not parsed.path.startswith("/api") and parsed.path != "/health":
             _legacy_served = {"/onboard", "/dashboard", "/knowledge", "/benchmark", "/release"}
             if parsed.path not in _legacy_served:
                 return self._serve_frontend(parsed, root)
@@ -2956,6 +2988,14 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         actor = self._require_actor()
         if actor is None:
             return
+        _route_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+        _route_project = (
+            _route_parts[3]
+            if len(_route_parts) >= 4 and _route_parts[:3] == ["api", "v1", "projects"]
+            else ""
+        )
+        if _route_project:
+            project = _safe_project_id(_route_project)
         if not self._require_project_scope(project):
             return
         if parsed.path == "/onboard":
@@ -3011,10 +3051,12 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
                         "source": base_name,
                     })
             return self._json({"ok": True, "data": items})
+        if len(_route_parts) >= 5 and _route_parts[:3] == ["api", "v1", "projects"] and _route_parts[4] == "campaigns":
+            return self._handle_campaign_get(project, _route_parts[5:], parse_qs(parsed.query), root)
         # Bridge: serve V12 results in legacy format for Dashboard/Findings
         if parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/command-center"):
             pid = parsed.path.split("/")[4] if len(parsed.path.split("/")) >= 5 else ""
-            import urllib.parse; pid = urllib.parse.unquote(pid)
+            pid = urllib.parse.unquote(pid)
             trace_id = uuid.uuid4().hex
             started = time.perf_counter()
             _dbg_report(
@@ -3125,6 +3167,89 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v1/scan/preflight":
             return self._handle_scan_preflight(project, root)
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
+
+
+    def _handle_campaign_get(
+        self,
+        project: str,
+        route: list[str],
+        query: dict[str, list[str]],
+        root: Path,
+    ) -> None:
+        """Serve the versioned campaign/read-model resources from one SSOT."""
+        from .campaign_api_contract import (
+            CampaignContractError,
+            build_campaign_view,
+            campaign_slices,
+            finding_resource,
+            finding_rows,
+            structured_error,
+        )
+
+        try:
+            campaign_id = route[0] if route else ""
+            view = build_campaign_view(root, project, campaign_id)
+            if not route:
+                summary = {
+                    key: view.get(key)
+                    for key in (
+                        "schema_version",
+                        "campaign_id",
+                        "project_id",
+                        "status",
+                        "pipeline_health",
+                        "execution_status",
+                        "selected_experiment_count",
+                        "every_selected_experiment_has_receipt",
+                        "formal_count_projection",
+                        "external_evaluation",
+                        "fingerprint",
+                    )
+                }
+                return self._json({"ok": True, "data": [summary]})
+            if len(route) == 1:
+                return self._json({"ok": True, "data": view})
+            resource = route[1]
+            if resource == "slices" and len(route) == 2:
+                return self._json({"ok": True, "data": campaign_slices(view), "campaign_id": campaign_id})
+            if resource in {"identity-traces", "identity_traces"} and len(route) == 2:
+                return self._json({"ok": True, "data": view.get("identity_traces") or [], "campaign_id": campaign_id})
+            if resource == "findings" and len(route) == 2:
+                classification = str((query.get("classification") or ["deliverable"])[0])
+                return self._json({
+                    "ok": True,
+                    "classification": classification,
+                    "data": finding_rows(view, classification),
+                    "campaign_id": campaign_id,
+                })
+            if resource == "findings" and len(route) == 4 and route[3] in {"evidence", "replay"}:
+                classification, finding = finding_resource(view, route[2])
+                if route[3] == "evidence":
+                    evidence = {
+                        "finding_id": route[2],
+                        "classification": classification,
+                        "evidence": finding.get("evidence") or finding.get("raw_evidence") or {},
+                        "evidence_chain": finding.get("evidence_chain") or [],
+                        "source_refs": finding.get("source_refs") or finding.get("doc_refs") or [],
+                    }
+                    return self._json({"ok": True, "data": evidence})
+                replay = {
+                    "finding_id": route[2],
+                    "classification": classification,
+                    "reproduction": finding.get("reproduction") or {},
+                    "replay_allowed": classification == "deliverable",
+                }
+                return self._json({"ok": True, "data": replay})
+            return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
+        except CampaignContractError as exc:
+            error = structured_error(
+                stage="campaign_api",
+                code="CAMPAIGN_RESOURCE_UNAVAILABLE",
+                identity={"project_id": project, "campaign_id": route[0] if route else ""},
+                retryability="after_new_scan_or_operator_action",
+                operator_action=str(exc),
+            )
+            return self._json({"ok": False, "error": error}, 404)
 
 
     def _render_report_html(self, project: str, root: Path) -> None:
@@ -3299,13 +3424,48 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         try:
             body = self._body()
             route_project = ""
-            if parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/regression/run"):
-                parts = parsed.path.split("/")
-                if len(parts) >= 5:
-                    route_project = urllib.parse.unquote(parts[4])
+            route_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+            if len(route_parts) >= 4 and route_parts[:3] == ["api", "v1", "projects"]:
+                route_project = route_parts[3]
             project = _safe_project_id(str(body.get("project_id") or route_project or self._project()))
             if not self._require_project_scope(project):
                 return
+            if parsed.path == "/api/v1/evaluations/submissions":
+                from .campaign_api_contract import build_evaluation_submission
+
+                return self._json({"ok": True, "data": build_evaluation_submission(root, project, body)}, 201)
+            if len(route_parts) == 5 and route_parts[:3] == ["api", "v1", "projects"] and route_parts[4] == "campaigns":
+                from .campaign_api_contract import create_campaign
+
+                return self._json({"ok": True, "data": create_campaign(root, project, body)}, 201)
+            if (
+                len(route_parts) == 7
+                and route_parts[:3] == ["api", "v1", "projects"]
+                and route_parts[4] == "campaigns"
+                and route_parts[6] in {"run", "resume"}
+            ):
+                from .campaign_api_contract import CampaignContractError, load_created_campaign
+
+                campaign_contract = load_created_campaign(root, project, route_parts[5])
+                if campaign_contract.get("status") != "ready":
+                    raise CampaignContractError(
+                        "campaign is not ready; resolve target_policy_decision.blocking_codes before execution"
+                    )
+                runtime_input = campaign_contract.get("runtime_input") if isinstance(campaign_contract.get("runtime_input"), dict) else {}
+                scan_body = {
+                    **body,
+                    **runtime_input,
+                    "project_id": project,
+                    "campaign_id": route_parts[5],
+                    "target_policy_decision": campaign_contract.get("target_policy_decision"),
+                }
+                return self._handle_v12_scan(project, root, actor, scan_body)
+            if (
+                len(route_parts) == 6
+                and route_parts[:3] == ["api", "v1", "projects"]
+                and route_parts[4:] == ["environment", "preflight"]
+            ):
+                return self._handle_scan_preflight(project, root, body)
             if parsed.path == "/api/knowledge/ingest":
                 if not self._require_role(actor, KNOWLEDGE_MANAGER_ROLES, "knowledge source ingestion"):
                     return
@@ -3365,6 +3525,15 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             else:
                 return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
             return self._json(result)
+        except CampaignContractError as exc:
+            error = structured_error(
+                stage="campaign_api",
+                code="CAMPAIGN_CONTRACT_BLOCKED",
+                identity={"project_id": locals().get("project", "")},
+                retryability="after_operator_action",
+                operator_action=str(exc),
+            )
+            return self._json({"ok": False, "error": error}, 409)
         except PermissionError as exc:
             return self._json({"ok": False, "error": "FORBIDDEN", "message": str(exc)}, 403)
         except (ValueError, KeyError) as exc:
@@ -3669,9 +3838,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             return self._json({"ok": True, "message": "持续检测已手动停止。"})
         return self._json({"ok": True, "message": "持续检测未在运行。"})
 
-    def _handle_scan_preflight(self, project: str, root: Path) -> None:
+    def _handle_scan_preflight(self, project: str, root: Path, body: dict[str, Any] | None = None) -> None:
         """Customer-facing readiness check: surface actionable blockers BEFORE a scan
         is launched, instead of failing late with a 400/500 the UI can't explain."""
+        body = dict(body or {})
         reasons: list[dict[str, str]] = []
         # 1) service credentials configured?
         _cfg = root / "platform_workspace" / project / "multi_service_config.json"
@@ -3711,19 +3881,61 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     ).format(len(_assets)),
                 })
             # 3) target base_url / connector endpoint?
-        _base_url = ""
+        _approved_url = str(body.get("approved_base_url") or "").strip()
+        _base_url = str(body.get("target_url") or body.get("base_url") or _approved_url or "").strip()
+        _environment_type = str(body.get("environment_type") or body.get("environment_kind") or "").strip()
+        _environment_ref = str(body.get("environment_ref") or body.get("target_id") or "").strip()
+        _project_config = root / "platform_inputs" / project / "real_project_config.json"
+        if _project_config.is_file():
+            try:
+                _project_values = json.loads(_project_config.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                reasons.append({"code": "PROJECT_CONFIG_INVALID", "message": f"项目运行配置无法解析: {exc}"})
+                _project_values = {}
+            if isinstance(_project_values, dict):
+                _base_url = _base_url or str(_project_values.get("base_url") or "").strip()
+                _approved_url = _approved_url or str(_project_values.get("approved_base_url") or "").strip()
+                if not _approved_url:
+                    _approved_urls = _project_values.get("approved_base_urls")
+                    if isinstance(_approved_urls, list) and len(_approved_urls) == 1:
+                        _approved_url = str(_approved_urls[0] or "").strip()
+                _environment_type = _environment_type or str(_project_values.get("environment_type") or _project_values.get("environment_kind") or "").strip()
+                _environment_ref = _environment_ref or str(_project_values.get("environment_ref") or _project_values.get("target_id") or "").strip()
         try:
             from .enterprise_pilot_runtime import load_connector_registry
             for _c in load_connector_registry(project, root).get("connectors", []):
                 if _c.get("enabled"):
                     _ep = str(_c.get("endpoint_ref") or "")
-                    if _ep.startswith(("http://", "https://")):
+                    if not _base_url and _ep.startswith(("http://", "https://")):
                         _base_url = _ep
                         break
         except Exception:
             pass
         if not _base_url:
             reasons.append({"code": "NO_TARGET", "message": "未配置被测目标 base_url 或启用连接器端点。"})
+
+        from .target_policy import build_target_policy_decision
+
+        _read_only = bool(body.get("read_only"))
+        _target_policy = build_target_policy_decision(
+            requested_base_url=_base_url,
+            approved_base_url=_approved_url,
+            environment_type=_environment_type,
+            environment_ref=_environment_ref,
+            execution_mode="safe_read_only" if _read_only else "approved_sandbox_write",
+            runtime_status="approved",
+        )
+        _policy_blocking_codes = list(_target_policy.get("blocking_codes") or [])
+        if _read_only:
+            _policy_blocking_codes = [
+                code for code in _policy_blocking_codes
+                if code not in {"READ_ONLY_MODE", "UNKNOWN_ENVIRONMENT", "PRODUCTION_WRITE_BLOCKED"}
+            ]
+        for _code in _policy_blocking_codes:
+            reasons.append({
+                "code": str(_code),
+                "message": "补全明确环境类型、环境标识和精确批准 URL 后重试；生产或未知环境写入不会放行。",
+            })
 
         # Integrate with CapabilityGapResolver for gap detection and resolution tasks
         gap_summary = None
@@ -3736,7 +3948,23 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             except Exception:
                 pass
 
-        response = {"ok": True, "ready": len(reasons) == 0, "reasons": reasons}
+        _blocking_codes = list(dict.fromkeys(str(item.get("code") or "") for item in reasons if item.get("code")))
+        response = {
+            "ok": True,
+            "schema_version": "qualibug.environment-preflight.v1",
+            "project_id": project,
+            "ready": len(_blocking_codes) == 0,
+            "blocking_codes": _blocking_codes,
+            "reasons": reasons,
+            "target_policy_decision": _target_policy,
+            "input_checks": {
+                "credentials": {"status": "passed" if _services else "blocked", "service_count": len(_services)},
+                "sources": {"status": "passed" if _assets else "blocked", "source_count": len(_assets)},
+                "target": {"status": "passed" if _base_url else "blocked", "target_url": _base_url, "approved_base_url": _approved_url},
+                "environment": {"status": "passed" if _environment_type and _environment_ref else "blocked", "environment_type": _environment_type, "environment_ref": _environment_ref},
+                "target_policy": {"status": "passed" if (_target_policy.get("read_allowed") if _read_only else _target_policy.get("write_allowed")) else "blocked"},
+            },
+        }
         if gap_summary:
             response["gap_summary"] = gap_summary
         return self._json(response)
@@ -3829,24 +4057,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                             ep = c.get("endpoint_ref", "")
                             if ep and (ep.startswith("http://") or ep.startswith("https://")):
                                 base_url = ep; break
-                    if False:  # disabled: never fabricate API doc from hardcoded endpoint templates (fake bugs / industry lock-in)
-                        lines = []
-                        for c in enabled:
-                            ep = c.get("endpoint_ref", "")
-                            if ep:
-                                lines.append(f"| POST | {ep}/api/orders | 鍒涘缓 | product_id,quantity |")
-                                lines.append(f"| POST | {ep}/api/orders/{{id}}/pay | 鏀粯 | amount |")
-                                lines.append(f"| POST | {ep}/api/orders/{{id}}/cancel | 鍙栨秷 | |")
-                                lines.append(f"| POST | {ep}/api/orders/{{id}}/refund | 閫€娆?| |")
-                                lines.append(f"| POST | {ep}/api/register | 娉ㄥ唽 | username,password,role |")
-                                lines.append(f"| GET | {ep}/api/admin/stats | 绠＄悊缁熻 | |")
-                                lines.append(f"| GET | {ep}/api/audit-logs | 瀹¤鏃ュ織 | |")
-                                lines.append(f"| GET | {ep}/api/products | 鍟嗗搧鍒楄〃 | |")
-                        if lines:
-                            api_doc = "\n".join(lines)
-                # Fallback disabled: never synthesize endpoints from base_url alone (would create fake bugs).
-                if False and not api_doc and base_url:
-                    api_doc = f"| POST | {base_url}/api/orders | 鍒涘缓 |\n| GET | {base_url}/api/products | 鍟嗗搧鍒楄〃 |\n| GET | {base_url}/api/admin/stats | 绠＄悊缁熻 |"
+                # A connector URL is target identity only. Endpoint contracts must
+                # come from registered project sources; never synthesize routes.
             if api_doc and not prepared_body.get("api_doc"):
                 prepared_body["api_doc"] = api_doc
             if base_url and not prepared_body.get("base_url"):
@@ -4759,7 +4971,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             import re
             text_for_route = " ".join([title, description, str(evidence), str(probe)])
             # 提取 API 路径——用 ASCII-only 正则避免中文/日文等被误匹配为路径
-            # \w 在 Python re 默认包含 Unicode，导致"/api/orders两次均返回201"被整体匹配
+            # \w 在 Python re 默认包含 Unicode，会把路径后的中文叙述一并匹配
             path_match = re.search(r'(/api/[a-zA-Z0-9_/{}.-]+|/[a-zA-Z0-9{}.-]+/[a-zA-Z0-9_/{}.-]+)', text_for_route)
             api_path = self._first_text(
                 item.get("_api_path"),
@@ -4884,6 +5096,13 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 finding_evidence["source_file"] = str(item.get("evidence_hint"))
 
             findings.append({
+                "candidate_id": self._first_text(item.get("candidate_id")),
+                "slice_id": self._first_text(item.get("slice_id")),
+                "obligation_id": self._first_text(item.get("obligation_id")),
+                "experiment_id": self._first_text(item.get("experiment_id")),
+                "execution_id": self._first_text(item.get("execution_id")),
+                "evidence_id": self._first_text(item.get("evidence_id")),
+                "finding_id": self._first_text(item.get("finding_id")),
                 "risk_id": self._first_text(item.get("risk_id"), item.get("bug_id"), item.get("evidence_id"), item.get("finding_id"), f"v12_{index}"),
                 "id": self._first_text(item.get("risk_id"), item.get("bug_id"), item.get("evidence_id"), item.get("finding_id"), f"v12_{index}"),
                 "title": title,
@@ -5795,6 +6014,164 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["continuous_state"] = _get_continuous_state(root, project_id)
         except Exception:
             pass
+        # External evaluation / commercial quality projection (Phase 0 SSOT).
+        # NOT_MEASURED must never surface as a quality score of 100 or 0.
+        try:
+            from .discovery_quality_projection import (
+                attach_quality_projection_to_scan_result,
+                suppress_benchmark_quality_when_not_measured,
+            )
+
+            _scan_for_quality: dict[str, Any] = {}
+            for source in (current_scan_report, report, real_discovery_payload):
+                if isinstance(source, dict) and source:
+                    _scan_for_quality = dict(source)
+                    break
+            _current_findings_declared = False
+            if isinstance(current_scan_report, dict):
+                for _finding_key in ("findings", "real_findings"):
+                    if isinstance(current_scan_report.get(_finding_key), list):
+                        _scan_for_quality["findings"] = list(current_scan_report.get(_finding_key) or [])
+                        _current_findings_declared = True
+                        break
+                if isinstance(current_scan_report.get("candidate_findings"), list):
+                    _scan_for_quality["candidate_findings"] = list(current_scan_report.get("candidate_findings") or [])
+            if not _current_findings_declared and not _scan_for_quality.get("findings"):
+                _scan_for_quality["findings"] = list(delivery_defects or [])
+            if not _scan_for_quality.get("candidate_findings"):
+                _scan_for_quality["candidate_findings"] = list(internal_clues or [])
+            if isinstance(discovery_funnel, dict):
+                _scan_for_quality["discovery_funnel"] = discovery_funnel
+            # Prefer v12 nested obligation/experiment fields when present on report.
+            if isinstance(current_scan_report, dict):
+                for _key in (
+                    "test_obligations",
+                    "experiment_compile",
+                    "obligation_plan",
+                    "execution_adapters",
+                    "behavior_ir",
+                    "phases",
+                    "pipeline_health",
+                    "campaign",
+                    "behavior_slice_ledger",
+                    "v12",
+                ):
+                    if _key not in _scan_for_quality and current_scan_report.get(_key) is not None:
+                        _scan_for_quality[_key] = current_scan_report.get(_key)
+            if isinstance(report, dict):
+                for _key in (
+                    "test_obligations",
+                    "experiment_compile",
+                    "obligation_plan",
+                    "execution_adapters",
+                    "behavior_ir",
+                    "phases",
+                    "v12",
+                ):
+                    if _key not in _scan_for_quality and report.get(_key) is not None:
+                        _scan_for_quality[_key] = report.get(_key)
+            _projected = attach_quality_projection_to_scan_result(_scan_for_quality)
+            _external = _projected.get("external_evaluation") if isinstance(_projected.get("external_evaluation"), dict) else {}
+            _counts = _projected.get("formal_count_projection") if isinstance(_projected.get("formal_count_projection"), dict) else {}
+            _classification = (
+                _projected.get("finding_classification")
+                if isinstance(_projected.get("finding_classification"), dict)
+                else {}
+            )
+            _scope_counts = (
+                _projected.get("scope_counts")
+                if isinstance(_projected.get("scope_counts"), dict)
+                else {}
+            )
+            _obl = (
+                _projected.get("obligation_execution_projection")
+                if isinstance(_projected.get("obligation_execution_projection"), dict)
+                else {}
+            )
+            data["external_evaluation"] = _external
+            data["formal_count_projection"] = _counts
+            data["finding_classification"] = _classification
+            data["scope_counts"] = _scope_counts
+            data["obligation_execution_projection"] = _obl
+            data["quality_claim_status"] = _projected.get("quality_claim_status") or "NOT_MEASURED"
+            data["commercial_quality_score"] = _projected.get("commercial_quality_score")
+            data["score_semantics"] = _projected.get("score_semantics") or {}
+            data["scan_meta"]["external_evaluation"] = _external
+            data["scan_meta"]["quality_claim_status"] = data["quality_claim_status"]
+            data["scan_meta"]["commercial_quality_score"] = data["commercial_quality_score"]
+            data["scan_meta"]["formal_customer_deliverable_count"] = _counts.get("formal_customer_deliverable_count")
+            data["scan_meta"]["obligation_execution_projection"] = _obl
+            # The formal delivery gate is the only source for customer-facing
+            # defect lists and counts.  Legacy readiness/campaign counters are
+            # retained only as diagnostics below, never as commercial defects.
+            _formal_deliverables = list(_classification.get("deliverable") or [])
+            _candidate_findings = list(_classification.get("candidate") or [])
+            _rejected_findings = list(_classification.get("rejected") or [])
+            _formal_count = int(_counts.get("formal_customer_deliverable_count") or 0)
+            _legacy_count_diagnostics = {
+                "current_report_readiness_count": data["scan_meta"].get("current_report_customer_ready_defect_count"),
+                "current_campaign_readiness_count": data["scan_meta"].get("current_campaign_customer_ready_defect_count"),
+                "project_family_readiness_count": data["scan_meta"].get("family_customer_ready_defect_count"),
+                "semantics": "diagnostic_only_not_formal_customer_deliverables",
+            }
+            data["deliverable_findings"] = _formal_deliverables
+            data["candidate_findings"] = _candidate_findings
+            data["rejected_findings"] = _rejected_findings
+            data["defects"] = _formal_deliverables
+            data["risks"] = _formal_deliverables
+            data["clues"] = _candidate_findings
+            data["legacy_count_diagnostics"] = _legacy_count_diagnostics
+            data["project_history"] = {
+                "measurement_status": "NOT_MEASURED",
+                "formal_customer_deliverable_count": len(delivery_defects or []),
+                "deliverable_findings": list(delivery_defects or []),
+                "note": "Historical shelf is a separate scope and is never merged into current-run formal counts.",
+            }
+            data["scope_counts"] = {
+                **_scope_counts,
+                "current_run_formal_deliverable": _formal_count,
+                "current_campaign_formal_deliverable": _formal_count,
+                "project_open_formal_deliverable": None,
+                "project_open_measurement_status": "NOT_MEASURED",
+            }
+            for _surface in (data["scan_meta"], data["executive_summary"], data["value_metrics"]):
+                _surface["formal_customer_deliverable_count"] = _formal_count
+                _surface["current_report_customer_ready_defect_count"] = _formal_count
+                _surface["customer_ready_defects"] = _formal_count
+                _surface["current_campaign_customer_ready_defect_count"] = _formal_count
+                _surface["legacy_count_diagnostics"] = _legacy_count_diagnostics
+            data["executive_summary"]["total_bugs_found"] = _formal_count
+            data["executive_summary"]["ready_bugs"] = _formal_count
+            data["value_metrics"]["defect_count"] = _formal_count
+            data["value_metrics"]["ready_bug_count"] = _formal_count
+            data["scan_meta"]["ready_bug_count"] = _formal_count
+            if _test_task_board and _obl:
+                data["test_task_board"]["obligation_execution_projection"] = _obl
+            if str(_external.get("measurement_status") or "").upper() != "MEASURED":
+                data["executive_summary"]["overall_score"] = None
+                data["executive_summary"]["commercial_quality_suppressed"] = True
+                data["executive_summary"]["quality_label"] = "尚未完成外部质量评测"
+                data["value_metrics"]["commercial_quality_score"] = None
+                data["value_metrics"]["quality_claim_status"] = "NOT_MEASURED"
+            if isinstance(data.get("scan_meta"), dict) and isinstance(data["scan_meta"].get("benchmark_metrics"), dict):
+                data["scan_meta"]["benchmark_metrics"] = suppress_benchmark_quality_when_not_measured(
+                    data["scan_meta"]["benchmark_metrics"],
+                    _external,
+                )
+        except Exception as _quality_exc:
+            data["external_evaluation"] = {
+                "measurement_status": "NOT_MEASURED",
+                "reason": f"quality_projection_failed:{type(_quality_exc).__name__}",
+                "display": {
+                    "quality_label": "尚未完成外部质量评测",
+                    "suppress_quality_score": True,
+                    "suppress_recall_precision": True,
+                },
+            }
+            data["quality_claim_status"] = "NOT_MEASURED"
+            data["commercial_quality_score"] = None
+            data["executive_summary"]["overall_score"] = None
+            data["executive_summary"]["quality_label"] = "尚未完成外部质量评测"
         return {
             "ok": True,
             "data": data,

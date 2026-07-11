@@ -110,7 +110,7 @@ export function Findings() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
-  const { findings, clues, commercialAssets, loading, error, refetch } = useFindingsData(project);
+  const { findings, clues, rejected, commercialAssets, scanMeta, obligationProjection, loading, error, refetch } = useFindingsData(project);
   const toast = useToast();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FindingFilter>('all');
@@ -147,6 +147,14 @@ export function Findings() {
   const commercialGate = commercialAssets?.release_gate;
   const handoffReady = Boolean(commercialAssets?.commercial_handoff.safe_for_customer);
   const handoffLabel = handoffReadinessLabel(commercialAssets);
+  const oblTotal = Number(obligationProjection.obligation_total || 0);
+  const oblCompiled = Number(obligationProjection.obligation_compiled || 0);
+  const oblBlocked = Number(obligationProjection.obligation_blocked || 0);
+  const oblExecuted = Number(obligationProjection.obligation_executed || 0);
+  const qualityClaim = String(scanMeta.quality_claim_status || 'NOT_MEASURED');
+  const fingerprints = (obligationProjection.fingerprints && typeof obligationProjection.fingerprints === 'object')
+    ? obligationProjection.fingerprints as Record<string, unknown>
+    : {};
   const runReleaseRegression = async (): Promise<void> => {
     if (!project) return;
     setRegressionRunning(true);
@@ -177,7 +185,17 @@ export function Findings() {
           <h1>{confirmed.length > 0 ? `已确认 ${confirmed.length} 个可交付缺陷` : '当前没有可交付缺陷'}</h1>
           <p className="customer-showcase-headline">{confirmed.length > 0 ? '等待客户修复后，用真实回归验证是否闭环。' : clues.length > 0 ? '内部线索仍在补证，不会作为已确认缺陷交付。' : '尚未形成具备真实运行证据的已确认缺陷。'}</p>
           <p>{confirmed.length > 0 ? `仅展示已执行、可复现且证据完整的结果。平台提供事实证据与回归验证，不提供修复方案。当前重点涉及 ${topModules.length ? topModules.join('、') : '多个模块'}。` : clues.length > 0 ? `当前有 ${clues.length} 条内部线索正在补证。` : '完成真实检测后，这里会展示可直接交给客户的缺陷结论。'}</p>
-          <div className="page-summary-strip"><span className="summary-pill strong">可交付 {confirmed.length}</span><span className="summary-pill">P0 阻塞 {bySeverity.P0}</span><span className="summary-pill">P1 已确认 {bySeverity.P1}</span><span className="summary-pill">待补证 {clues.length}</span>{commercialOverall && <span className="summary-pill">发布门禁 {commercialReleaseLabel(commercialOverall)}</span>}</div>
+          <div className="page-summary-strip"><span className="summary-pill strong">可交付 {confirmed.length}</span><span className="summary-pill">候选 {clues.length}</span><span className="summary-pill">已拒绝 {rejected.length}</span><span className="summary-pill">P0 阻塞 {bySeverity.P0}</span><span className="summary-pill">P1 已确认 {bySeverity.P1}</span>{commercialOverall && <span className="summary-pill">发布门禁 {commercialReleaseLabel(commercialOverall)}</span>}</div>
+          {(oblTotal > 0 || qualityClaim === 'NOT_MEASURED') && (
+            <div className="page-summary-strip" style={{ marginTop: 8 }}>
+              {oblTotal > 0 && <span className="summary-pill">义务 {oblTotal}</span>}
+              {oblTotal > 0 && <span className="summary-pill">已编译 {oblCompiled}</span>}
+              {oblTotal > 0 && <span className="summary-pill">已执行 {oblExecuted}</span>}
+              {oblBlocked > 0 && <span className="summary-pill">编译阻断 {oblBlocked}</span>}
+              <span className="summary-pill">{qualityClaim === 'MEASURED' ? '外部质量已评测' : '尚未完成外部质量评测'}</span>
+              {Boolean(fingerprints.source_hash) && <span className="summary-pill">source {String(fingerprints.source_hash).slice(0, 8)}</span>}
+            </div>
+          )}
           <div className="customer-showcase-actions"><button className="btn btn-primary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button><button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={regressionRunning}>{regressionRunning ? 'Release 回归中' : '执行 Release 回归'}</button>{clues.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/clues', project)}>查看内部线索</button>}{error && <button className="btn btn-secondary" onClick={refetch}>重新加载</button>}</div>
         </div>
         <div className="customer-showcase-side">

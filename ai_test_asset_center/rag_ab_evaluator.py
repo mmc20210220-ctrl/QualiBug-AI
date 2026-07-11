@@ -237,7 +237,7 @@ def run_rag_ab_evaluation(
             # Avoid accidentally loading old budgeted policy unless this variant explicitly budgets by count.
             PROBE_BUDGET_POLICY_PATH="__phase16_no_budget_policy__" if not budget else os.environ.get("PROBE_BUDGET_POLICY_PATH", "__phase16_no_budget_policy__"),
         ):
-            DefectDiscoveryRunner(DiscoveryConfig(project=project, public_artifacts=public_artifacts, discovery_mode="blind", benchmark_compat_enabled=False)).run()
+            DefectDiscoveryRunner(DiscoveryConfig(project=project, public_artifacts=public_artifacts, discovery_mode="blind")).run()
             scorecard = evaluate(DEFAULT_DISCOVERY_OUT, ground_truth, variant_out)
             # Copy probe artifacts for later inspection.
             for artifact in [DEFAULT_RAG_PROBES, DEFAULT_DEFECT_PROBES]:

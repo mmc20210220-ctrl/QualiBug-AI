@@ -13,6 +13,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .customer_delivery_gate import is_customer_deliverable_defect
+
 
 def build_closed_loop_context(
     project: str, root: Path, findings: list[dict], *, max_patterns: int = 20
@@ -24,12 +26,13 @@ def build_closed_loop_context(
 
     history: dict = {"patterns": {}, "total_confirmed": 0}
     if patterns_file.exists():
-        try: history = json.loads(patterns_file.read_text(encoding="utf-8"))
-        except: pass
+        try:
+            history = json.loads(patterns_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(f"closed_loop_history_invalid:{patterns_file}:{type(exc).__name__}") from exc
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    confirmed = [f for f in findings if str(f.get("verdict","")).lower() == "confirmed"
-                 or f.get("source") in ("runtime_probe", "v12_state_graph")]
+    confirmed = [f for f in findings if is_customer_deliverable_defect(f)]
     
     new_patterns = 0
     for f in confirmed:
@@ -74,48 +77,60 @@ def _generate_learning_probes(
     This wires the formerly-unused mutation hints into actual probe generation,
     proving that learning is NOT just re-sorting — it creates new artifacts.
     """
-    try:
-        from .learning_generator import LearningGenerator
+    from .learning_generator import LearningGenerator
 
-        confirmed = [f for f in findings if str(f.get("verdict", "")).lower() == "confirmed"
-                     or f.get("source") in ("runtime_probe", "v12_state_graph")]
-        if not confirmed:
-            return []
-
-        # Build minimal context from findings
-        entities: list[str] = []
-        endpoints: list[dict[str, str]] = []
-        seen_paths: set[str] = set()
-        for f in confirmed:
-            path_val = str(f.get("path") or f.get("api", ""))
-            method_val = str(f.get("method", "GET")).upper()
-            if path_val and method_val:
-                key = f"{method_val}:{path_val}"
-                if key not in seen_paths:
-                    seen_paths.add(key)
-                    endpoints.append({"method": method_val, "path": path_val})
-            # Extract entity from path
-            parts = [p for p in path_val.strip("/").split("/") if p and not p.startswith("{")]
-            for p in parts:
-                if p.lower() not in ("api", "v1", "v2", "v3") and p not in entities:
-                    entities.append(p)
-
-        context = {"entities": entities[:20], "endpoints": endpoints[:50], "roles": []}
-        generator = LearningGenerator(project_context=context)
-        manifest = generator.generate_from_confirmed_bugs(confirmed)
-        return generator.manifest_to_dict(manifest).get("generated_probes", [])
-    except Exception as e:
-        import sys
-        print(f"[closed_loop_feedback] LearningGenerator failed: {e}", file=sys.stderr)
+    confirmed = [f for f in findings if is_customer_deliverable_defect(f)]
+    if not confirmed:
         return []
+
+    # Build minimal context from findings
+    entities: list[str] = []
+    endpoints: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+    for f in confirmed:
+        method_val, path_val, _entity = _finding_operation(f)
+        if path_val and method_val:
+            key = f"{method_val}:{path_val}"
+            if key not in seen_paths:
+                seen_paths.add(key)
+                endpoints.append({"method": method_val, "path": path_val})
+        parts = [p for p in path_val.strip("/").split("/") if p and not p.startswith("{")]
+        for p in parts:
+            if p.lower() not in ("api", "v1", "v2", "v3") and p not in entities:
+                entities.append(p)
+
+    context = {"entities": entities[:20], "endpoints": endpoints[:50], "roles": []}
+    generator = LearningGenerator(project_context=context)
+    manifest = generator.generate_from_confirmed_bugs(confirmed)
+    return generator.manifest_to_dict(manifest).get("generated_probes", [])
+
+
+def _finding_operation(finding: dict[str, Any]) -> tuple[str, str, str]:
+    reproduction = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
+    raw = finding.get("raw_evidence") if isinstance(finding.get("raw_evidence"), dict) else {}
+    request_raw = raw.get("request_raw") if isinstance(raw.get("request_raw"), dict) else {}
+    method = str(finding.get("method") or reproduction.get("method") or request_raw.get("method") or "GET").upper()
+    path = str(finding.get("path") or finding.get("api") or reproduction.get("path") or request_raw.get("path") or "").strip()
+    if not path:
+        evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+        request_text = str(evidence.get("request") or "").strip()
+        if " " in request_text:
+            request_method, request_path = request_text.split(" ", 1)
+            if request_path.startswith("/"):
+                method = request_method.upper()
+                path = request_path
+    segments = [
+        part for part in path.split("?")[0].strip("/").split("/")
+        if part and not part.startswith("{") and part.lower() not in {"api", "v1", "v2", "v3"}
+    ]
+    return method, path, (segments[0] if segments else "unknown")
 
 
 def _extract_pattern(finding: dict) -> dict:
     """Extract a reusable bug pattern from a confirmed finding."""
     title = str(finding.get("title", ""))
     category = str(finding.get("category", ""))
-    method = str(finding.get("method", ""))
-    path = str(finding.get("path", ""))
+    method, path, entity = _finding_operation(finding)
     oracle = finding.get("oracle", {})
     
     # Map to pattern type
@@ -132,14 +147,14 @@ def _extract_pattern(finding: dict) -> dict:
         pattern_type = "forbidden_transition"
     
     # Build signature for dedup
-    signature = f"{pattern_type}:{category}:{method}:{path.split('/')[1] if '/' in path else path}"
+    signature = f"{pattern_type}:{category}:{method}:{entity}"
     signature = signature[:80]
     
     # Build mutation hint
     if pattern_type == "permission_bypass":
-        mutation = f"Try lower-role access on /{path.split('/')[1]}/* endpoints"
+        mutation = f"Try lower-role access on source-declared {entity} endpoints"
     elif pattern_type == "forbidden_transition":
-        mutation = f"Try all forbidden transitions on {path.split('/')[1]} entity"
+        mutation = f"Try all source-declared forbidden transitions on {entity} entity"
     elif pattern_type == "money_conservation":
         mutation = "Add negative-amount / zero-amount / duplicate-amount probes"
     elif pattern_type == "idempotency":
@@ -147,5 +162,5 @@ def _extract_pattern(finding: dict) -> dict:
     else:
         mutation = "Expand parameter variants for similar endpoints"
     
-    return {"type": pattern_type, "entity": path.split("/")[1] if "/" in path else "unknown",
+    return {"type": pattern_type, "entity": entity,
             "category": category, "method": method, "signature": signature, "mutation": mutation}

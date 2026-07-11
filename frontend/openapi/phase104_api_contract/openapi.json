@@ -1,4 +1,4 @@
-﻿{
+{
   "components": {
     "parameters": {
       "ProjectId": {
@@ -1890,7 +1890,7 @@
   ],
   "x-qualibug": {
     "contract_version": "phase104b-api-contract-exporter-v1",
-    "generated_at": "2026-06-29T09:27:45Z",
+    "generated_at": "2026-07-11T02:05:08Z",
     "redaction_status": "safe",
     "runtime_version": "phase104a-command-center-http-api-v1"
   }

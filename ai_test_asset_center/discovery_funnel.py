@@ -35,6 +35,37 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def effective_execution_status(v12_result: dict[str, Any] | None) -> str:
+    """Reconcile legacy scenario execution with the Experiment Executor ledger."""
+
+    result = _as_dict(v12_result)
+    legacy = str(_as_dict(_as_dict(result.get("phases")).get("execution")).get("status") or "not_executed").strip().lower()
+    experiment = _as_dict(result.get("experiment_execution"))
+    selected = _as_int(experiment.get("selected_count"))
+    executed = _as_int(experiment.get("executed_count"))
+    blocked = _as_int(experiment.get("blocked_count"))
+    if selected <= 0:
+        return legacy
+    if executed >= selected:
+        return "completed"
+    if executed > 0:
+        return "partial"
+    if blocked >= selected:
+        return "blocked"
+    return legacy
+
+
+def _experiment_has_real_http_receipts(result: dict[str, Any]) -> bool:
+    experiment = _as_dict(result.get("experiment_execution"))
+    for receipt in _as_list(experiment.get("results")):
+        if not isinstance(receipt, dict) or str(receipt.get("status") or "").upper() != "EXECUTED":
+            continue
+        for step in _as_list(receipt.get("steps")):
+            if isinstance(step, dict) and _as_int(step.get("status_code")) > 0:
+                return True
+    return False
+
+
 def _conversion(output: int, input_n: int) -> float:
     if input_n <= 0:
         return 0.0
@@ -125,6 +156,8 @@ def _collect_blocking_reasons(
         dropped = _as_int(funnel.get("dropped_no_endpoint"))
         if dropped:
             _bump("dropped_no_endpoint", dropped)
+        for reason, count in _as_dict(funnel.get("dropped_reason_counts")).items():
+            _bump(f"endpoint_binding:{reason}", _as_int(count, 1))
         if str(funnel.get("status") or "") == "provider_unavailable":
             _bump("llm_provider_unavailable")
 
@@ -220,6 +253,11 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     result = _as_dict(v12_result)
     phases = _as_dict(result.get("phases"))
     execution = _as_dict(phases.get("execution"))
+    experiment_execution = _as_dict(result.get("experiment_execution"))
+    experiment_executed = _as_int(experiment_execution.get("executed_count"))
+    experiment_blocked = _as_int(experiment_execution.get("blocked_count"))
+    effective_status = effective_execution_status(result)
+    effective_executed = max(_as_int(execution.get("executed")), experiment_executed)
     observability = [item for item in _as_list(execution.get("observability")) if isinstance(item, dict)]
     failed_obs = [
         item for item in observability
@@ -229,6 +267,18 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     failed_stages = {
         key: value for key, value in stage_status.items()
         if str(value or "") == "FAILED_SAFE"
+    }
+    failed_phases = {
+        key: str(_as_dict(value).get("status") or "")
+        for key, value in phases.items()
+        if isinstance(value, dict)
+        and str(value.get("status") or "").lower() in {"failed", "failed_safe"}
+    }
+    degraded_phases = {
+        key: str(_as_dict(value).get("status") or "")
+        for key, value in phases.items()
+        if isinstance(value, dict)
+        and str(value.get("status") or "").lower() in {"degraded", "blocked"}
     }
     stage_failures = [str(item) for item in _as_list(result.get("stage_failures")) if str(item).strip()]
     execution_failed_safe = str(execution.get("observability_status") or "") == "FAILED_SAFE"
@@ -252,19 +302,111 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         or _as_dict(result.get("behavior_slice_ledger")).get("pending_slice_ids")
     )
     unexecuted_candidates = bool(pending_slices) or stop_reason == "slice_budget_reached"
+    result_error = str(result.get("error") or "").strip()
+    auto_har = _as_dict(result.get("auto_har"))
+    no_real_traffic = str(auto_har.get("status") or "").strip().lower() in {"no_traffic", "empty", "missing"}
+    if not no_real_traffic and auto_har:
+        entry_count = _as_int(auto_har.get("entry_count") or auto_har.get("entries_count") or auto_har.get("count"))
+        entries = _as_list(auto_har.get("entries") or auto_har.get("log") or auto_har.get("requests"))
+        if entry_count == 0 and not entries and _as_int(execution.get("executed")) > 0:
+            # Executed claimed but HAR proves zero traffic.
+            no_real_traffic = True
+        if str(auto_har.get("status") or "").strip().lower() == "no_traffic":
+            no_real_traffic = True
+    if _experiment_has_real_http_receipts(result):
+        no_real_traffic = False
+    cleanup_failures = _as_int(experiment_execution.get("cleanup_failures"))
+    for finding in _as_list(result.get("findings")):
+        if not isinstance(finding, dict):
+            continue
+        cleanup = _as_dict(finding.get("cleanup") or _as_dict(finding.get("evidence")).get("cleanup"))
+        status_text = str(cleanup.get("status") or finding.get("cleanup_status") or "").strip().upper()
+        if status_text in {
+            "FAILED",
+            "CLEANUP_INCOMPLETE",
+            "CLEANUP_NOT_SUCCEEDED",
+            "INCOMPLETE",
+            "NOT_REVERSIBLE",
+        }:
+            cleanup_failures += 1
+    secret_scan = _as_dict(result.get("artifact_secret_scan") or result.get("secret_scan"))
+    secret_scan_failed = secret_scan and secret_scan.get("safe") is False
+    target_cleanliness = _as_dict(result.get("target_cleanliness") or result.get("fixture_governance"))
+    cleanliness_unproven = bool(result.get("target_cleanliness_required")) and not bool(
+        target_cleanliness.get("clean") or target_cleanliness.get("proven") or target_cleanliness.get("status") == "clean"
+    )
+    # Model request occurred but usage/cost unknown → non-OK (never display as 0).
+    unify = _as_dict(result.get("mainline_unification"))
+    llm = _as_dict(unify.get("llm_reasoner"))
+    model_usage = _as_dict(llm.get("model_usage"))
+    observed_model_requests = _as_int(
+        model_usage.get("request_count")
+        or llm.get("observed_model_request_count")
+        or llm.get("request_count")
+    )
+    usage_cost_unknown = False
+    if observed_model_requests > 0:
+        responses_with_cost = model_usage.get("responses_with_cost")
+        cost_usd = model_usage.get("cost_usd")
+        if responses_with_cost is None or cost_usd is None:
+            usage_cost_unknown = True
+        elif _as_int(responses_with_cost) != observed_model_requests:
+            usage_cost_unknown = True
+    # Missing critical phases when execution was expected.
+    required_phases = ("execution",)
+    missing_phases = [name for name in required_phases if name not in phases]
     status = "OK"
-    if execution_failed_safe or failed_stages or stage_failures or runtime_failed:
+    if (
+        execution_failed_safe
+        or failed_stages
+        or failed_phases
+        or stage_failures
+        or runtime_failed
+        or result_error
+        or secret_scan_failed
+    ):
         status = "FAILED_SAFE"
-    elif str(execution.get("status") or "") in {"blocked", "skipped"} and _as_int(execution.get("executed")) == 0:
+    elif effective_status in {"blocked", "skipped", "not_executed"} and effective_executed == 0:
         status = "BLOCKED"
-    elif binding_blocked and _as_int(execution.get("executed")) == 0:
+    elif binding_blocked and effective_executed == 0:
         status = "FAILED_SAFE"
-    elif unexecuted_candidates or binding_blocked or funnel_error:
+    elif no_real_traffic and effective_executed > 0:
+        status = "FAILED_SAFE"
+    elif missing_phases:
+        status = "FAILED_SAFE"
+    elif (
+        unexecuted_candidates
+        or binding_blocked
+        or funnel_error
+        or cleanup_failures
+        or usage_cost_unknown
+        or cleanliness_unproven
+        or degraded_phases
+        or effective_status == "partial"
+        or experiment_blocked
+    ):
         status = "DEGRADED"
 
     operator_note = str(result.get("operator_note") or "").strip()
     if status == "FAILED_SAFE" and not operator_note:
-        if binding_blocked and _as_int(execution.get("executed")) == 0:
+        if result_error:
+            operator_note = (
+                f"发现链路 result.error 非空（{result_error[:160]}）；"
+                "空 findings 不能解读为「系统无缺陷」。"
+            )
+        elif secret_scan_failed:
+            operator_note = (
+                "artifact secret scan 失败：持久化产物含高置信密钥，pipeline 标记 FAILED_SAFE。"
+            )
+        elif no_real_traffic:
+            operator_note = (
+                "执行声称已完成但 auto_har 无真实流量；空 findings 不能解读为「系统无缺陷」。"
+            )
+        elif missing_phases:
+            operator_note = (
+                f"关键 phase 缺失（{', '.join(missing_phases)}）；结果不可作为无缺陷证据。"
+            )
+        elif binding_blocked and _as_int(execution.get("executed")) == 0:
             operator_note = (
                 "候选探针因 missing_runtime_path_binding / precondition_not_met 未形成运行时收据；"
                 "空 findings 不能解读为「系统无缺陷」，请先补齐真实 ID / 路径绑定。"
@@ -289,6 +431,12 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
             notes.append("部分探针因路径绑定/前置条件未满足被跳过")
         if funnel_error:
             notes.append(f"漏斗聚合异常：{funnel_error[:120]}")
+        if cleanup_failures:
+            notes.append(f"{cleanup_failures} 条 finding cleanup 未成功")
+        if usage_cost_unknown:
+            notes.append("模型请求已发生但 usage/cost 未知（不得显示为 0）")
+        if cleanliness_unproven:
+            notes.append("target cleanliness 未证明")
         operator_note = (
             "；".join(notes) + "。空 findings 仅表示本轮已执行子集未确认缺陷，不能外推为全量无缺陷。"
             if notes
@@ -298,12 +446,20 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": status,
         "empty_findings_means_no_bugs": status == "OK",
-        "execution_status": str(execution.get("status") or ""),
+        "execution_status": effective_status,
         "execution_reason": str(execution.get("reason") or ""),
         "observability_status": str(execution.get("observability_status") or ("ok" if observability and not failed_obs else "")),
         "observability_gaps": failed_obs[:12],
         "failed_stages": failed_stages,
+        "failed_phases": failed_phases,
+        "degraded_phases": degraded_phases,
         "stage_failures": stage_failures[:20],
+        "result_error": result_error[:300] if result_error else "",
+        "no_real_traffic": no_real_traffic,
+        "cleanup_failure_count": cleanup_failures,
+        "usage_cost_unknown": usage_cost_unknown,
+        "secret_scan_failed": bool(secret_scan_failed),
+        "missing_phases": missing_phases,
         "unexecuted_candidate_signal": {
             "stop_reason": stop_reason,
             "pending_slice_count": len(pending_slices),
@@ -312,6 +468,54 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         },
         "operator_note": operator_note,
     }
+
+
+def reconcile_pipeline_health_after_campaign_cleanup(
+    pipeline_health: dict[str, Any] | None,
+    *,
+    findings: list[dict[str, Any]],
+    scenario_cleanup_failures_recovered: int = 0,
+    environment_restored: bool = False,
+    original_cleanup_failures: int | None = None,
+) -> dict[str, Any]:
+    """Record environment_restored after campaign reset without erasing cleanup failures.
+
+    Global reset may prove the environment is restored, but original per-scenario
+    cleanup failures remain visible for scoring and audit. Other degradation
+    causes (unexecuted candidates, preflight, cost unknown) also remain visible.
+    """
+    health = dict(pipeline_health or {})
+    residual_cleanup_failures = 0
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        cleanup = _as_dict(finding.get("cleanup") or _as_dict(finding.get("evidence")).get("cleanup"))
+        status_text = str(cleanup.get("status") or finding.get("cleanup_status") or "").strip().upper()
+        if status_text in {
+            "FAILED",
+            "CLEANUP_INCOMPLETE",
+            "CLEANUP_NOT_SUCCEEDED",
+            "INCOMPLETE",
+            "NOT_REVERSIBLE",
+        }:
+            residual_cleanup_failures += 1
+    preserved = int(
+        original_cleanup_failures
+        if original_cleanup_failures is not None
+        else (_as_int(health.get("cleanup_failure_count")) or residual_cleanup_failures)
+    )
+    # Never zero out original cleanup failures because a global reset succeeded.
+    health["cleanup_failure_count"] = max(preserved, residual_cleanup_failures)
+    health["environment_restored"] = bool(environment_restored)
+    health["scenario_cleanup_failures_recovered_by_campaign_reset"] = 0
+    health["campaign_cleanup_recovered"] = False
+    if environment_restored:
+        note = str(health.get("operator_note") or "")
+        health["operator_note"] = (
+            f"{note} Campaign reset recorded environment_restored=true; "
+            f"original cleanup_failure_count={health['cleanup_failure_count']} preserved."
+        ).strip()
+    return health
 
 
 def reconcile_product_pipeline_health(
@@ -338,7 +542,17 @@ def reconcile_product_pipeline_health(
         or _as_int(diagnostics.get("errors")) > 0
     )
     execution_completed = normalized_execution in {"completed", "executed"}
-    if not execution_completed:
+    execution_partial = normalized_execution == "partial"
+    if execution_partial:
+        health["status"] = "DEGRADED"
+        health["empty_findings_means_no_bugs"] = False
+        health["execution_status"] = normalized_execution
+        health["execution_reason"] = "partial_execution"
+        health["operator_note"] = (
+            "Experiment Executor 仅完成部分入选实验；已执行收据可形成结论，"
+            "未执行/阻断部分必须保留为覆盖缺口，不能宣称全量完成。"
+        )
+    elif not execution_completed:
         health["status"] = (
             "FAILED_SAFE" if str(health.get("status") or "").upper() == "FAILED_SAFE" else "BLOCKED"
         )

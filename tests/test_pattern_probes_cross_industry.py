@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from ai_test_asset_center.defect_discovery import (
+    body_for_probe,
+    business_object_for_api,
     concrete_path,
+    execute_probe,
+    generate_defect_probes,
     generate_high_value_pattern_probes,
-    is_enterprise_bug_factory_demo,
+    infer_business_model,
+    login_accounts,
+    predicted_template_for_probe,
 )
+from ai_test_asset_center.adaptive_probe_optimizer import build_adaptive_probe_plan
 
 
 def _ops(*paths_methods: tuple[str, str], resource: str | None = None) -> list[dict]:
@@ -39,8 +46,8 @@ def test_pattern_probes_use_openapi_paths_not_synthetic_mall_ids():
     assert "/cart/apply-coupon" in paths
     assert not any("o900" in str(p.get("path") or "") for p in probes)
     assert not any("p100" in str(p.get("path") or "") for p in probes)
-    assert any(p["probe_id"] == "PATTERN_ORDER_IDOR_READ" for p in probes)
-    assert any(p["probe_id"] == "PATTERN_COUPON_REUSE" for p in probes)
+    assert any(p["risk_type"] == "idor" and p["path"] == "/orders/{order_id}" for p in probes)
+    assert any(p["risk_type"] == "coupon_abuse" and p["path"] == "/cart/apply-coupon" for p in probes)
 
 
 def test_pattern_probes_activate_for_healthcare_without_mall_paths():
@@ -84,25 +91,172 @@ def test_concrete_path_preserves_placeholders():
     assert "p100" not in concrete_path("/products/{id}")
 
 
-def test_bug_factory_demo_requires_explicit_benchmark_target():
-    mall_ops = _ops(
-        ("/orders", "POST"),
-        ("/payments", "POST"),
-        ("/refunds", "POST"),
-        ("/cart/apply-coupon", "POST"),
-        ("/admin/orders", "GET"),
+def test_runtime_discovery_contains_no_benchmark_answer_probe_factory():
+    from pathlib import Path
+
+    source_path = Path(__file__).parents[1] / "ai_test_asset_center" / "defect_discovery.py"
+    source = source_path.read_text(encoding="utf-8").lower()
+
+    for forbidden in (
+        "generate_benchmark_compatibility_probes",
+        "is_enterprise_bug_factory_demo",
+        "benchmark_compat",
+        "o900",
+        "p100",
+    ):
+        assert forbidden not in source, f"benchmark answer remains in runtime discovery: {forbidden}"
+
+    adaptive_source = (
+        Path(__file__).parents[1] / "ai_test_asset_center" / "adaptive_probe_optimizer.py"
+    ).read_text(encoding="utf-8").lower()
+    for forbidden in ("adaptive_template_library", "/orders", "/products", "/payments", "/refunds"):
+        assert forbidden not in adaptive_source, f"fixed runtime strategy remains: {forbidden}"
+
+
+def test_runtime_probe_body_uses_only_documented_openapi_example() -> None:
+    openapi = {
+        "paths": {
+            "/api/work-items": {
+                "post": {
+                    "summary": "Create work item",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "example": {"subject": "source-declared", "priority": 2},
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+    model = infer_business_model("", openapi, {"accounts": []})
+    operation = model["operations"][0]
+    item = {
+        "probe_id": "generic",
+        "risk_type": "validation",
+        "path": operation["path"],
+        "request_example": operation["request_example"],
+    }
+
+    assert body_for_probe(item) == {"subject": "source-declared", "priority": 2}
+    assert body_for_probe({**item, "request_example": {}}) == {}
+
+
+def test_generated_write_probe_carries_its_source_request_contract() -> None:
+    openapi = {
+        "paths": {
+            "/api/reservations": {
+                "post": {
+                    "summary": "Create reservation with capacity limit",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"type": "object"},
+                                "example": {"slot_ref": "documented-slot", "count": 1},
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+    model = infer_business_model("", openapi, {"accounts": [{"role": "operator"}]})
+
+    probes = generate_defect_probes([], model)
+    bound = [item for item in probes if item["path"] == "/api/reservations"]
+
+    assert bound
+    assert all(item["request_example"] == {"slot_ref": "documented-slot", "count": 1} for item in bound)
+    assert all(item["request_contract_source"] == "openapi_documented_example" for item in bound)
+
+
+def test_legacy_discovery_write_is_blocked_before_http_execution() -> None:
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def request(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            raise AssertionError("legacy write must not reach HTTP transport")
+
+    client = RecordingClient()
+    result = execute_probe(
+        client,
+        {},
+        {
+            "probe_id": "source_bound_write",
+            "source": "generic_auto",
+            "actor": "anonymous",
+            "method": "POST",
+            "path": "/api/work-items",
+            "risk_type": "validation",
+            "expected_status": 400,
+            "expected": "reject invalid input",
+            "bug_signal": "unexpected acceptance",
+            "request_example": {"subject": "documented"},
+        },
     )
-    assert is_enterprise_bug_factory_demo({"industry": "ecommerce", "operations": mall_ops}) is False
-    assert is_enterprise_bug_factory_demo({
-        "industry": "ecommerce",
-        "project_id": "benchmark_mall",
-        "operations": mall_ops,
-    }) is True
-    assert is_enterprise_bug_factory_demo({
-        "benchmark_factory_demo": True,
-        "operations": mall_ops,
-    }) is True
-    assert is_enterprise_bug_factory_demo({
-        "project_id": "benchmark_mall",
-        "operations": _ops(("/orders", "POST")),
-    }) is False
+
+    assert client.calls == []
+    assert result["execution_status"] == "blocked"
+    assert result["reason_code"] == "BLOCKED_UNGOVERNED_LEGACY_WRITE"
+    assert result["assertion_result"] == "blocked"
+
+
+def test_predicted_template_identity_is_derived_from_source_risk_and_route() -> None:
+    template = predicted_template_for_probe({
+        "probe_id": "probe_1",
+        "risk_type": "tenant_isolation",
+        "method": "GET",
+        "path": "/api/lab-samples/{sample_ref}",
+    })
+
+    assert template.startswith("SOURCE_TENANT_ISOLATION_GET_")
+    assert "LAB_SAMPLES" in template
+    assert "ORDER" not in template
+
+
+def test_business_object_is_derived_from_arbitrary_route_shape() -> None:
+    assert business_object_for_api("GET /api/v3/lab-samples/{sample_ref}") == "lab-samples"
+    assert business_object_for_api("POST /service/work-items") == "work-items"
+
+
+def test_legacy_account_loader_never_posts_login_requests() -> None:
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def request(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            raise AssertionError("account loading must not issue an ungoverned POST")
+
+    client = RecordingClient()
+    tokens = login_accounts(client, {
+        "accounts": [
+            {"role": "operator", "username": "declared", "access_token": "token-from-source"},
+            {"role": "reviewer", "username": "needs-login", "password": "not-used"},
+        ]
+    })
+
+    assert client.calls == []
+    assert tokens == {"operator": "token-from-source", "declared": "token-from-source"}
+
+
+def test_adaptive_probe_plan_preserves_finding_identity_without_template_routes() -> None:
+    plan = build_adaptive_probe_plan([
+        {
+            "finding_id": "finding-1",
+            "risk_type": "tenant_isolation",
+            "severity": "P1",
+            "confidence_score": 0.8,
+            "method": "GET",
+            "path": "/api/lab-samples/{sample_ref}",
+        }
+    ])
+
+    assert len(plan) == 1
+    assert plan[0]["path"] == "/api/lab-samples/{sample_ref}"
+    assert plan[0]["risk_type"] == "tenant_isolation"
+    assert plan[0]["finding_id"] == "finding-1"

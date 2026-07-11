@@ -269,7 +269,7 @@ def run_enterprise_scan(body: dict[str, Any], authorization: str = Header(None))
     principal = require_access(authorization, "campaign.execute" if base_url else "campaign.plan", project_id=project_id)
     _require_allowed_target(base_url)
     context = _as_dict(body.get("campaign_context"))
-    for key in ("scope_id", "environment_ref", "source_manifest", "test_data_contract", "execution_approval_id", "execution_mode", "release_policy"):
+    for key in ("scope_id", "environment_ref", "environment_type", "source_manifest", "test_data_contract", "execution_approval_id", "execution_mode", "release_policy"):
         if key in body and key not in context:
             context[key] = body[key]
     context.setdefault("authenticated_principal", _actor(principal))

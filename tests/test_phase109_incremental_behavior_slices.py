@@ -7,9 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ai_test_asset_center.business_state_graph import BusinessStateGraphBuilder
+from ai_test_asset_center.contract_oracles import demote_heuristic_business_oracle_finding
 from ai_test_asset_center.oracle_engine import OracleEngine
 from ai_test_asset_center.policy_wiring import _behavior_slice_execution_value
 from ai_test_asset_center.route_catalog_builder import RouteCatalogBuilder
+from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
 from ai_test_asset_center.v12_pipeline import (
     _confirmed_oracle_finding,
     _execute_scenario,
@@ -184,6 +186,24 @@ def test_chinese_section_title_binds_cancel_order_requirement_via_markdown_summa
     assert invariant_slices
     assert any("/api/orders/:id" in item["endpoints"] for item in invariant_slices)
     assert any("已支付订单不能直接取消" in ref["quote"] for item in invariant_slices for ref in item["source_refs"])
+
+
+def test_arrow_state_targets_route_to_documented_mutation_stems():
+    builder = BusinessStateGraphBuilder()
+    graphs = builder.build(
+        "# Cases\nCREATED -> PAID\nPAID -> SHIPPED\nSHIPPED -> COMPLETED\nCOMPLETED -> CANCELLED",
+        "### POST /api/cases/{id}/pay\n### POST /api/cases/{id}/ship\n### POST /api/cases/{id}/complete\n### POST /api/cases/{id}/cancel",
+        "",
+    )
+
+    transitions = next(iter(graphs.values())).transitions
+
+    assert {(row.to_state, row.action, row.api_endpoint) for row in transitions} == {
+        ("PAID", "pay", "/api/cases/{id}/pay"),
+        ("SHIPPED", "ship", "/api/cases/{id}/ship"),
+        ("COMPLETED", "complete", "/api/cases/{id}/complete"),
+        ("CANCELLED", "cancel", "/api/cases/{id}/cancel"),
+    }
 
 
 def test_inventory_report_route_is_reused_as_inventory_observation_endpoint():
@@ -865,6 +885,35 @@ def test_optimize_behavior_slice_pool_preserves_distinct_llm_invariants_on_same_
     assert stats["collapsed_llm_invariant"] == 0
 
 
+def test_money_slice_uses_documented_observer_instead_of_synthetic_collection():
+    api_doc = """
+### POST /api/payments/pay
+Request:
+```json
+{"orderId":"<order_id>","amount":100}
+```
+
+### GET /api/payments/order/:orderId
+"""
+    scenario = SemanticScenarioGenerator._money_slice(
+        {
+            "slice_id": "BHV_money_pay",
+            "entity": "payment",
+            "kind": "money",
+            "_money_method": "POST",
+            "_money_path": "/api/payments/pay",
+            "_default_actor": "buyer",
+        },
+        1,
+        api_doc,
+    )
+
+    assert scenario is not None
+    observer_paths = [step.api_path for step in scenario.steps if step.action.startswith("observe_money")]
+    assert "/api/payments" not in observer_paths
+    assert "/api/payments/order/{orderId}" in observer_paths
+
+
 def test_optimize_behavior_slice_pool_keeps_numeric_thresholds_distinct():
     slices = [
         {
@@ -917,7 +966,7 @@ def test_sandbox_write_allows_login_bound_scenarios_without_preflight_token(monk
     allowed, reason = sandbox_write_allowed(
         root=Path("."),
         project="demo",
-        runtime_contract={"status": "approved", "approved_base_url": "http://localhost:8080", "execution_mode": "approved_sandbox_write"},
+        runtime_contract={"status": "approved", "approved_base_url": "http://localhost:8080", "requested_base_url": "http://localhost:8080", "environment_ref": "local-test", "environment_type": "test", "execution_mode": "approved_sandbox_write"},
         actor_token="",
         actor_identity="",
         scenario=scenario,
@@ -1374,6 +1423,7 @@ def test_pipeline_preserves_original_markdown_doc_for_dependency_write_scenarios
         campaign_context={
             "scope_id": "dependency-runtime",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write",
             "source_manifest": manifest,
         },
@@ -1420,9 +1470,16 @@ def test_pipeline_promotes_runtime_write_oracle_violation_to_confirmed_receipt(m
                     "expected_status": 409,
                 },
             ],
-            "errors": [],
-            "duration_ms": 12,
-        }
+                "errors": [],
+                "duration_ms": 12,
+                "evidence": {
+                    # This test exercises a contract-backed state violation,
+                    # not an HTTP-only heuristic.  The typed control receipt is
+                    # what permits the downstream business-oracle gate.
+                    "control_succeeded": True,
+                    "invariant_held": False,
+                },
+            }
 
     class StubOracle:
         def evaluate(self, scenario, trace, snapshots):
@@ -1459,6 +1516,7 @@ def test_pipeline_promotes_runtime_write_oracle_violation_to_confirmed_receipt(m
         campaign_context={
             "scope_id": "dependency-runtime",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "source_manifest": manifest,
             "execution_approval_id": "eap_test",
             "execution_mode": "approved_sandbox_write",
@@ -1696,6 +1754,88 @@ def test_confirmed_oracle_finding_preserves_db_and_business_invariant_evidence_f
     assert finding["evidence_strength"] == "runtime_and_db"
 
 
+def test_state_oracle_before_after_observation_satisfies_contract_gate() -> None:
+    scenario = SimpleNamespace(
+        actor_token="tok-write",
+        actors=["buyer"],
+        execution_policy="approved_sandbox_write",
+        title="source forbidden transition",
+        category="state_machine",
+        behavior_slice_id="BHV_STATE_1",
+        source_refs=[{"source_type": "requirement", "quote": "terminal state must reject mutation"}],
+        steps=[{"action": "execute_forbidden_write", "method": "POST", "path": "/api/orders/{id}/cancel"}],
+    )
+    oracle_result = SimpleNamespace(
+        passed=False,
+        severity="P0",
+        oracle_name="StateOracle",
+        explanation="forbidden transition accepted",
+        confidence=0.93,
+        expected="forbidden transition should be rejected",
+        actual="HTTP 200",
+        violated_rule="forbidden_transition",
+        to_dict=lambda: {"oracle_name": "StateOracle", "violated_rule": "forbidden_transition"},
+    )
+    evidence = SimpleNamespace(
+        evidence_id="ev-state-1",
+        reproduction_steps="GET /api/orders\nPOST /api/orders/ord-1/cancel\nGET /api/orders",
+        vote_summary={"confirmation_threshold_met": True},
+        layers_triggered=["runtime", "oracle"],
+    )
+    trace = {
+        "steps": [
+            {
+                "action": "resolve_body_addressId",
+                "method": "GET",
+                "path": "/api/users/addresses",
+                "status": 200,
+                "response": {"status_code": 200, "body": [{"id": "addr-1"}]},
+            },
+            {
+                "action": "observe_bound_entity",
+                "method": "GET",
+                "path": "/api/orders",
+                "status": 200,
+                "response": {"status_code": 200, "body": {"id": "ord-1", "status": "PAID"}},
+            },
+            {
+                "action": "execute_forbidden_write",
+                "method": "POST",
+                "path": "/api/orders/ord-1/cancel",
+                "status": 200,
+                "expected_status": 409,
+                "response": {"status_code": 200, "body": {"id": "ord-1", "status": "CANCELLED"}},
+            },
+            {
+                "action": "verify_bound_entity_after_write",
+                "method": "GET",
+                "path": "/api/orders",
+                "status": 200,
+                "response": {"status_code": 200, "body": {"id": "ord-1", "status": "CANCELLED"}},
+            },
+        ]
+    }
+
+    finding = _confirmed_oracle_finding(
+        scenario,
+        trace,
+        oracle_result,
+        evidence,
+        campaign_id="CMP_STATE_1",
+        discovery_round=1,
+        base_url="https://example.test",
+    )
+    kept = demote_heuristic_business_oracle_finding(finding)
+
+    assert finding["before_after_snapshot"]["before"]["path"] == "/api/orders"
+    assert finding["before_after_snapshot"]["after"]["path"] == "/api/orders"
+    assert finding["evidence"]["control_observation"]["body"]["status"] == "PAID"
+    assert finding["evidence"]["final_state_observation"]["status"] == "CANCELLED"
+    assert kept["customer_delivery_status"] == "defect"
+    assert kept["gate_passed"] is True
+    assert "oracle_demotion_reason" not in kept
+
+
 def test_pipeline_records_blocked_cycle_without_marking_unexecuted_slices_attempted(monkeypatch, tmp_path):
     manifest = {
         "source_id": "uploaded:approval-gated-api",
@@ -1716,6 +1856,7 @@ def test_pipeline_records_blocked_cycle_without_marking_unexecuted_slices_attemp
         campaign_context={
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
+            "environment_type": "test",
             "execution_mode": "approved_sandbox_write",
             "source_manifest": manifest,
         },

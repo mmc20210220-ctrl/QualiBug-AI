@@ -44,6 +44,13 @@ def test_build_funnel_five_stages_and_separates_validated_from_pending():
         },
         "findings": [
             {
+                "candidate_id": "candidate-validated",
+                "slice_id": "slice-validated",
+                "obligation_id": "obligation-validated",
+                "experiment_id": "experiment-validated",
+                "execution_id": "execution-validated",
+                "evidence_id": "evidence-validated",
+                "finding_id": "finding-validated",
                 "title": "validated bug",
                 "gate_passed": True,
                 "bug_status": "reproduced",

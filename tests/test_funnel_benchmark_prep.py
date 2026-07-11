@@ -75,6 +75,27 @@ def test_reset_benchmark_target_db_raises_on_nonzero_exit(tmp_path: Path):
         )
 
 
+def test_reset_benchmark_target_db_decodes_windows_codepage_error(tmp_path: Path):
+    script = tmp_path / "scripts" / "init_db_windows.ps1"
+    script.parent.mkdir(parents=True)
+    script.write_text("# noop", encoding="utf-8")
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            7,
+            stdout="",
+            stderr="数据库错误".encode("gbk"),
+        )
+
+    with pytest.raises(RuntimeError, match="数据库错误"):
+        reset_benchmark_target_db(
+            target_root=tmp_path,
+            env={},
+            runner=fake_run,
+        )
+
+
 def test_refresh_test_account_tokens_runs_for_any_mode(tmp_path: Path):
     script = tmp_path / "_refresh_tokens.py"
     script.write_text("print('ok')", encoding="utf-8")
@@ -137,5 +158,8 @@ def test_funnel_runtime_never_loads_or_scores_evaluator_private_ground_truth() -
     assert "benchmark_compute" not in source
     assert "QUALIBUG_BENCHMARK_GROUND_TRUTH" not in source
     assert "discovery_evaluation_submission.v1" in source
-    assert '"measurement_status": "NOT_MEASURED"' in source
+    assert (
+        '"measurement_status": "NOT_MEASURED"' in source
+        or 'measurement_status="NOT_MEASURED"' in source
+    )
     assert "external_evaluator_receipt_required" in source

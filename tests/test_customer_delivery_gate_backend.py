@@ -12,6 +12,13 @@ from ai_test_asset_center.customer_delivery_gate import (
 def _ready_finding() -> dict:
     return {
         "id": "BUG-1",
+        "finding_id": "finding-1",
+        "evidence_id": "evidence-1",
+        "execution_id": "execution-1",
+        "experiment_id": "experiment-1",
+        "obligation_id": "obligation-1",
+        "slice_id": "slice-1",
+        "candidate_id": "candidate-1",
         "title": "支付金额守恒失败",
         "bug_status": "reproduced",
         "gate_passed": True,
@@ -35,6 +42,9 @@ def _ready_finding() -> dict:
             "timestamp": "2026-07-06T12:00:00Z",
             "request_raw": {"method": "POST", "path": "/api/payments"},
             "response_raw": {"status_code": 200, "body": {"paid_amount": 1}},
+            "sandbox_write": {
+                "cleanup": {"status": "completed", "receipt_ref": "audit://cleanup/BUG-1"}
+            },
         },
         "reproduction": {
             "method": "POST",
@@ -49,6 +59,31 @@ def test_backend_gate_accepts_only_fully_validated_replayable_defect() -> None:
     assert is_customer_deliverable_defect(_ready_finding()) is True
     assert customer_delivery_rejection_reasons(_ready_finding()) == []
     assert customer_delivery_rejection_explanations(_ready_finding()) == []
+
+
+def test_backend_gate_rejects_incomplete_mainline_identity_chain() -> None:
+    finding = _ready_finding()
+    finding.pop("experiment_id")
+
+    assert is_customer_deliverable_defect(finding) is False
+    assert "IDENTITY_CHAIN_INCOMPLETE" in customer_delivery_rejection_reasons(finding)
+
+
+def test_backend_gate_accepts_traceable_legacy_runtime_identity() -> None:
+    finding = _ready_finding()
+    for field in (
+        "candidate_id",
+        "slice_id",
+        "obligation_id",
+        "experiment_id",
+        "execution_id",
+    ):
+        finding.pop(field)
+    finding["source"] = "v12_state_graph"
+    finding["raw_evidence"]["execution_trace"] = {"evidence_id": finding["evidence_id"]}
+
+    assert is_customer_deliverable_defect(finding) is True
+    assert "IDENTITY_CHAIN_INCOMPLETE" not in customer_delivery_rejection_reasons(finding)
 
 
 def test_backend_gate_rejects_missing_business_evidence_status() -> None:

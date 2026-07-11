@@ -14,32 +14,28 @@ def _source() -> str:
     return FRONTEND_GATE.read_text(encoding="utf-8")
 
 
-def test_customer_ready_findings_require_explicit_business_evidence_status() -> None:
+def test_customer_ready_findings_do_not_recompute_backend_business_gate() -> None:
     source = _source()
 
-    assert "function hasPassedBusinessEvidenceStatus" in source
-    assert "if (!status) return false" in source
-    assert "semantic !== 'SEMANTIC_CONFIRMED'" in source
-    assert "business !== 'VALIDATED'" in source
-    assert "missing.length === 0" in source
+    assert "function hasPassedBusinessEvidenceStatus" not in source
+    assert "Backend SSOT" in source or "Trust backend delivery gate projection" in source
 
 
-def test_customer_ready_findings_require_validated_replayable_evidence_quality() -> None:
+def test_customer_ready_findings_do_not_recompute_backend_evidence_score() -> None:
     source = _source()
 
-    assert "CUSTOMER_READY_MIN_EVIDENCE_SCORE = 90" in source
-    assert "level === 'validated'" in source
-    assert "score >= CUSTOMER_READY_MIN_EVIDENCE_SCORE" in source
-    assert "Boolean(quality?.can_reproduce)" in source
+    assert "CUSTOMER_READY_MIN_EVIDENCE_SCORE" not in source
+    assert "hasValidatedEvidenceQuality" not in source
 
 
 def test_customer_ready_findings_require_hard_evidence_and_failure_assertion() -> None:
     source = _source()
 
     assert "function hasExplicitFailureAssertion" in source
-    assert "hasRealReplayAsset(finding)" in source
-    assert "hasCustomerFacingHardEvidence(finding)" in source
+    assert "export function hasRealReplayAsset" in source
+    assert "export function hasCustomerFacingHardEvidence" in source
     assert "hasRequest && hasResponse && hasAssertion && hasTimestamp" in source
+    assert "Backend SSOT" in source or "Trust backend delivery gate projection" in source
 
 
 def test_customer_ready_findings_keep_internal_clues_out_of_customer_list() -> None:
@@ -49,11 +45,10 @@ def test_customer_ready_findings_keep_internal_clues_out_of_customer_list() -> N
     assert "finding.bug_status !== 'reproduced'" in source
     assert "!finding.gate_passed" in source
     assert "finding.reproduction?.is_synthetic" in source
-    assert "route_blocked" in source
-    assert "auth_blocked" in source
-    assert "environment_blocked" in source
-    assert "coverage_gap" in source
-    assert "not_reproduced" in source
+    assert "finding_classification" in source
+    assert "classifiedRows(raw, 'deliverable', 'defects')" in source
+    assert "classifiedRows(raw, 'candidate', 'clues')" in source
+    assert "classifiedRows(raw, 'rejected', 'rejected_findings')" in source
 
 
 def test_internal_clue_page_surfaces_delivery_gate_reasons() -> None:

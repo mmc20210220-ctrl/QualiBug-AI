@@ -303,7 +303,7 @@ def test_invariant_slice_generates_forbidden_cancel_write_scenario():
     assert scenario.steps[2].api_path == "/api/orders"
 
 
-def test_invariant_slice_generates_duplicate_payment_write_scenario():
+def test_invariant_slice_does_not_guess_payment_route_outside_slice_binding():
     graph = BusinessStateGraph("order")
     graph.add_state(
         "PENDING_PAYMENT",
@@ -334,20 +334,15 @@ def test_invariant_slice_generates_duplicate_payment_write_scenario():
     assert len(scenarios) == 1
     scenario = scenarios[0]
     assert scenario.behavior_slice_kind == "invariant"
-    assert scenario.execution_policy == "approved_sandbox_write"
-    assert scenario.category == "concurrency"
-    assert len(scenario.steps) == 4
+    assert scenario.execution_policy == "safe_read_only"
+    assert scenario.category == "invariant"
+    assert len(scenario.steps) == 1
     assert scenario.steps[0].api_method == "GET"
-    assert scenario.steps[1].api_method == "POST"
-    assert scenario.steps[1].api_path == "/api/payments/pay"
-    assert scenario.steps[1].body_template["orderId"] == "{id}"
-    assert scenario.steps[2].api_method == "POST"
-    assert scenario.steps[2].api_path == "/api/payments/pay"
-    assert scenario.steps[3].api_method == "GET"
-    assert scenario.steps[3].api_path == "/api/orders"
+    assert scenario.steps[0].api_path == "/api/orders"
+    assert all("/api/payments" not in step.api_path for step in scenario.steps)
 
 
-def test_invariant_slice_can_upgrade_from_nearby_requirement_context():
+def test_nearby_requirement_context_does_not_override_slice_route_binding():
     graph = BusinessStateGraph("order")
     source_refs = [
         {"source_type": "requirement", "locator": "line:39", "quote": "订单必须处于 `PENDING_PAYMENT` 状态；"},
@@ -384,14 +379,11 @@ def test_invariant_slice_can_upgrade_from_nearby_requirement_context():
     assert len(scenarios) == 1
     scenario = scenarios[0]
     assert scenario.behavior_slice_kind == "invariant"
-    assert scenario.execution_policy == "approved_sandbox_write"
-    assert scenario.category == "concurrency"
-    assert len(scenario.steps) == 4
-    assert scenario.steps[1].api_method == "POST"
-    assert scenario.steps[1].api_path == "/api/payments/pay"
-    assert scenario.steps[1].body_template["orderId"] == "{id}"
-    assert scenario.steps[2].api_method == "POST"
-    assert scenario.steps[2].api_path == "/api/payments/pay"
+    assert scenario.execution_policy == "safe_read_only"
+    assert scenario.category == "invariant"
+    assert len(scenario.steps) == 1
+    assert scenario.steps[0].api_method == "GET"
+    assert scenario.steps[0].api_path == "/api/orders"
 
 
 def test_query_like_post_route_can_back_source_observation_for_coupon_invariants():
