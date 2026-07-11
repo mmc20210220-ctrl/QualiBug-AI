@@ -341,6 +341,12 @@ function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return fetchWithTenant(url, init) as Promise<T>;
 }
 
+async function fetchPublicJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { ...init, credentials: 'include' });
+  if (!response.ok) throw new Error(parseApiErrorMessage(response.status, await response.text()));
+  return response.json() as Promise<T>;
+}
+
 let projectsCache: Promise<CustomerWorkspace[]> | null = null;
 
 async function listProjects(): Promise<CustomerWorkspace[]> {
@@ -436,7 +442,7 @@ export function saveSettings(body: JsonRecord): Promise<unknown> {
 }
 
 export function getHealth(): Promise<unknown> {
-  return fetchJSON<unknown>(`${API_BASE}/health`);
+  return fetchPublicJSON<unknown>(`${API_BASE}/health`);
 }
 
 export async function listConnectors(projectId: string): Promise<ConnectorRecord[]> {

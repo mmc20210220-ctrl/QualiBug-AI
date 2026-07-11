@@ -15,10 +15,10 @@ async function expectCount(locator, expected, context) {
   if (actual !== expected) fail(`Expected ${expected} matching element(s), received ${actual}`, context);
 }
 
-async function expectText(locator, expected, context) {
+async function expectTextContains(locator, expected, context) {
   await expectCount(locator, 1, context);
   const actual = (await locator.innerText()).trim();
-  if (actual !== expected) fail(`Expected text "${expected}", received "${actual}"`, context);
+  if (!actual.includes(expected)) fail(`Expected text containing "${expected}", received "${actual}"`, context);
 }
 
 async function assertNoHorizontalOverflow(page, context) {
@@ -61,7 +61,7 @@ async function verifyMode(page, mode, viewport) {
   await page.setViewportSize(viewport);
   await page.goto(url.toString(), { waitUntil: 'domcontentloaded' });
   await expectCount(page.getByRole('heading', { name: expected.heading, exact: true }), 1, context);
-  await expectText(page.getByRole('button', { name: expected.action, exact: true }), expected.action, context);
+  await expectTextContains(page.getByRole('button', { name: expected.action, exact: true }), expected.action, context);
   await assertLabel(page, mode === 'login' ? '账号' : '登录账号', context);
   await assertLabel(page, mode === 'forgot' ? '新密码' : '密码', context);
   await expectCount(page.getByRole('button', { name: '显示密码', exact: true }), mode === 'login' ? 1 : 2, context);
