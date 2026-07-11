@@ -1944,6 +1944,89 @@ def _knowledge_asset_planning_text(asset: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _normalize_executable_api_document(api_document: Any) -> tuple[str, dict[str, Any]]:
+    """Compile customer API material into the one executable OpenAPI view.
+
+    The immutable submitted document remains available separately for source
+    identity and reasoning. Parser-bound runtime consumers must receive this
+    normalized JSON view so a Markdown document is not accidentally parsed as
+    YAML again later in the pipeline.
+    """
+
+    raw = (
+        json.dumps(api_document, ensure_ascii=False, default=str)
+        if isinstance(api_document, dict)
+        else str(api_document or "")
+    )
+    if not raw.strip():
+        return "", {
+            "status": "missing",
+            "input_format": "unknown",
+            "normalized_path_count": 0,
+            "normalized_operation_count": 0,
+            "reason": "api_document_missing",
+        }
+
+    try:
+        from .universal_api_parser import detect_format, parse_to_openapi
+
+        input_format = detect_format(raw)
+        normalized = parse_to_openapi(raw)
+        if not isinstance(normalized, dict):
+            normalized = {}
+        paths = normalized.get("paths") if isinstance(normalized.get("paths"), dict) else {}
+        normalized = {
+            **normalized,
+            "openapi": str(normalized.get("openapi") or "3.0.0"),
+            "info": (
+                normalized.get("info")
+                if isinstance(normalized.get("info"), dict)
+                else {"title": "normalized customer API"}
+            ),
+            "paths": paths,
+            "components": (
+                normalized.get("components")
+                if isinstance(normalized.get("components"), dict)
+                else {"schemas": {}}
+            ),
+        }
+        normalized.setdefault("components", {}).setdefault("schemas", {})
+        operation_count = sum(
+            1
+            for operations in paths.values()
+            if isinstance(operations, dict)
+            for method in operations
+            if str(method).lower()
+            in {"get", "post", "put", "patch", "delete", "head", "options"}
+        )
+        return json.dumps(normalized, ensure_ascii=False, default=str), {
+            "status": "normalized" if paths else "degraded",
+            "input_format": input_format,
+            "normalized_path_count": len(paths),
+            "normalized_operation_count": operation_count,
+            "reason": "" if paths else "api_document_has_no_executable_paths",
+        }
+    except Exception as exc:
+        # A malformed source must become an observable, safe empty executable
+        # catalog. Keeping the original text here would merely move the same
+        # parser exception into preview/scenario generation and erase execution.
+        safe_empty = {
+            "openapi": "3.0.0",
+            "info": {"title": "unparseable customer API"},
+            "paths": {},
+            "components": {"schemas": {}},
+        }
+        return json.dumps(safe_empty, ensure_ascii=False), {
+            "status": "FAILED_SAFE",
+            "input_format": "unknown",
+            "normalized_path_count": 0,
+            "normalized_operation_count": 0,
+            "reason": "api_document_parse_failed",
+            "error_type": type(exc).__name__,
+            "detail": str(exc)[:300],
+        }
+
+
 def _publish_behavior_contract_snapshot(
     result: dict[str, Any],
     behavior_contract: dict[str, Any],
@@ -2036,15 +2119,15 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         "runtime_contract": runtime_contract,
     }
     ledger_for_persistence: dict[str, Any] | None = None
-    if api_spec_text and not isinstance(api_spec_text, dict):
-        try:
-            from .universal_api_parser import detect_format, parse_to_openapi
-            if detect_format(api_spec_text) not in {"openapi3", "unknown"}:
-                normalized = parse_to_openapi(api_spec_text)
-                if normalized.get("paths"):
-                    api_spec_text = json.dumps(normalized, ensure_ascii=False, default=str)
-        except Exception:
-            pass
+    api_spec_text, api_document_normalization = _normalize_executable_api_document(api_spec_text)
+    result["api_document_normalization"] = api_document_normalization
+    if api_document_normalization.get("status") == "FAILED_SAFE":
+        result["stage_status"] = {"api_document": "FAILED_SAFE"}
+        result["stage_failures"] = [
+            "api_document:"
+            f"{api_document_normalization.get('error_type') or 'ParseError'}:"
+            f"{api_document_normalization.get('detail') or api_document_normalization.get('reason')}"
+        ]
     try:
         graph_started = time.time()
         from .business_state_graph import BusinessStateGraphBuilder
@@ -2244,7 +2327,10 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         if runtime_contract.get("status") == "approved":
             from .semantic_scenario_generator import SemanticScenarioGenerator
 
-            preview_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+            # Scenario generation is parser-bound. Always use the normalized
+            # executable view; the raw submitted document is retained only for
+            # source identity and semantic reasoning.
+            preview_api_doc = api_spec_text
             preview_scenarios = SemanticScenarioGenerator().generate(
                 graphs,
                 preview_api_doc,
@@ -2379,7 +2465,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 from .parameter_fuzzer import ParameterFuzzer
                 scoped_catalog = [entry for entry in catalog if str(entry.get("path") or "") in selected_paths]
                 fuzzer = ParameterFuzzer(approved_base_url, allow_write=False)
-                _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text)
+                _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=api_spec_text)
                 fuzzer_findings = fuzzer.fuzz_all(scoped_catalog, max_variants=6)
                 fuzzer_execution_receipts = list(fuzzer.execution_receipts)
                 fuzzer_receipt_paths = {
@@ -2428,7 +2514,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             "duration_ms": int((time.time() - fuzz_started) * 1000),
         }
         scenario_started = time.time()
-        scenario_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+        scenario_api_doc = api_spec_text
         from .semantic_scenario_generator import SemanticScenarioGenerator
         scenarios = SemanticScenarioGenerator().generate(
             graphs,
@@ -2550,7 +2636,7 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             try:
                 from .supplementary_behavior_slices import probe_disabled_account_logins
 
-                _probe_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
+                _probe_api_doc = api_spec_text
                 for _login_finding in probe_disabled_account_logins(
                     root,
                     project,
