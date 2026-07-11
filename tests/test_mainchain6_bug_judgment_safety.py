@@ -133,6 +133,97 @@ def test_non_blocked_real_evidence_confirmed():
     assert finding["blocked_by_safety_boundary"] is False
 
 
+def test_confirmed_oracle_finding_preserves_runtime_semantic_signature():
+    scenario = SimpleNamespace(
+        actor_token="tok-buyer",
+        actors=["buyer"],
+        title="source-bound order confirmation transition",
+        category="state_machine",
+        behavior_slice_id="BHV_ORDER_CONFIRM",
+        steps=[{"action": "confirm", "method": "POST", "path": "/api/orders/{id}/confirm"}],
+        execution_policy="approved_sandbox_write",
+    )
+    oracle_result = SimpleNamespace(
+        passed=False,
+        oracle_name="StateOracle",
+        layer="L3",
+        violated_rule="forbidden_transition",
+        expected="cancelled orders must reject confirmation",
+        actual="HTTP 200 accepted CANCELLED -> CONFIRMED",
+        severity="P0",
+        confidence=0.96,
+        explanation="terminal order state accepted a forbidden transition",
+        to_dict=lambda: {"passed": False, "oracle_name": "StateOracle", "violated_rule": "forbidden_transition"},
+    )
+    evidence = SimpleNamespace(
+        reproduction_steps=(
+            "GET /api/orders/ord-1\n"
+            "POST /api/orders/ord-1/confirm\n"
+            "GET /api/orders/ord-1"
+        ),
+        vote_summary={"confirmation_threshold_met": True},
+        evidence_id="EVID_ORDER_CONFIRM",
+        layers_triggered=["runtime", "oracle"],
+    )
+    trace = {
+        "steps": [
+            {
+                "action": "observe_bound_entity",
+                "method": "GET",
+                "path": "/api/orders/ord-1",
+                "status": 200,
+                "response": {"status_code": 200, "body": {"id": "ord-1", "status": "CANCELLED"}},
+                "expected_status": 200,
+            },
+            {
+                "action": "confirm",
+                "method": "POST",
+                "path": "/api/orders/ord-1/confirm",
+                "status": 200,
+                "response": {"status_code": 200, "body": {"id": "ord-1", "status": "CONFIRMED"}},
+                "expected_status": 409,
+            },
+            {
+                "action": "verify_bound_entity_after_write",
+                "method": "GET",
+                "path": "/api/orders/ord-1",
+                "status": 200,
+                "response": {"status_code": 200, "body": {"id": "ord-1", "status": "CONFIRMED"}},
+                "expected_status": 200,
+            },
+        ],
+        "evidence": {"control_succeeded": True, "invariant_held": False},
+    }
+
+    finding = _confirmed_oracle_finding(
+        scenario,
+        trace,
+        oracle_result,
+        evidence,
+        campaign_id="c1",
+        discovery_round=1,
+        base_url="http://x",
+    )
+
+    assert finding["gate_passed"] is True
+    assert finding["customer_delivery_status"] == "defect"
+    assert "POST /api/orders/ord-1/confirm" in finding["title"]
+    assert "cancelled orders must reject confirmation" in finding["title"]
+    assert "HTTP 200 accepted CANCELLED -> CONFIRMED" in finding["title"]
+    assert "Expected: cancelled orders must reject confirmation" in finding["description"]
+    assert "Actual: HTTP 200 accepted CANCELLED -> CONFIRMED" in finding["description"]
+    assert "Observed request: POST /api/orders/ord-1/confirm as buyer -> HTTP 200" in finding["description"]
+    signature = finding["semantic_signature"]
+    assert signature["oracle_name"] == "StateOracle"
+    assert signature["expected_behavior"] == "cancelled orders must reject confirmation"
+    assert signature["actual_behavior"] == "HTTP 200 accepted CANCELLED -> CONFIRMED"
+    assert signature["contract_observation_keys"] == ["control_succeeded", "invariant_held"]
+    assert "forbidden_transition" in signature["defect_signature_terms"]
+    assert finding["evidence"]["semantic_signature"] == signature
+    assert finding["evidence"]["expected_behavior"] == signature["expected_behavior"]
+    assert finding["evidence"]["actual_behavior"] == signature["actual_behavior"]
+
+
 def test_expected_success_4xx_requires_valid_success_control():
     trace = {
         "steps": [

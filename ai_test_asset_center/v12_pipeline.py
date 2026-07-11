@@ -5097,6 +5097,186 @@ def _runtime_contract_evidence_from_snapshot(
     return evidence
 
 
+def _compact_semantic_text(value: Any, *, max_len: int = 240) -> str:
+    """Return a compact, redaction-aware string for customer/evaluator semantics."""
+
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    else:
+        text = str(value)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(
+        r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+",
+        r"\1<REDACTED>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key)\s*[:=]\s*[^,\s;}\]]+",
+        r"\1=<REDACTED>",
+        text,
+    )
+    if max_len > 0 and len(text) > max_len:
+        return text[: max_len - 1].rstrip() + "…"
+    return text
+
+
+def _semantic_signature_terms(*values: Any, limit: int = 32) -> list[str]:
+    """Derive generic defect signature tokens from runtime semantics, not GT."""
+
+    stop_words = {
+        "api",
+        "http",
+        "https",
+        "post",
+        "get",
+        "put",
+        "patch",
+        "delete",
+        "expected",
+        "actual",
+        "oracle",
+        "status",
+        "response",
+        "request",
+        "should",
+        "must",
+        "with",
+        "when",
+        "from",
+        "that",
+        "this",
+        "true",
+        "false",
+    }
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _compact_semantic_text(value, max_len=500).lower()
+        for token in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", text):
+            normalized = token.strip("_-")
+            if not normalized or normalized in stop_words or normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(normalized)
+            if len(terms) >= limit:
+                return terms
+    return terms
+
+
+def _oracle_semantic_signature(
+    scenario: Any,
+    oracle_result: Any,
+    *,
+    method: str,
+    path: str,
+    actor_label: str,
+    status: int,
+    assertion: str,
+    actual: str,
+) -> dict[str, Any]:
+    """Preserve the concrete defect meaning carried by a confirmed runtime oracle."""
+
+    oracle_name = _compact_semantic_text(getattr(oracle_result, "oracle_name", "Oracle"), max_len=80)
+    scenario_title = _compact_semantic_text(getattr(scenario, "title", ""), max_len=160)
+    violated_rule = _compact_semantic_text(getattr(oracle_result, "violated_rule", ""), max_len=160)
+    explanation = _compact_semantic_text(getattr(oracle_result, "explanation", ""), max_len=260)
+    expected_behavior = _compact_semantic_text(assertion or violated_rule, max_len=220)
+    actual_behavior = _compact_semantic_text(actual or (f"HTTP {status}" if status else ""), max_len=220)
+    request = f"{method} {path}".strip()
+    signature = {
+        "oracle_name": oracle_name,
+        "scenario_title": scenario_title,
+        "request": request,
+        "method": method,
+        "path": path,
+        "actor": _compact_semantic_text(actor_label, max_len=80),
+        "response_status": status,
+        "expected_behavior": expected_behavior,
+        "actual_behavior": actual_behavior,
+        "violated_rule": violated_rule,
+        "explanation": explanation,
+        "defect_signature_terms": _semantic_signature_terms(
+            oracle_name,
+            scenario_title,
+            method,
+            path,
+            actor_label,
+            status,
+            expected_behavior,
+            actual_behavior,
+            violated_rule,
+            explanation,
+        ),
+    }
+    return {key: value for key, value in signature.items() if value not in ("", [], 0)}
+
+
+def _semantic_v12_title(
+    scenario: Any,
+    oracle_result: Any,
+    *,
+    method: str,
+    path: str,
+    assertion: str,
+    actual: str,
+    status: int,
+) -> str:
+    oracle_name = _compact_semantic_text(getattr(oracle_result, "oracle_name", "Oracle"), max_len=80) or "Oracle"
+    scenario_title = _compact_semantic_text(getattr(scenario, "title", ""), max_len=120)
+    request = f"{method} {path}".strip()
+    expected_behavior = _compact_semantic_text(
+        assertion or getattr(oracle_result, "violated_rule", ""),
+        max_len=100,
+    )
+    actual_behavior = _compact_semantic_text(actual or (f"HTTP {status}" if status else ""), max_len=100)
+    parts = [f"[V12 {oracle_name}]"]
+    if scenario_title:
+        parts.append(scenario_title)
+    if request:
+        parts.append(request)
+    if expected_behavior:
+        parts.append(f"expected {expected_behavior}")
+    if actual_behavior:
+        parts.append(f"actual {actual_behavior}")
+    return _compact_semantic_text(" | ".join(parts), max_len=360)
+
+
+def _semantic_v12_description(
+    oracle_result: Any,
+    *,
+    method: str,
+    path: str,
+    actor_label: str,
+    status: int,
+    assertion: str,
+    actual: str,
+) -> str:
+    lines: list[str] = []
+    expected_behavior = _compact_semantic_text(assertion, max_len=320)
+    actual_behavior = _compact_semantic_text(actual, max_len=320)
+    explanation = _compact_semantic_text(getattr(oracle_result, "explanation", ""), max_len=420)
+    violated_rule = _compact_semantic_text(getattr(oracle_result, "violated_rule", ""), max_len=180)
+    request = f"{method} {path}".strip()
+    if explanation:
+        lines.append(explanation)
+    if expected_behavior:
+        lines.append(f"Expected: {expected_behavior}")
+    if actual_behavior:
+        lines.append(f"Actual: {actual_behavior}")
+    if request:
+        observed = f"Observed request: {request}"
+        if actor_label:
+            observed += f" as {actor_label}"
+        if status:
+            observed += f" -> HTTP {status}"
+        lines.append(observed)
+    if violated_rule:
+        lines.append(f"Violated rule: {violated_rule}")
+    return "\n".join(lines)
+
+
 def _confirmed_oracle_finding(
     scenario: Any,
     trace: dict[str, Any],
@@ -5218,12 +5398,52 @@ def _confirmed_oracle_finding(
             else ("defect" if gate_passed else "candidate")
         )
     )
+    trace_evidence = trace.get("evidence") if isinstance(trace.get("evidence"), dict) else {}
+    contract_observation_keys = (
+        "control_succeeded",
+        "authorized_control",
+        "effect_count",
+        "invariant_held",
+        "control_observation",
+        "treatment_observation",
+        "treatment_result",
+        "observer_ids",
+    )
+    semantic_signature = _oracle_semantic_signature(
+        scenario,
+        oracle_result,
+        method=method,
+        path=path,
+        actor_label=actor_label,
+        status=status,
+        assertion=assertion,
+        actual=actual,
+    )
+    _contract_keys_present = [key for key in contract_observation_keys if key in trace_evidence]
+    if _contract_keys_present:
+        semantic_signature["contract_observation_keys"] = _contract_keys_present
     finding = {
         "severity": getattr(oracle_result, "severity", "P1"),
-        "title": f"[V12 {getattr(oracle_result, 'oracle_name', 'Oracle')}] {getattr(scenario, 'title', '')}",
+        "title": _semantic_v12_title(
+            scenario,
+            oracle_result,
+            method=method,
+            path=path,
+            assertion=assertion,
+            actual=actual,
+            status=status,
+        ),
         "category": getattr(scenario, "category", "scenario_flow"),
         "source": "v12_state_graph",
-        "description": str(getattr(oracle_result, "explanation", "") or ""),
+        "description": _semantic_v12_description(
+            oracle_result,
+            method=method,
+            path=path,
+            actor_label=actor_label,
+            status=status,
+            assertion=assertion,
+            actual=actual,
+        ),
         "confidence_score": float(getattr(oracle_result, "confidence", 0.0) or 0.0),
         "evidence_id": str(getattr(evidence, "evidence_id", "") or ""),
         "oracle": oracle_result.to_dict() if hasattr(oracle_result, "to_dict") else {},
@@ -5245,12 +5465,17 @@ def _confirmed_oracle_finding(
         "blocked_reason": safety_boundary_reason if safety_boundary_blocked else "",
         "expected": assertion,
         "actual": actual,
+        "semantic_signature": semantic_signature,
         "timestamp": timestamp,
         "failed_assertions": [actual] if actual else [],
         "evidence": {
             "request": f"{method} {path}",
             "response": f"HTTP {status}",
             "assertion": assertion or actual or str(getattr(oracle_result, "violated_rule", "") or "oracle_violation"),
+            "semantic_signature": semantic_signature,
+            "expected_behavior": semantic_signature.get("expected_behavior", ""),
+            "actual_behavior": semantic_signature.get("actual_behavior", ""),
+            "defect_signature_terms": semantic_signature.get("defect_signature_terms", []),
             "timestamp": timestamp,
             "target": target,
             "actor": actor_label,
@@ -5308,22 +5533,12 @@ def _confirmed_oracle_finding(
     # Attach sandbox write evidence (before/after/cleanup) when present on the trace.
     sandbox = trace.get("sandbox_write") if isinstance(trace.get("sandbox_write"), dict) else {}
     sandbox_evidence = sandbox.get("evidence") if isinstance(sandbox.get("evidence"), dict) else {}
-    trace_evidence = trace.get("evidence") if isinstance(trace.get("evidence"), dict) else {}
     # Preserve typed contract observations for the downstream contract-oracle
     # gate.  A runtime State/Permission/Concurrency result is not customer
     # deliverable merely because an HTTP response looked wrong; when the
     # governed observer explicitly records a control or invariant result, keep
     # that fact attached to the finding instead of dropping it at normalization.
-    for contract_key in (
-        "control_succeeded",
-        "authorized_control",
-        "effect_count",
-        "invariant_held",
-        "control_observation",
-        "treatment_observation",
-        "treatment_result",
-        "observer_ids",
-    ):
+    for contract_key in contract_observation_keys:
         if contract_key in trace_evidence:
             finding["evidence"][contract_key] = trace_evidence[contract_key]
     before_ref = str(

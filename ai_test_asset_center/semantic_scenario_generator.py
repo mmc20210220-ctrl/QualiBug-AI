@@ -2111,7 +2111,16 @@ class SemanticScenarioGenerator:
         write_path = SemanticScenarioGenerator._preferred_write_endpoint(api_doc, entity)
         if not write_path:
             return {}
-        example = _markdown_request_example(api_doc, "POST", write_path)
+        # Runtime scenario generation consumes the normalized OpenAPI view.
+        # Read its requestBody first; retain the Markdown extractor only for
+        # direct callers that have not passed through document normalization.
+        example = SemanticScenarioGenerator._runtime_body_template(
+            api_doc,
+            "POST",
+            write_path,
+        )
+        if not example:
+            example = _markdown_request_example(api_doc, "POST", write_path)
         if not isinstance(example, dict) or not example:
             return {}
         rendered = SemanticScenarioGenerator._bind_dependency_placeholders(example, target_entity)
