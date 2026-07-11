@@ -42,6 +42,7 @@ _e2e_stage/
 .pytest_tmp_*/
 .workbuddy/
 .worktrees/
+.superpowers/
 .trae/*
 !.trae/specs/
 !.trae/specs/nextgen-frontend-nextjs-rsc-sso/
