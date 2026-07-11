@@ -51,8 +51,6 @@ export function LoginStageCanvas({ pointerX, pointerY, focusBoost = false }: Log
 
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
     let reduced = media.matches;
-    const onMotionChange = () => { reduced = media.matches; };
-    media.addEventListener?.('change', onMotionChange);
 
     let width = 0;
     let height = 0;
@@ -312,16 +310,33 @@ export function LoginStageCanvas({ pointerX, pointerY, focusBoost = false }: Log
       ctx.fillStyle = vignette;
       ctx.fillRect(0, 0, width, height);
 
-      raf = window.requestAnimationFrame(draw);
+      if (!reduced) raf = window.requestAnimationFrame(draw);
+    };
+
+    const onMotionChange = () => {
+      const nextReduced = media.matches;
+      if (nextReduced === reduced) return;
+      reduced = nextReduced;
+      window.cancelAnimationFrame(raf);
+      raf = 0;
+      if (reduced) draw(0);
+      else raf = window.requestAnimationFrame(draw);
+    };
+
+    const onResize = () => {
+      resize();
+      if (reduced) draw(0);
     };
 
     resize();
-    raf = window.requestAnimationFrame(draw);
-    window.addEventListener('resize', resize);
+    if (reduced) draw(0);
+    else raf = window.requestAnimationFrame(draw);
+    window.addEventListener('resize', onResize);
+    media.addEventListener?.('change', onMotionChange);
 
     return () => {
       window.cancelAnimationFrame(raf);
-      window.removeEventListener('resize', resize);
+      window.removeEventListener('resize', onResize);
       media.removeEventListener?.('change', onMotionChange);
     };
   }, []);
