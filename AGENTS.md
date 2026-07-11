@@ -51,6 +51,24 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 
 ## Discovery Harness Evolution Contract
 
+- Near-term capability stabilization uses the user-supplied Windows-native
+  benchmark whose manifest identity is
+  `v0.6-windows-native-stable-131bugs` and whose frozen hidden GT contains 131
+  defects. Cross-industry execution is deferred until this single-target
+  foundation is stable; commercial cross-industry gates remain `NOT_MEASURED`
+  and are not removed.
+- The 131-Bug focus does not permit benchmark hardcoding. Discovery runtime may
+  consume only visible enterprise materials, configured endpoints, declared
+  test actors, secret references, and runtime observations. Benchmark source,
+  hidden GT, scoring rules, match keywords, reproduction answers, and evaluator
+  miss labels remain evaluator-private and must never enter prompts, runtime
+  context, traces, detectors, fixtures, Oracles, or product-facing outputs.
+- The requested package directory name contains `v0_5`, but target identity is
+  determined by `BENCHMARK_MANIFEST.json`, not by its folder name. For the
+  selected Windows-native mode, the benchmark target uses customer UI 3001,
+  admin UI 3002, API gateway 8080, and PostgreSQL 5432 as evaluator-profile
+  data. QualiBug remains frontend 5174 and backend 8088.
+
 - The Bug discovery north star is externally measured hidden-ground-truth quality, not internal candidate, confirmed, validated, or funnel counts. Internal counts may diagnose conversion loss but MUST NOT be presented as recall, precision, or commercial capability.
 - Harness evolution uses a fixed, versioned evaluator-private manifest. Discovery runtime receives only the runtime view; ground-truth paths and contents must never enter prompts, runtime context, traces, policy proposals, or product-facing outputs.
 - Commercial promotion requires paired champion/challenger replay and shadow execution on identical input, fixture, context, environment, held-in, held-out, and intentionally clean targets. Estimated impact is not promotion evidence.
