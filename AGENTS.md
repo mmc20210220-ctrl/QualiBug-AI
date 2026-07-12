@@ -69,6 +69,37 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   admin UI 3002, API gateway 8080, and PostgreSQL 5432 as evaluator-profile
   data. QualiBug remains frontend 5174 and backend 8088.
 
+- Discovery mainline authority is selected before campaign creation and frozen
+  in `qualibug.discovery-mainline-run.v1`. The public
+  `v12_pipeline.run_v12_pipeline` function is a compatibility wrapper that
+  invokes `discovery_mainline.run_discovery_mainline` exactly once. It must
+  never retry with, fall back to, or switch to the other authority after an
+  exception.
+- `experiment_candidate` planning and execution live in
+  `discovery_runtime.py`; selected experiments execute only through
+  `experiment_executor.execute_selected_experiments`. The legacy domain may
+  run only when `legacy_champion` was explicitly selected before the run. Its
+  adapter is diagnostic and cannot acquire candidate execution or formal-count
+  authority.
+- `qualibug.obligation-attempt-ledger.v1` is the completion and funnel SSOT.
+  Every selected, blocked, or deferred obligation must have exactly one
+  terminal attempt with a reason code. Zero selected obligations and all-
+  blocked runs remain visibly `BLOCKED`; empty findings from them must never be
+  interpreted as a defect-free target.
+- Trace and weakness diagnostics consume
+  `qualibug.discovery-trace-ledger.v2`, keyed by obligation attempt identity.
+  V1 input requires the explicit offline migration; silent schema fallback is
+  prohibited. Replay and shadow runs set `customer_outputs_published=false`.
+- Runtime rollback is a next-run policy decision only. Select
+  `legacy_champion` before creating a new immutable run contract; never roll
+  back inside an active campaign or after either runner has started.
+- Phase-1 cycle-time claims require immutable
+  `qualibug.discovery-phase1-timing.v1` receipts from
+  `tools/discovery_phase1_timing.py`: five warm runs for baseline and candidate,
+  matching command/input/environment/runtime/system identities, a clean code
+  commit, and at least 60% p50 improvement. Timing evidence never substitutes
+  for external quality evidence.
+
 - The Bug discovery north star is externally measured hidden-ground-truth quality, not internal candidate, confirmed, validated, or funnel counts. Internal counts may diagnose conversion loss but MUST NOT be presented as recall, precision, or commercial capability.
 - Harness evolution uses a fixed, versioned evaluator-private manifest. Discovery runtime receives only the runtime view; ground-truth paths and contents must never enter prompts, runtime context, traces, policy proposals, or product-facing outputs.
 - Commercial promotion requires paired champion/challenger replay and shadow execution on identical input, fixture, context, environment, held-in, held-out, and intentionally clean targets. Estimated impact is not promotion evidence.

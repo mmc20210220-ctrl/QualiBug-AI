@@ -42,6 +42,31 @@ checkpoint, not a substitute for externally measured quality. The existing
 P1 compile-rate, execution, engine, evidence, write-audit, and cleanup gates
 remain in force and are not lowered when incomplete.
 
+### Phase 1 implementation evidence contract
+
+The runtime cutover is implemented, but Phase 1 is not complete until the
+clean champion/candidate receipts satisfy every checkpoint above. Runtime
+authority is frozen before planning in
+`qualibug.discovery-mainline-run.v1`; one run may select either
+`legacy_champion` or `experiment_candidate`, and an exception may never switch
+that selection. Replay and shadow runs set `customer_outputs_published=false`.
+
+Completion and product health are derived only from
+`qualibug.obligation-attempt-ledger.v1` plus the formal quality projection.
+Zero selected obligations and runs whose obligations are all blocked remain
+visibly `BLOCKED`; empty findings from those runs never mean that the target is
+defect-free. Trace and weakness diagnostics consume
+`qualibug.discovery-trace-ledger.v2`, keyed by obligation attempt identity.
+
+Stage-local timing evidence uses immutable
+`qualibug.discovery-phase1-timing.v1` receipts produced by
+`tools/discovery_phase1_timing.py`. Baseline and candidate each require five
+warm samples with matching command, input, Python/runtime, CPU/OS, and
+environment fingerprints. A missing receipt, identity mismatch, dirty source
+tree, or p50 improvement below 60% leaves this checkpoint incomplete. These
+receipts do not alter external quality, benchmark P1, Gate D, controlled-pilot,
+or GA status.
+
 ## Gate D implementation checkpoint (2026-07-10)
 
 The repository now exposes the following contracts without changing the Gate D

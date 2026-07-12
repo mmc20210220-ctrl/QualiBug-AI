@@ -10,6 +10,73 @@
 > `docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md` 为准。DOCX 仅是发布导出件，
 > 不得独立修改形成第二事实源。
 
+## Phase 1 single-mainline runtime authority (implemented 2026-07-12)
+
+The implementation now has one pre-selected discovery authority per run. The
+selection is resolved from policy before campaign creation and is frozen in
+`qualibug.discovery-mainline-run.v1`. The immutable identity contains
+`mainline_authority`, `run_id`, `campaign_id`, `target_id`, `environment_id`,
+`policy_version`, `evaluation_mode`, and `customer_outputs_published`.
+Changing authority after that contract exists is a contract error.
+
+The authoritative module flow is:
+
+```text
+product entrypoints (__main__.scan / continuous evaluation / private pilot)
+  -> v12_pipeline.run_v12_pipeline compatibility wrapper
+  -> discovery_mainline.run_discovery_mainline coordinator (one call)
+  -> discovery_runtime.build_discovery_plan
+  -> exactly one selected runner
+       experiment_candidate: discovery_runtime.run_experiment_candidate
+       legacy_champion:      v12_pipeline._run_legacy_champion_domain
+                             -> pure legacy-result Obligation adapter
+  -> obligation_attempt_ledger
+  -> discovery_funnel + discovery_quality_projection
+  -> discovery_trace_ledger.v2
+```
+
+`run_v12_pipeline` remains the public compatibility entrypoint, but it no
+longer owns scheduling, retry, completion, or fallback decisions. It validates
+source identity, target policy, and the immutable run identity, then invokes
+the coordinator exactly once. Product scan and private-pilot entrypoints do not
+rerun the mainline to auto-create approvals or to drive another discovery
+round. Runtime exceptions propagate as visible failure; they never activate
+the other runner.
+
+The experiment candidate compiles source-grounded Behavior IR into Test
+Obligations and Executable Experiments, selects through the adaptive planner,
+and executes only through `experiment_executor.execute_selected_experiments`.
+Legacy hypotheses, slices, scenarios, and findings have no candidate execution
+or formal-count authority; when `legacy_champion` is deliberately selected,
+the adapter creates diagnostic obligation lineage and keeps replay/shadow
+outputs outside the operational customer scope.
+
+`qualibug.obligation-attempt-ledger.v1` is the completion SSOT. Every selected,
+compile-blocked, runtime-blocked, or budget-deferred obligation must have one
+terminal attempt with a reason code and receipt lineage. Funnel stages, p50/p95
+timing, health, terminal reasons, and formal IDs are projected from those
+attempts. Zero obligations and all-blocked attempts stay `BLOCKED`; neither can
+be represented as a clean no-Bug result. Delivery Gate IDs must match the
+formal projection exactly.
+
+`qualibug.discovery-trace-ledger.v2` consumes the same attempt identities and
+has an explicit offline V1-to-V2 migration. Silent mixed-schema reads are
+forbidden. Persisted artifacts pass through `artifact_redactor.py` before
+write.
+
+Rollback is a next-run policy action only: select `legacy_champion` before a
+new run and create a new immutable run contract. Rollback may not occur inside
+an active campaign, on exception, or after either runner has started. Replay
+and shadow contracts always set `customer_outputs_published=false`; only an
+operational contract may feed customer-visible formal outputs.
+
+Engineering cycle-time evidence is emitted by
+`tools/discovery_phase1_timing.py` as immutable
+`qualibug.discovery-phase1-timing.v1` receipts. Comparison requires five warm
+samples for both code versions and exact command/input/environment/runtime/
+system identity. The 60% p50 acceptance threshold remains owned by
+`docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md`.
+
 ## 1. 决策摘要
 
 QualiBug 当前的主要瓶颈不是“LLM 没有生成足够多的 Bug 猜想”，而是从资料理解到正式缺陷之间的整条链路发生了严重的信息丢失、执行损耗和误判：
