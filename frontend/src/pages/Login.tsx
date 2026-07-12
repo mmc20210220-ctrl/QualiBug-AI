@@ -255,7 +255,7 @@ export function Login() {
 
       <aside className="login-stage" aria-label="QualiBug AI 产品价值">
         <div className="login-stage-brand">
-          <BrandLogo variant="full" size={40} dark />
+          <BrandLogo variant="full" detail="compact" tone="dark" size={40} />
           <ServiceHealthBadge />
         </div>
 

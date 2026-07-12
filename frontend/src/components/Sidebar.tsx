@@ -78,7 +78,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
             ×
           </button>
-          <BrandLogo variant="full" size={38} dark subtitle="客户成果台" />
+          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="客户成果台" />
         </div>
         <div className="side-project">
           <span className="side-project-label">当前客户</span>

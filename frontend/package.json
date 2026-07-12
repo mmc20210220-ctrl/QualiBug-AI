@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "redaction:scan": "node scripts/security/redaction-scan.mjs",
     "audit:check": "node scripts/security/npm-audit-baseline.mjs",
+    "test:brand-mark": "node scripts/brand/brand-mark-contract.mjs",
     "test:login-contract": "node scripts/login-page-contract.mjs",
     "dev:vite": "vite --host"
   },
