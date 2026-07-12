@@ -16,7 +16,8 @@
     "audit:check": "node scripts/security/npm-audit-baseline.mjs",
     "brand:export": "node scripts/brand/export-assets.mjs",
     "brand:check": "node scripts/brand/export-assets.mjs --check",
-    "test:brand-canvas": "node scripts/brand/behavior-space-canvas-contract.mjs",
+    "test:login-radar": "node scripts/brand/login-radar-canvas-contract.mjs",
+    "test:brand-canvas": "npm run test:login-radar",
     "test:brand-mark": "node scripts/brand/brand-mark-contract.mjs",
     "test:login-contract": "node scripts/login-page-contract.mjs",
     "dev:vite": "vite --host"

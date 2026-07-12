@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { drawBehaviorFieldFrame } from '../brand/behaviorFieldCanvas';
+import {
+  createLoginRadarScene,
+  drawLoginRadarFrame,
+  type LoginRadarScene,
+} from '../visuals/loginRadarCanvas';
 
 type LoginStageCanvasProps = {
   pointerX: number;
@@ -30,9 +34,8 @@ export function LoginStageCanvas({
   useEffect(() => {
     const canvas = canvasRef.current;
     let stopped = false;
-    let raf = 0;
-    let width = 0;
-    let height = 0;
+    let animationFrame = 0;
+    let scene: LoginRadarScene | null = null;
     let boost = 0;
     let publishedState: BrandVisualState = 'initializing';
 
@@ -47,13 +50,13 @@ export function LoginStageCanvas({
       reason: string,
       error?: unknown,
     ) => {
-      console.error('[login.brand-visual] Behavior Field canvas failed', {
+      console.error('[login.brand-visual] Login radar canvas failed', {
         operation,
         reason,
         error,
       });
       stopped = true;
-      window.cancelAnimationFrame(raf);
+      window.cancelAnimationFrame(animationFrame);
       publishedState = 'failed';
       setVisualState('failed');
     };
@@ -72,30 +75,38 @@ export function LoginStageCanvas({
     let reducedMotion = media.matches;
 
     const resize = (): boolean => {
-      const parent = canvas.parentElement;
-      if (!parent) {
-        fail('resize', 'parent_element_unavailable');
+      try {
+        const parent = canvas.parentElement;
+        if (!parent) {
+          fail('resize', 'parent_element_unavailable');
+          return false;
+        }
+        const rect = parent.getBoundingClientRect();
+        const width = Math.max(1, Math.floor(rect.width));
+        const height = Math.max(1, Math.floor(rect.height));
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        scene = createLoginRadarScene(width, height);
+        return true;
+      } catch (error) {
+        fail('resize', 'scene_initialization_failed', error);
         return false;
       }
-      const rect = parent.getBoundingClientRect();
-      width = Math.max(1, Math.floor(rect.width));
-      height = Math.max(1, Math.floor(rect.height));
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      return true;
     };
 
     const render = (time: number) => {
       if (stopped) return;
+      if (!scene) {
+        fail('render', 'scene_unavailable');
+        return;
+      }
       boost += ((focusRef.current ? 1 : 0) - boost) * 0.06;
       try {
-        drawBehaviorFieldFrame(context, {
-          width,
-          height,
+        drawLoginRadarFrame(context, scene, {
           time,
           pointerX: pointerRef.current.x,
           pointerY: pointerRef.current.y,
@@ -107,14 +118,14 @@ export function LoginStageCanvas({
         fail('render', 'draw_failed', error);
         return;
       }
-      if (!reducedMotion) raf = window.requestAnimationFrame(render);
+      if (!reducedMotion) animationFrame = window.requestAnimationFrame(render);
     };
 
     const restart = () => {
-      window.cancelAnimationFrame(raf);
+      window.cancelAnimationFrame(animationFrame);
       if (!resize() || stopped) return;
       if (reducedMotion) render(0);
-      else raf = window.requestAnimationFrame(render);
+      else animationFrame = window.requestAnimationFrame(render);
     };
 
     const onMotionChange = () => {
@@ -129,7 +140,7 @@ export function LoginStageCanvas({
 
     return () => {
       stopped = true;
-      window.cancelAnimationFrame(raf);
+      window.cancelAnimationFrame(animationFrame);
       window.removeEventListener('resize', restart);
       media.removeEventListener?.('change', onMotionChange);
     };
@@ -140,6 +151,7 @@ export function LoginStageCanvas({
       ref={canvasRef}
       className="login-stage-canvas"
       aria-hidden="true"
+      data-login-visual="radar"
       data-brand-visual-state={visualState}
     />
   );

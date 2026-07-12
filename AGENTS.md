@@ -88,6 +88,7 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 
 - QualiBug AI is enterprise software behavior-space infrastructure. It maps actors, states, data, rules, and real execution trajectories into a computable, verifiable, evolvable behavior-space model.
 - The governed Behavior Field mark is the brand source of truth: Q is the enterprise-system boundary, the plane is behavior space, nodes are states, and the curve is an observed behavior trajectory.
-- Brand and decorative product visuals use no insect, crawler, spider-web, radar, or scraping semantics. `Bug` means a verified divergence between observed and expected behavior.
-- Brand animation is decorative only and must never imply service, provider, campaign, scan, model, evaluator, or commercial health.
+- The login radar is an approved decorative metaphor for enterprise-system behavior observation; it is not a product-health signal and is not part of the governed logo geometry.
+- Brand and decorative product visuals use no insect, crawler, spider-web, or scraping semantics; insect, crawler, spider-web, and scraping semantics remain prohibited. `Bug` means a verified divergence between observed and expected behavior.
+- Decorative brand motion must never represent actual system health, provider health, campaign health, scan health, model health, evaluator health, or commercial readiness.
 - Brand work remains industry-neutral, preserves existing product copy unless separately approved, and keeps frontend 5174 and backend 8088.
