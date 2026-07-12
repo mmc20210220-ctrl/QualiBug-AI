@@ -47,12 +47,6 @@ a { color: inherit; text-decoration: none }
 button { font: inherit; cursor: pointer; border: none }
 svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0 }
 
-@keyframes scan-sweep {
-  0% { transform: translateY(-140%); opacity: 0; }
-  8% { opacity: 1; }
-  45% { opacity: .55; }
-  100% { transform: translateY(260%); opacity: 0; }
-}
 @keyframes title-sheen {
   0% { background-position: 0% 50%; }
   100% { background-position: 200% 50%; }
@@ -113,7 +107,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .login-page > .login-stage-canvas,
 .login-page > .login-stage-glow,
-.login-page > .login-stage-scan,
 .login-page > .login-stage-orb,
 .login-page > .login-light-bleed,
 .login-page > .login-hud-frame {
@@ -149,19 +142,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   pointer-events: none;
   animation: soft-pulse 7s ease-in-out infinite;
   z-index: 0;
-}
-.login-stage-scan {
-  position: absolute;
-  left: 0;
-  right: 42%;
-  top: 0;
-  height: 18%;
-  background: linear-gradient(180deg, transparent, rgba(45,212,191,.14), transparent);
-  pointer-events: none;
-  animation: scan-sweep 5.5s linear infinite;
-  z-index: 0;
-  mix-blend-mode: screen;
-  opacity: .22;
 }
 .login-hud-frame {
   position: absolute;
@@ -708,7 +688,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .login-proof { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .login-stage-scan,
   .login-title-accent,
   .login-health-dot,
   .login-submit,
@@ -805,8 +784,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   .login-page.is-register .login-panel-inner { padding: 24px 22px 18px; }
   .login-light-bleed,
   .login-hud-frame,
-  .login-stage-orb,
-  .login-stage-scan { display: none; }
+  .login-stage-orb { display: none; }
 }
 
 @media (max-width: 720px) {

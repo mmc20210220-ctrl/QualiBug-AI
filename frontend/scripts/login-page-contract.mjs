@@ -36,6 +36,44 @@ async function assertLabel(page, text, context) {
   await expectCount(page.getByLabel(text, { exact: true }), 1, { ...context, label: text });
 }
 
+async function assertCurrentCopy(page, context) {
+  for (const text of [
+    'EVIDENCE-DRIVEN QUALITY',
+    '上线前，先看清',
+    '业务会不会出事',
+    '把软件风险变成可复现、可验收、可决策的业务结论。',
+    '发现真问题',
+    '验证后再交付',
+    '结论有证据',
+    '影响与复现可追溯',
+    '发布有依据',
+    '风险门禁清晰可见',
+  ]) {
+    await expectCount(page.getByText(text, { exact: true }), 1, { ...context, text });
+  }
+  await expectCount(
+    page.locator('[data-brand-detail="compact"][data-brand-tone="dark"]'),
+    1,
+    context,
+  );
+  const visual = page.locator('[data-brand-visual-state]');
+  await expectCount(visual, 1, context);
+  await page.waitForFunction(() => {
+    const state = document.querySelector('[data-brand-visual-state]')?.getAttribute('data-brand-visual-state');
+    return state === 'ready' || state === 'reduced-motion';
+  });
+}
+
+async function assertFavicon(page) {
+  const faviconUrl = new URL('/favicon.svg', baseUrl).toString();
+  const response = await page.request.get(faviconUrl);
+  const contentType = response.headers()['content-type'] || '';
+  const body = await response.text();
+  if (!response.ok()) fail('Favicon request failed', { faviconUrl, status: response.status() });
+  if (!contentType.startsWith('image/svg+xml')) fail('Favicon has wrong content type', { faviconUrl, contentType });
+  if (!body.trimStart().startsWith('<svg')) fail('Favicon returned non-SVG content', { faviconUrl, prefix: body.slice(0, 80) });
+}
+
 async function installHealthyApi(page) {
   await page.route('**/api/health', async (route) => {
     healthRequestCount += 1;
@@ -80,6 +118,7 @@ async function verifyMode(page, mode, viewport) {
   await assertNoHorizontalOverflow(page, context);
 
   if (mode === 'login') {
+    await assertCurrentCopy(page, context);
     await expectCount(page.getByRole('button', { name: '忘记密码？', exact: true }), 1, context);
     const password = page.getByLabel('密码', { exact: true });
     await password.fill('contract-secret');
@@ -99,8 +138,44 @@ try {
       await verifyMode(page, mode, viewport);
     }
   }
+  await assertFavicon(page);
   await context.close();
-  console.log('PASS login-page-contract: 3 modes × 2 viewports');
+
+  const reducedContext = await browser.newContext({ reducedMotion: 'reduce' });
+  const reducedPage = await reducedContext.newPage();
+  await installHealthyApi(reducedPage);
+  await reducedPage.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await reducedPage.locator('[data-brand-visual-state="reduced-motion"]').waitFor({ state: 'visible' });
+  await expectCount(
+    reducedPage.locator('[data-brand-visual-state="reduced-motion"]'),
+    1,
+    { mode: 'reduced-motion' },
+  );
+  await reducedContext.close();
+
+  const failedContext = await browser.newContext();
+  const failedPage = await failedContext.newPage();
+  const brandErrors = [];
+  failedPage.on('console', (message) => {
+    if (message.type() === 'error' && message.text().includes('[login.brand-visual]')) {
+      brandErrors.push(message.text());
+    }
+  });
+  await failedPage.addInitScript(() => {
+    HTMLCanvasElement.prototype.getContext = () => null;
+  });
+  await installHealthyApi(failedPage);
+  await failedPage.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await failedPage.locator('[data-brand-visual-state="failed"]').waitFor({ state: 'visible' });
+  await expectCount(
+    failedPage.locator('[data-brand-visual-state="failed"]'),
+    1,
+    { mode: 'canvas-failure' },
+  );
+  if (brandErrors.length === 0) fail('Canvas failure was not logged', { mode: 'canvas-failure' });
+  await failedContext.close();
+
+  console.log('PASS login-page-contract: 3 modes × 2 viewports + copy/favicon/motion/failure');
 } finally {
   await browser.close();
 }

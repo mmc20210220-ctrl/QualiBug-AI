@@ -83,3 +83,11 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 - Target authorization has one SSOT: `ai_test_asset_center/target_policy.py`. Environment identity and environment type are separate required facts; localhost or an environment name must never imply write safety. Project preflight, V12 runtime, API/DB/UI adapters, and sandbox writes must consume the same `TargetPolicyDecision`.
 - Product defect truth has one SSOT: `ai_test_asset_center/discovery_quality_projection.py`. Current-run `deliverable|candidate|rejected`, current campaign, and historical shelf are separate scopes; legacy readiness counters are diagnostic only and cannot replace `formal_customer_deliverable_count`.
 - Project campaign contracts live in `ai_test_asset_center/campaign_api_contract.py` and are exposed only under `/api/v1`. Evaluation submissions must be Ground-Truth-free, pass `artifact_redactor.py`, and stay `NOT_MEASURED` until an external evaluator receipt is verified.
+
+## Brand Direction Contract
+
+- QualiBug AI is enterprise software behavior-space infrastructure. It maps actors, states, data, rules, and real execution trajectories into a computable, verifiable, evolvable behavior-space model.
+- The governed Behavior Field mark is the brand source of truth: Q is the enterprise-system boundary, the plane is behavior space, nodes are states, and the curve is an observed behavior trajectory.
+- Brand and decorative product visuals use no insect, crawler, spider-web, radar, or scraping semantics. `Bug` means a verified divergence between observed and expected behavior.
+- Brand animation is decorative only and must never imply service, provider, campaign, scan, model, evaluator, or commercial health.
+- Brand work remains industry-neutral, preserves existing product copy unless separately approved, and keeps frontend 5174 and backend 8088.

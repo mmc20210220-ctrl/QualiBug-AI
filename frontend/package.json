@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "vite --host",
+    "prebuild": "npm run brand:check",
     "build": "vite build",
     "start": "vite preview --host",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"vite.config.ts\" \"eslint.config.mjs\" --max-warnings=0",
@@ -13,6 +14,10 @@
     "typecheck": "tsc --noEmit",
     "redaction:scan": "node scripts/security/redaction-scan.mjs",
     "audit:check": "node scripts/security/npm-audit-baseline.mjs",
+    "brand:export": "node scripts/brand/export-assets.mjs",
+    "brand:check": "node scripts/brand/export-assets.mjs --check",
+    "test:brand-canvas": "node scripts/brand/behavior-space-canvas-contract.mjs",
+    "test:brand-mark": "node scripts/brand/brand-mark-contract.mjs",
     "test:login-contract": "node scripts/login-page-contract.mjs",
     "dev:vite": "vite --host"
   },
