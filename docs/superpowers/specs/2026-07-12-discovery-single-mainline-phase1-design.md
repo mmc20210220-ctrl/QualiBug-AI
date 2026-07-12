@@ -96,8 +96,13 @@ Shadow findings:
 - cannot enter the Delivery Gate's customer track;
 - cannot affect `formal_customer_deliverable_count`;
 - cannot satisfy campaign completion;
-- cannot appear in evaluator submissions;
+- cannot appear in product-created evaluation submissions;
 - remain available as redacted engineering diagnostics.
+
+The evaluator-owned champion/challenger runner may send the isolated shadow
+scope directly to the private evaluator and receive a shadow comparison
+receipt. That evaluator-private channel does not publish product or customer
+output and is distinct from the product evaluation-submission API.
 
 Promotion atomically changes the pre-run authority only after paired
 champion/candidate replay proves non-regression. After promotion, legacy inputs
