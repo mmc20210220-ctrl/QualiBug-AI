@@ -13,6 +13,7 @@ from .discovery_mainline_contract import (
     MAINLINE_AUTHORITIES,
     MainlineContractError,
     build_mainline_run_contract,
+    validate_mainline_run_contract,
 )
 from .discovery_policy_evaluation_runner import (
     SCAN_RESULT_SCHEMA,
@@ -220,6 +221,75 @@ class ObservedProductScanExecutor:
             )
         except MainlineContractError as exc:
             raise PolicyEvaluationRunnerError(f"product scan mainline contract invalid: {exc}") from exc
+        scan_v12 = (
+            scan_result.get("v12")
+            if isinstance(scan_result.get("v12"), dict)
+            else {}
+        )
+        raw_scan_contract = scan_result.get("mainline_run") or scan_v12.get(
+            "mainline_run"
+        )
+        if raw_scan_contract is not None:
+            try:
+                observed_scan_contract = validate_mainline_run_contract(
+                    dict(raw_scan_contract)
+                )
+            except (TypeError, ValueError, MainlineContractError) as exc:
+                raise PolicyEvaluationRunnerError(
+                    f"product scan embedded mainline contract invalid: {exc}"
+                ) from exc
+            if (
+                observed_scan_contract["contract_fingerprint"]
+                != mainline_run["contract_fingerprint"]
+            ):
+                raise PolicyEvaluationRunnerError(
+                    "scan mainline contract does not match evaluator run"
+                )
+        projection_input = dict(scan_result)
+        projection_input.setdefault("mainline_run", mainline_run)
+        evaluator_projection: dict[str, Any] = {}
+        if mainline_run["private_evaluator_observation_allowed"]:
+            from .discovery_evaluator_projection import (
+                build_evaluator_only_projection,
+            )
+
+            try:
+                evaluator_projection = build_evaluator_only_projection(
+                    projection_input
+                )
+            except MainlineContractError as exc:
+                raise PolicyEvaluationRunnerError(
+                    f"private evaluator projection invalid: {exc}"
+                ) from exc
+            evaluator_findings = list(evaluator_projection["findings"])
+            evaluator_candidates = list(evaluator_projection["candidates"])
+        else:
+            evaluator_findings = list(scan_result.get("findings") or [])
+            evaluator_candidates = list(
+                scan_result.get("candidate_findings") or []
+            )
+
+        trace_ledger = scan_result.get("trace_ledger")
+        v12 = scan_v12
+        if trace_ledger is None:
+            trace_ledger = v12.get("trace_ledger")
+        trace_source = v12 or scan_result
+        if (
+            trace_ledger is None
+            and isinstance(trace_source.get("obligation_attempt_ledger"), dict)
+            and isinstance(trace_source.get("formal_count_projection"), dict)
+        ):
+            from .discovery_trace_ledger import build_discovery_trace_ledger_v2
+
+            trace_ledger = build_discovery_trace_ledger_v2(
+                trace_source,
+                run_id=run_id,
+                policy_id=policy_id,
+                target_id=str(target.get("target_id") or ""),
+                project_id=project_id,
+                industry=str(target.get("industry") or "unclassified"),
+                evaluation_mode=evaluation_mode,
+            )
         return {
             "schema_version": SCAN_RESULT_SCHEMA,
             "run_id": run_id,
@@ -238,8 +308,10 @@ class ObservedProductScanExecutor:
             ),
             "runtime_fingerprint": str(target.get("runtime_fingerprint") or ""),
             **fingerprints,
-            "findings": list(scan_result.get("findings") or []),
-            "candidates": list(scan_result.get("candidate_findings") or []),
+            "findings": evaluator_findings,
+            "candidates": evaluator_candidates,
+            "evaluator_projection": evaluator_projection,
+            "trace_ledger": trace_ledger,
             "pipeline_health": pipeline_health,
             "operational_metrics": operational,
         }

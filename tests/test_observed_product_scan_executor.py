@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_asset_center.discovery_mainline_contract import validate_mainline_run_contract
+from ai_test_asset_center.discovery_mainline_contract import (
+    build_mainline_run_contract,
+    validate_mainline_run_contract,
+)
 from ai_test_asset_center.observed_product_scan_executor import (
     PRODUCT_SCAN_CONTEXT_SCHEMA,
     PRODUCT_SCAN_INPUT_SCHEMA,
@@ -126,6 +129,126 @@ def test_executor_calls_real_scan_entrypoint_with_runtime_only_artifacts(monkeyp
     assert mainline_run["run_id"] == "real-scan-1"
     assert mainline_run["environment_id"] == "http://127.0.0.1:8011"
     assert calls[0]["campaign_context"]["mainline_authority"] == "experiment_candidate"
+
+
+def test_executor_uses_authority_scoped_shadow_projection_for_private_evaluator(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifacts = _artifacts(tmp_path)
+
+    def scan(**kwargs):
+        contract = build_mainline_run_contract(
+            mainline_authority="experiment_candidate",
+            run_id="real-shadow-scan",
+            campaign_id=kwargs["campaign_context"]["campaign_id"],
+            target_id="target-1",
+            environment_id="http://127.0.0.1:8011",
+            policy_version="v1",
+            evaluation_mode="shadow",
+        )
+        return {
+            "success": True,
+            "scan_id": "real-shadow-scan",
+            "execution_status": "completed",
+            "mainline_run": contract,
+            "findings": [],
+            "candidate_findings": [],
+            "shadow_findings": [
+                {
+                    "finding_id": "shadow-deliverable",
+                    "semantic_delivery_gate_status": "DELIVERABLE",
+                    "mainline_run": {
+                        "contract_fingerprint": contract["contract_fingerprint"],
+                    },
+                },
+                {
+                    "finding_id": "shadow-rejected",
+                    "semantic_delivery_gate_status": "REJECTED",
+                    "mainline_run": {
+                        "contract_fingerprint": contract["contract_fingerprint"],
+                    },
+                },
+            ],
+            "pipeline_health": {"status": "OK"},
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.__main__.scan", scan)
+    executor = ObservedProductScanExecutor(
+        workspace_root=tmp_path,
+        operational_metrics_collector=_operational_metrics,
+    )
+    strategy = StrategyBundle()
+    strategy.execution.mainline_authority = "experiment_candidate"
+
+    with policy_strategy_override(strategy):
+        result = executor(
+            runtime_view=artifacts["runtime_view"],
+            campaign_id="campaign-shadow",
+            policy_id="policy-1",
+            policy_version="v1",
+            mainline_authority="experiment_candidate",
+            evaluation_mode="shadow",
+            fixture_preparation_receipt={"audit_receipt_id": "fixture-audit-1"},
+        )
+
+    assert [row["finding_id"] for row in result["findings"]] == [
+        "shadow-deliverable"
+    ]
+    assert [row["finding_id"] for row in result["candidates"]] == [
+        "shadow-rejected"
+    ]
+    assert result["evaluator_projection"]["authority_scope"] == "private_evaluator"
+
+
+def test_executor_rejects_scan_shadow_contract_from_another_run(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifacts = _artifacts(tmp_path)
+
+    def scan(**kwargs):
+        return {
+            "success": True,
+            "scan_id": "expected-run",
+            "execution_status": "completed",
+            "mainline_run": build_mainline_run_contract(
+                mainline_authority="experiment_candidate",
+                run_id="different-run",
+                campaign_id=kwargs["campaign_context"]["campaign_id"],
+                target_id="target-1",
+                environment_id="http://127.0.0.1:8011",
+                policy_version="v1",
+                evaluation_mode="shadow",
+            ),
+            "findings": [],
+            "candidate_findings": [],
+            "shadow_findings": [],
+            "pipeline_health": {"status": "OK"},
+        }
+
+    monkeypatch.setattr("ai_test_asset_center.__main__.scan", scan)
+    executor = ObservedProductScanExecutor(
+        workspace_root=tmp_path,
+        operational_metrics_collector=_operational_metrics,
+    )
+    strategy = StrategyBundle()
+    strategy.execution.mainline_authority = "experiment_candidate"
+
+    with policy_strategy_override(strategy):
+        with pytest.raises(
+            PolicyEvaluationRunnerError,
+            match="scan mainline contract does not match evaluator run",
+        ):
+            executor(
+                runtime_view=artifacts["runtime_view"],
+                campaign_id="campaign-shadow",
+                policy_id="policy-1",
+                policy_version="v1",
+                mainline_authority="experiment_candidate",
+                evaluation_mode="shadow",
+                fixture_preparation_receipt={"audit_receipt_id": "fixture-audit-1"},
+            )
 
 
 def test_executor_rejects_missing_mainline_authority_before_scan(monkeypatch, tmp_path: Path) -> None:

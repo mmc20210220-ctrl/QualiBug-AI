@@ -474,6 +474,7 @@ def execute_governed_control_write(
         "after_ref": record["after_ref"],
         "audit_path": str(audit_path),
         "audit_record": record,
+        "http_attempt_count": 3 if allowed else 0,
         "production_http_requests": 0,
     }
 

@@ -370,6 +370,48 @@ def test_not_measured_operational_nulls_remain_unknown_during_aggregation(tmp_pa
     }]
 
 
+def test_cost_unknown_does_not_erase_independently_observed_operational_totals(
+    tmp_path: Path,
+) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    receipt = evaluate_completed_scan(
+        manifest,
+        "held-in",
+        run_id="cost-unknown-run",
+        policy_id="policy-candidate",
+        evaluation_mode="shadow",
+        findings=[],
+        candidates=[],
+        pipeline_health={"status": "OK"},
+        operational_metrics={
+            "wall_clock_seconds": 10,
+            "estimated_cost_usd": None,
+            "request_count": 42,
+            "production_http_requests": 0,
+            "cleanup_failures": 0,
+            "safety_incidents": 0,
+            "dirty_test_environments": 0,
+            "execution_success_rate": 0.8,
+            "engine_success_rate": 1.0,
+            "duplicate_rate": 0.1,
+            "cost_measurement_status": "NOT_MEASURED",
+            "promotion_blockers": ["COST_NOT_MEASURED"],
+        },
+    )
+
+    operational = aggregate_evaluation_receipts(manifest, [receipt])["operational"]
+
+    assert operational["complete"] is False
+    assert operational["total_estimated_cost_usd"] is None
+    assert operational["total_wall_clock_seconds"] == 10
+    assert operational["total_request_count"] == 42
+    assert operational["production_http_requests"] == 0
+    assert operational["cleanup_failures"] == 0
+    assert operational["execution_success_rate"] == 0.8
+    assert operational["field_completeness"]["estimated_cost_usd"] is False
+    assert operational["field_completeness"]["request_count"] is True
+
+
 def test_private_evaluator_reports_per_bug_first_loss_stage(tmp_path: Path) -> None:
     manifest = load_evaluation_manifest(_manifest(tmp_path))
     receipt = evaluate_completed_scan(
@@ -386,6 +428,11 @@ def test_private_evaluator_reports_per_bug_first_loss_stage(tmp_path: Path) -> N
     )
 
     diagnostics = receipt["metrics"]["stage_loss_diagnostics"]
+    assert receipt["trace_ledger_projection"]["schema_version"] == (
+        "qualibug.discovery-trace-ledger.v2"
+    )
+    assert receipt["trace_ledger_projection"]["trace_count"] == 1
+    assert receipt["trace_ledger_projection"]["ledger_fingerprint"]
     assert receipt["metrics"]["true_positives"] == 0
     assert receipt["metrics"]["false_negatives"] == 1
     assert diagnostics["status"] == "READY"

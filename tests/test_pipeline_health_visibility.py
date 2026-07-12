@@ -435,3 +435,39 @@ def test_successful_execution_without_violation_remains_in_trace_ledger() -> Non
     serialized = json.dumps(ledger, ensure_ascii=False)
     assert "do-not-persist" not in serialized
     assert "password" not in serialized
+
+
+def test_redacted_execution_trace_keeps_operational_receipt_counts() -> None:
+    scenario = SimpleNamespace(id="scenario-write", behavior_slice_id="slice-write")
+
+    summary = _redacted_execution_trace_graph(
+        scenario,
+        {
+            "scenario_id": "scenario-write",
+            "steps": [
+                {"method": "POST", "path": "/resources", "status": 201},
+            ],
+            "sandbox_write": {
+                "status": "cleanup_incomplete",
+                "cleanup": {"status": "failed", "receipt_ref": ""},
+                "audit_records": [
+                    {"operation_accepted": True, "environment_kind": "test"},
+                    {"operation_accepted": False, "environment_kind": "test"},
+                ],
+            },
+        },
+        discovery_round=1,
+    )
+
+    operational = summary["execution_trace"]["operational_receipt"]
+    assert operational == {
+        "scenario_attempt_count": 1,
+        "http_request_attempt_count": 1,
+        "production_http_request_count": 0,
+        "accepted_write_count": 1,
+        "accepted_non_cleanup_write_count": 1,
+        "accepted_cleanup_write_count": 0,
+        "cleanup_attempted_count": 1,
+        "cleanup_completed_count": 0,
+        "cleanup_failure_count": 1,
+    }

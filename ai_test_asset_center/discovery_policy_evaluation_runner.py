@@ -404,6 +404,11 @@ class DiscoveryPolicyEvaluationRunner:
                 pipeline_health=dict(scan_output["pipeline_health"]),
                 operational_metrics=dict(scan_output["operational_metrics"]),
                 fixture_governance=governance,
+                trace_ledger=(
+                    dict(scan_output["trace_ledger"])
+                    if isinstance(scan_output.get("trace_ledger"), dict)
+                    else None
+                ),
             )
             persist_evaluation_receipt(
                 receipt,

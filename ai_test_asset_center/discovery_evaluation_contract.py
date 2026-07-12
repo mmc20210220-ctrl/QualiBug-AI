@@ -517,6 +517,25 @@ def evaluate_completed_scan(
             "critical_high_false_positives": len(high_value),
         }
 
+    trace_ledger_projection = (
+        {
+            "schema_version": validated_trace_ledger.get("schema_version"),
+            "ledger_fingerprint": validated_trace_ledger.get("ledger_fingerprint"),
+            "trace_count": int(validated_trace_ledger.get("trace_count") or 0),
+            "attempt_count": int(validated_trace_ledger.get("attempt_count") or 0),
+            "redaction_contract": dict(
+                validated_trace_ledger.get("redaction_contract") or {}
+            ),
+        }
+        if validated_trace_ledger is not None
+        else {
+            "schema_version": "qualibug.discovery-trace-ledger.v2",
+            "status": "NOT_PROVIDED",
+            "ledger_fingerprint": "",
+            "trace_count": 0,
+            "attempt_count": 0,
+        }
+    )
     receipt = {
         "schema_version": RECEIPT_SCHEMA,
         "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -543,6 +562,7 @@ def evaluate_completed_scan(
         "metrics": metrics,
         "operational_metrics": dict(operational_metrics),
         "fixture_governance": dict(fixture_governance or {}),
+        "trace_ledger_projection": trace_ledger_projection,
     }
     receipt["receipt_fingerprint"] = _sha256_bytes(_canonical_json(receipt))
     return receipt
@@ -639,7 +659,9 @@ def _finite_number(value: Any, field_name: str) -> float:
 
 def _aggregate_operational(receipts: list[dict[str, Any]]) -> dict[str, Any]:
     missing: list[dict[str, Any]] = []
-    normalized: list[dict[str, float]] = []
+    values_by_field: dict[str, list[float]] = {
+        field: [] for field in _REQUIRED_OPERATIONAL_FIELDS
+    }
     for receipt in receipts:
         raw = receipt.get("operational_metrics")
         raw = raw if isinstance(raw, dict) else {}
@@ -650,36 +672,86 @@ def _aggregate_operational(receipts: list[dict[str, Any]]) -> dict[str, Any]:
         ]
         if missing_fields:
             missing.append({"target_id": receipt.get("target_id"), "fields": missing_fields})
-            continue
-        row = {
-            field: _finite_number(raw[field], f"{receipt.get('target_id')}.operational_metrics.{field}")
-            for field in _REQUIRED_OPERATIONAL_FIELDS
-        }
-        for rate_field in ("execution_success_rate", "engine_success_rate", "duplicate_rate"):
-            if row[rate_field] > 1:
-                raise EvaluationContractError(f"{receipt.get('target_id')}.{rate_field} must be between 0 and 1")
-        normalized.append(row)
+        for field in _REQUIRED_OPERATIONAL_FIELDS:
+            if field not in raw or raw[field] is None:
+                continue
+            parsed = _finite_number(
+                raw[field],
+                f"{receipt.get('target_id')}.operational_metrics.{field}",
+            )
+            if field in {
+                "execution_success_rate",
+                "engine_success_rate",
+                "duplicate_rate",
+            } and parsed > 1:
+                raise EvaluationContractError(
+                    f"{receipt.get('target_id')}.{field} must be between 0 and 1"
+                )
+            values_by_field[field].append(parsed)
 
-    complete = bool(receipts) and not missing and len(normalized) == len(receipts)
+    field_completeness = {
+        field: bool(receipts) and len(values) == len(receipts)
+        for field, values in values_by_field.items()
+    }
+    complete = bool(receipts) and all(field_completeness.values())
     seeded_true_positives = sum(
         int((item.get("metrics") or {}).get("true_positives") or 0)
         for item in receipts
         if item.get("expectation") == "seeded_defects" and item.get("measurement_status") == "MEASURED"
     )
-    total_cost = sum(item["estimated_cost_usd"] for item in normalized) if complete else None
+    total_cost = (
+        sum(values_by_field["estimated_cost_usd"])
+        if field_completeness["estimated_cost_usd"]
+        else None
+    )
+    def total(field: str) -> float | None:
+        if not field_completeness[field]:
+            return None
+        return sum(values_by_field[field])
+
+    def mean(field: str) -> float | None:
+        if not field_completeness[field]:
+            return None
+        return _mean(values_by_field[field])
+
     return {
         "complete": complete,
         "missing_fields": missing,
-        "total_wall_clock_seconds": round(sum(item["wall_clock_seconds"] for item in normalized), 4) if complete else None,
+        "field_completeness": field_completeness,
+        "total_wall_clock_seconds": (
+            round(float(total("wall_clock_seconds")), 4)
+            if total("wall_clock_seconds") is not None
+            else None
+        ),
         "total_estimated_cost_usd": round(float(total_cost), 6) if total_cost is not None else None,
-        "total_request_count": int(sum(item["request_count"] for item in normalized)) if complete else None,
-        "production_http_requests": int(sum(item["production_http_requests"] for item in normalized)) if complete else None,
-        "cleanup_failures": int(sum(item["cleanup_failures"] for item in normalized)) if complete else None,
-        "safety_incidents": int(sum(item["safety_incidents"] for item in normalized)) if complete else None,
-        "dirty_test_environments": int(sum(item["dirty_test_environments"] for item in normalized)) if complete else None,
-        "execution_success_rate": _mean(item["execution_success_rate"] for item in normalized) if complete else None,
-        "engine_success_rate": _mean(item["engine_success_rate"] for item in normalized) if complete else None,
-        "duplicate_rate": _mean(item["duplicate_rate"] for item in normalized) if complete else None,
+        "total_request_count": (
+            int(total("request_count"))
+            if total("request_count") is not None
+            else None
+        ),
+        "production_http_requests": (
+            int(total("production_http_requests"))
+            if total("production_http_requests") is not None
+            else None
+        ),
+        "cleanup_failures": (
+            int(total("cleanup_failures"))
+            if total("cleanup_failures") is not None
+            else None
+        ),
+        "safety_incidents": (
+            int(total("safety_incidents"))
+            if total("safety_incidents") is not None
+            else None
+        ),
+        "dirty_test_environments": (
+            int(total("dirty_test_environments"))
+            if total("dirty_test_environments") is not None
+            else None
+        ),
+        "execution_success_rate": mean("execution_success_rate"),
+        "engine_success_rate": mean("engine_success_rate"),
+        "duplicate_rate": mean("duplicate_rate"),
         "cost_per_true_positive_usd": (
             round(float(total_cost) / seeded_true_positives, 6)
             if total_cost is not None and seeded_true_positives > 0

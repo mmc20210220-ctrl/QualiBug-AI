@@ -33,6 +33,11 @@ from .experiment_executor import execute_selected_experiments
 from .fixture_dag import attach_fixture_dag_to_experiments
 from .obligation_attempt_ledger import build_obligation_attempt_ledger
 from .obligation_compiler import compile_obligations_from_behavior_ir
+from .operational_receipts import (
+    EXECUTION_OPERATIONAL_RECEIPT_SCHEMA,
+    aggregate_execution_operational_receipts,
+    validate_execution_operational_receipt,
+)
 
 
 RUNTIME_SCHEMA = "qualibug.discovery-runtime.v1"
@@ -48,6 +53,41 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _operational_summary_from_attempt_ledger(
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
+    attempts = [
+        row
+        for row in _list(_dict(ledger).get("attempts"))
+        if isinstance(row, dict)
+    ]
+    execution_attempts = [
+        row
+        for row in attempts
+        if any(
+            _text(stage.get("stage")) == "execution"
+            for stage in _list(row.get("stages"))
+            if isinstance(stage, dict)
+        )
+    ]
+    receipts = [
+        dict(row["operational_receipt"])
+        for row in execution_attempts
+        if isinstance(row.get("operational_receipt"), dict)
+    ]
+    summary = aggregate_execution_operational_receipts(receipts)
+    missing = [
+        _text(row.get("obligation_id"))
+        for row in execution_attempts
+        if not isinstance(row.get("operational_receipt"), dict)
+    ]
+    return {
+        **summary,
+        "complete": not missing and len(receipts) == len(execution_attempts),
+        "missing_obligation_ids": missing,
+    }
 
 
 def _campaign_object(handle: Any) -> Any:
@@ -427,6 +467,12 @@ def _authority_findings(
                 **row,
                 "finding_class": "shadow",
                 "shadow_origin": "delivery_gate",
+                "semantic_delivery_gate_status": _text(
+                    gate.get("semantic_status") or gate.get("status")
+                ).upper(),
+                "delivery_gate_receipt_id": _text(
+                    gate.get("gate_receipt_id") or gate.get("receipt_id")
+                ),
             })
         elif _text(gate.get("status")).upper() == "DELIVERABLE":
             deliverable.append(row)
@@ -569,6 +615,7 @@ def run_experiment_candidate(
         execution_results=execution_results,
         gate_results=gate_results,
     )
+    operational_summary = _operational_summary_from_attempt_ledger(ledger)
     deliverable, candidates, shadow = _authority_findings(
         raw_findings=[
             dict(row)
@@ -606,8 +653,10 @@ def run_experiment_candidate(
             "harness_failure_count": int(batch.get("harness_failure_count") or 0),
             "cleanup_failures": int(batch.get("cleanup_failures") or 0),
             "every_experiment_has_receipt": bool(ledger.get("complete")),
+            "operational_receipt_summary": operational_summary,
             "results": list(batch.get("results") or []),
         },
+        "operational_receipt_summary": operational_summary,
         "obligation_attempt_ledger": ledger,
         "formal_count_projection": formal,
         "formal_id_consistency": build_formal_id_consistency(
@@ -635,6 +684,21 @@ def run_experiment_candidate(
             "execution": {
                 "status": "completed",
                 "executed": int(batch.get("executed_count") or 0),
+                "observed_http_request_count": int(
+                    operational_summary.get("observed_http_request_count") or 0
+                ),
+                "production_http_requests": int(
+                    operational_summary.get("production_http_requests") or 0
+                ),
+                "scenario_attempts": int(
+                    operational_summary.get("scenario_attempts") or 0
+                ),
+                "accepted_write_count": int(
+                    operational_summary.get("accepted_write_count") or 0
+                ),
+                "operational_receipt_complete": bool(
+                    operational_summary.get("complete")
+                ),
                 "blocked": sum(
                     1
                     for row in ledger["attempts"]
@@ -740,37 +804,57 @@ def adapt_legacy_champion_result(
     def trace_view(trace: dict[str, Any]) -> dict[str, Any]:
         scenario = _dict(trace.get("scenario"))
         execution = _dict(trace.get("execution_trace"))
+        sandbox = _dict(execution.get("sandbox_write"))
+        source_operational = _dict(execution.get("operational_receipt"))
+        redacted_steps = [
+            {
+                "method": _text(step.get("method")).upper(),
+                "path": _text(step.get("path")),
+                "status": step.get("status"),
+                "skipped_reason": _text(step.get("skipped_reason")),
+            }
+            for step in _list(execution.get("steps"))
+            if isinstance(step, dict)
+        ]
+        if not source_operational and int(sandbox.get("audit_record_count") or 0) == 0:
+            source_operational = {
+                "scenario_attempt_count": 1,
+                "http_request_attempt_count": sum(
+                    1
+                    for step in redacted_steps
+                    if step["method"] and step["path"] and not step["skipped_reason"]
+                ),
+                "production_http_request_count": 0,
+                "accepted_write_count": 0,
+                "accepted_non_cleanup_write_count": 0,
+                "accepted_cleanup_write_count": 0,
+                "cleanup_attempted_count": 0,
+                "cleanup_completed_count": 0,
+                "cleanup_failure_count": 0,
+            }
         return {
             "scenario_id": _text(scenario.get("id") or execution.get("scenario_id")),
             "behavior_slice_id": _text(scenario.get("behavior_slice_id")),
             "discovery_round": int(scenario.get("discovery_round") or 0),
             "actor_role": _text(execution.get("actor_role")),
-            "steps": [
-                {
-                    "method": _text(step.get("method")).upper(),
-                    "path": _text(step.get("path")),
-                    "status": step.get("status"),
-                    "skipped_reason": _text(step.get("skipped_reason")),
-                }
-                for step in _list(execution.get("steps"))
-                if isinstance(step, dict)
-            ],
+            "steps": redacted_steps,
             "errors": [_text(value) for value in _list(execution.get("errors")) if _text(value)],
             "precondition_not_met_count": len(
                 _list(execution.get("precondition_not_met"))
             ),
             "sandbox_write": {
-                "status": _text(_dict(execution.get("sandbox_write")).get("status")),
+                "status": _text(sandbox.get("status")),
                 "cleanup_status": _text(
-                    _dict(_dict(execution.get("sandbox_write")).get("cleanup")).get(
+                    _dict(sandbox.get("cleanup")).get(
                         "status"
                     )
                 ),
                 "audit_record_count": int(
-                    _dict(execution.get("sandbox_write")).get("audit_record_count")
+                    sandbox.get("audit_record_count")
                     or 0
                 ),
             },
+            "operational_receipt": source_operational,
             "oracle_results": [
                 {
                     "oracle_name": _text(row.get("oracle_name") or row.get("name")),
@@ -1075,6 +1159,68 @@ def adapt_legacy_champion_result(
             execution_status = "BLOCKED"
             execution_reason = "LEGACY_EXECUTION_RECEIPT_MISSING"
 
+        source_operational = _dict(_dict(view).get("operational_receipt"))
+        if trace is not None and not source_operational:
+            raise MainlineContractError(
+                f"legacy_operational_receipt_missing:{scenario_id or obligation_id}"
+            )
+        if trace is None and raw_finding is not None:
+            source_operational = {
+                "scenario_attempt_count": 1,
+                "http_request_attempt_count": int(bool(observation_receipt_ids)),
+                "production_http_request_count": 0,
+                "accepted_write_count": 0,
+                "accepted_non_cleanup_write_count": 0,
+                "accepted_cleanup_write_count": 0,
+                "cleanup_attempted_count": 0,
+                "cleanup_completed_count": 0,
+                "cleanup_failure_count": 0,
+            }
+        cleanup_failure_count = int(
+            source_operational.get("cleanup_failure_count") or 0
+        )
+        cleanup_attempted_count = int(
+            source_operational.get("cleanup_attempted_count") or 0
+        )
+        cleanup_completed_count = int(
+            source_operational.get("cleanup_completed_count") or 0
+        )
+        operational_receipt = validate_execution_operational_receipt({
+            "schema_version": EXECUTION_OPERATIONAL_RECEIPT_SCHEMA,
+            "receipt_id": stable_id("operational", execution_id),
+            "execution_status": execution_status,
+            "scenario_attempt_count": int(
+                source_operational.get("scenario_attempt_count") or 1
+            ),
+            "http_request_attempt_count": int(
+                source_operational.get("http_request_attempt_count") or 0
+            ),
+            "production_http_request_count": int(
+                source_operational.get("production_http_request_count") or 0
+            ),
+            "accepted_write_count": int(
+                source_operational.get("accepted_write_count") or 0
+            ),
+            "accepted_non_cleanup_write_count": int(
+                source_operational.get("accepted_non_cleanup_write_count") or 0
+            ),
+            "accepted_cleanup_write_count": int(
+                source_operational.get("accepted_cleanup_write_count") or 0
+            ),
+            "cleanup_outcome": {
+                "status": (
+                    "FAILED"
+                    if cleanup_failure_count
+                    else "COMPLETED"
+                    if cleanup_attempted_count
+                    else "NOT_REQUIRED"
+                ),
+                "attempted_count": cleanup_attempted_count,
+                "completed_count": cleanup_completed_count,
+                "failure_count": cleanup_failure_count,
+            },
+        })
+
         oracle_rows = _list(_dict(view).get("oracle_results"))
         oracle_receipt_id = (
             stable_id("oracle", execution_id, oracle_rows or finding_receipt_view)
@@ -1094,6 +1240,7 @@ def adapt_legacy_champion_result(
                 "finding": finding_receipt_view,
             }),
             "cost_coverage_status": "UNKNOWN",
+            "operational_receipt": operational_receipt,
         }
 
         normalized_finding: dict[str, Any] | None = None
@@ -1198,6 +1345,7 @@ def adapt_legacy_champion_result(
         execution_results=execution_results,
         gate_results=gate_results,
     )
+    operational_summary = _operational_summary_from_attempt_ledger(ledger)
     deliverable: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     shadow: list[dict[str, Any]] = []
@@ -1273,6 +1421,28 @@ def adapt_legacy_champion_result(
         "mainline_run": dict(contract),
         "campaign": _finalize_campaign(campaign_handle, ledger),
         "obligation_attempt_ledger": ledger,
+        "operational_receipt_summary": operational_summary,
+        "phases": {
+            **_dict(legacy_result.get("phases")),
+            "execution": {
+                **_dict(_dict(legacy_result.get("phases")).get("execution")),
+                "observed_http_request_count": int(
+                    operational_summary.get("observed_http_request_count") or 0
+                ),
+                "production_http_requests": int(
+                    operational_summary.get("production_http_requests") or 0
+                ),
+                "scenario_attempts": int(
+                    operational_summary.get("scenario_attempts") or 0
+                ),
+                "accepted_write_count": int(
+                    operational_summary.get("accepted_write_count") or 0
+                ),
+                "operational_receipt_complete": bool(
+                    operational_summary.get("complete")
+                ),
+            },
+        },
         "formal_count_projection": formal,
         "formal_id_consistency": build_formal_id_consistency(
             delivery_gate_ids=formal_ids,

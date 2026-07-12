@@ -21,6 +21,7 @@ from .observer_contracts import (
     observe_experiment_requirements,
     validate_observer_declarations,
 )
+from .operational_receipts import build_execution_operational_receipt
 from .real_id_resolver import (
     bind_entity_fields,
     infer_path_params,
@@ -1290,6 +1291,22 @@ def execute_selected_experiments(
         elif status == "HARNESS_FAILED":
             status = "HARNESS_FAILURE"
             outcome["status"] = status
+        operational_receipt = build_execution_operational_receipt(
+            receipt_id=_stable_id("operational", execution_id),
+            execution_status=status,
+            steps=[
+                row
+                for row in _list(outcome.get("steps"))
+                if isinstance(row, dict)
+            ],
+            cleanup_failures=outcome_cleanup_failures,
+        )
+        outcome["operational_receipt"] = operational_receipt
+        outcome_execution_receipt = _dict(outcome.get("execution_receipt"))
+        outcome_execution_receipt["operational_receipt_id"] = _text(
+            operational_receipt.get("receipt_id")
+        )
+        outcome["execution_receipt"] = outcome_execution_receipt
         results.append(outcome)
         if status == "BLOCKED":
             blocked += 1
@@ -1303,6 +1320,7 @@ def execute_selected_experiments(
                 "observation_receipt_ids": observation_receipt_ids,
                 "oracle_receipt_id": oracle_receipt_id,
                 "elapsed_ms": outcome.get("elapsed_ms"),
+                "operational_receipt": operational_receipt,
             }
         elif status == "HARNESS_FAILURE":
             harness += 1
@@ -1316,6 +1334,7 @@ def execute_selected_experiments(
                 "observation_receipt_ids": observation_receipt_ids,
                 "oracle_receipt_id": oracle_receipt_id,
                 "elapsed_ms": outcome.get("elapsed_ms"),
+                "operational_receipt": operational_receipt,
             }
         else:
             executed += 1
@@ -1329,6 +1348,7 @@ def execute_selected_experiments(
                 "oracle_receipt_id": oracle_receipt_id,
                 "elapsed_ms": outcome.get("elapsed_ms"),
                 "cost_coverage_status": "UNKNOWN",
+                "operational_receipt": operational_receipt,
             }
             gate_results[oid] = build_customer_delivery_gate_receipt(
                 outcome.get("finding") if isinstance(outcome.get("finding"), dict) else None,

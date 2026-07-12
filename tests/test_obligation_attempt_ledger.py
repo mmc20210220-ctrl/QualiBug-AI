@@ -65,6 +65,46 @@ def test_every_selected_obligation_has_one_terminal_attempt() -> None:
     assert ledger["ledger_fingerprint"]
 
 
+def test_attempt_ledger_preserves_validated_operational_terminal_receipt() -> None:
+    operational_receipt = {
+        "schema_version": "qualibug.execution-operational-receipt.v1",
+        "receipt_id": "operational-exec-1",
+        "execution_status": "EXECUTED",
+        "scenario_attempt_count": 1,
+        "http_request_attempt_count": 3,
+        "production_http_request_count": 0,
+        "accepted_write_count": 1,
+        "accepted_non_cleanup_write_count": 1,
+        "accepted_cleanup_write_count": 0,
+        "cleanup_outcome": {
+            "status": "COMPLETED",
+            "attempted_count": 1,
+            "completed_count": 1,
+            "failure_count": 0,
+        },
+    }
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={"obl-1": {"status": "COMPILED"}},
+        execution_results={
+            "obl-1": {
+                "status": "EXECUTED",
+                "operational_receipt": operational_receipt,
+            }
+        },
+        gate_results={
+            "obl-1": {
+                "status": "REJECTED",
+                "reason_code": "ORACLE_NOT_VIOLATED",
+            }
+        },
+    )
+
+    assert ledger["attempts"][0]["operational_receipt"] == operational_receipt
+
+
 def test_duplicate_or_missing_terminal_receipt_fails_fast() -> None:
     with pytest.raises(ObligationAttemptLedgerError, match="duplicate_terminal_receipt:obl-1"):
         build_obligation_attempt_ledger(

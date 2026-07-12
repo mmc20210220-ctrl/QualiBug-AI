@@ -4564,6 +4564,8 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             industry=_industry,
             evaluation_mode=_evaluation_mode,
         )
+        result["trace_ledger"] = _trace_ledger
+        v12["trace_ledger"] = _trace_ledger
         _weakness_report = mine_discovery_weaknesses([_trace_ledger])
         if _active_policy is None:
             raise RuntimeError("active policy is required for bounded Harness proposal generation")

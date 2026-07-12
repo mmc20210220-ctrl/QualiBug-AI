@@ -286,6 +286,23 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
                     "observation_receipt_ids": ["obs-approved"],
                     "oracle_receipt_id": "oracle-approved",
                     "cost_coverage_status": "MEASURED",
+                    "operational_receipt": {
+                        "schema_version": "qualibug.execution-operational-receipt.v1",
+                        "receipt_id": "operational-approved",
+                        "execution_status": "EXECUTED",
+                        "scenario_attempt_count": 1,
+                        "http_request_attempt_count": 3,
+                        "production_http_request_count": 0,
+                        "accepted_write_count": 1,
+                        "accepted_non_cleanup_write_count": 1,
+                        "accepted_cleanup_write_count": 0,
+                        "cleanup_outcome": {
+                            "status": "COMPLETED",
+                            "attempted_count": 1,
+                            "completed_count": 1,
+                            "failure_count": 0,
+                        },
+                    },
                 }
             },
             "gate_results": {
@@ -325,6 +342,10 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
 
     assert calls == ["experiment"]
     assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "REJECTED"
+    assert result["phases"]["execution"]["observed_http_request_count"] == 3
+    assert result["phases"]["execution"]["production_http_requests"] == 0
+    assert result["phases"]["execution"]["scenario_attempts"] == 1
+    assert result["phases"]["execution"]["accepted_write_count"] == 1
     assert result["discovery_funnel"]["pipeline_health"]["status"] == "OK"
 
 
@@ -346,6 +367,36 @@ def test_candidate_authority_projects_semantic_deliverable_to_shadow_terminal() 
     assert projected["obl-1"]["reason_code"] == "SHADOW_AUTHORITY_NOT_PUBLISHED"
     assert projected["obl-1"]["semantic_status"] == "DELIVERABLE"
     assert "finding_id" not in projected["obl-1"]
+
+
+def test_shadow_finding_retains_semantic_gate_status_for_private_evaluator() -> None:
+    from ai_test_asset_center.discovery_runtime import (
+        _authority_findings,
+        _project_gate_results_for_authority,
+    )
+
+    contract = _contract("experiment_candidate")
+    gate_results = _project_gate_results_for_authority(
+        gate_results={
+            "obl-1": {
+                "status": "DELIVERABLE",
+                "finding_id": "finding-1",
+                "gate_receipt_id": "gate-1",
+            }
+        },
+        contract=contract,
+    )
+
+    deliverable, candidates, shadow = _authority_findings(
+        raw_findings=[{"finding_id": "finding-1", "obligation_id": "obl-1"}],
+        gate_results=gate_results,
+        contract=contract,
+    )
+
+    assert deliverable == []
+    assert candidates == []
+    assert shadow[0]["semantic_delivery_gate_status"] == "DELIVERABLE"
+    assert shadow[0]["delivery_gate_receipt_id"] == "gate-1"
 
 
 def test_campaign_identity_exists_before_planning_and_execution() -> None:
@@ -534,6 +585,9 @@ def test_operational_legacy_champion_is_adapted_to_attempt_authority() -> None:
     assert result["formal_count_projection"]["formal_customer_deliverable_count"] == 1
     assert result["obligation_attempt_ledger"]["complete"] is True
     assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "DELIVERABLE"
+    assert result["phases"]["execution"]["observed_http_request_count"] == 1
+    assert result["phases"]["execution"]["scenario_attempts"] == 1
+    assert result["phases"]["execution"]["accepted_write_count"] == 0
     assert result["findings"][0]["mainline_run"]["contract_fingerprint"] == contract["contract_fingerprint"]
     assert result["discovery_funnel"]["validated_bug_count"] == 1
 

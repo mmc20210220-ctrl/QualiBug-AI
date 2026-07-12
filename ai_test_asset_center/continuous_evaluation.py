@@ -311,9 +311,14 @@ def ci_scan_and_evaluate(
             },
         },
     )
+    from .discovery_evaluator_projection import build_evaluator_only_projection
+
+    evaluator_projection = build_evaluator_only_projection(v12)
     evaluation_view = {
         **v12,
-        "findings": list(v12.get("shadow_findings") or []),
+        "findings": list(evaluator_projection["findings"]),
+        "candidate_findings": list(evaluator_projection["candidates"]),
+        "evaluator_projection": evaluator_projection,
     }
     result = EvaluationEngine().evaluate(evaluation_view)
 

@@ -6,6 +6,11 @@ import json
 from collections import Counter
 from typing import Any, Mapping
 
+from .operational_receipts import (
+    OperationalReceiptError,
+    validate_execution_operational_receipt,
+)
+
 
 OBLIGATION_ATTEMPT_LEDGER_SCHEMA = "qualibug.obligation-attempt-ledger.v1"
 TERMINAL_STATUSES = frozenset({
@@ -217,6 +222,19 @@ def build_obligation_attempt_ledger(
             for value in execution_receipt.get("observation_receipt_ids", []) or []
             if _text(value)
         ]
+        operational_receipt: dict[str, Any] = {}
+        if execution_receipt.get("operational_receipt") is not None:
+            try:
+                operational_receipt = validate_execution_operational_receipt(
+                    _object(
+                        execution_receipt.get("operational_receipt"),
+                        field=f"operational_receipt:{obligation_id}",
+                    )
+                )
+            except OperationalReceiptError as exc:
+                raise ObligationAttemptLedgerError(
+                    f"operational_receipt_invalid:{obligation_id}:{exc}"
+                ) from exc
         attempt: dict[str, Any] = {
             "candidate_id": _text(
                 selected_row.get("candidate_id")
@@ -306,6 +324,8 @@ def build_obligation_attempt_ledger(
             "cost_coverage_status": cost_coverage_status,
             "stages": stage_records,
         }
+        if operational_receipt:
+            attempt["operational_receipt"] = operational_receipt
         attempt["attempt_fingerprint"] = _fingerprint(attempt)
         attempts.append(attempt)
 

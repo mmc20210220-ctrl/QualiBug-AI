@@ -2208,6 +2208,31 @@ def _redacted_execution_trace_graph(
         item for item in sandbox_write.get("audit_records") or []
         if isinstance(item, dict)
     ]
+    accepted_write_records = [
+        item for item in audit_records if item.get("operation_accepted") is True
+    ]
+    accepted_non_cleanup_write_count = len(accepted_write_records)
+    cleanup_status = str(cleanup.get("status") or "").strip().lower()
+    explicit_cleanup_statuses = [
+        str(item.get("cleanup_status") or "").strip().lower()
+        for item in accepted_write_records
+        if str(item.get("cleanup_status") or "").strip()
+    ]
+    cleanup_attempted_count = len(accepted_write_records)
+    cleanup_completed_count = sum(
+        1
+        for status in explicit_cleanup_statuses
+        if status in {"completed", "verified", "not_required"}
+    )
+    cleanup_failure_count = (
+        len(explicit_cleanup_statuses) - cleanup_completed_count
+        if explicit_cleanup_statuses
+        else int(
+            accepted_non_cleanup_write_count > 0
+            and cleanup_status
+            not in {"completed", "verified", "not_required", "not_applicable"}
+        )
+    )
     execution_trace = {
         "scenario_id": str(trace.get("scenario_id") or getattr(scenario, "id", "") or ""),
         "actor_role": str(trace.get("actor_role") or "")[:80],
@@ -2230,6 +2255,30 @@ def _redacted_execution_trace_graph(
             },
             "audit_path": "present" if sandbox_write.get("audit_path") else "",
             "audit_record_count": len(audit_records),
+        },
+        "operational_receipt": {
+            "scenario_attempt_count": 1,
+            "http_request_attempt_count": sum(
+                1
+                for item in steps
+                if item.get("method")
+                and item.get("path")
+                and not item.get("skipped_reason")
+            ),
+            "production_http_request_count": sum(
+                1
+                for item in audit_records
+                if str(item.get("environment_kind") or "").strip().lower()
+                in {"production", "prod", "live"}
+            ),
+            "accepted_write_count": (
+                accepted_non_cleanup_write_count + cleanup_completed_count
+            ),
+            "accepted_non_cleanup_write_count": accepted_non_cleanup_write_count,
+            "accepted_cleanup_write_count": cleanup_completed_count,
+            "cleanup_attempted_count": cleanup_attempted_count,
+            "cleanup_completed_count": cleanup_completed_count,
+            "cleanup_failure_count": cleanup_failure_count,
         },
     }
     return {
