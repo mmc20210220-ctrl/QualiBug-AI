@@ -245,7 +245,6 @@ export function Login() {
     >
       <LoginStageCanvas pointerX={pointer.x} pointerY={pointer.y} focusBoost={fieldFocused || submitting} />
       <div className="login-stage-glow" aria-hidden="true" />
-      <div className="login-stage-scan" aria-hidden="true" />
       <div className="login-stage-orb login-stage-orb-a" aria-hidden="true" />
       <div className="login-stage-orb login-stage-orb-b" aria-hidden="true" />
       <div className="login-light-bleed" aria-hidden="true" />
