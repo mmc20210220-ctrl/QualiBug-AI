@@ -1,0 +1,484 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _config(root: Path) -> Path:
+    path = root / "architecture_roots.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "qualibug.architecture-roots.v1",
+                "package": "samplepkg",
+                "supported_roots": {
+                    "product": ["samplepkg.main"],
+                    "evaluation": ["samplepkg.evaluation"],
+                    "tooling": [],
+                },
+                "module_class_overrides": {
+                    "samplepkg.main": "core",
+                    "samplepkg.evaluation": "diagnostic",
+                },
+                "discovery_entrypoints": [
+                    {
+                        "name": "canonical",
+                        "module": "samplepkg.main",
+                        "callable": "main",
+                        "status": "canonical",
+                    }
+                ],
+                "oversized_line_threshold": 20,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _sample_repo(tmp_path: Path, *, dynamic_import: bool = False) -> Path:
+    _write(tmp_path / "samplepkg" / "__init__.py", "")
+    dynamic = (
+        "\nimport importlib as loader\n\ndef load(name):\n    return loader.import_module(name)\n"
+        if dynamic_import
+        else ""
+    )
+    _write(
+        tmp_path / "samplepkg" / "main.py",
+        (
+            "from . import used\n\n"
+            "def main():\n    return used.VALUE\n\n"
+            "def alternate():\n    return used.VALUE\n"
+            + dynamic
+        ),
+    )
+    _write(tmp_path / "samplepkg" / "used.py", "VALUE = 1\n")
+    _write(
+        tmp_path / "samplepkg" / "evaluation.py",
+        "from .adapter_bridge import evaluate\n",
+    )
+    _write(
+        tmp_path / "samplepkg" / "adapter_bridge.py",
+        "def evaluate():\n    return True\n",
+    )
+    _write(tmp_path / "samplepkg" / "test_only.py", "VALUE = 2\n")
+    _write(tmp_path / "samplepkg" / "dead_module.py", "VALUE = 3\n")
+    _write(
+        tmp_path / "samplepkg" / "external_root.py",
+        "from . import external_dependency\n",
+    )
+    _write(
+        tmp_path / "samplepkg" / "external_dependency.py",
+        "VALUE = 4\n",
+    )
+    _write(
+        tmp_path / "support_script.py",
+        "from samplepkg import external_root\n",
+    )
+    _write(
+        tmp_path / "tests" / "test_reference.py",
+        "from samplepkg import test_only\n",
+    )
+    _write(
+        tmp_path / "pyproject.toml",
+        (
+            "[project]\nname='sample'\nversion='0.0.0'\n"
+            "[project.scripts]\n"
+            "sample-main='samplepkg.main:main'\n"
+            "sample-alternate='samplepkg.main:alternate'\n"
+        ),
+    )
+    return tmp_path
+
+
+def _by_module(inventory: dict) -> dict[str, dict]:
+    return {row["module"]: row for row in inventory["modules"]}
+
+
+def _runtime_trace_payload(
+    inventory: dict,
+    *,
+    modules: list[str],
+    covered_roots: list[str] | None = None,
+    coverage_status: str = "COMPLETE",
+) -> dict:
+    required_roots = [row["root_id"] for row in inventory["trace_roots"]]
+    roots = required_roots if covered_roots is None else covered_roots
+    descriptors = {row["root_id"]: row for row in inventory["trace_roots"]}
+    return {
+        "schema_version": "qualibug.python-import-trace.v1",
+        "coverage_status": coverage_status,
+        "source_fingerprint": inventory["source_identity"][
+            "python_source_fingerprint"
+        ],
+        "config_fingerprint": inventory["source_identity"][
+            "config_fingerprint"
+        ],
+        "project_scripts_fingerprint": inventory["source_identity"][
+            "project_scripts_fingerprint"
+        ],
+        "collector": {
+            "name": "qualibug.import-trace",
+            "version": "1",
+            "session_id": "trace-session-1",
+        },
+        "root_sessions": [
+            {
+                "root_id": root,
+                "module": descriptors[root]["module"],
+                "callable": descriptors[root]["callable"],
+                "status": "COMPLETE",
+                "command_fingerprint": f"cmd:{root}",
+                "environment_fingerprint": "env:test",
+            }
+            for root in roots
+        ],
+        "modules": modules,
+    }
+
+
+def test_inventory_classifies_reachability_without_auto_deleting(tmp_path: Path) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path)
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+    modules = _by_module(inventory)
+
+    assert modules["samplepkg.main"]["reachable_from_product"] is True
+    assert modules["samplepkg.used"]["reachable_from_product"] is True
+    assert modules["samplepkg.evaluation"]["reachable_from_evaluation"] is True
+    assert modules["samplepkg.adapter_bridge"]["responsibility"] == "adapter"
+    assert modules["samplepkg.test_only"]["reachable_from_tests"] is True
+    assert modules["samplepkg.test_only"]["responsibility"] != "retirement_candidate"
+    assert modules["samplepkg.external_root"][
+        "reachable_from_external_reference"
+    ] is True
+    assert modules["samplepkg.external_dependency"][
+        "reachable_from_external_reference"
+    ] is True
+    assert modules["samplepkg.external_dependency"]["responsibility"] != (
+        "retirement_candidate"
+    )
+    assert modules["samplepkg.dead_module"]["responsibility"] == "retirement_candidate"
+    assert modules["samplepkg.dead_module"]["removal_gate"] == (
+        "BLOCKED_RUNTIME_TRACE_REQUIRED"
+    )
+    assert inventory["auto_delete_performed"] is False
+    assert inventory["quality_claim_status"] == "ARCHITECTURE_DIAGNOSTIC_ONLY"
+    assert inventory["external_discovery_quality"] == "NOT_MEASURED"
+
+
+def test_complete_runtime_trace_advances_but_never_auto_approves_deletion(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path)
+    baseline = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+    trace = root / "runtime_trace.json"
+    trace.write_text(
+        json.dumps(
+            _runtime_trace_payload(
+                baseline,
+                modules=[
+                    *[row["module"] for row in baseline["trace_roots"]],
+                    "samplepkg.used",
+                    "samplepkg.adapter_bridge",
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+        runtime_trace_path=trace,
+    )
+    dead = _by_module(inventory)["samplepkg.dead_module"]
+
+    assert inventory["runtime_trace"]["status"] == "VERIFIED_COMPLETE"
+    assert dead["runtime_observed"] is False
+    assert dead["removal_gate"] == "MANUAL_DELETION_REVIEW_REQUIRED"
+    assert inventory["auto_delete_performed"] is False
+
+
+def test_dynamic_import_uncertainty_blocks_retirement_even_with_complete_trace(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path, dynamic_import=True)
+    baseline = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+    trace = root / "runtime_trace.json"
+    trace.write_text(
+        json.dumps(
+            _runtime_trace_payload(
+                baseline,
+                modules=[
+                    row["module"] for row in baseline["trace_roots"]
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+        runtime_trace_path=trace,
+    )
+
+    assert inventory["dynamic_import_uncertainty"]["present"] is True
+    assert _by_module(inventory)["samplepkg.dead_module"]["removal_gate"] == (
+        "BLOCKED_DYNAMIC_IMPORT_REVIEW_REQUIRED"
+    )
+
+
+def test_complete_runtime_trace_fails_closed_without_exact_root_and_source_proof(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        ArchitectureInventoryError,
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path)
+    config = _config(root)
+    baseline = build_architecture_inventory(repo_root=root, config_path=config)
+    trace = root / "runtime_trace.json"
+    trace.write_text(
+        json.dumps(
+            _runtime_trace_payload(
+                baseline,
+                modules=[],
+                covered_roots=[],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ArchitectureInventoryError,
+        match="runtime_trace_root_coverage_missing",
+    ):
+        build_architecture_inventory(
+            repo_root=root,
+            config_path=config,
+            runtime_trace_path=trace,
+        )
+
+    payload = _runtime_trace_payload(
+        baseline,
+        modules=[
+            row["module"] for row in baseline["trace_roots"]
+        ],
+    )
+    payload["source_fingerprint"] = "stale-source"
+    trace.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(
+        ArchitectureInventoryError,
+        match="runtime_trace_source_fingerprint_mismatch",
+    ):
+        build_architecture_inventory(
+            repo_root=root,
+            config_path=config,
+            runtime_trace_path=trace,
+        )
+
+
+def test_configuration_schema_fails_fast_for_malformed_authority(tmp_path: Path) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        ArchitectureInventoryError,
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path)
+    config = _config(root)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    payload["module_class_overrides"] = []
+    config.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(
+        ArchitectureInventoryError,
+        match="architecture_module_class_overrides_invalid",
+    ):
+        build_architecture_inventory(repo_root=root, config_path=config)
+
+    payload["module_class_overrides"] = {}
+    payload["discovery_entrypoints"] = [
+        {
+            "name": "canonical",
+            "module": "samplepkg.main",
+            "callable": "missing_callable",
+            "status": "canonical",
+        }
+    ]
+    config.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(
+        ArchitectureInventoryError,
+        match="architecture_entrypoint_callable_missing",
+    ):
+        build_architecture_inventory(repo_root=root, config_path=config)
+
+
+def test_windows_ignore_names_are_case_insensitive(tmp_path: Path) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path)
+    _write(root / "VENV" / "broken.py", "not valid python [")
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+    assert inventory["diagnostics"]["module_count"] >= 1
+
+
+def test_trace_roots_preserve_distinct_script_callable_identities(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path)
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+    scripts = [
+        row for row in inventory["trace_roots"]
+        if row["category"] == "project_script"
+    ]
+    assert len(scripts) == 2
+    assert {row["module"] for row in scripts} == {"samplepkg.main"}
+    assert {row["callable"] for row in scripts} == {"main", "alternate"}
+    assert len({row["root_id"] for row in scripts}) == 2
+    assert len(inventory["source_identity"]["project_scripts_fingerprint"]) == 64
+
+
+def test_module_graph_and_source_hash_use_one_byte_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import _parse_module
+
+    path = tmp_path / "samplepkg" / "main.py"
+    original_source = b"VALUE = 1\n"
+    changed_source = b"VALUE = 2\nEXTRA = True\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(original_source)
+    original_read_text = Path.read_text
+
+    def mutate_after_text_read(self: Path, *args: object, **kwargs: object) -> str:
+        text = original_read_text(self, *args, **kwargs)
+        if self == path:
+            self.write_bytes(changed_source)
+        return text
+
+    monkeypatch.setattr(Path, "read_text", mutate_after_text_read)
+    parsed = _parse_module(
+        module="samplepkg.main",
+        path=path,
+        known_modules={"samplepkg.main"},
+    )
+
+    assert parsed["line_count"] == 1
+    assert parsed["source_sha256"] == hashlib.sha256(original_source).hexdigest()
+
+
+def test_inventory_cli_persists_diagnostics_without_mutating_sources(
+    tmp_path: Path,
+) -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    root = _sample_repo(tmp_path)
+    config = _config(root)
+    output = root / "inventory.json"
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*.py")
+    }
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "tools" / "architecture_inventory.py"),
+            "--root",
+            str(root),
+            "--config",
+            str(config),
+            "--output",
+            str(output),
+        ],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "qualibug.architecture-inventory.v1"
+    assert payload["auto_delete_performed"] is False
+    assert payload["source_identity"]["scope"] == "WORKTREE_CONTENT_ADDRESSED"
+    assert len(payload["source_identity"]["python_source_fingerprint"]) == 64
+    assert len(payload["source_identity"]["config_fingerprint"]) == 64
+    assert all(len(row["source_sha256"]) == 64 for row in payload["modules"])
+    summary = json.loads(completed.stdout)
+    assert summary["output"] == str(output.resolve())
+    assert summary["runtime_trace"]["missing_required_root_count"] >= 1
+    assert "missing_required_roots" not in summary["runtime_trace"]
+    after = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*.py")
+    }
+    assert after == before
+
+
+def test_repository_inventory_reports_architecture_metrics_not_quality() -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=root / "ai_test_asset_center" / "architecture_roots.json",
+    )
+
+    diagnostics = inventory["diagnostics"]
+    assert diagnostics["module_count"] >= 400
+    assert diagnostics["python_line_count"] >= 200_000
+    assert diagnostics["discovery_entrypoint_count"] >= 1
+    assert "duplicate_discovery_entrypoint_count" in diagnostics
+    assert "monkeypatch_authority_count" in diagnostics
+    assert "oversized_boundary_count" in diagnostics
+    assert inventory["auto_delete_performed"] is False
+    assert inventory["external_discovery_quality"] == "NOT_MEASURED"

@@ -130,6 +130,7 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 - Product defect truth has one SSOT: `ai_test_asset_center/discovery_quality_projection.py`. Current-run `deliverable|candidate|rejected`, current campaign, and historical shelf are separate scopes; legacy readiness counters are diagnostic only and cannot replace `formal_customer_deliverable_count`.
 - Idempotency and concurrency obligations must come from an explicit source invariant joined to an exact Behavior IR operation. A write method alone is not evidence that an idempotency or concurrency contract exists; blanket write-effect obligations are forbidden.
 - Project campaign contracts live in `ai_test_asset_center/campaign_api_contract.py` and are exposed only under `/api/v1`. Evaluation submissions must be Ground-Truth-free, pass `artifact_redactor.py`, and stay `NOT_MEASURED` until an external evaluator receipt is verified.
+- Python-module retirement uses the non-destructive strangler inventory in `ai_test_asset_center/architecture_inventory.py`, with roots and responsibility overrides in `ai_test_asset_center/architecture_roots.json`. Architecture counts are diagnostic only and must never become discovery-quality claims. No module may be deleted automatically: static unreachability, a complete supported-entrypoint runtime import trace, resolved dynamic-import uncertainty, passing tests, and manual deletion review are all required. The operating procedure lives in `docs/DISCOVERY_MODULE_STRANGLER.md`.
 
 ## Brand Direction Contract
 

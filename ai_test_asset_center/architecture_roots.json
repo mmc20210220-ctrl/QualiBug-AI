@@ -1,0 +1,63 @@
+{
+  "schema_version": "qualibug.architecture-roots.v1",
+  "package": "ai_test_asset_center",
+  "supported_roots": {
+    "product": [
+      "ai_test_asset_center.__main__",
+      "ai_test_asset_center.private_pilot_entrypoint",
+      "ai_test_asset_center.private_pilot_doctor",
+      "ai_test_asset_center.private_pilot_acceptance_smoke",
+      "ai_test_asset_center.real_project_discovery_with_chain",
+      "ai_test_asset_center.enterprise_pilot_runtime_with_chain"
+    ],
+    "evaluation": [
+      "ai_test_asset_center.discovery_policy_evaluation_runner",
+      "ai_test_asset_center.observed_product_scan_executor",
+      "ai_test_asset_center.discovery_evaluation_contract",
+      "tools.discovery_evaluation"
+    ],
+    "tooling": [
+      "aitestops.cli"
+    ]
+  },
+  "module_class_overrides": {
+    "ai_test_asset_center.discovery_mainline": "core",
+    "ai_test_asset_center.discovery_runtime": "core",
+    "ai_test_asset_center.behavior_ir": "core",
+    "ai_test_asset_center.obligation_compiler": "core",
+    "ai_test_asset_center.experiment_compiler": "core",
+    "ai_test_asset_center.experiment_executor": "core",
+    "ai_test_asset_center.contract_oracles": "core",
+    "ai_test_asset_center.customer_delivery_gate": "core",
+    "ai_test_asset_center.v12_pipeline": "compatibility",
+    "ai_test_asset_center.real_project_defect_discovery": "compatibility",
+    "ai_test_asset_center.real_project_discovery_with_chain": "compatibility"
+  },
+  "discovery_entrypoints": [
+    {
+      "name": "canonical_scan",
+      "module": "ai_test_asset_center.__main__",
+      "callable": "scan",
+      "status": "canonical"
+    },
+    {
+      "name": "private_pilot",
+      "module": "ai_test_asset_center.private_pilot_entrypoint",
+      "callable": "run_server",
+      "status": "adapter"
+    },
+    {
+      "name": "legacy_real_project_chain",
+      "module": "ai_test_asset_center.real_project_discovery_with_chain",
+      "callable": "main",
+      "status": "compatibility"
+    },
+    {
+      "name": "aitestops_discover",
+      "module": "aitestops.cli",
+      "callable": "cmd_discover",
+      "status": "deprecated"
+    }
+  ],
+  "oversized_line_threshold": 1500
+}
