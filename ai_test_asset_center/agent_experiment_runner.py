@@ -16,6 +16,7 @@ approval and safety-gate checks.
 
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any

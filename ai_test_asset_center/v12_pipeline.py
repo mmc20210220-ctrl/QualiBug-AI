@@ -2692,13 +2692,6 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
         # permission boundaries and historical-bug patterns drive the live test
         # plan. Additive only — when no asset exists the pipeline is unchanged.
         _permission_matrix: list[dict[str, Any]] = []
-        _behavior_ir: dict[str, Any] = {}
-        _obligation_compile: dict[str, Any] = {}
-        _experiment_compile: dict[str, Any] = {}
-        _obligation_plan: dict[str, Any] = {}
-        _adapter_matrix: dict[str, Any] = {}
-        _experiment_execution: dict[str, Any] = {}
-        _exp_by_obl: dict[str, dict[str, Any]] = {}
         try:
             from .enterprise_knowledge_center import (
                 build_enterprise_business_knowledge_asset,
@@ -2743,116 +2736,6 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 _enrich = _knowledge_asset_planning_text(_asset)
                 if _enrich:
                     prd_text = (prd_text or "") + "\n\n" + _enrich
-                # Phase 1–4 vertical slice: structured Behavior IR → obligations →
-                # experiments → adaptive plan on the real V12 main chain.
-                try:
-                    from .behavior_ir import behavior_ir_summary, build_behavior_ir_from_knowledge_asset
-                    from .obligation_compiler import compile_obligations_from_behavior_ir
-                    from .experiment_compiler import compile_experiments
-                    from .adaptive_discovery_planner import plan_obligation_round
-                    from .execution_adapter import build_adapter_capability_matrix
-                    from .policy_registry import get_policy_registry
-
-                    _env_type = str(
-                        _dict(context.get("runtime") or {}).get("environment_type")
-                        or context.get("environment_kind")
-                        or context.get("environment_type")
-                        or ""
-                    ).strip().lower()
-                    # Missing environment must fail closed — never default to "test".
-                    _behavior_ir = build_behavior_ir_from_knowledge_asset(
-                        _asset,
-                        project_id=project,
-                        source_snapshot_hash=str(
-                            _dict(context.get("source_manifest")).get("source_hash") or ""
-                        ),
-                        api_operations=_extract_api_operations_for_ir(
-                            submitted_api_spec_text or api_spec_text
-                        ),
-                        runtime_actors=_extract_runtime_actors_for_ir(root, project, context),
-                    )
-                    _obligation_compile = compile_obligations_from_behavior_ir(_behavior_ir)
-                    _experiment_compile = compile_experiments(
-                        list(_obligation_compile.get("obligations") or []),
-                        behavior_ir=_behavior_ir,
-                        environment_type=_env_type,
-                        policy_version=str(getattr(get_policy_registry().get_active(), "policy_version", "") or ""),
-                    )
-                    from .fixture_dag import attach_fixture_dag_to_experiments
-
-                    _experiment_compile = attach_fixture_dag_to_experiments(
-                        _experiment_compile,
-                        behavior_ir=_behavior_ir,
-                    )
-                    _exp_by_obl = {
-                        str(item.get("obligation_id") or ""): item
-                        for item in list(_experiment_compile.get("experiments") or [])
-                        if isinstance(item, dict)
-                    }
-                    _obligation_plan = plan_obligation_round(
-                        list(_obligation_compile.get("obligations") or []),
-                        experiments_by_obligation=_exp_by_obl,
-                        budget=int(_behavior_slice_settings().get("slice_budget") or 20),
-                    )
-                    _adapter_matrix = build_adapter_capability_matrix(
-                        ui_available=False,
-                        db_available=bool(str((__import__("os").environ.get("QUALIBUG_DB_DSN") or "")).strip()),
-                        log_available=False,
-                    )
-                    # Selected experiment → fixture → governed HTTP → observers →
-                    # typed assertions → contract oracle (every item gets a receipt).
-                    for _finding in list(_experiment_execution.get("findings") or []):
-                        if isinstance(_finding, dict):
-                            result["findings"].append(_finding)
-                    result["behavior_ir"] = {
-                        "summary": behavior_ir_summary(_behavior_ir),
-                        "model_id": _behavior_ir.get("model_id"),
-                        "schema_version": _behavior_ir.get("schema_version"),
-                        "coverage_gaps": list(_behavior_ir.get("coverage_gaps") or [])[:50],
-                    }
-                    result["test_obligations"] = {
-                        "count": int(_obligation_compile.get("obligation_count") or 0),
-                        "by_family": dict(_obligation_compile.get("by_family") or {}),
-                        "obligations": list(_obligation_compile.get("obligations") or [])[:200],
-                    }
-                    result["experiment_compile"] = {
-                        "compiled_count": int(_experiment_compile.get("compiled_count") or 0),
-                        "blocked_count": int(_experiment_compile.get("blocked_count") or 0),
-                        "block_reason_counts": dict(_experiment_compile.get("block_reason_counts") or {}),
-                        "experiments": list(_experiment_compile.get("experiments") or [])[:100],
-                        "blocked_experiments": list(_experiment_compile.get("blocked_experiments") or [])[:100],
-                    }
-                    result["obligation_plan"] = _obligation_plan
-                    result["experiment_execution"] = {
-                        "selected_count": int(_experiment_execution.get("selected_count") or 0),
-                        "executed_count": int(_experiment_execution.get("executed_count") or 0),
-                        "blocked_count": int(_experiment_execution.get("blocked_count") or 0),
-                        "harness_failure_count": int(_experiment_execution.get("harness_failure_count") or 0),
-                        "cleanup_failures": int(_experiment_execution.get("cleanup_failures") or 0),
-                        "every_experiment_has_receipt": bool(
-                            _experiment_execution.get("every_experiment_has_receipt")
-                        ),
-                        "results": list(_experiment_execution.get("results") or [])[:100],
-                    }
-                    result["execution_adapters"] = _adapter_matrix
-                    result["phases"]["behavior_ir"] = {
-                        "status": "completed",
-                        "model_id": _behavior_ir.get("model_id"),
-                        "obligation_count": int(_obligation_compile.get("obligation_count") or 0),
-                        "compiled_experiments": int(_experiment_compile.get("compiled_count") or 0),
-                        "blocked_experiments": int(_experiment_compile.get("blocked_count") or 0),
-                        "experiment_executed": int(_experiment_execution.get("executed_count") or 0),
-                        "experiment_blocked": int(_experiment_execution.get("blocked_count") or 0),
-                        "environment_type": _env_type or "MISSING",
-                    }
-                except Exception as _ir_exc:
-                    import sys as _sys
-                    _sys.stderr.write(f"[v12_behavior_ir] project={project} compile failed: {_ir_exc}\n")
-                    _sys.stderr.flush()
-                    result["phases"]["behavior_ir"] = {
-                        "status": "FAILED_SAFE",
-                        "error": f"{type(_ir_exc).__name__}: {str(_ir_exc)[:200]}",
-                    }
         except Exception as _ka_exc:
             import sys as _sys
             _sys.stderr.write(f"[v12_knowledge_asset] project={project} enrichment failed: {_ka_exc}\n")
@@ -2909,62 +2792,6 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 ).strip(),
             }
         result["runtime_contract"] = runtime_contract
-        if str(context.get("mainline_authority") or "") == "legacy_champion":
-            _behavior_ir = {}
-            _obligation_plan = {}
-            _experiment_execution = {}
-            result.pop("experiment_execution", None)
-        if _behavior_ir and _obligation_plan:
-            try:
-                from .experiment_executor import execute_selected_experiments
-
-                _experiment_execution = execute_selected_experiments(
-                    list(_obligation_plan.get("selected") or []),
-                    experiments_by_obligation=_exp_by_obl,
-                    behavior_ir=_behavior_ir,
-                    root=root,
-                    project=project,
-                    base_url=approved_base_url,
-                    runtime_contract=runtime_contract,
-                    campaign_id=campaign.campaign_id,
-                )
-                for _finding in list(_experiment_execution.get("findings") or []):
-                    if isinstance(_finding, dict):
-                        result["findings"].append(_finding)
-                result["experiment_execution"] = {
-                    "selected_count": int(_experiment_execution.get("selected_count") or 0),
-                    "executed_count": int(_experiment_execution.get("executed_count") or 0),
-                    "blocked_count": int(_experiment_execution.get("blocked_count") or 0),
-                    "harness_failure_count": int(
-                        _experiment_execution.get("harness_failure_count") or 0
-                    ),
-                    "cleanup_failures": int(_experiment_execution.get("cleanup_failures") or 0),
-                    "every_experiment_has_receipt": bool(
-                        _experiment_execution.get("every_experiment_has_receipt")
-                    ),
-                    "results": list(_experiment_execution.get("results") or [])[:100],
-                }
-                result["phases"]["behavior_ir"] = {
-                    **_dict(result["phases"].get("behavior_ir")),
-                    "status": "completed",
-                    "experiment_executed": int(
-                        _experiment_execution.get("executed_count") or 0
-                    ),
-                    "experiment_blocked": int(
-                        _experiment_execution.get("blocked_count") or 0
-                    ),
-                    "campaign_id": campaign.campaign_id,
-                }
-            except Exception as _ir_execution_exc:
-                result["phases"]["behavior_ir"] = {
-                    **_dict(result["phases"].get("behavior_ir")),
-                    "status": "FAILED_SAFE",
-                    "campaign_id": campaign.campaign_id,
-                    "error": (
-                        f"{type(_ir_execution_exc).__name__}: "
-                        f"{str(_ir_execution_exc)[:200]}"
-                    ),
-                }
         ranked_behavior_slices = list(behavior_contract["slices"])
         # ── Supplementary coverage: inject actor-aware / data-isolation /
         # concurrency / financial-integrity slices that the state-machine builder

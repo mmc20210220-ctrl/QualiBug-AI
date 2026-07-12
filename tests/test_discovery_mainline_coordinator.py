@@ -57,6 +57,18 @@ def test_v12_wrapper_delegates_once_and_has_no_runtime_fallback() -> None:
     assert source.count("run_discovery_mainline(") == 1
 
 
+def test_legacy_champion_domain_does_not_compile_or_execute_candidate_vertical_slice() -> None:
+    from ai_test_asset_center.v12_pipeline import _run_legacy_champion_domain
+
+    source = inspect.getsource(_run_legacy_champion_domain)
+
+    assert "build_behavior_ir_from_knowledge_asset" not in source
+    assert "compile_obligations_from_behavior_ir" not in source
+    assert "compile_experiments" not in source
+    assert "plan_obligation_round" not in source
+    assert "execute_selected_experiments" not in source
+
+
 def test_v12_rejects_missing_immutable_run_identity(tmp_path: Path) -> None:
     from ai_test_asset_center.v12_pipeline import run_v12_pipeline
 

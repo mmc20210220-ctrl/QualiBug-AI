@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -14,6 +15,10 @@ from ai_test_asset_center.private_pilot_server import (
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
 SERVER_ENTRYPOINT = ROOT / "ai_test_asset_center" / "private_pilot_server.py"
+PRIVATE_PILOT_ENTRYPOINT = ROOT / "ai_test_asset_center" / "private_pilot_entrypoint.py"
+SCAN_RESULT_REPAIR_PATCH = (
+    ROOT / "ai_test_asset_center" / "private_pilot_scan_result_repair_patch.py"
+)
 
 
 def _legacy_ready_but_business_unvalidated() -> dict:
@@ -67,6 +72,26 @@ def test_qualibug_server_entrypoint_uses_gate_patch_wrapper() -> None:
     assert "run_private_pilot_service()" in wrapper
     assert "serve_forever()" in wrapper
     assert "server_close()" in wrapper
+
+
+def test_private_pilot_entrypoint_has_no_post_projection_scan_repair_monkeypatch() -> None:
+    source = PRIVATE_PILOT_ENTRYPOINT.read_text(encoding="utf-8")
+
+    assert "install_scan_result_repair_patch" not in source
+    assert "restore_scan_result_repair_patch" not in source
+    assert "private_pilot_scan_result_repair_patch" not in source
+    assert SCAN_RESULT_REPAIR_PATCH.exists() is False
+
+
+def test_canonical_scan_defines_ui_evidence_before_persistence_and_har_bridge() -> None:
+    from ai_test_asset_center import __main__ as scanner
+
+    source = inspect.getsource(scanner.scan)
+    ui_index = source.index('ui_execution = _as_dict(v12.get("ui_execution"))')
+    persistence_index = source.index("evidence_bundle = _persist_execution_evidence(")
+    bridge_index = source.index("bridge_browser_har_to_findings(")
+
+    assert ui_index < persistence_index < bridge_index
 
 
 def test_private_pilot_server_legacy_run_server_starts_private_pilot_service(monkeypatch) -> None:

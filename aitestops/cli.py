@@ -118,20 +118,25 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
-    """Run the autonomous bug discovery engine from the public CLI."""
-    from ai_test_asset_center.discovery_engine import run_discovery
-
-    result = run_discovery(
-        prd_path=args.prd,
-        api_path=args.api,
-        base_url=args.base_url,
-    )
+    """Reject the retired discovery side path with a stable migration receipt."""
+    result = {
+        "status": "DEPRECATED_COMMAND",
+        "reason_code": "DISCOVERY_MAINLINE_REQUIRED",
+        "independent_discovery_executed": False,
+        "canonical_entrypoint": "ai_test_asset_center scan",
+        "detail": (
+            "aitestops discover was an independent finding/oracle path and is "
+            "retired; use the source-bound scan API or private-pilot campaign "
+            "entrypoint so one mainline authority, target policy, attempt ledger, "
+            "and delivery gate govern the run"
+        ),
+    }
     if args.out:
         out = Path(args.out).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    return 0 if result.get("runtime_status") == "OK" else 1
+    return 2
 
 def cmd_self_evolve(args: argparse.Namespace) -> int:
     """Run one supervised QualiBug self-evolution worker."""
@@ -537,10 +542,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor", help="Check local and LLM configuration")
     doctor.set_defaults(func=cmd_doctor)
 
-    discover = subparsers.add_parser("discover", help="Run autonomous bug discovery from PRD/API docs")
+    discover = subparsers.add_parser("discover", help="Deprecated: use the source-bound mainline scan entrypoint")
     discover.add_argument("--prd", required=True, help="Path to PRD/business requirement text")
     discover.add_argument("--api", required=True, help="Path to API/OpenAPI contract text")
-    discover.add_argument("--base-url", default="http://127.0.0.1:8000/api", help="Target API base URL")
+    discover.add_argument("--base-url", default="", help="Deprecated compatibility argument")
     discover.add_argument("--out", default="", help="Optional JSON output path")
     discover.set_defaults(func=cmd_discover)
 
