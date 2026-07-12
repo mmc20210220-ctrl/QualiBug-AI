@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_test_asset_center.discovery_mainline_contract import validate_mainline_run_contract
 from ai_test_asset_center.observed_product_scan_executor import (
     PRODUCT_SCAN_CONTEXT_SCHEMA,
     PRODUCT_SCAN_INPUT_SCHEMA,
@@ -98,6 +99,7 @@ def test_executor_calls_real_scan_entrypoint_with_runtime_only_artifacts(monkeyp
         operational_metrics_collector=_operational_metrics,
     )
     strategy = StrategyBundle()
+    strategy.execution.mainline_authority = "experiment_candidate"
 
     with policy_strategy_override(strategy):
         result = executor(
@@ -105,6 +107,7 @@ def test_executor_calls_real_scan_entrypoint_with_runtime_only_artifacts(monkeyp
             campaign_id="campaign-1",
             policy_id="policy-1",
             policy_version="v1",
+            mainline_authority="experiment_candidate",
             evaluation_mode="shadow",
             fixture_preparation_receipt={"audit_receipt_id": "fixture-audit-1"},
         )
@@ -118,6 +121,69 @@ def test_executor_calls_real_scan_entrypoint_with_runtime_only_artifacts(monkeyp
     assert result["estimated_metrics_used"] is False
     assert result["customer_outputs_published"] is False
     assert result["input_fingerprint"] == hashlib.sha256(artifacts["input"].read_bytes()).hexdigest()
+    mainline_run = validate_mainline_run_contract(result["mainline_run"])
+    assert mainline_run["mainline_authority"] == "experiment_candidate"
+    assert mainline_run["run_id"] == "real-scan-1"
+    assert mainline_run["environment_id"] == "http://127.0.0.1:8011"
+    assert calls[0]["campaign_context"]["mainline_authority"] == "experiment_candidate"
+
+
+def test_executor_rejects_missing_mainline_authority_before_scan(monkeypatch, tmp_path: Path) -> None:
+    artifacts = _artifacts(tmp_path)
+    called = False
+
+    def scan(**kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr("ai_test_asset_center.__main__.scan", scan)
+    executor = ObservedProductScanExecutor(
+        workspace_root=tmp_path,
+        operational_metrics_collector=_operational_metrics,
+    )
+
+    with pytest.raises(PolicyEvaluationRunnerError, match="mainline_authority"):
+        executor(
+            runtime_view=artifacts["runtime_view"],
+            campaign_id="campaign-1",
+            policy_id="policy-1",
+            policy_version="v1",
+            evaluation_mode="shadow",
+            fixture_preparation_receipt={"audit_receipt_id": "fixture-audit-1"},
+        )
+
+    assert called is False
+
+
+def test_executor_rejects_authority_that_differs_from_effective_policy(monkeypatch, tmp_path: Path) -> None:
+    artifacts = _artifacts(tmp_path)
+    called = False
+
+    def scan(**kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr("ai_test_asset_center.__main__.scan", scan)
+    executor = ObservedProductScanExecutor(
+        workspace_root=tmp_path,
+        operational_metrics_collector=_operational_metrics,
+    )
+
+    with policy_strategy_override(StrategyBundle()):
+        with pytest.raises(PolicyEvaluationRunnerError, match="effective policy"):
+            executor(
+                runtime_view=artifacts["runtime_view"],
+                campaign_id="campaign-1",
+                policy_id="policy-1",
+                policy_version="v1",
+                mainline_authority="experiment_candidate",
+                evaluation_mode="shadow",
+                fixture_preparation_receipt={"audit_receipt_id": "fixture-audit-1"},
+            )
+
+    assert called is False
 
 
 def test_executor_rejects_context_artifact_with_ground_truth_key_before_scan(monkeypatch, tmp_path: Path) -> None:
@@ -141,6 +207,7 @@ def test_executor_rejects_context_artifact_with_ground_truth_key_before_scan(mon
             campaign_id="campaign-1",
             policy_id="policy-1",
             policy_version="v1",
+            mainline_authority="legacy_champion",
             evaluation_mode="replay",
             fixture_preparation_receipt={"audit_receipt_id": "fixture-audit-1"},
         )

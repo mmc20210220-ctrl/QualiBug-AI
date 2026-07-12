@@ -17,6 +17,7 @@ from ai_test_asset_center.discovery_policy_evaluation_runner import (
     PolicyEvaluationRunnerError,
     strategy_fingerprint,
 )
+from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
 from ai_test_asset_center.autonomous_evolution_orchestrator import EvolutionOrchestrator
 from ai_test_asset_center.policy_registry import PolicyRecord, PolicyRegistry, StrategyBundle
 
@@ -132,6 +133,7 @@ def _policies() -> tuple[PolicyRecord, PolicyRecord]:
     champion_strategy = StrategyBundle()
     challenger_strategy = StrategyBundle()
     challenger_strategy.execution.cleanup_retry_count = 2
+    challenger_strategy.execution.mainline_authority = "experiment_candidate"
     champion = PolicyRecord(
         policy_id="champion",
         policy_version="v1",
@@ -207,26 +209,41 @@ class RecordingScanExecutor:
         policy_strategies: dict[str, StrategyBundle],
         *,
         publish_shadow: bool = False,
+        returned_authority_override: str = "",
     ) -> None:
         self.manifest = load_evaluation_manifest(manifest_path)
         self.policy_strategies = policy_strategies
         self.champion_policy_id, self.challenger_policy_id = tuple(policy_strategies)
         self.publish_shadow = publish_shadow
+        self.returned_authority_override = returned_authority_override
         self.calls: list[tuple[str, str, str]] = []
+        self.authority_calls: list[tuple[str, str, str]] = []
 
     def __call__(self, **kwargs: Any) -> dict[str, Any]:
         target_id = kwargs["runtime_view"]["target"]["target_id"]
         policy_id = kwargs["policy_id"]
         mode = kwargs["evaluation_mode"]
+        authority = kwargs["mainline_authority"]
         self.calls.append((mode, policy_id, target_id))
+        self.authority_calls.append((mode, policy_id, authority))
         fingerprints = self.manifest.target_fingerprints[target_id]
         seeded = target_id != "clean"
         champion_finds = policy_id == self.champion_policy_id and target_id == "held-in"
         challenger_finds = policy_id == self.challenger_policy_id
         findings = [_finding(target_id)] if seeded and (challenger_finds or champion_finds) else []
+        run_id = f"run-{len(self.calls)}-{mode}-{policy_id}-{target_id}"
+        mainline_run = build_mainline_run_contract(
+            mainline_authority=self.returned_authority_override or authority,
+            run_id=run_id,
+            campaign_id=kwargs["campaign_id"],
+            target_id=target_id,
+            environment_id=kwargs["runtime_view"]["target"]["runtime"]["environment_ref"],
+            policy_version=kwargs["policy_version"],
+            evaluation_mode=mode,
+        )
         return {
             "schema_version": SCAN_RESULT_SCHEMA,
-            "run_id": f"run-{len(self.calls)}-{mode}-{policy_id}-{target_id}",
+            "run_id": run_id,
             "target_id": target_id,
             "campaign_id": kwargs["campaign_id"],
             "policy_id": policy_id,
@@ -235,6 +252,7 @@ class RecordingScanExecutor:
             "execution_kind": "observed",
             "estimated_metrics_used": False,
             "customer_outputs_published": self.publish_shadow if mode == "shadow" else False,
+            "mainline_run": mainline_run,
             "effective_strategy_fingerprint": strategy_fingerprint(self.policy_strategies[policy_id]),
             "fixture_audit_receipt_id": kwargs["fixture_preparation_receipt"]["audit_receipt_id"],
             **{field: fingerprints[field] for field in (
@@ -266,6 +284,7 @@ def _runner(
     *,
     fail_cleanup_target: str = "",
     publish_shadow: bool = False,
+    returned_authority_override: str = "",
 ) -> tuple[DiscoveryPolicyEvaluationRunner, RecordingFixtureController, RecordingScanExecutor, PolicyRecord, PolicyRecord]:
     manifest_path = _manifest(tmp_path)
     champion, challenger = _policies()
@@ -274,6 +293,7 @@ def _runner(
         manifest_path,
         {champion.policy_id: champion.strategy, challenger.policy_id: challenger.strategy},
         publish_shadow=publish_shadow,
+        returned_authority_override=returned_authority_override,
     )
     runner = DiscoveryPolicyEvaluationRunner(
         manifest_path,
@@ -300,6 +320,36 @@ def test_runner_executes_every_target_four_times_and_never_activates_candidate(t
     assert result["promotion_decision"]["promote"] is True
     assert challenger.status == "candidate"
     assert Path(result["comparison_ref"]).is_file()
+
+
+def test_runner_binds_each_policy_mainline_authority_before_scan(tmp_path: Path) -> None:
+    runner, _, executor, champion, challenger = _runner(tmp_path)
+
+    runner.run(champion=champion, challenger=challenger, evaluation_id="authority-binding")
+
+    assert len(executor.authority_calls) == 20
+    assert {
+        authority
+        for _, policy_id, authority in executor.authority_calls
+        if policy_id == champion.policy_id
+    } == {"legacy_champion"}
+    assert {
+        authority
+        for _, policy_id, authority in executor.authority_calls
+        if policy_id == challenger.policy_id
+    } == {"experiment_candidate"}
+
+
+def test_runner_rejects_scan_contract_from_different_mainline_authority(tmp_path: Path) -> None:
+    runner, controller, _, champion, challenger = _runner(
+        tmp_path,
+        returned_authority_override="legacy_champion",
+    )
+
+    with pytest.raises(PolicyEvaluationRunnerError, match="mainline authority mismatch"):
+        runner.run(champion=champion, challenger=challenger, evaluation_id="authority-mismatch")
+
+    assert len(controller.cleanup_calls) == 6
 
 
 def test_runner_fails_closed_when_governed_cleanup_does_not_restore_target(tmp_path: Path) -> None:

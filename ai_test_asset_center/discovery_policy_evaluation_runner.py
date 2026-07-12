@@ -30,6 +30,10 @@ from .discovery_evaluation_contract import (
     persist_evaluation_report,
     policy_metrics_from_evaluation_reports,
 )
+from .discovery_mainline_contract import (
+    MainlineContractError,
+    validate_mainline_run_contract,
+)
 from .policy_evaluation_gate import PolicyPromotionGate
 from .policy_registry import PolicyRecord, StrategyBundle
 from .policy_wiring import policy_strategy_override
@@ -76,6 +80,7 @@ class ObservedScanExecutor(Protocol):
         campaign_id: str,
         policy_id: str,
         policy_version: str,
+        mainline_authority: str,
         evaluation_mode: str,
         fixture_preparation_receipt: dict[str, Any],
     ) -> dict[str, Any]: ...
@@ -318,6 +323,7 @@ class DiscoveryPolicyEvaluationRunner:
                         campaign_id=campaign_id,
                         policy_id=policy.policy_id,
                         policy_version=policy.policy_version,
+                        mainline_authority=policy.strategy.execution.mainline_authority,
                         evaluation_mode=evaluation_mode,
                         fixture_preparation_receipt=preparation,
                     )
@@ -369,6 +375,7 @@ class DiscoveryPolicyEvaluationRunner:
                 scan_output,
                 policy=policy,
                 target_id=target.target_id,
+                environment_id=target.environment_ref,
                 campaign_id=campaign_id,
                 evaluation_mode=evaluation_mode,
                 expected_fingerprints=expected,
@@ -492,6 +499,7 @@ class DiscoveryPolicyEvaluationRunner:
         *,
         policy: PolicyRecord,
         target_id: str,
+        environment_id: str,
         campaign_id: str,
         evaluation_mode: str,
         expected_fingerprints: dict[str, str],
@@ -519,11 +527,39 @@ class DiscoveryPolicyEvaluationRunner:
         for field, value in expected.items():
             if output.get(field) != value:
                 raise PolicyEvaluationRunnerError(f"scan output {field} mismatch for {target_id}")
-        _required_text(output.get("run_id"), "scan_output.run_id")
+        run_id = _required_text(output.get("run_id"), "scan_output.run_id")
+        try:
+            mainline_run = validate_mainline_run_contract(dict(output.get("mainline_run") or {}))
+        except MainlineContractError as exc:
+            raise PolicyEvaluationRunnerError(
+                f"scan output mainline contract invalid for {target_id}: {exc}"
+            ) from exc
+        contract_expected = {
+            "mainline_authority": policy.strategy.execution.mainline_authority,
+            "run_id": run_id,
+            "campaign_id": campaign_id,
+            "target_id": target_id,
+            "environment_id": environment_id,
+            "policy_version": policy.policy_version,
+            "evaluation_mode": evaluation_mode,
+        }
+        for field, value in contract_expected.items():
+            if mainline_run[field] != value:
+                if field == "mainline_authority":
+                    raise PolicyEvaluationRunnerError(
+                        f"scan output mainline authority mismatch for {target_id}"
+                    )
+                raise PolicyEvaluationRunnerError(
+                    f"scan output mainline contract {field} mismatch for {target_id}"
+                )
         if output.get("execution_kind") != "observed" or output.get("estimated_metrics_used") is not False:
             raise PolicyEvaluationRunnerError("estimated or non-observed scan output cannot be promotion evidence")
-        if evaluation_mode == "shadow" and output.get("customer_outputs_published") is not False:
-            raise PolicyEvaluationRunnerError("shadow evaluation must not publish customer outputs")
+        if output.get("customer_outputs_published") is not mainline_run["customer_outputs_published"]:
+            if evaluation_mode == "shadow":
+                raise PolicyEvaluationRunnerError("shadow evaluation must not publish customer outputs")
+            raise PolicyEvaluationRunnerError(
+                f"scan output customer publication scope mismatch for {target_id}"
+            )
         for field in ("findings", "candidates"):
             if not isinstance(output.get(field), list):
                 raise PolicyEvaluationRunnerError(f"scan output {field} must be a list")

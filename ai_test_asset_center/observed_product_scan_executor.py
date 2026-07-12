@@ -9,6 +9,11 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
+from .discovery_mainline_contract import (
+    MAINLINE_AUTHORITIES,
+    MainlineContractError,
+    build_mainline_run_contract,
+)
 from .discovery_policy_evaluation_runner import (
     SCAN_RESULT_SCHEMA,
     PolicyEvaluationRunnerError,
@@ -92,6 +97,15 @@ class ObservedProductScanExecutor:
         runtime_view = kwargs.get("runtime_view")
         if not isinstance(runtime_view, dict) or _has_private_key(runtime_view):
             raise PolicyEvaluationRunnerError("product scan runtime view is invalid or leaks evaluator data")
+        mainline_authority = str(kwargs.get("mainline_authority") or "").strip()
+        if mainline_authority not in MAINLINE_AUTHORITIES:
+            reason = "missing" if not mainline_authority else f"invalid:{mainline_authority}"
+            raise PolicyEvaluationRunnerError(f"mainline_authority {reason}")
+        effective_strategy = get_effective_policy_strategy()
+        if effective_strategy.execution.mainline_authority != mainline_authority:
+            raise PolicyEvaluationRunnerError(
+                "mainline_authority does not match the effective policy strategy"
+            )
         target = runtime_view.get("target") if isinstance(runtime_view.get("target"), dict) else {}
         runtime = target.get("runtime") if isinstance(target.get("runtime"), dict) else {}
         input_path, input_bundle = _load_json(runtime.get("input_bundle_ref"), "input_bundle_ref")
@@ -143,6 +157,7 @@ class ObservedProductScanExecutor:
             "target_environment": str(runtime.get("environment_type") or ""),
             "environment_kind": str(runtime.get("environment_type") or ""),
             "policy_id": policy_id,
+            "mainline_authority": mainline_authority,
             "evaluation_mode": evaluation_mode,
             "fixture_audit_receipt_id": str(
                 (kwargs.get("fixture_preparation_receipt") or {}).get("audit_receipt_id") or ""
@@ -192,9 +207,22 @@ class ObservedProductScanExecutor:
             ).hexdigest(),
             "context_fingerprint": hashlib.sha256(context_path.read_bytes()).hexdigest(),
         }
+        run_id = str(scan_result.get("scan_id") or campaign_id)
+        try:
+            mainline_run = build_mainline_run_contract(
+                mainline_authority=mainline_authority,
+                run_id=run_id,
+                campaign_id=campaign_id,
+                target_id=str(target.get("target_id") or ""),
+                environment_id=str(runtime.get("environment_ref") or "").strip(),
+                policy_version=str(kwargs.get("policy_version") or ""),
+                evaluation_mode=evaluation_mode,
+            )
+        except MainlineContractError as exc:
+            raise PolicyEvaluationRunnerError(f"product scan mainline contract invalid: {exc}") from exc
         return {
             "schema_version": SCAN_RESULT_SCHEMA,
-            "run_id": str(scan_result.get("scan_id") or campaign_id),
+            "run_id": run_id,
             "target_id": str(target.get("target_id") or ""),
             "campaign_id": campaign_id,
             "policy_id": policy_id,
@@ -202,8 +230,9 @@ class ObservedProductScanExecutor:
             "evaluation_mode": evaluation_mode,
             "execution_kind": "observed",
             "estimated_metrics_used": False,
-            "customer_outputs_published": False,
-            "effective_strategy_fingerprint": strategy_fingerprint(get_effective_policy_strategy()),
+            "customer_outputs_published": mainline_run["customer_outputs_published"],
+            "mainline_run": mainline_run,
+            "effective_strategy_fingerprint": strategy_fingerprint(effective_strategy),
             "fixture_audit_receipt_id": str(
                 (kwargs.get("fixture_preparation_receipt") or {}).get("audit_receipt_id") or ""
             ),

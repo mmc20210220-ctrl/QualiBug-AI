@@ -202,6 +202,8 @@ class ExecutionPolicy:
     ])
     require_cleanup_receipt: bool = True
     persist_cross_round_traces: bool = True
+    # Frozen before a run. Runtime errors must never switch this authority.
+    mainline_authority: str = "legacy_champion"
 
     def __post_init__(self) -> None:
         self.max_requests = max(1, min(int(self.max_requests or 1), 1000))
@@ -243,6 +245,9 @@ class ExecutionPolicy:
         ))
         self.require_cleanup_receipt = True
         self.persist_cross_round_traces = True
+        self.mainline_authority = str(self.mainline_authority or "").strip()
+        if self.mainline_authority not in {"legacy_champion", "experiment_candidate"}:
+            raise ValueError(f"invalid mainline_authority: {self.mainline_authority}")
         deployment_mode = str(self.deployment_mode or "private_deployment").strip().lower()
         self.deployment_mode = deployment_mode if deployment_mode in {"private_deployment", "public_saas", "dedicated_cloud"} else "private_deployment"
         learning_sync_mode = str(self.learning_sync_mode or "local_only").strip().lower()
