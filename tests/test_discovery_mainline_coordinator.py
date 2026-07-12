@@ -326,6 +326,26 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
     assert result["discovery_funnel"]["pipeline_health"]["status"] == "OK"
 
 
+def test_candidate_authority_projects_semantic_deliverable_to_shadow_terminal() -> None:
+    from ai_test_asset_center.discovery_runtime import _project_gate_results_for_authority
+
+    projected = _project_gate_results_for_authority(
+        gate_results={
+            "obl-1": {
+                "status": "DELIVERABLE",
+                "finding_id": "finding-1",
+                "gate_receipt_id": "gate-1",
+            }
+        },
+        contract=_contract("experiment_candidate"),
+    )
+
+    assert projected["obl-1"]["status"] == "REJECTED"
+    assert projected["obl-1"]["reason_code"] == "SHADOW_AUTHORITY_NOT_PUBLISHED"
+    assert projected["obl-1"]["semantic_status"] == "DELIVERABLE"
+    assert "finding_id" not in projected["obl-1"]
+
+
 def test_campaign_identity_exists_before_planning_and_execution() -> None:
     from ai_test_asset_center.discovery_mainline import run_discovery_mainline
 

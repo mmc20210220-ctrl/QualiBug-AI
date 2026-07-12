@@ -450,6 +450,35 @@ def _authority_findings(
     return deliverable, candidates, shadow
 
 
+def _project_gate_results_for_authority(
+    *,
+    gate_results: dict[str, dict[str, Any]],
+    contract: MainlineRunContract,
+) -> dict[str, dict[str, Any]]:
+    """Project semantic gates into the selected authority's terminal scope."""
+    projected = {
+        _text(obligation_id): dict(receipt)
+        for obligation_id, receipt in gate_results.items()
+        if _text(obligation_id) and isinstance(receipt, dict)
+    }
+    if contract["customer_outputs_published"]:
+        return projected
+    for obligation_id, receipt in projected.items():
+        if _text(receipt.get("status")).upper() != "DELIVERABLE":
+            continue
+        semantic_finding_id = _text(receipt.pop("finding_id", ""))
+        receipt.update({
+            "status": "REJECTED",
+            "reason_code": "SHADOW_AUTHORITY_NOT_PUBLISHED",
+            "semantic_status": "DELIVERABLE",
+        })
+        if semantic_finding_id:
+            receipt["shadow_finding_fingerprint"] = hashlib.sha256(
+                semantic_finding_id.encode("utf-8")
+            ).hexdigest()[:16]
+    return projected
+
+
 def _finalize_campaign(handle: Any, ledger: dict[str, Any]) -> dict[str, Any]:
     campaign = _campaign_object(handle)
     campaign.record_obligation_attempt_ledger(ledger)
@@ -521,6 +550,10 @@ def run_experiment_candidate(
         for key, value in _dict(batch.get("gate_results")).items()
         if _text(key) and isinstance(value, dict)
     }
+    gate_results = _project_gate_results_for_authority(
+        gate_results=gate_results,
+        contract=plan.mainline_run,
+    )
     selected_rows = _selected_rows(plan)
     _manual_terminal_receipts(
         selected_rows=selected_rows,
