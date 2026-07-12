@@ -2529,7 +2529,8 @@ def run_v12_pipeline(
     _require_mainline_identity(context)
     submitted_api_spec_text = str(api_spec_text or "")
     context.setdefault("_source_verification_text", submitted_api_spec_text)
-    _, source_issues = _source_manifest_details(context, submitted_api_spec_text)
+    source_verification_text = context["_source_verification_text"]
+    _, source_issues = _source_manifest_details(context, source_verification_text)
     if source_issues:
         raise MainlineContractError(
             "source_identity_invalid:" + ",".join(sorted(source_issues))

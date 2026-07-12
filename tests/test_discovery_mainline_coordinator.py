@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import inspect
@@ -101,6 +102,50 @@ def test_experiment_candidate_returns_attempt_authoritative_result(tmp_path: Pat
     assert result["obligation_attempt_ledger"]["complete"] is True
     assert result["discovery_funnel"]["receipt_authority"] == "obligation_attempt_ledger"
     assert result["formal_count_projection"]["formal_finding_ids"] == []
+
+
+def test_v12_validates_primary_source_before_using_enriched_api_document(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+    from ai_test_asset_center.v12_pipeline import run_v12_pipeline
+
+    primary = API_SPEC
+    enriched = json.dumps({
+        "openapi": "3.0.0",
+        "paths": {
+            "/resources": {"get": {"operationId": "listResources"}},
+            "/resources/{id}": {"get": {"operationId": "getResource"}},
+        },
+    })
+    manifest = register_source_asset(
+        "project-enriched-source",
+        "primary-api-contract",
+        primary,
+        source_type="openapi",
+        root=tmp_path,
+    )
+
+    result = run_v12_pipeline(
+        "project-enriched-source",
+        tmp_path,
+        api_spec_text=enriched,
+        campaign_context={
+            "mainline_authority": "experiment_candidate",
+            "run_id": "RUN-ENRICHED-SOURCE",
+            "target_id": "TARGET-ENRICHED-SOURCE",
+            "environment_id": "ENV-ENRICHED-SOURCE",
+            "environment_ref": "ENV-ENRICHED-SOURCE",
+            "environment_type": "test",
+            "scope_id": "scope-enriched-source",
+            "policy_version": "policy-enriched-source",
+            "evaluation_mode": "operational",
+            "source_manifest": manifest,
+            "_source_verification_text": primary,
+        },
+    )
+
+    assert result["mainline_run"]["run_id"] == "RUN-ENRICHED-SOURCE"
 
 
 def test_candidate_accounts_for_compiled_obligation_when_runtime_is_plan_only(
