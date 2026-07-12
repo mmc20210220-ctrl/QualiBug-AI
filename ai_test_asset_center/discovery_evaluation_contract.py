@@ -643,7 +643,11 @@ def _aggregate_operational(receipts: list[dict[str, Any]]) -> dict[str, Any]:
     for receipt in receipts:
         raw = receipt.get("operational_metrics")
         raw = raw if isinstance(raw, dict) else {}
-        missing_fields = [field for field in _REQUIRED_OPERATIONAL_FIELDS if field not in raw]
+        missing_fields = [
+            field
+            for field in _REQUIRED_OPERATIONAL_FIELDS
+            if field not in raw or raw[field] is None
+        ]
         if missing_fields:
             missing.append({"target_id": receipt.get("target_id"), "fields": missing_fields})
             continue

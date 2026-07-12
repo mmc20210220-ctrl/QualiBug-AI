@@ -319,6 +319,57 @@ def test_failed_pipeline_is_not_reported_as_zero_bug_or_zero_false_positive(tmp_
     assert "held-in" in {item["target_id"] for item in report["not_measured_targets"]}
 
 
+def test_not_measured_operational_nulls_remain_unknown_during_aggregation(tmp_path: Path) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    operational_metrics = {
+        **{field: None for field in (
+            "wall_clock_seconds",
+            "estimated_cost_usd",
+            "request_count",
+            "cleanup_failures",
+            "dirty_test_environments",
+            "execution_success_rate",
+            "engine_success_rate",
+            "duplicate_rate",
+        )},
+        "production_http_requests": 0,
+        "safety_incidents": 0,
+        "measurement_status": "NOT_MEASURED",
+    }
+    receipt = evaluate_completed_scan(
+        manifest,
+        "held-in",
+        run_id="blocked-run",
+        policy_id="policy-candidate",
+        evaluation_mode="shadow",
+        findings=[],
+        candidates=[],
+        pipeline_health={"status": "BLOCKED"},
+        operational_metrics=operational_metrics,
+    )
+
+    report = aggregate_evaluation_receipts(manifest, [receipt])
+
+    assert report["claim_status"] == "NOT_MEASURED"
+    assert report["operational"]["complete"] is False
+    assert report["operational"]["total_estimated_cost_usd"] is None
+    assert report["operational"]["cost_per_true_positive_usd"] is None
+    missing = report["operational"]["missing_fields"]
+    assert missing == [{
+        "target_id": "held-in",
+        "fields": [
+            "wall_clock_seconds",
+            "estimated_cost_usd",
+            "request_count",
+            "cleanup_failures",
+            "dirty_test_environments",
+            "execution_success_rate",
+            "engine_success_rate",
+            "duplicate_rate",
+        ],
+    }]
+
+
 def test_private_evaluator_reports_per_bug_first_loss_stage(tmp_path: Path) -> None:
     manifest = load_evaluation_manifest(_manifest(tmp_path))
     receipt = evaluate_completed_scan(
