@@ -184,7 +184,8 @@ def test_candidate_accounts_for_compiled_obligation_when_runtime_is_plan_only(
                 {
                     "role": "restricted",
                     "resource": "/resources",
-                    "actions": [],
+                    "actions": ["read"],
+                    "decision": "deny",
                     "scope": "own",
                     "source_id": "permission-source",
                 },
@@ -252,7 +253,8 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
                 {
                     "role": "restricted",
                     "resource": "/resources",
-                    "actions": [],
+                    "actions": ["read"],
+                    "decision": "deny",
                     "scope": "own",
                     "source_id": "permission-source",
                 },

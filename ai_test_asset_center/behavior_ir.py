@@ -27,6 +27,7 @@ ALLOWED_RELATION_TYPES = frozenset({
     "conserves",
     "observes",
     "compensates",
+    "permission_unknown",
 })
 _DERIVATIONS = {"explicit", "schema-derived", "runtime-observed", "model-inferred"}
 _STATUSES = {"accepted", "conflicting", "unsupported", "unknown"}
@@ -96,6 +97,25 @@ _METHOD_ACTIONS = {
     "PATCH": {"patch", "update", "modify", "write"},
     "DELETE": {"delete", "remove", "write"},
 }
+_UNIVERSAL_ACTIONS = {
+    "*",
+    "all",
+    "any",
+    "full_access",
+    "manage",
+    "administer",
+}
+_PERMIT_DECISIONS = {"allow", "allowed", "grant", "granted", "permit", "permitted"}
+_DENY_DECISIONS = {
+    "deny",
+    "denied",
+    "forbid",
+    "forbidden",
+    "not_allow",
+    "not_allowed",
+    "prohibit",
+    "prohibited",
+}
 
 
 def _path_shape(value: Any) -> str:
@@ -131,12 +151,72 @@ def _resource_matches_operation(resource: Any, operation: dict[str, Any]) -> boo
     return bool(resource_tokens and resource_tokens.intersection(operation_tokens))
 
 
-def _permission_allows_operation(actions: list[Any], operation: dict[str, Any]) -> bool:
+def _normalize_action(value: Any) -> str:
+    return re.sub(r"[\s\-]+", "_", _text(value).lower())
+
+
+def _actions_match_operation(actions: list[Any], operation: dict[str, Any]) -> bool:
     normalized = {_text(action).lower() for action in actions if _text(action)}
-    if normalized.intersection({"*", "all", "any"}):
+    normalized = {_normalize_action(action) for action in normalized}
+    if normalized.intersection(_UNIVERSAL_ACTIONS):
         return True
     method = _text(operation.get("method")).upper()
     return bool(normalized.intersection(_METHOD_ACTIONS.get(method, {method.lower()})))
+
+
+def _declared_permission_polarity(row: dict[str, Any]) -> str:
+    raw_decision = _normalize_action(
+        row.get("decision")
+        or row.get("effect")
+        or row.get("outcome")
+        or row.get("access")
+    )
+    if row.get("allowed") is False:
+        return "DENY"
+    if row.get("allowed") is True:
+        return "PERMIT"
+    if raw_decision in _DENY_DECISIONS:
+        return "DENY"
+    if raw_decision in _PERMIT_DECISIONS:
+        return "PERMIT"
+    return ""
+
+
+def _permission_row_decision(
+    row: dict[str, Any],
+    operation: dict[str, Any],
+) -> str:
+    """Return PERMIT, DENY, or UNKNOWN from explicit permission evidence.
+
+    An omitted action is not evidence of a denial. A caller may opt into
+    closed-world semantics only through an explicit policy declaration.
+    """
+
+    denied_actions = _list(
+        row.get("denied_actions")
+        or row.get("forbidden_actions")
+        or row.get("prohibited_actions")
+    )
+    if denied_actions and _actions_match_operation(denied_actions, operation):
+        return "DENY"
+
+    declared_polarity = _declared_permission_polarity(row)
+
+    actions = _list(row.get("actions"))
+    if not actions and _text(row.get("action")):
+        actions = [row.get("action")]
+
+    if declared_polarity == "DENY":
+        return "DENY" if not actions or _actions_match_operation(actions, operation) else "UNKNOWN"
+    raw_decision = _normalize_action(
+        row.get("decision")
+        or row.get("effect")
+        or row.get("outcome")
+        or row.get("access")
+    )
+    if raw_decision and not declared_polarity:
+        return "UNKNOWN"
+    return "PERMIT" if _actions_match_operation(actions, operation) else "UNKNOWN"
 
 
 def _relation_node(
@@ -151,6 +231,9 @@ def _relation_node(
     source_refs: list[dict[str, Any]] | None = None,
     confidence: float = 0.8,
     derivation: str = "schema-derived",
+    status: str = "accepted",
+    permission_decision: str = "",
+    source_relationship_ref: str = "",
 ) -> dict[str, Any]:
     return _fact_node(
         node_id=_stable_id("rel", relation_type, from_ref, to_ref, operation_ref, actor_ref),
@@ -162,10 +245,13 @@ def _relation_node(
             "actor_ref": actor_ref,
             "preconditions": list(preconditions or []),
             "effects": list(effects or []),
+            "permission_decision": _text(permission_decision),
+            "source_relationship_ref": _text(source_relationship_ref),
         },
         source_refs=source_refs,
         confidence=confidence,
         derivation=derivation,
+        status=status,
     )
 
 
@@ -191,9 +277,23 @@ def _fact_node(
     }
 
 
+def _dedupe_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for node in nodes:
+        node_id = _text(node.get("id"))
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        result.append(node)
+    return result
+
+
 def _derive_permission_relations(
     model: dict[str, Any],
     permission_rows: list[Any],
+    *,
+    closed_world: bool = False,
 ) -> list[dict[str, Any]]:
     actors_by_role: dict[str, list[dict[str, Any]]] = {}
     for actor in _list(model.get("actors")):
@@ -226,11 +326,27 @@ def _derive_permission_relations(
             ]
             if not matching_rows:
                 continue
-            permitted = any(
-                _permission_allows_operation(_list(row.get("actions")), operation)
+            row_decisions = {
+                _permission_row_decision(row, operation)
                 for row in matching_rows
-            )
-            relation_type = "permits" if permitted else "denies"
+            }
+            explicit_decisions = row_decisions.intersection({"PERMIT", "DENY"})
+            if len(explicit_decisions) > 1:
+                permission_decision = "UNKNOWN"
+                relation_type = "permission_unknown"
+                relation_status = "conflicting"
+            elif explicit_decisions:
+                permission_decision = next(iter(explicit_decisions))
+                relation_type = "permits" if permission_decision == "PERMIT" else "denies"
+                relation_status = "accepted"
+            elif closed_world:
+                permission_decision = "DENY"
+                relation_type = "denies"
+                relation_status = "accepted"
+            else:
+                permission_decision = "UNKNOWN"
+                relation_type = "permission_unknown"
+                relation_status = "unknown"
             source_refs = [
                 _source_ref(
                     _text(row.get("source_id")) or "permission_matrix",
@@ -256,10 +372,20 @@ def _derive_permission_relations(
                     actor_ref=actor_ref,
                     effects=[{"allowed_actions": actions}],
                     source_refs=source_refs,
-                    confidence=0.82 if permitted else 0.76,
-                    derivation="explicit" if permitted else "schema-derived",
+                    confidence=(
+                        0.82
+                        if permission_decision == "PERMIT"
+                        else 0.8 if permission_decision == "DENY" else 0.55
+                    ),
+                    derivation=(
+                        "schema-derived"
+                        if closed_world and not explicit_decisions
+                        else "explicit"
+                    ),
+                    status=relation_status,
+                    permission_decision=permission_decision,
                 ))
-                owns_scope = permitted and any(
+                owns_scope = permission_decision == "PERMIT" and any(
                     "own" in _text(row.get("scope")).lower()
                     for row in matching_rows
                 )
@@ -275,6 +401,35 @@ def _derive_permission_relations(
                         confidence=0.78,
                         derivation="explicit",
                     ))
+            if permission_decision == "UNKNOWN":
+                gap_id = _stable_id("gap", "permission_unknown", role_key, operation.get("id"))
+                model["coverage_gaps"].append(_fact_node(
+                    node_id=gap_id,
+                    typed_fields={
+                        "gap_type": "permission_decision_unknown",
+                        "description": "No explicit source fact permits or denies this role-operation pair",
+                        "role_key": role_key,
+                        "operation_ref": _text(operation.get("id")),
+                    },
+                    source_refs=source_refs,
+                    confidence=1.0,
+                    derivation="explicit",
+                    status="unsupported" if relation_status != "conflicting" else "conflicting",
+                ))
+            if relation_status == "conflicting":
+                model["conflicts"].append(_fact_node(
+                    node_id=_stable_id("conflict", "permission", role_key, operation.get("id")),
+                    typed_fields={
+                        "conflict_type": "permission_decision_conflict",
+                        "role_key": role_key,
+                        "operation_ref": _text(operation.get("id")),
+                        "decisions": sorted(explicit_decisions),
+                    },
+                    source_refs=source_refs,
+                    confidence=1.0,
+                    derivation="explicit",
+                    status="conflicting",
+                ))
     return relations
 
 
@@ -432,17 +587,108 @@ def _derive_state_transition_relations(
     return relations
 
 
+def _invariant_relation_type(invariant: dict[str, Any]) -> str:
+    kind = _text(_dict(invariant.get("expression")).get("kind")).lower()
+    return "conserves" if any(
+        token in kind for token in ("conserv", "balance", "amount", "quantity")
+    ) else "observes"
+
+
+def _derive_source_relationship_relations(
+    model: dict[str, Any],
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Resolve typed knowledge-asset edges by exact source identifiers only."""
+
+    invariants_by_source_ref: dict[str, list[dict[str, Any]]] = {}
+    for invariant in _list(model.get("invariants")):
+        if not isinstance(invariant, dict):
+            continue
+        aliases = [_text(invariant.get("id")), *_list(invariant.get("source_rule_refs"))]
+        for alias in {_text(value) for value in aliases if _text(value)}:
+            invariants_by_source_ref.setdefault(alias, []).append(invariant)
+
+    operations_by_source_ref: dict[str, list[dict[str, Any]]] = {}
+    for operation in _list(model.get("operations")):
+        if not isinstance(operation, dict):
+            continue
+        aliases = [_text(operation.get("id")), *_list(operation.get("source_operation_refs"))]
+        for alias in {_text(value) for value in aliases if _text(value)}:
+            operations_by_source_ref.setdefault(alias, []).append(operation)
+
+    relations: list[dict[str, Any]] = []
+    for edge in _list(data.get("relationships")):
+        if not isinstance(edge, dict):
+            continue
+        relationship_type = _text(edge.get("relation") or edge.get("relation_type")).lower()
+        if relationship_type != "rule_to_interface":
+            continue
+        relationship_id = _text(edge.get("edge_id") or edge.get("id")) or _stable_id(
+            "source_relationship",
+            relationship_type,
+            edge.get("from") or edge.get("from_ref"),
+            edge.get("to") or edge.get("to_ref"),
+        )
+        source_rule_ref = _text(edge.get("from") or edge.get("from_ref"))
+        source_operation_ref = _text(edge.get("to") or edge.get("to_ref"))
+        invariant_matches = invariants_by_source_ref.get(source_rule_ref, [])
+        operation_matches = operations_by_source_ref.get(source_operation_ref, [])
+        edge_source_ref = _source_ref(
+            _text(edge.get("source_id")) or "knowledge_relationships",
+            locator=relationship_id,
+            kind=relationship_type,
+        )
+        if len(invariant_matches) != 1 or len(operation_matches) != 1:
+            model["coverage_gaps"].append(_fact_node(
+                node_id=_stable_id("gap", "source_relationship_unresolved", relationship_id),
+                typed_fields={
+                    "gap_type": "source_relationship_unresolved",
+                    "description": "A typed source relationship could not be joined to exactly one IR rule and operation",
+                    "relationship_id": relationship_id,
+                    "relationship_type": relationship_type,
+                    "source_rule_ref": source_rule_ref,
+                    "source_operation_ref": source_operation_ref,
+                    "invariant_match_count": len(invariant_matches),
+                    "operation_match_count": len(operation_matches),
+                },
+                source_refs=[edge_source_ref],
+                confidence=1.0,
+                derivation="explicit",
+                status="unsupported",
+            ))
+            continue
+
+        invariant = invariant_matches[0]
+        operation = operation_matches[0]
+        operation_ref = _text(operation.get("id"))
+        relations.append(_relation_node(
+            relation_type=_invariant_relation_type(invariant),
+            from_ref=operation_ref,
+            to_ref=_text(invariant.get("id")),
+            operation_ref=operation_ref,
+            source_refs=(
+                [edge_source_ref]
+                + list(operation.get("source_refs") or [])
+                + list(invariant.get("source_refs") or [])
+            )[:5],
+            confidence=min(
+                float(edge.get("confidence") or 0.7),
+                float(operation.get("confidence") or 0.7),
+                float(invariant.get("confidence") or 0.7),
+            ),
+            derivation="schema-derived",
+            source_relationship_ref=relationship_id,
+        ))
+    return relations
+
+
 def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
     operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
     relations: list[dict[str, Any]] = []
     for invariant in _list(model.get("invariants")):
         if not isinstance(invariant, dict):
             continue
-        expr = _dict(invariant.get("expression"))
-        kind = _text(expr.get("kind")).lower()
-        relation_type = "conserves" if any(
-            token in kind for token in ("conserv", "balance", "amount", "quantity")
-        ) else "observes"
+        relation_type = _invariant_relation_type(invariant)
         for hint in _list(invariant.get("operation_refs")):
             operation = _resolve_operation(operations, {"operation_ref": hint})
             if not operation:
@@ -625,6 +871,16 @@ def build_behavior_ir_from_knowledge_asset(
                 "read_write": side_effect,
                 "entity_refs": [_text(x) for x in _list(op.get("entity_refs")) if _text(x)],
                 "examples": _list(op.get("examples")),
+                "source_operation_refs": list(dict.fromkeys(
+                    _text(value)
+                    for value in (
+                        op.get("interface_id"),
+                        op.get("operation_id"),
+                        op.get("operationId"),
+                        op.get("id"),
+                    )
+                    if _text(value)
+                )),
             },
             source_refs=[_source_ref(_text(op.get("source_id")) or "api_spec", locator=f"{method} {path}", kind="api_operation")],
             confidence=0.85 if op.get("operation_id") else 0.7,
@@ -682,14 +938,34 @@ def build_behavior_ir_from_knowledge_asset(
         if not role:
             continue
         role_key = role.lower()
-        aggregate = permission_by_role.setdefault(role_key, {"role": role, "resources": [], "actions": [], "scopes": [], "source_ids": []})
+        aggregate = permission_by_role.setdefault(role_key, {
+            "role": role,
+            "resources": [],
+            "actions": [],
+            "denied_actions": [],
+            "scopes": [],
+            "source_ids": [],
+        })
+        declared_polarity = _declared_permission_polarity(perm)
         resource = _text(perm.get("resource"))
-        if resource and resource not in aggregate["resources"]:
+        if declared_polarity != "DENY" and resource and resource not in aggregate["resources"]:
             aggregate["resources"].append(resource)
-        for action in _list(perm.get("actions")):
+        declared_actions = _list(perm.get("actions"))
+        for action in declared_actions if declared_polarity != "DENY" else []:
             value = _text(action)
             if value and value not in aggregate["actions"]:
                 aggregate["actions"].append(value)
+        denied_actions = (
+            declared_actions if declared_polarity == "DENY" else []
+        ) + _list(
+            perm.get("denied_actions")
+            or perm.get("forbidden_actions")
+            or perm.get("prohibited_actions")
+        )
+        for action in denied_actions:
+            value = _text(action)
+            if value and value not in aggregate["denied_actions"]:
+                aggregate["denied_actions"].append(value)
         scope = _text(perm.get("scope"))
         if scope and scope not in aggregate["scopes"]:
             aggregate["scopes"].append(scope)
@@ -711,6 +987,7 @@ def build_behavior_ir_from_knowledge_asset(
                 "account_status": "active",
                 "allowed_resources": aggregate["resources"],
                 "allowed_actions": aggregate["actions"],
+                "denied_actions": aggregate["denied_actions"],
             },
             source_refs=[
                 _source_ref(source_id or "permission_matrix", locator=role, kind="permission_matrix")
@@ -739,6 +1016,7 @@ def build_behavior_ir_from_knowledge_asset(
                 "account_status": "active",
                 "allowed_resources": [],
                 "allowed_actions": [],
+                "denied_actions": [],
             },
             source_refs=[_source_ref(_text(declared_role.get("source_id")) or "roles", locator=role, kind="role_catalog")],
             confidence=float(declared_role.get("confidence") or 0.75),
@@ -771,6 +1049,7 @@ def build_behavior_ir_from_knowledge_asset(
                     "account_status": _text(actor.get("status") or "active"),
                     "allowed_resources": list(aggregate.get("resources") or []),
                     "allowed_actions": list(aggregate.get("actions") or []),
+                    "denied_actions": list(aggregate.get("denied_actions") or []),
                     "runtime_bound": True,
                 },
                 source_refs=source_refs,
@@ -800,6 +1079,7 @@ def build_behavior_ir_from_knowledge_asset(
                 "account_status": _text(actor.get("status") or "active"),
                 "allowed_resources": list(aggregate.get("resources") or []),
                 "allowed_actions": list(aggregate.get("actions") or []),
+                "denied_actions": list(aggregate.get("denied_actions") or []),
                 "runtime_bound": True,
             },
             source_refs=source_refs,
@@ -851,6 +1131,11 @@ def build_behavior_ir_from_knowledge_asset(
                     )
                     if _text(value)
                 ],
+                "source_rule_refs": list(dict.fromkeys(
+                    _text(value)
+                    for value in (rule.get("rule_id"), rule.get("id"))
+                    if _text(value)
+                )),
             },
             source_refs=[_source_ref(_text(rule.get("source_id")) or "rule_library", quote=statement[:200])],
             confidence=float(rule.get("confidence") or 0.7),
@@ -858,9 +1143,22 @@ def build_behavior_ir_from_knowledge_asset(
         ))
 
     # Runtime V2 relations are the only semantic joins used by the compiler.
-    model["relations"].extend(_derive_permission_relations(model, permission_rows))
+    permission_policy_mode = _text(
+        data.get("permission_policy_mode")
+        or data.get("permission_matrix_mode")
+    ).lower()
+    permission_matrix_complete = bool(data.get("permission_matrix_complete")) or permission_policy_mode in {
+        "closed_world",
+        "complete",
+    }
+    model["relations"].extend(_derive_permission_relations(
+        model,
+        permission_rows,
+        closed_world=permission_matrix_complete,
+    ))
     model["relations"].extend(_derive_operation_entity_relations(model))
     model["relations"].extend(_derive_state_transition_relations(model, data))
+    model["relations"].extend(_derive_source_relationship_relations(model, data))
     model["relations"].extend(_derive_invariant_relations(model))
     model["relations"].extend(_derive_compensation_relations(model))
 
@@ -898,7 +1196,9 @@ def build_behavior_ir_from_knowledge_asset(
             status="unsupported",
         ))
 
-    model["relations"] = [normalize_relation(row) for row in model["relations"]]
+    model["relations"] = [normalize_relation(row) for row in _dedupe_nodes(model["relations"])]
+    model["coverage_gaps"] = _dedupe_nodes(model["coverage_gaps"])
+    model["conflicts"] = _dedupe_nodes(model["conflicts"])
     model["model_id"] = _content_addressed_id(model)
     return model
 

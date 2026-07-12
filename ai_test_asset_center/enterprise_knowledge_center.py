@@ -1013,6 +1013,48 @@ def _permission_field(item: dict[str, Any], aliases: set[str]) -> Any:
     return ""
 
 
+def _permission_decision(item: dict[str, Any], narrative: str) -> str:
+    for key, value in item.items():
+        normalized_key = _norm(key).replace(" ", "_")
+        if normalized_key in {"allowed", "is_allowed"} and isinstance(value, bool):
+            return "allow" if value else "deny"
+    raw = _permission_field(
+        item,
+        {"decision", "effect", "outcome", "access", "policy_effect"},
+    )
+    normalized = _norm(raw or narrative).replace("-", " ").replace("_", " ")
+    if any(marker in normalized for marker in (
+        "deny",
+        "denied",
+        "forbid",
+        "forbidden",
+        "not allowed",
+        "cannot",
+        "prohibit",
+        "\u4e0d\u5f97",
+        "\u7981\u6b62",
+    )):
+        return "deny"
+    if raw and any(marker in normalized for marker in (
+        "allow",
+        "allowed",
+        "grant",
+        "permit",
+        "\u5141\u8bb8",
+        "\u6388\u6743",
+    )):
+        return "allow"
+    return ""
+
+
+def _permission_action_values(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not str(value or "").strip():
+        return []
+    return _permission_action_aliases(value)
+
+
 def _permission_resource_aliases(value: Any) -> list[str]:
     text = str(value or "").strip()
     normalized = _norm(text)
@@ -1070,9 +1112,15 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
         resource = str(_permission_field(item, {"resource", "module", "object", "path", "endpoint", "资源", "模块", "对象", "接口"}) or "").strip()
         actions = _permission_field(item, {"actions", "action", "permissions", "permission", "operation", "allowed_actions", "权限", "权限说明", "操作", "能力"})
         scope_value = _permission_field(item, {"scope", "data_scope", "tenant_scope", "范围", "数据范围"})
-        if not role or (not resource and not str(actions or "").strip()):
+        denied_actions = _permission_field(
+            item,
+            {"denied_actions", "forbidden_actions", "prohibited_actions"},
+        )
+        if not role or (not resource and not str(actions or denied_actions or "").strip()):
             continue
         narrative = str(actions or resource).strip()
+        permission_decision = _permission_decision(item, narrative)
+        denied_action_values = _permission_action_values(denied_actions)
         normalized_narrative = _norm(narrative)
         if any(marker in normalized_narrative for marker in ("所有权限", "全部权限", "all permissions", "full access")):
             rows.append({
@@ -1082,6 +1130,8 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                 "resource": "*",
                 "resource_aliases": ["*"],
                 "actions": ["*"],
+                **({"decision": permission_decision} if permission_decision else {}),
+                **({"denied_actions": denied_action_values} if denied_action_values else {}),
                 "scope": "all",
                 "evidence": _redact_text(str(item), 280),
             })
@@ -1107,7 +1157,9 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
             clause_norm = _norm(clause)
             if any(marker in clause_norm for marker in ("只读", "read only", "readonly")):
                 action_values.extend(["GET", "HEAD", "OPTIONS", "read", "view", "list"])
-            action_values = list(dict.fromkeys(action_values)) or ["read"]
+            action_values = list(dict.fromkeys(action_values))
+            if not action_values and not denied_action_values:
+                action_values = ["read"]
             for resource_index, resource_alias in enumerate(resource_aliases):
                 rows.append({
                     "permission_id": f"perm:{source_id}:{idx+1}:{clause_index+1}:{resource_index+1}",
@@ -1116,6 +1168,8 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                     "resource": resource_alias,
                     "resource_aliases": resource_aliases,
                     "actions": action_values,
+                    **({"decision": permission_decision} if permission_decision else {}),
+                    **({"denied_actions": denied_action_values} if denied_action_values else {}),
                     "scope": str(scope_value or "").strip() or _permission_scope(clause),
                     "evidence": _redact_text(str(item), 280),
                 })

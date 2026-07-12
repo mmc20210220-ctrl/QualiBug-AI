@@ -44,7 +44,13 @@ def _sample_asset() -> dict:
     return {
         "sources": [{"source_id": "src-api", "filename": "api.md", "source_type": "api"}],
         "permission_matrix": [
-            {"role": "viewer_role", "resource": "/resources/{id}", "actions": ["read"], "scope": "own"},
+            {
+                "role": "viewer_role",
+                "resource": "/resources/{id}",
+                "actions": ["read"],
+                "denied_actions": ["write"],
+                "scope": "own",
+            },
             {"role": "owner_role", "resource": "/resources/{id}", "actions": ["read", "write"], "scope": "own"},
         ],
         "rule_library": [
