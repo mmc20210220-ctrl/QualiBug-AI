@@ -1,472 +1,487 @@
-"""Discovery funnel observability — aggregate five-stage conversion + blockers.
-
-Pure aggregation over a completed ``run_v12_pipeline`` result. No mock findings,
-no industry hardcoding. Customer-visible validated bugs stay separated from
-pending (needs_more_evidence) internal clues.
-"""
+"""Attempt-receipt-only discovery funnel and pipeline health projection."""
 from __future__ import annotations
 
+import math
+from collections import Counter
 from typing import Any
 
-from .customer_delivery_gate import is_customer_deliverable_defect
-
-
-_STAGE_NAMES = (
-    "candidate_generation",
-    "probe_selection",
-    "execution",
-    "verification",
-    "formal_accounting",
+from .obligation_attempt_ledger import (
+    ObligationAttemptLedgerError,
+    validate_obligation_attempt_ledger,
 )
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
+REQUIRED_STAGE_NAMES = (
+    "obligation_generation",
+    "experiment_compile",
+    "binding_materialization",
+    "fixture_setup",
+    "governed_execution",
+    "observation",
+    "assertion",
+    "oracle_resolution",
+    "delivery_gate",
+    "cleanup",
+    "formal_projection",
+)
+
+
+class DiscoveryFunnelError(ValueError):
+    """Authoritative attempt or formal projection receipts are missing."""
+
+
+def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _as_list(value: Any) -> list[Any]:
+def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _as_int(value: Any, default: int = 0) -> int:
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
 
 
+def _attempt_ledger(result: dict[str, Any] | None) -> dict[str, Any]:
+    value = _dict(result)
+    nested = _dict(value.get("v12"))
+    raw = value.get("obligation_attempt_ledger") or nested.get("obligation_attempt_ledger")
+    if not isinstance(raw, dict):
+        raise DiscoveryFunnelError("obligation_attempt_ledger_missing")
+    try:
+        return validate_obligation_attempt_ledger(raw)
+    except ObligationAttemptLedgerError as exc:
+        raise DiscoveryFunnelError(f"obligation_attempt_ledger_invalid:{exc}") from exc
+
+
 def effective_execution_status(v12_result: dict[str, Any] | None) -> str:
-    """Reconcile legacy scenario execution with the Experiment Executor ledger."""
+    """Derive execution completeness from the attempt ledger and no other source."""
 
-    result = _as_dict(v12_result)
-    legacy = str(_as_dict(_as_dict(result.get("phases")).get("execution")).get("status") or "not_executed").strip().lower()
-    experiment = _as_dict(result.get("experiment_execution"))
-    selected = _as_int(experiment.get("selected_count"))
-    executed = _as_int(experiment.get("executed_count"))
-    blocked = _as_int(experiment.get("blocked_count"))
-    if selected <= 0:
-        return legacy
-    if executed >= selected:
+    ledger = _attempt_ledger(v12_result)
+    selected = _int(ledger.get("selected_count"))
+    terminal = _int(ledger.get("terminal_count"))
+    if bool(ledger.get("complete")) and selected == terminal:
         return "completed"
-    if executed > 0:
+    if terminal > 0:
         return "partial"
-    if blocked >= selected:
+    return "not_executed"
+
+
+def _stage(attempt: dict[str, Any], name: str) -> dict[str, Any]:
+    return next(
+        (
+            _dict(item)
+            for item in _list(attempt.get("stages"))
+            if _text(_dict(item).get("stage")) == name
+        ),
+        {},
+    )
+
+
+def _classify_status(status: str) -> str:
+    normalized = _text(status).upper()
+    if normalized in {
+        "COMPILED",
+        "EXECUTED",
+        "OBSERVED",
+        "ASSERTED",
+        "RESOLVED",
+        "DELIVERABLE",
+        "REJECTED",
+        "PROJECTED",
+        "SUCCEEDED",
+        "NOT_REQUIRED",
+    }:
+        return "success"
+    if normalized in {"BLOCKED", "DEFERRED", "NOT_REACHED"}:
         return "blocked"
-    return legacy
+    return "failed"
 
 
-def _experiment_has_real_http_receipts(result: dict[str, Any]) -> bool:
-    experiment = _as_dict(result.get("experiment_execution"))
-    for receipt in _as_list(experiment.get("results")):
-        if not isinstance(receipt, dict) or str(receipt.get("status") or "").upper() != "EXECUTED":
-            continue
-        for step in _as_list(receipt.get("steps")):
-            if isinstance(step, dict) and _as_int(step.get("status_code")) > 0:
-                return True
-    return False
+def _observation(
+    attempt: dict[str, Any],
+    stage_name: str,
+) -> dict[str, Any] | None:
+    compile_stage = _stage(attempt, "compile")
+    execution_stage = _stage(attempt, "execution")
+    gate_stage = _stage(attempt, "gate")
+    compile_status = _text(compile_stage.get("status")).upper()
+    execution_status = _text(execution_stage.get("status")).upper()
+    terminal_status = _text(attempt.get("terminal_status")).upper()
+    terminal_reason = _text(attempt.get("reason_code"))
+    if stage_name == "obligation_generation":
+        return {"status": "SUCCEEDED", "reason": "", "elapsed_ms": None}
+    if stage_name == "experiment_compile":
+        return {
+            "status": compile_status or "RECEIPT_MISSING",
+            "reason": _text(compile_stage.get("reason_code")) or (
+                "STAGE_RECEIPT_MISSING" if not compile_status else ""
+            ),
+            "elapsed_ms": compile_stage.get("elapsed_ms"),
+        }
+    if stage_name == "binding_materialization":
+        if not compile_stage:
+            return {"status": "RECEIPT_MISSING", "reason": "STAGE_RECEIPT_MISSING", "elapsed_ms": None}
+        if compile_status == "COMPILED":
+            return {"status": "SUCCEEDED", "reason": "", "elapsed_ms": compile_stage.get("elapsed_ms")}
+        return {
+            "status": compile_status,
+            "reason": _text(compile_stage.get("reason_code")) or "BINDING_NOT_MATERIALIZED",
+            "elapsed_ms": compile_stage.get("elapsed_ms"),
+        }
+    if compile_status != "COMPILED" and stage_name not in {"formal_projection"}:
+        return None
+    if stage_name == "fixture_setup":
+        if not execution_stage:
+            return {"status": "RECEIPT_MISSING", "reason": "STAGE_RECEIPT_MISSING", "elapsed_ms": None}
+        reason = _text(execution_stage.get("reason_code"))
+        if "FIXTURE" in reason.upper():
+            return {"status": "BLOCKED", "reason": reason, "elapsed_ms": execution_stage.get("elapsed_ms")}
+        return {"status": "SUCCEEDED", "reason": "", "elapsed_ms": None}
+    if stage_name == "governed_execution":
+        if not execution_stage:
+            return {"status": "RECEIPT_MISSING", "reason": "STAGE_RECEIPT_MISSING", "elapsed_ms": None}
+        return {
+            "status": execution_status,
+            "reason": _text(execution_stage.get("reason_code")),
+            "elapsed_ms": execution_stage.get("elapsed_ms"),
+        }
+    if execution_status != "EXECUTED" and stage_name not in {"formal_projection"}:
+        return None
+    if stage_name == "observation":
+        observed = bool(_list(attempt.get("observation_receipt_ids")))
+        return {
+            "status": "OBSERVED" if observed else "RECEIPT_MISSING",
+            "reason": "" if observed else "OBSERVATION_RECEIPT_MISSING",
+            "elapsed_ms": None,
+        }
+    if stage_name == "assertion":
+        asserted = bool(_text(attempt.get("oracle_receipt_id")))
+        return {
+            "status": "ASSERTED" if asserted else "RECEIPT_MISSING",
+            "reason": "" if asserted else "ASSERTION_RECEIPT_MISSING",
+            "elapsed_ms": None,
+        }
+    if stage_name == "oracle_resolution":
+        resolved = bool(_text(attempt.get("oracle_receipt_id")))
+        return {
+            "status": "RESOLVED" if resolved else "RECEIPT_MISSING",
+            "reason": _text(attempt.get("oracle_reason_code")) or (
+                "" if resolved else "ORACLE_RECEIPT_MISSING"
+            ),
+            "elapsed_ms": None,
+        }
+    if stage_name == "delivery_gate":
+        if not gate_stage:
+            return {"status": "RECEIPT_MISSING", "reason": "GATE_RECEIPT_MISSING", "elapsed_ms": None}
+        return {
+            "status": _text(gate_stage.get("status")).upper(),
+            "reason": _text(gate_stage.get("reason_code")),
+            "elapsed_ms": gate_stage.get("elapsed_ms"),
+        }
+    if stage_name == "cleanup":
+        if terminal_status == "HARNESS_FAILED" and "CLEANUP" in terminal_reason.upper():
+            return {"status": "HARNESS_FAILED", "reason": terminal_reason, "elapsed_ms": None}
+        return {"status": "NOT_REQUIRED", "reason": "", "elapsed_ms": None}
+    if stage_name == "formal_projection":
+        return {
+            "status": "PROJECTED" if terminal_status else "RECEIPT_MISSING",
+            "reason": terminal_reason if not terminal_status else "",
+            "elapsed_ms": None,
+        }
+    raise DiscoveryFunnelError(f"unknown_required_stage:{stage_name}")
 
 
-def _conversion(output: int, input_n: int) -> float:
-    if input_n <= 0:
-        return 0.0
-    return round(float(output) / float(input_n), 4)
+def _percentile(values: list[int], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(max(0, int(value)) for value in values)
+    rank = max(1, math.ceil(percentile * len(ordered)))
+    return ordered[rank - 1]
 
 
-def _stage(name: str, input_n: int, output_n: int) -> dict[str, Any]:
-    input_n = max(0, int(input_n))
-    output_n = max(0, min(int(output_n), input_n) if input_n else max(0, int(output_n)))
+def _dimension_counts(rows: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
+    dimensions: dict[str, Counter[str]] = {
+        "source": Counter(),
+        "risk_family": Counter(),
+        "operation": Counter(),
+        "actor": Counter(),
+        "adapter": Counter(),
+        "round": Counter(),
+        "terminal_status": Counter(),
+        "reason_code": Counter(),
+    }
+    for attempt, observation in rows:
+        for source_ref in _list(attempt.get("source_refs")):
+            source = _text(
+                _dict(source_ref).get("source_type")
+                or _dict(source_ref).get("kind")
+            )
+            if source:
+                dimensions["source"][source] += 1
+        dimensions["risk_family"][_text(attempt.get("risk_family")) or "unclassified"] += 1
+        for operation in _list(attempt.get("operation_refs")):
+            if _text(operation):
+                dimensions["operation"][_text(operation)] += 1
+        for actor in _list(attempt.get("actor_refs")):
+            if _text(actor):
+                dimensions["actor"][_text(actor)] += 1
+        dimensions["adapter"][_text(attempt.get("adapter")) or "unclassified"] += 1
+        dimensions["round"][_text(attempt.get("round")) or "unclassified"] += 1
+        dimensions["terminal_status"][
+            _text(attempt.get("terminal_status")).upper() or "UNCLASSIFIED"
+        ] += 1
+        reason = _text(observation.get("reason"))
+        if reason:
+            dimensions["reason_code"][reason] += 1
     return {
-        "name": name,
-        "input": input_n,
-        "output": output_n,
-        "conversion": _conversion(output_n, input_n),
-        "dropped": max(0, input_n - output_n),
+        name: dict(sorted(counts.items()))
+        for name, counts in dimensions.items()
     }
 
 
-def _is_validated_bug(finding: dict[str, Any]) -> bool:
-    """Use the formal customer-delivery gate as the single source of truth."""
-    return is_customer_deliverable_defect(finding)
-
-
-def _is_pending_finding(finding: dict[str, Any]) -> bool:
-    if _is_validated_bug(finding):
-        return False
-    status = str(finding.get("final_review_status") or finding.get("business_evidence_status") or "").upper()
-    if "NEEDS_MORE_EVIDENCE" in status or status.startswith("PENDING"):
-        return True
-    eq = _as_dict(finding.get("evidence_quality"))
-    if str(eq.get("level") or "").lower() in {"needs_evidence", "needs_more_evidence"}:
-        return True
-    if str(finding.get("confirmation_status") or "").lower() in {"candidate", "needs_more_evidence"}:
-        return True
-    if finding.get("gate_passed") is False:
-        return True
-    quality = _as_dict(finding.get("evidence_quality"))
-    if finding.get("gate_passed") and _as_int(quality.get("score")) < 90:
-        return True
-    return False
-
-
-def _collect_blocking_reasons(
-    v12_result: dict[str, Any],
-    gate_results: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    counts: dict[str, int] = {}
-
-    def _bump(reason: str, n: int = 1) -> None:
-        key = str(reason or "").strip()
-        if not key:
-            return
-        counts[key] = counts.get(key, 0) + max(1, int(n))
-
-    for item in gate_results or []:
-        if not isinstance(item, dict):
-            continue
-        missing = item.get("business_gate_missing") or item.get("missing") or item.get("missing_requirements")
-        if isinstance(missing, list):
-            for reason in missing:
-                _bump(str(reason))
-        elif isinstance(missing, dict):
-            for reason, n in missing.items():
-                _bump(str(reason), _as_int(n, 1))
-        reason = item.get("reason") or item.get("blocking_reason")
-        if reason:
-            _bump(str(reason))
-
-    for finding in _as_list(v12_result.get("findings")):
-        if not isinstance(finding, dict):
-            continue
-        missing = finding.get("business_gate_missing") or _as_dict(finding.get("evidence")).get("business_gate_missing")
-        if isinstance(missing, list):
-            for reason in missing:
-                _bump(str(reason))
-        status = str(finding.get("business_evidence_status") or finding.get("final_review_status") or "")
-        if status.upper().startswith("PENDING_") or "NEEDS_MORE_EVIDENCE" in status.upper():
-            # Map pending status tokens to gate-style reason codes when explicit missing list absent
-            if not missing:
-                token = status.upper().replace("PENDING_", "")
-                if token and token not in {"EVIDENCE", "MORE_EVIDENCE"}:
-                    _bump(token if "_" in token or token.endswith("MISSING") else f"{token}_PENDING")
-
-    unify = _as_dict(v12_result.get("mainline_unification"))
-    for origin, funnel in unify.items():
-        if origin == "error" or not isinstance(funnel, dict):
-            continue
-        dropped = _as_int(funnel.get("dropped_no_endpoint"))
-        if dropped:
-            _bump("dropped_no_endpoint", dropped)
-        for reason, count in _as_dict(funnel.get("dropped_reason_counts")).items():
-            _bump(f"endpoint_binding:{reason}", _as_int(count, 1))
-        if str(funnel.get("status") or "") == "provider_unavailable":
-            _bump("llm_provider_unavailable")
-
-    execution = _as_dict(_as_dict(v12_result.get("phases")).get("execution"))
-    blocked = _as_int(execution.get("production_data_blocked"))
-    if blocked:
-        _bump("production_data_blocked", blocked)
-    skip_telemetry = _as_dict(execution.get("skip_telemetry"))
-    cleanup_counts = _as_dict(skip_telemetry.get("cleanup_status_counts"))
-    if _as_int(cleanup_counts.get("failed")):
-        _bump("sandbox_cleanup_failed", _as_int(cleanup_counts.get("failed")))
-    if _as_int(cleanup_counts.get("not_reversible")):
-        _bump("sandbox_cleanup_not_reversible", _as_int(cleanup_counts.get("not_reversible")))
-    observer_counts = _as_dict(skip_telemetry.get("observer_status_counts"))
-    observer_missing = sum(
-        _as_int(count)
-        for key, count in observer_counts.items()
-        if "documented_observer_missing" in str(key)
+def _stage_projection(
+    attempts: list[dict[str, Any]],
+    stage_name: str,
+) -> dict[str, Any]:
+    rows = [
+        (attempt, observation)
+        for attempt in attempts
+        for observation in [_observation(attempt, stage_name)]
+        if observation is not None
+    ]
+    classifications = Counter(
+        _classify_status(_text(observation.get("status")))
+        for _, observation in rows
     )
-    if observer_missing:
-        _bump("documented_observer_missing", observer_missing)
-    reason_counts = _as_dict(skip_telemetry.get("reason_counts"))
-    for reason, n in reason_counts.items():
-        key = str(reason or "").split(":", 1)[0].strip()
-        if key:
-            _bump(key, _as_int(n, 1))
-    path_binding_misses = _as_dict(skip_telemetry.get("path_binding_misses"))
-    if path_binding_misses:
-        _bump("missing_runtime_path_binding", sum(_as_int(n, 1) for n in path_binding_misses.values()) or len(path_binding_misses))
-    blocked_scenarios = _as_int(skip_telemetry.get("scenarios_blocked"))
-    if blocked_scenarios and _as_int(execution.get("executed")) == 0:
-        _bump("scenarios_blocked_no_http", blocked_scenarios)
-    if str(execution.get("status") or "") in {"blocked", "skipped", "plan_only"}:
-        reason = str(execution.get("reason") or execution.get("status") or "execution_blocked")
-        _bump(reason)
-    if str(execution.get("observability_status") or "") == "FAILED_SAFE":
-        _bump("execution_observability_gap")
-        for item in _as_list(execution.get("observability")):
-            if not isinstance(item, dict):
-                continue
-            status = str(item.get("status") or "")
-            if status in {"failed", "missing"}:
-                _bump(f"observability_{item.get('kind') or 'unknown'}_{status}")
-    if _as_int(execution.get("executed")) == 0:
-        selected = _as_list(
-            _as_dict(_as_dict(v12_result.get("phases")).get("incremental_discovery")).get("selected_slice_ids")
-            or _as_dict(v12_result.get("behavior_slice_ledger")).get("selected_slice_ids")
-        )
-        if selected:
-            _bump(str(execution.get("reason") or "no_runtime_execution_receipts"))
+    reasons = Counter(
+        _text(observation.get("reason"))
+        for _, observation in rows
+        if _text(observation.get("reason"))
+    )
+    elapsed = [
+        _int(observation.get("elapsed_ms"))
+        for _, observation in rows
+        if observation.get("elapsed_ms") is not None
+    ]
+    return {
+        "name": stage_name,
+        "input": len(rows),
+        "success": int(classifications.get("success", 0)),
+        "blocked": int(classifications.get("blocked", 0)),
+        "failed": int(classifications.get("failed", 0)),
+        "elapsed_ms": {
+            "p50": _percentile(elapsed, 0.50),
+            "p95": _percentile(elapsed, 0.95),
+        },
+        "reason_counts": dict(sorted(reasons.items())),
+        "dimensions": _dimension_counts(rows),
+    }
 
-    # Unattempted / budget-gated candidates — empty findings must not look like "no bugs".
-    incremental = _as_dict(_as_dict(v12_result.get("phases")).get("incremental_discovery"))
-    stop_reason = str(
-        incremental.get("stop_reason")
-        or _as_dict(v12_result.get("behavior_slice_ledger")).get("stop_reason")
-        or ""
-    )
-    if stop_reason == "slice_budget_reached":
-        _bump("slice_budget_reached")
-    pending_slices = _as_list(
-        incremental.get("pending_slice_ids")
-        or _as_dict(v12_result.get("behavior_slice_ledger")).get("pending_slice_ids")
-        or incremental.get("pending")
-    )
-    if pending_slices:
-        _bump("unattempted_behavior_slices", len(pending_slices))
-    total_slices = _as_int(
-        incremental.get("total_slices")
-        or _as_dict(v12_result.get("behavior_slice_ledger")).get("total_slices")
-    )
-    selected_slices = _as_list(
-        incremental.get("selected_slice_ids")
-        or _as_dict(v12_result.get("behavior_slice_ledger")).get("selected_slice_ids")
-    )
-    if total_slices and selected_slices and len(selected_slices) < total_slices:
-        _bump("unselected_behavior_slices", total_slices - len(selected_slices))
 
-    # Standalone discovery-engine health (when embedded on the result).
-    discovery_health = _as_dict(v12_result.get("discovery_engine_health") or v12_result.get("stage_status"))
-    for stage_name, status in discovery_health.items():
-        if str(status or "") == "FAILED_SAFE":
-            _bump(f"discovery_{stage_name}_FAILED_SAFE")
-    for failure in _as_list(v12_result.get("stage_failures")):
-        _bump(f"stage_failure:{str(failure)[:120]}")
-
-    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    return [{"reason": reason, "count": count} for reason, count in ranked]
+def _formal_projection(result: dict[str, Any]) -> dict[str, Any]:
+    nested = _dict(result.get("v12"))
+    formal = _dict(result.get("formal_count_projection") or nested.get("formal_count_projection"))
+    if not isinstance(formal.get("formal_finding_ids"), list):
+        raise DiscoveryFunnelError("formal_count_projection_missing")
+    ids = sorted({_text(value) for value in formal["formal_finding_ids"] if _text(value)})
+    count = _int(formal.get("formal_customer_deliverable_count"), len(ids))
+    if count != len(ids):
+        raise DiscoveryFunnelError("formal_count_projection_id_mismatch")
+    return {**formal, "formal_customer_deliverable_count": count, "formal_finding_ids": ids}
 
 
 def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
-    """Summarize whether empty findings mean 'no bugs' or 'pipeline failed safe'."""
-    result = _as_dict(v12_result)
-    phases = _as_dict(result.get("phases"))
-    execution = _as_dict(phases.get("execution"))
-    experiment_execution = _as_dict(result.get("experiment_execution"))
-    experiment_executed = _as_int(experiment_execution.get("executed_count"))
-    experiment_blocked = _as_int(experiment_execution.get("blocked_count"))
-    effective_status = effective_execution_status(result)
-    effective_executed = max(_as_int(execution.get("executed")), experiment_executed)
-    observability = [item for item in _as_list(execution.get("observability")) if isinstance(item, dict)]
-    failed_obs = [
-        item for item in observability
-        if str(item.get("status") or "") in {"failed", "missing"}
+    result = _dict(v12_result)
+    ledger = _attempt_ledger(result)
+    formal = _formal_projection(result)
+    attempts = [_dict(item) for item in _list(ledger.get("attempts"))]
+    attempt_deliverable_ids = sorted(
+        _text(item.get("finding_id"))
+        for item in attempts
+        if _text(item.get("terminal_status")).upper() == "DELIVERABLE"
+        and _text(item.get("finding_id"))
+    )
+    if attempt_deliverable_ids != formal["formal_finding_ids"]:
+        raise DiscoveryFunnelError("formal_projection_attempt_id_mismatch")
+    terminal_counts = Counter(_text(item.get("terminal_status")).upper() for item in attempts)
+    selected = _int(ledger.get("selected_count"))
+    terminal = _int(ledger.get("terminal_count"))
+    execution_status = effective_execution_status(result)
+    harness_failures = int(terminal_counts.get("HARNESS_FAILED", 0))
+    blocked = int(terminal_counts.get("BLOCKED", 0) + terminal_counts.get("DEFERRED", 0))
+    executed = sum(
+        1 for attempt in attempts if _text(_stage(attempt, "execution").get("status")).upper() == "EXECUTED"
+    )
+    observation_missing = sum(
+        1
+        for attempt in attempts
+        if _text(_stage(attempt, "execution").get("status")).upper() == "EXECUTED"
+        and not _list(attempt.get("observation_receipt_ids"))
+    )
+    error_present = bool(_text(result.get("error")))
+    stage_failures = [
+        _text(value) for value in _list(result.get("stage_failures")) if _text(value)
     ]
-    stage_status = _as_dict(result.get("stage_status") or result.get("discovery_engine_health"))
-    failed_stages = {
-        key: value for key, value in stage_status.items()
-        if str(value or "") == "FAILED_SAFE"
+    secret_scan = _dict(result.get("artifact_secret_scan") or result.get("secret_scan"))
+    secret_scan_failed = bool(secret_scan and secret_scan.get("safe") is False)
+    reasoner = _dict(_dict(result.get("mainline_unification")).get("llm_reasoner"))
+    reasoner_status = _text(reasoner.get("status")).lower()
+    reasoner_failure_count = _int(reasoner.get("failed_engine_count"))
+    reasoner_error_class_counts = {
+        _text(key): _int(value)
+        for key, value in _dict(reasoner.get("engine_error_class_counts")).items()
+        if _text(key) and _int(value) > 0
     }
-    failed_phases = {
-        key: str(_as_dict(value).get("status") or "")
-        for key, value in phases.items()
-        if isinstance(value, dict)
-        and str(value.get("status") or "").lower() in {"failed", "failed_safe"}
-    }
-    degraded_phases = {
-        key: str(_as_dict(value).get("status") or "")
-        for key, value in phases.items()
-        if isinstance(value, dict)
-        and str(value.get("status") or "").lower() in {"degraded", "blocked"}
-    }
-    stage_failures = [str(item) for item in _as_list(result.get("stage_failures")) if str(item).strip()]
-    execution_failed_safe = str(execution.get("observability_status") or "") == "FAILED_SAFE"
-    runtime_failed = str(result.get("runtime_status") or "").upper() in {"FAILED", "FAILED_SAFE"}
-    funnel_error = str(result.get("discovery_funnel_error") or _as_dict(result.get("discovery_funnel")).get("error") or "")
-    skip_telemetry = _as_dict(execution.get("skip_telemetry"))
-    reason_counts = _as_dict(skip_telemetry.get("reason_counts"))
-    binding_blocked = (
-        _as_int(reason_counts.get("missing_runtime_path_binding"))
-        + _as_int(reason_counts.get("precondition_not_met"))
-        + len(_as_dict(skip_telemetry.get("path_binding_misses")))
+    formal_consistency = _dict(result.get("formal_id_consistency"))
+    formal_mismatch = bool(formal_consistency and formal_consistency.get("consistent") is False)
+    cleanup_failures = sum(
+        1
+        for attempt in attempts
+        if "CLEANUP" in _text(attempt.get("reason_code")).upper()
+        and _text(attempt.get("terminal_status")).upper() == "HARNESS_FAILED"
     )
-    incremental = _as_dict(phases.get("incremental_discovery"))
-    stop_reason = str(
-        incremental.get("stop_reason")
-        or _as_dict(result.get("behavior_slice_ledger")).get("stop_reason")
-        or ""
+    cost_unknown = any(
+        _text(attempt.get("cost_coverage_status")).upper() == "UNKNOWN"
+        for attempt in attempts
     )
-    pending_slices = _as_list(
-        incremental.get("pending_slice_ids")
-        or _as_dict(result.get("behavior_slice_ledger")).get("pending_slice_ids")
-    )
-    unexecuted_candidates = bool(pending_slices) or stop_reason == "slice_budget_reached"
-    result_error = str(result.get("error") or "").strip()
-    auto_har = _as_dict(result.get("auto_har"))
-    no_real_traffic = str(auto_har.get("status") or "").strip().lower() in {"no_traffic", "empty", "missing"}
-    if not no_real_traffic and auto_har:
-        entry_count = _as_int(auto_har.get("entry_count") or auto_har.get("entries_count") or auto_har.get("count"))
-        entries = _as_list(auto_har.get("entries") or auto_har.get("log") or auto_har.get("requests"))
-        if entry_count == 0 and not entries and _as_int(execution.get("executed")) > 0:
-            # Executed claimed but HAR proves zero traffic.
-            no_real_traffic = True
-        if str(auto_har.get("status") or "").strip().lower() == "no_traffic":
-            no_real_traffic = True
-    if _experiment_has_real_http_receipts(result):
-        no_real_traffic = False
-    cleanup_failures = _as_int(experiment_execution.get("cleanup_failures"))
-    for finding in _as_list(result.get("findings")):
-        if not isinstance(finding, dict):
-            continue
-        cleanup = _as_dict(finding.get("cleanup") or _as_dict(finding.get("evidence")).get("cleanup"))
-        status_text = str(cleanup.get("status") or finding.get("cleanup_status") or "").strip().upper()
-        if status_text in {
-            "FAILED",
-            "CLEANUP_INCOMPLETE",
-            "CLEANUP_NOT_SUCCEEDED",
-            "INCOMPLETE",
-            "NOT_REVERSIBLE",
-        }:
-            cleanup_failures += 1
-    secret_scan = _as_dict(result.get("artifact_secret_scan") or result.get("secret_scan"))
-    secret_scan_failed = secret_scan and secret_scan.get("safe") is False
-    target_cleanliness = _as_dict(result.get("target_cleanliness") or result.get("fixture_governance"))
-    cleanliness_unproven = bool(result.get("target_cleanliness_required")) and not bool(
-        target_cleanliness.get("clean") or target_cleanliness.get("proven") or target_cleanliness.get("status") == "clean"
-    )
-    # Model request occurred but usage/cost unknown → non-OK (never display as 0).
-    unify = _as_dict(result.get("mainline_unification"))
-    llm = _as_dict(unify.get("llm_reasoner"))
-    model_usage = _as_dict(llm.get("model_usage"))
-    observed_model_requests = _as_int(
-        model_usage.get("request_count")
-        or llm.get("observed_model_request_count")
-        or llm.get("request_count")
-    )
-    usage_cost_unknown = False
-    if observed_model_requests > 0:
-        responses_with_cost = model_usage.get("responses_with_cost")
-        cost_usd = model_usage.get("cost_usd")
-        if responses_with_cost is None or cost_usd is None:
-            usage_cost_unknown = True
-        elif _as_int(responses_with_cost) != observed_model_requests:
-            usage_cost_unknown = True
-    # Missing critical phases when execution was expected.
-    required_phases = ("execution",)
-    missing_phases = [name for name in required_phases if name not in phases]
     status = "OK"
-    if (
-        execution_failed_safe
-        or failed_stages
-        or failed_phases
-        or stage_failures
-        or runtime_failed
-        or result_error
-        or secret_scan_failed
-    ):
+    if error_present or stage_failures or secret_scan_failed or observation_missing:
         status = "FAILED_SAFE"
-    elif effective_status in {"blocked", "skipped", "not_executed"} and effective_executed == 0:
+    elif selected == 0:
         status = "BLOCKED"
-    elif binding_blocked and effective_executed == 0:
-        status = "FAILED_SAFE"
-    elif no_real_traffic and effective_executed > 0:
-        status = "FAILED_SAFE"
-    elif missing_phases:
-        status = "FAILED_SAFE"
+    elif selected and blocked == selected:
+        status = "BLOCKED"
     elif (
-        unexecuted_candidates
-        or binding_blocked
-        or funnel_error
-        or cleanup_failures
-        or usage_cost_unknown
-        or cleanliness_unproven
-        or degraded_phases
-        or effective_status == "partial"
-        or experiment_blocked
+        harness_failures
+        or blocked
+        or execution_status != "completed"
+        or reasoner_failure_count
+        or reasoner_status in {"degraded", "failed", "provider_unavailable"}
+        or formal_mismatch
+        or cost_unknown
     ):
         status = "DEGRADED"
-
-    operator_note = str(result.get("operator_note") or "").strip()
-    if status == "FAILED_SAFE" and not operator_note:
-        if result_error:
-            operator_note = (
-                f"发现链路 result.error 非空（{result_error[:160]}）；"
-                "空 findings 不能解读为「系统无缺陷」。"
-            )
-        elif secret_scan_failed:
-            operator_note = (
-                "artifact secret scan 失败：持久化产物含高置信密钥，pipeline 标记 FAILED_SAFE。"
-            )
-        elif no_real_traffic:
-            operator_note = (
-                "执行声称已完成但 auto_har 无真实流量；空 findings 不能解读为「系统无缺陷」。"
-            )
-        elif missing_phases:
-            operator_note = (
-                f"关键 phase 缺失（{', '.join(missing_phases)}）；结果不可作为无缺陷证据。"
-            )
-        elif binding_blocked and _as_int(execution.get("executed")) == 0:
-            operator_note = (
-                "候选探针因 missing_runtime_path_binding / precondition_not_met 未形成运行时收据；"
-                "空 findings 不能解读为「系统无缺陷」，请先补齐真实 ID / 路径绑定。"
-            )
-        else:
-            operator_note = (
-                "发现链路关键阶段失败或可观测性缺口：空 findings / 零缺陷不代表目标系统无缺陷，"
-                "请先修复执行/账号/探针可观测性问题后再解读结果。"
-            )
-    elif status == "BLOCKED" and not operator_note:
-        operator_note = (
-            f"执行阶段未产出运行时收据（status={execution.get('status')}, "
-            f"reason={execution.get('reason') or 'unknown'}）；不能把本轮解读为「系统无缺陷」。"
+    empty_means_no_bugs = bool(
+        status == "OK"
+        and selected > 0
+        and selected == terminal
+        and all(
+            _text(item.get("terminal_status")).upper() == "REJECTED"
+            and _text(item.get("reason_code")).upper() == "ORACLE_NOT_VIOLATED"
+            for item in attempts
         )
-    elif status == "DEGRADED" and not operator_note:
-        notes = []
-        if stop_reason == "slice_budget_reached":
-            notes.append("本轮触及 slice_budget，仍有未执行行为切片")
-        if pending_slices:
-            notes.append(f"{len(pending_slices)} 个 pending 切片未尝试")
-        if binding_blocked:
-            notes.append("部分探针因路径绑定/前置条件未满足被跳过")
-        if funnel_error:
-            notes.append(f"漏斗聚合异常：{funnel_error[:120]}")
-        if cleanup_failures:
-            notes.append(f"{cleanup_failures} 条 finding cleanup 未成功")
-        if usage_cost_unknown:
-            notes.append("模型请求已发生但 usage/cost 未知（不得显示为 0）")
-        if cleanliness_unproven:
-            notes.append("target cleanliness 未证明")
+    )
+    reasons = Counter(
+        _text(item.get("reason_code")) for item in attempts if _text(item.get("reason_code"))
+    )
+    if status == "OK":
+        operator_note = "All selected obligations reached terminal, receipt-backed outcomes."
+    else:
+        reason_summary = ", ".join(
+            f"{reason.lower()}={count}"
+            for reason, count in sorted(reasons.items())
+        ) or "none"
+        health_flags = [
+            label
+            for active, label in (
+                (error_present, "result.error"),
+                (bool(stage_failures), "stage_failures"),
+                (secret_scan_failed, "secret_scan_failed"),
+                (observation_missing > 0, "observation_receipts_missing"),
+                (cost_unknown, "usage/cost_coverage_unknown"),
+                (reasoner_failure_count > 0, "reasoner_failures"),
+                (formal_mismatch, "formal_id_mismatch"),
+                (cleanup_failures > 0, "cleanup_failures"),
+                (blocked > 0, "blocked_or_deferred_obligations"),
+                (selected == 0, "no_obligations_selected"),
+            )
+            if active
+        ]
+        flag_summary = ", ".join(health_flags) or "terminal_outcome_degraded"
         operator_note = (
-            "；".join(notes) + "。空 findings 仅表示本轮已执行子集未确认缺陷，不能外推为全量无缺陷。"
-            if notes
-            else "发现链路部分候选未执行；空 findings 不能外推为全量无缺陷。"
+            "Attempt receipts expose incomplete, blocked, failed, or unmeasured discovery work; "
+            "empty findings must not be interpreted as a defect-free target. "
+            f"Health flags: {flag_summary}. Terminal reasons: {reason_summary}."
         )
-
     return {
         "status": status,
-        "empty_findings_means_no_bugs": status == "OK",
-        "execution_status": effective_status,
-        "execution_reason": str(execution.get("reason") or ""),
-        "observability_status": str(execution.get("observability_status") or ("ok" if observability and not failed_obs else "")),
-        "observability_gaps": failed_obs[:12],
-        "failed_stages": failed_stages,
-        "failed_phases": failed_phases,
-        "degraded_phases": degraded_phases,
-        "stage_failures": stage_failures[:20],
-        "result_error": result_error[:300] if result_error else "",
-        "no_real_traffic": no_real_traffic,
+        "execution_status": execution_status,
+        "selected_obligation_count": selected,
+        "terminal_obligation_count": terminal,
+        "executed_obligation_count": executed,
+        "blocked_obligation_count": blocked,
+        "harness_failure_count": harness_failures,
         "cleanup_failure_count": cleanup_failures,
-        "usage_cost_unknown": usage_cost_unknown,
-        "secret_scan_failed": bool(secret_scan_failed),
-        "missing_phases": missing_phases,
-        "unexecuted_candidate_signal": {
-            "stop_reason": stop_reason,
-            "pending_slice_count": len(pending_slices),
-            "binding_or_precondition_blocks": binding_blocked,
-            "skip_reason_counts": {k: reason_counts[k] for k in list(reason_counts)[:12]},
-        },
+        "observation_receipt_missing_count": observation_missing,
+        "empty_findings_means_no_bugs": empty_means_no_bugs,
+        "usage_cost_unknown": cost_unknown,
+        "reasoner_status": reasoner_status,
+        "reasoner_failure_count": reasoner_failure_count,
+        "reasoner_error_class_counts": reasoner_error_class_counts,
+        "secret_scan_failed": secret_scan_failed,
+        "formal_id_mismatch": formal_mismatch,
+        "terminal_reason_counts": dict(sorted(reasons.items())),
+        "formal_customer_deliverable_count": formal["formal_customer_deliverable_count"],
+        "formal_finding_ids": list(formal["formal_finding_ids"]),
+        "planning_gap_reason": "NO_OBLIGATIONS_SELECTED" if selected == 0 else "",
         "operator_note": operator_note,
+    }
+
+
+def build_funnel(
+    v12_result: dict[str, Any],
+    gate_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Project required stage loss from attempt receipts; legacy gate rows are ignored."""
+
+    del gate_results
+    result = _dict(v12_result)
+    ledger = _attempt_ledger(result)
+    attempts = [_dict(item) for item in _list(ledger.get("attempts"))]
+    formal = _formal_projection(result)
+    stages = [
+        _stage_projection(attempts, stage_name)
+        for stage_name in REQUIRED_STAGE_NAMES
+    ]
+    reasons = Counter(
+        _text(item.get("reason_code")) for item in attempts if _text(item.get("reason_code"))
+    )
+    top_reasons = [
+        {"reason": reason, "count": count}
+        for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    rejected_pending = sum(
+        1
+        for item in attempts
+        if _text(item.get("terminal_status")).upper() == "REJECTED"
+        and _text(item.get("reason_code")).upper() != "ORACLE_NOT_VIOLATED"
+    )
+    health = build_pipeline_health(result)
+    return {
+        "schema_version": "qualibug.discovery-funnel.v2",
+        "stages": stages,
+        "top_blocking_reasons": top_reasons,
+        "validated_bug_count": formal["formal_customer_deliverable_count"],
+        "formal_finding_ids": list(formal["formal_finding_ids"]),
+        "pending_finding_count": rejected_pending,
+        "candidate_count": _int(ledger.get("selected_count")),
+        "explanation": (
+            f"{_int(ledger.get('selected_count'))} selected obligations, "
+            f"{_int(ledger.get('terminal_count'))} terminal outcomes, "
+            f"{formal['formal_customer_deliverable_count']} formal deliverables; "
+            f"pipeline health {health['status']}; all counts come from immutable "
+            "attempt and formal projection receipts."
+        ),
+        "pipeline_health": health,
+        "receipt_authority": "obligation_attempt_ledger",
     }
 
 
@@ -478,42 +493,39 @@ def reconcile_pipeline_health_after_campaign_cleanup(
     environment_restored: bool = False,
     original_cleanup_failures: int | None = None,
 ) -> dict[str, Any]:
-    """Record environment_restored after campaign reset without erasing cleanup failures.
+    """Record a global reset without erasing original per-attempt cleanup failures."""
 
-    Global reset may prove the environment is restored, but original per-scenario
-    cleanup failures remain visible for scoring and audit. Other degradation
-    causes (unexecuted candidates, preflight, cost unknown) also remain visible.
-    """
+    del scenario_cleanup_failures_recovered
     health = dict(pipeline_health or {})
-    residual_cleanup_failures = 0
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        cleanup = _as_dict(finding.get("cleanup") or _as_dict(finding.get("evidence")).get("cleanup"))
-        status_text = str(cleanup.get("status") or finding.get("cleanup_status") or "").strip().upper()
-        if status_text in {
+    residual = sum(
+        1
+        for finding in findings
+        if isinstance(finding, dict)
+        and _text(
+            _dict(finding.get("cleanup") or _dict(finding.get("evidence")).get("cleanup")).get("status")
+            or finding.get("cleanup_status")
+        ).upper()
+        in {
             "FAILED",
             "CLEANUP_INCOMPLETE",
             "CLEANUP_NOT_SUCCEEDED",
             "INCOMPLETE",
             "NOT_REVERSIBLE",
-        }:
-            residual_cleanup_failures += 1
-    preserved = int(
-        original_cleanup_failures
-        if original_cleanup_failures is not None
-        else (_as_int(health.get("cleanup_failure_count")) or residual_cleanup_failures)
+        }
     )
-    # Never zero out original cleanup failures because a global reset succeeded.
-    health["cleanup_failure_count"] = max(preserved, residual_cleanup_failures)
+    preserved = (
+        _int(original_cleanup_failures)
+        if original_cleanup_failures is not None
+        else max(_int(health.get("cleanup_failure_count")), residual)
+    )
+    health["cleanup_failure_count"] = max(preserved, residual)
     health["environment_restored"] = bool(environment_restored)
     health["scenario_cleanup_failures_recovered_by_campaign_reset"] = 0
     health["campaign_cleanup_recovered"] = False
     if environment_restored:
-        note = str(health.get("operator_note") or "")
         health["operator_note"] = (
-            f"{note} Campaign reset recorded environment_restored=true; "
-            f"original cleanup_failure_count={health['cleanup_failure_count']} preserved."
+            f"{_text(health.get('operator_note'))} Campaign reset restored the environment; "
+            f"original cleanup_failure_count={health['cleanup_failure_count']} remains visible."
         ).strip()
     return health
 
@@ -524,253 +536,45 @@ def reconcile_product_pipeline_health(
     execution_status: str,
     preflight_diagnostics: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Reconcile V12 health with product-level preflight/execution truth.
+    """Apply product preflight truth without manufacturing execution success."""
 
-    V12 can have no execution phase when product preflight blocks the run. In
-    that case its local funnel has insufficient context and must not report OK
-    or interpret empty findings as evidence of no defects.
-    """
     health = dict(v12_health or {})
-    normalized_execution = str(execution_status or "not_executed").strip().lower()
-    diagnostics = _as_dict(preflight_diagnostics)
+    normalized = _text(execution_status or "not_executed").lower()
+    diagnostics = _dict(preflight_diagnostics)
     preflight_present = any(
         key in diagnostics for key in ("ready", "all_checks_passed", "errors", "checks")
     )
     preflight_failed = preflight_present and (
         diagnostics.get("ready") is False
         or diagnostics.get("all_checks_passed") is False
-        or _as_int(diagnostics.get("errors")) > 0
+        or _int(diagnostics.get("errors")) > 0
     )
-    execution_completed = normalized_execution in {"completed", "executed"}
-    execution_partial = normalized_execution == "partial"
-    if execution_partial:
-        health["status"] = "DEGRADED"
-        health["empty_findings_means_no_bugs"] = False
-        health["execution_status"] = normalized_execution
-        health["execution_reason"] = "partial_execution"
-        health["operator_note"] = (
-            "Experiment Executor 仅完成部分入选实验；已执行收据可形成结论，"
-            "未执行/阻断部分必须保留为覆盖缺口，不能宣称全量完成。"
-        )
-    elif not execution_completed:
-        health["status"] = (
-            "FAILED_SAFE" if str(health.get("status") or "").upper() == "FAILED_SAFE" else "BLOCKED"
-        )
-        health["empty_findings_means_no_bugs"] = False
-        health["execution_status"] = normalized_execution
-        health["execution_reason"] = (
-            "preflight_not_ready" if preflight_failed else "execution_not_completed"
-        )
-        health["operator_note"] = (
-            "产品级执行未产生完整运行时收据；空 findings 不能解释为目标无缺陷。"
-            f" execution_status={normalized_execution}, "
-            f"preflight_errors={_as_int(diagnostics.get('errors'))}."
-        )
+    if normalized == "partial":
+        health.update({
+            "status": "DEGRADED",
+            "execution_status": normalized,
+            "execution_reason": "partial_execution",
+            "empty_findings_means_no_bugs": False,
+        })
+    elif normalized not in {"completed", "executed"}:
+        health.update({
+            "status": "FAILED_SAFE" if _text(health.get("status")).upper() == "FAILED_SAFE" else "BLOCKED",
+            "execution_status": normalized,
+            "execution_reason": "preflight_not_ready" if preflight_failed else "execution_not_completed",
+            "empty_findings_means_no_bugs": False,
+        })
     elif preflight_failed:
-        health["status"] = "DEGRADED"
-        health["empty_findings_means_no_bugs"] = False
-        health["execution_status"] = normalized_execution
-        health["execution_reason"] = "preflight_health_failed"
-        health["operator_note"] = (
-            "执行虽已返回，但产品级 preflight 未通过；结果覆盖不完整，"
-            "空 findings 不能解释为目标无缺陷。"
-        )
+        health.update({
+            "status": "DEGRADED",
+            "execution_status": normalized,
+            "execution_reason": "preflight_health_failed",
+            "empty_findings_means_no_bugs": False,
+        })
     health["preflight"] = {
         "present": preflight_present,
         "ready": diagnostics.get("ready"),
         "all_checks_passed": diagnostics.get("all_checks_passed"),
-        "errors": _as_int(diagnostics.get("errors")),
-        "warnings": _as_int(diagnostics.get("warnings")),
+        "errors": _int(diagnostics.get("errors")),
+        "warnings": _int(diagnostics.get("warnings")),
     }
     return health
-
-
-def _build_explanation(
-    *,
-    validated_bug_count: int,
-    pending_finding_count: int,
-    candidate_count: int,
-    stages: list[dict[str, Any]],
-    top_blocking_reasons: list[dict[str, Any]],
-    unify: dict[str, Any],
-    pipeline_health: dict[str, Any] | None = None,
-) -> str:
-    parts: list[str] = []
-    health = _as_dict(pipeline_health)
-    health_status = str(health.get("status") or "OK")
-    if health_status == "FAILED_SAFE":
-        parts.append(
-            str(health.get("operator_note") or "")
-            or "发现链路 FAILED_SAFE：空结果不能解读为「系统无缺陷」。"
-        )
-    elif health_status == "BLOCKED":
-        parts.append(
-            str(health.get("operator_note") or "")
-            or "执行阶段被阻断，本轮未形成可验证运行时证据。"
-        )
-
-    gen = next((s for s in stages if s["name"] == "candidate_generation"), None)
-    sel = next((s for s in stages if s["name"] == "probe_selection"), None)
-    exe = next((s for s in stages if s["name"] == "execution"), None)
-    ver = next((s for s in stages if s["name"] == "verification"), None)
-    acc = next((s for s in stages if s["name"] == "formal_accounting"), None)
-
-    if validated_bug_count == 0:
-        if health_status in {"FAILED_SAFE", "BLOCKED"}:
-            parts.append(
-                f"本轮正式记账的已验证 Bug 为 0（候选 {candidate_count}，待确认发现 {pending_finding_count}），"
-                f"但链路状态为 {health_status}，不能据此宣称目标系统无缺陷。"
-            )
-        else:
-            parts.append(f"本轮正式记账的已验证 Bug 为 0（候选 {candidate_count}，待确认发现 {pending_finding_count}）。")
-    else:
-        parts.append(
-            f"本轮已验证 Bug {validated_bug_count}；待确认发现 {pending_finding_count}（不计入客户可见已验证 Bug）；候选信号 {candidate_count}。"
-        )
-
-    if gen and sel and gen["input"] > 0 and sel["output"] < gen["output"]:
-        parts.append(
-            f"候选生成 {gen['output']} 条切片，入选执行 {sel['output']} 条（预算择优，未入选 {sel['dropped']}）。"
-        )
-    if exe and exe["input"] > 0 and exe["dropped"] > 0:
-        parts.append(f"执行阶段输入 {exe['input']}，成功产出可验证轨迹 {exe['output']}，损耗 {exe['dropped']}。")
-    if ver and ver["input"] > 0:
-        parts.append(f"验证阶段评估 {ver['input']}，检出违规/发现 {ver['output']}。")
-    if acc and pending_finding_count > 0 and validated_bug_count < pending_finding_count:
-        parts.append(
-            f"{pending_finding_count} 条语义/候选发现因证据链不全未计入正式 Bug。"
-        )
-
-    top = top_blocking_reasons[:3]
-    if top:
-        reason_text = "、".join(f"{item['reason']}×{item['count']}" for item in top)
-        parts.append(f"Top 阻断原因：{reason_text}。")
-
-    suggestions: list[str] = []
-    reason_keys = {str(item.get("reason") or "") for item in top_blocking_reasons}
-    if any(key in reason_keys for key in ("BEFORE_SNAPSHOT_MISSING", "AFTER_SNAPSHOT_MISSING", "CLEANUP_PENDING")):
-        suggestions.append("建议开启沙箱写探针（QUALIBUG_ENABLE_SANDBOX_WRITE=1）并确认测试环境标记，以补齐写操作 before/after/cleanup 证据链")
-    if "dropped_no_endpoint" in reason_keys:
-        suggestions.append("部分假设无法绑定 API 文档中的真实 endpoint，请检查 OpenAPI/API 文档是否完整")
-    if "llm_provider_unavailable" in reason_keys or str(_as_dict(unify.get("llm_reasoner")).get("status") or "") == "provider_unavailable":
-        suggestions.append("LLM Reasoner 当前不可用（provider offline）；配置并健康检查通过后再开 QUALIBUG_UNIFY_LLM_REASONER=1")
-    if "production_data_blocked" in reason_keys:
-        suggestions.append("部分探针命中生产数据排除规则被拦截，请核对 production_data_exclusion 与测试环境范围")
-    if "execution_observability_gap" in reason_keys or any(key.startswith("observability_") for key in reason_keys):
-        suggestions.append("多角色账号/禁用账号探针可观测性失败，请检查 platform_inputs/<project>/test_accounts.json 与登录探针配置")
-    if "missing_runtime_path_binding" in reason_keys or "precondition_not_met" in reason_keys:
-        suggestions.append("部分探针缺少真实路径/ID 绑定或前置条件未满足，请补齐 OpenAPI 可列表端点与多角色测试账号后再解读零缺陷")
-    if "slice_budget_reached" in reason_keys or "unattempted_behavior_slices" in reason_keys or "unselected_behavior_slices" in reason_keys:
-        suggestions.append("本轮切片预算未覆盖全部候选，请提高 QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND / 轮次或继续增量发现后再宣称全量无缺陷")
-    if any(key.startswith("discovery_") and key.endswith("FAILED_SAFE") for key in reason_keys) or any(key.startswith("stage_failure:") for key in reason_keys):
-        suggestions.append("发现引擎关键阶段 FAILED_SAFE，请查看 stage_failures / pipeline_health 后再解读零缺陷结果")
-    if any("runtime" in key.lower() or "approval" in key.lower() or key in {"no_base_url", "execution_blocked"} for key in reason_keys):
-        suggestions.append("检查 runtime_contract / base_url / 执行批准是否已批准，否则执行阶段会 plan_only 或 blocked")
-    if suggestions:
-        parts.append("下一步：" + "；".join(suggestions) + "。")
-    elif validated_bug_count == 0 and not top and health_status == "OK":
-        parts.append("漏斗各阶段未见明确阻断码；请核对是否有可执行切片入选，以及目标系统是否可达。")
-    elif validated_bug_count == 0 and health_status == "DEGRADED":
-        parts.append(str(health.get("operator_note") or "发现链路存在未执行候选，不能把本轮零缺陷外推为全量无缺陷。"))
-
-    return "".join(parts)
-
-
-def build_funnel(v12_result: dict[str, Any], gate_results: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Aggregate five-stage discovery funnel from a v12 pipeline result."""
-    result = _as_dict(v12_result)
-    phases = _as_dict(result.get("phases"))
-    ledger = _as_dict(result.get("behavior_slice_ledger"))
-    selection = _as_dict(phases.get("incremental_discovery"))
-    execution = _as_dict(phases.get("execution"))
-    oracle = _as_dict(phases.get("oracle"))
-    unify = _as_dict(result.get("mainline_unification"))
-    pipeline_health = build_pipeline_health(result)
-
-    total_slices = _as_int(ledger.get("total_slices"))
-    if total_slices <= 0:
-        behavior_slices = _as_list(result.get("behavior_slices"))
-        if behavior_slices:
-            total_slices = len(behavior_slices)
-    if total_slices <= 0:
-        slices = _as_list(_as_dict(result.get("behavior_contract")).get("slices"))
-        if not slices:
-            summary = _as_dict(_as_dict(result.get("behavior_contract")).get("summary"))
-            if not summary:
-                summary = _as_dict(_as_dict(phases.get("state_graph")).get("behavior_slices"))
-            total_slices = _as_int(summary.get("total_slices"))
-        else:
-            total_slices = len(slices)
-    if total_slices <= 0:
-        total_slices = _as_int(selection.get("total_slices")) or len(_as_list(selection.get("selected_slice_ids")))
-
-    selected_ids = _as_list(selection.get("selected_slice_ids") or ledger.get("selected_slice_ids"))
-    selected_count = len([sid for sid in selected_ids if str(sid).strip()])
-    if selected_count <= 0 and isinstance(selection.get("selected"), list):
-        selected_count = len(selection["selected"])
-    if selected_count <= 0 and isinstance(selection.get("selected_slices"), list):
-        selected_count = len(selection["selected_slices"])
-
-    executed = _as_int(execution.get("executed"))
-    failed = _as_int(execution.get("failed"))
-    planned_only = _as_int(execution.get("planned_only"))
-    # Successful execution traces available for verification
-    execution_output = max(0, executed) if str(execution.get("status") or "") in {"completed", "partial", ""} else 0
-    if str(execution.get("status") or "") == "completed" and executed == 0 and planned_only > 0:
-        execution_output = 0
-
-    total_evaluated = _as_int(oracle.get("total_evaluated"), execution_output)
-    violations_found = _as_int(oracle.get("violations_found"))
-
-    findings = [item for item in _as_list(result.get("findings")) if isinstance(item, dict)]
-    validated_bug_count = sum(1 for item in findings if _is_validated_bug(item))
-    pending_finding_count = sum(1 for item in findings if _is_pending_finding(item))
-    candidate_count = max(len(findings), violations_found, total_slices)
-
-    # Five stages: generation → selection → execution → verification → accounting
-    gen_input = max(total_slices, selected_count)
-    gen_output = total_slices if total_slices > 0 else selected_count
-    # Include unified bound slices in generation observability when present
-    unified_bound = sum(_as_int(_as_dict(v).get("bound")) for k, v in unify.items() if k != "error" and isinstance(v, dict))
-    if unified_bound and total_slices > 0:
-        gen_input = max(gen_input, total_slices)
-
-    stages = [
-        _stage("candidate_generation", max(gen_input, gen_output), gen_output),
-        _stage("probe_selection", gen_output if gen_output > 0 else selected_count, selected_count),
-        _stage("execution", max(selected_count, executed + failed + planned_only, execution_output), execution_output),
-        _stage("verification", max(total_evaluated, execution_output), max(violations_found, len(findings))),
-        _stage(
-            "formal_accounting",
-            max(len(findings), violations_found, validated_bug_count + pending_finding_count),
-            validated_bug_count,
-        ),
-    ]
-
-    # Ensure stage name order and presence
-    by_name = {s["name"]: s for s in stages}
-    stages = [by_name[name] for name in _STAGE_NAMES]
-
-    top_blocking_reasons = _collect_blocking_reasons(result, gate_results)
-    explanation = _build_explanation(
-        validated_bug_count=validated_bug_count,
-        pending_finding_count=pending_finding_count,
-        candidate_count=candidate_count,
-        stages=stages,
-        top_blocking_reasons=top_blocking_reasons,
-        unify=unify,
-        pipeline_health=pipeline_health,
-    )
-
-    return {
-        "stages": stages,
-        "top_blocking_reasons": top_blocking_reasons,
-        "validated_bug_count": validated_bug_count,
-        "pending_finding_count": pending_finding_count,
-        "candidate_count": candidate_count,
-        "explanation": explanation,
-        "pipeline_health": pipeline_health,
-        "mainline_unification": {
-            key: value for key, value in unify.items() if key != "error" or value
-        } if unify else {},
-    }

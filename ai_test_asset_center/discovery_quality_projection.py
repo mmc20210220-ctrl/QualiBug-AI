@@ -355,20 +355,6 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
     scoped = authority_scoped_findings(result)
     authoritative_findings = scoped["authoritative_findings"]
     authoritative_candidates = scoped["authoritative_candidates"]
-    initial_counts = build_formal_count_projection(
-        findings=authoritative_findings,
-        candidate_findings=authoritative_candidates,
-        discovery_funnel=_dict(result.get("discovery_funnel")),
-    )
-    # Align legacy funnel diagnostics to the formal customer-delivery SSOT before
-    # building downstream projections. Otherwise nested projections can retain a
-    # stale pre-gate `validated_bug_count` even after cleanup/readjudication
-    # promotes additional customer-deliverable defects.
-    funnel = _dict(result.get("discovery_funnel"))
-    if funnel:
-        funnel = dict(funnel)
-        funnel["validated_bug_count"] = initial_counts["formal_customer_deliverable_count"]
-        result["discovery_funnel"] = funnel
     counts = build_formal_count_projection(
         findings=authoritative_findings,
         candidate_findings=authoritative_candidates,
@@ -442,11 +428,12 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
             "score_field": "external_evaluator",
             "commercial_quality_score": external.get("quality_score"),
         }
-    # Align funnel validated count with formal SSOT when funnel is present.
+    # Preserve the immutable funnel receipt and attach the formal projection as
+    # a separate authority. A mismatch is observable; projection must not hide
+    # it by rewriting the historical funnel count.
     funnel = _dict(result.get("discovery_funnel"))
     if funnel:
         funnel = dict(funnel)
-        funnel["validated_bug_count"] = counts["formal_customer_deliverable_count"]
         funnel["formal_count_projection"] = counts
         result["discovery_funnel"] = funnel
     return result

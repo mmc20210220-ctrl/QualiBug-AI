@@ -118,11 +118,6 @@ def _apply_scan_execution_defaults(context: dict[str, Any], base_url: str) -> di
     return normalized
 
 
-def _truthy_env(name: str, default: str = "") -> bool:
-    value = str(os.environ.get(name, default) or "").strip().lower()
-    return value not in {"", "0", "false", "no", "off"}
-
-
 def _gap(code: str, detail: str) -> dict[str, str]:
     return {"kind": "SOURCE_INPUT_GAP", "code": code, "detail": detail}
 
@@ -134,71 +129,6 @@ def _safe_project(value: str) -> str:
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
-
-
-def _is_local_loopback_runtime(base_url: str) -> bool:
-    try:
-        parsed = urlparse(str(base_url or "").strip())
-    except Exception:
-        return False
-    host = str(parsed.hostname or "").strip().lower()
-    return (
-        host in {"127.0.0.1", "localhost", "::1"}
-        and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1"
-        and _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "1")
-    )
-
-
-def _issue_local_execution_approval(project: str, root: Path, context: dict[str, Any], campaign: dict[str, Any], base_url: str) -> str:
-    if not _is_local_loopback_runtime(base_url):
-        return ""
-    if str(context.get("execution_approval_id") or "").strip():
-        return ""
-    execution_mode = str(context.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
-    if execution_mode not in {"safe_read_only", "approved_sandbox_write"}:
-        return ""
-    campaign_id = str(campaign.get("campaign_id") or "").strip()
-    scope_id = str(campaign.get("scope_id") or "").strip()
-    environment_ref = str(campaign.get("environment_ref") or "").strip()
-    source_hash = str(campaign.get("source_hash") or "").strip().lower()
-    if not campaign_id or not scope_id or not environment_ref or not _SHA256_RE.fullmatch(source_hash):
-        return ""
-    try:
-        from .execution_approvals import issue_execution_approval
-
-        approval = issue_execution_approval(
-            project,
-            root=root,
-            campaign_id=campaign_id,
-            scope_id=scope_id,
-            environment_ref=environment_ref,
-            source_hash=source_hash,
-            target_base_url=base_url,
-            execution_mode=execution_mode,
-            expires_at_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600)),
-            actor={"name": "local_dev_scan", "role": "system"},
-        )
-    except Exception:
-        return ""
-    return str(approval.get("approval_id") or "").strip()
-
-
-def _should_refresh_local_execution_approval(runtime_contract: dict[str, Any], context: dict[str, Any]) -> bool:
-    if not str(context.get("execution_approval_id") or "").strip():
-        return False
-    if str(runtime_contract.get("reason") or "") != "execution_approval_required":
-        return False
-    missing = {
-        str(code or "").strip()
-        for code in (runtime_contract.get("missing_requirements") if isinstance(runtime_contract.get("missing_requirements"), list) else [])
-        if str(code or "").strip()
-    }
-    return any(
-        code == "EXECUTION_APPROVAL_CAMPAIGN_ID_MISMATCH"
-        or code == "EXECUTION_APPROVAL_INVALID"
-        or code.startswith("EXECUTION_APPROVAL_")
-        for code in missing
-    )
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -4204,167 +4134,6 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     from .discovery_funnel import effective_execution_status
 
     execution_status = effective_execution_status(v12)
-    refresh_local_approval = _should_refresh_local_execution_approval(runtime_contract, context)
-    if (
-        execution_status == "blocked"
-        and str(runtime_contract.get("reason") or "") == "execution_approval_required"
-        and (not str(context.get("execution_approval_id") or "").strip() or refresh_local_approval)
-    ):
-        if refresh_local_approval:
-            context.pop("execution_approval_id", None)
-        approval_id = _issue_local_execution_approval(project, root, context, campaign, approved_base_url)
-        if approval_id:
-            context["execution_approval_id"] = approval_id
-            try:
-                v12 = run_v12_pipeline(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, campaign_context=context)
-            except Exception as exc:
-                return {"success": False, "error": f"v12_pipeline_failed:{type(exc).__name__}:{exc}"}
-            runtime_contract = _as_dict(v12.get("runtime_contract")) or initial_runtime_contract
-            phases = _as_dict(v12.get("phases"))
-            execution = _as_dict(phases.get("execution"))
-            campaign = _as_dict(v12.get("campaign"))
-            execution_status = effective_execution_status(v12)
-
-    # ── Automatic multi-round campaign convergence ──
-    # A single behavior-slice round only exercises up to the per-round budget.
-    # When the campaign still has unattempted, source-executable slices, drive
-    # additional rounds in-process — feeding each round's confirmed findings
-    # back as history — so supplementary probes (permission / isolation /
-    # money / concurrency / state) accumulate coverage instead of stalling at
-    # one batch.  Bounded by round_limit and QUALIBUG_SCAN_MAX_ROUNDS.
-    if execution_status == "completed":
-        try:
-            from .v12_pipeline import run_v12_pipeline as _run_v12
-        except Exception:
-            _run_v12 = None
-        if _run_v12 is not None:
-            # How many times scan() re-drives run_v12. When the operator did not
-            # pin QUALIBUG_SCAN_MAX_ROUNDS, follow the auto-scaled round limit the
-            # pipeline sized to this system (so a large enterprise drains its pool
-            # without a manual bump). Absolute-bounded at 24.
-            try:
-                _auto_round_limit = int(_as_dict(v12.get("auto_scale")).get("round_limit") or 8)
-            except (TypeError, ValueError):
-                _auto_round_limit = 8
-            if "QUALIBUG_SCAN_MAX_ROUNDS" in os.environ:
-                try:
-                    _max_rounds = int(os.environ.get("QUALIBUG_SCAN_MAX_ROUNDS") or "8")
-                except (TypeError, ValueError):
-                    _max_rounds = 8
-            else:
-                _max_rounds = _auto_round_limit
-            _max_rounds = max(1, min(_max_rounds, 24))
-            _acc_findings: list[dict[str, Any]] = [f for f in (v12.get("findings") or []) if isinstance(f, dict)]
-            _seen_keys = {(str(f.get("behavior_slice_id") or ""), str(f.get("title") or "")) for f in _acc_findings}
-            # Evidence graphs are the execution half of finding lineage. The old
-            # loop accumulated findings but replaced V12 with the final round,
-            # silently discarding earlier execution traces and making confirmed
-            # findings impossible to audit or cluster by causal failure.
-            _acc_evidence_graphs: list[dict[str, Any]] = [
-                item for item in (v12.get("evidence_graphs") or []) if isinstance(item, dict)
-            ]
-
-            def _evidence_graph_key(item: dict[str, Any]) -> tuple[str, str, str]:
-                _scenario = _as_dict(item.get("scenario"))
-                return (
-                    str(item.get("evidence_id") or ""),
-                    str(_scenario.get("id") or ""),
-                    str(_scenario.get("behavior_slice_id") or ""),
-                )
-
-            _seen_evidence_graph_keys = {_evidence_graph_key(item) for item in _acc_evidence_graphs}
-            _acc_execution_trace_summaries: list[dict[str, Any]] = [
-                item
-                for item in (v12.get("execution_trace_summaries") or [])
-                if isinstance(item, dict)
-            ]
-
-            def _execution_trace_summary_key(
-                item: dict[str, Any],
-            ) -> tuple[str, str, str]:
-                _scenario = _as_dict(item.get("scenario"))
-                _execution_trace = _as_dict(item.get("execution_trace"))
-                return (
-                    str(_scenario.get("behavior_slice_id") or ""),
-                    str(
-                        _execution_trace.get("scenario_id")
-                        or _scenario.get("id")
-                        or ""
-                    ),
-                    str(_execution_trace.get("actor_role") or ""),
-                )
-
-            _seen_execution_trace_summary_keys = {
-                _execution_trace_summary_key(item)
-                for item in _acc_execution_trace_summaries
-            }
-            _rounds_run = 1
-            while _rounds_run < _max_rounds:
-                _ledger = _as_dict(v12.get("behavior_slice_ledger"))
-                _campaign_status = str(_as_dict(v12.get("campaign")).get("campaign_status") or "")
-                if _ledger.get("next_round") in (None, "", 0) or _campaign_status in {"completed", "blocked", "coverage_deferred"}:
-                    break
-                try:
-                    _next = _run_v12(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, existing_findings=_acc_findings, campaign_context=context)
-                except Exception:
-                    break
-                _next_exec = str(_as_dict(_as_dict(_next.get("phases")).get("execution")).get("status") or "")
-                if _next_exec != "completed":
-                    break
-                _new = 0
-                for _f in (_next.get("findings") or []):
-                    if not isinstance(_f, dict):
-                        continue
-                    _k = (str(_f.get("behavior_slice_id") or ""), str(_f.get("title") or ""))
-                    if _k not in _seen_keys:
-                        _seen_keys.add(_k)
-                        _acc_findings.append(_f)
-                        _new += 1
-                for _graph in (_next.get("evidence_graphs") or []):
-                    if not isinstance(_graph, dict):
-                        continue
-                    _graph_key = _evidence_graph_key(_graph)
-                    if _graph_key not in _seen_evidence_graph_keys:
-                        _seen_evidence_graph_keys.add(_graph_key)
-                        _acc_evidence_graphs.append(_graph)
-                for _trace_summary in (
-                    _next.get("execution_trace_summaries") or []
-                ):
-                    if not isinstance(_trace_summary, dict):
-                        continue
-                    _trace_summary_key = _execution_trace_summary_key(
-                        _trace_summary
-                    )
-                    if (
-                        _trace_summary_key
-                        not in _seen_execution_trace_summary_keys
-                    ):
-                        _seen_execution_trace_summary_keys.add(
-                            _trace_summary_key
-                        )
-                        _acc_execution_trace_summaries.append(_trace_summary)
-                v12 = _next
-                _rounds_run += 1
-                # Stop early if a round contributed nothing new AND has no next round.
-                if _new == 0 and _as_dict(_next.get("behavior_slice_ledger")).get("next_round") in (None, "", 0):
-                    break
-            v12["findings"] = _acc_findings
-            v12["evidence_graphs"] = _acc_evidence_graphs
-            v12["execution_trace_summaries"] = _acc_execution_trace_summaries
-            v12["multi_round_summary"] = {
-                "rounds_run": _rounds_run,
-                "max_rounds": _max_rounds,
-                "accumulated_findings": len(_acc_findings),
-                "accumulated_evidence_graphs": len(_acc_evidence_graphs),
-                "accumulated_execution_trace_summaries": len(
-                    _acc_execution_trace_summaries
-                ),
-            }
-            runtime_contract = _as_dict(v12.get("runtime_contract")) or runtime_contract
-            phases = _as_dict(v12.get("phases"))
-            execution = _as_dict(phases.get("execution"))
-            campaign = _as_dict(v12.get("campaign"))
-            execution_status = effective_execution_status(v12)
     confirmed, candidates = _classify_findings(v12.get("findings"))
     # Collapse state-graph cross-product duplicates so one real defect is not
     # reported as N near-identical P0 rows. Collapsed lifecycle variants are
@@ -4571,29 +4340,15 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         selected_slices=selected_slices,
         plan_only_scenarios=v12.get("plan_only_scenarios") if isinstance(v12.get("plan_only_scenarios"), list) else [],
     )
-    from .discovery_funnel import reconcile_product_pipeline_health
+    from .discovery_funnel import build_funnel, reconcile_product_pipeline_health
 
-    discovery_funnel = _as_dict(v12.get("discovery_funnel"))
+    discovery_funnel = build_funnel(v12)
     pipeline_health = reconcile_product_pipeline_health(
         _as_dict(discovery_funnel.get("pipeline_health")),
         execution_status=execution_status,
         preflight_diagnostics=diagnostics,
     )
     discovery_funnel["pipeline_health"] = pipeline_health
-    # Rebuild formal accounting against post-dedupe findings so funnel /
-    # delivery-gate / submission counts share one SSOT.
-    try:
-        from .discovery_funnel import build_funnel as _rebuild_funnel
-
-        _post_dedupe_v12 = dict(v12)
-        _post_dedupe_v12["findings"] = list(confirmed)
-        _post_dedupe_v12["discovery_funnel"] = discovery_funnel
-        discovery_funnel = _rebuild_funnel(_post_dedupe_v12)
-        discovery_funnel["pipeline_health"] = pipeline_health
-    except Exception as _funnel_rebuild_exc:
-        discovery_funnel["formal_count_rebuild_error"] = (
-            f"{type(_funnel_rebuild_exc).__name__}: {str(_funnel_rebuild_exc)[:160]}"
-        )
     result: dict[str, Any] = {
         "success": True, "scan_id": scan_id, "project": project, "grade": grade, "score": score, "coverage": coverage,
         "total_findings": len(confirmed), "total_candidates": len(candidates), "total_ms": duration_ms,

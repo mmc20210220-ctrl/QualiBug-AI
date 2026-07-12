@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from ai_test_asset_center.discovery_funnel import (
+    DiscoveryFunnelError,
     build_funnel,
     build_pipeline_health,
     effective_execution_status,
@@ -19,35 +22,86 @@ from ai_test_asset_center.v12_pipeline import (
 )
 
 
-def test_pipeline_health_marks_failed_safe_when_execution_observability_gap():
-    health = build_pipeline_health({
-        "phases": {
-            "execution": {
-                "status": "completed",
-                "executed": 2,
-                "observability_status": "FAILED_SAFE",
-                "observability": [
-                    {"kind": "multi_role_accounts", "status": "missing", "reason": "test_accounts_json_missing"},
-                ],
+def _attempt_result(
+    outcomes: list[tuple[str, str]],
+    *,
+    run_id: str = "run-health",
+) -> dict:
+    selected = [
+        {
+            "obligation_id": f"obl-{index}",
+            "risk_family": "generic",
+            "required_operations": [f"op-{index}"],
+        }
+        for index, _ in enumerate(outcomes, start=1)
+    ]
+    compile_results: dict[str, dict] = {}
+    execution_results: dict[str, dict] = {}
+    gate_results: dict[str, dict] = {}
+    for index, (terminal, reason) in enumerate(outcomes, start=1):
+        obligation_id = f"obl-{index}"
+        if terminal in {"BLOCKED", "DEFERRED"}:
+            compile_results[obligation_id] = {
+                "status": terminal,
+                "reason_code": reason,
+                "cost_coverage_status": "MEASURED",
             }
+            continue
+        compile_results[obligation_id] = {
+            "status": "COMPILED",
+            "experiment_id": f"exp-{index}",
+            "cost_coverage_status": "MEASURED",
+        }
+        if terminal == "HARNESS_FAILED":
+            execution_results[obligation_id] = {
+                "status": terminal,
+                "reason_code": reason,
+                "execution_id": f"exec-{index}",
+                "cost_coverage_status": "MEASURED",
+            }
+            continue
+        execution_results[obligation_id] = {
+            "status": "EXECUTED",
+            "execution_id": f"exec-{index}",
+            "observation_receipt_ids": [f"obs-{index}"],
+            "oracle_receipt_id": f"oracle-{index}",
+            "cost_coverage_status": "MEASURED",
+        }
+        gate_results[obligation_id] = {
+            "status": terminal,
+            "reason_code": reason,
+            "gate_receipt_id": f"gate-{index}",
+            "cost_coverage_status": "MEASURED",
+        }
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": run_id, "campaign_id": "campaign-health"},
+        selected=selected,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results=gate_results,
+    )
+    return {
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "formal_customer_deliverable_count": 0,
+            "formal_finding_ids": [],
         },
-        "findings": [],
-    })
+    }
+
+
+def test_pipeline_health_marks_failed_safe_when_execution_observability_gap():
+    result = _attempt_result([("HARNESS_FAILED", "EXECUTION_OBSERVABILITY_GAP")])
+    result["stage_failures"] = ["execution_observability_gap"]
+    health = build_pipeline_health(result)
     assert health["status"] == "FAILED_SAFE"
     assert health["empty_findings_means_no_bugs"] is False
-    assert "无缺陷" in health["operator_note"] or "伪影" in health["operator_note"] or "不能" in health["operator_note"]
+    assert "must not" in health["operator_note"]
 
 
 def test_pipeline_health_marks_blocked_when_no_execution_receipts():
-    health = build_pipeline_health({
-        "phases": {
-            "execution": {
-                "status": "blocked",
-                "reason": "test_actor_identity_missing",
-                "executed": 0,
-            }
-        }
-    })
+    health = build_pipeline_health(
+        _attempt_result([("BLOCKED", "BLOCKED_MISSING_ACTOR")])
+    )
     assert health["status"] == "BLOCKED"
     assert health["empty_findings_means_no_bugs"] is False
 
@@ -81,8 +135,12 @@ def test_product_health_degrades_completed_run_when_preflight_failed() -> None:
     assert health["execution_reason"] == "preflight_health_failed"
 
 
-def test_experiment_http_receipts_override_legacy_no_traffic_without_hiding_partial_execution() -> None:
+def test_attempt_receipts_override_conflicting_legacy_execution_counters() -> None:
     result = {
+        **_attempt_result([
+            ("REJECTED", "ORACLE_NOT_VIOLATED"),
+            ("BLOCKED", "BLOCKED_MISSING_BINDING"),
+        ]),
         "phases": {"execution": {"status": "blocked", "executed": 0}},
         "auto_har": {"status": "no_traffic", "entry_count": 0},
         "experiment_execution": {
@@ -99,11 +157,11 @@ def test_experiment_http_receipts_override_legacy_no_traffic_without_hiding_part
         },
     }
 
-    assert effective_execution_status(result) == "partial"
+    assert effective_execution_status(result) == "completed"
     health = build_pipeline_health(result)
     assert health["status"] == "DEGRADED"
-    assert health["execution_status"] == "partial"
-    assert health["no_real_traffic"] is False
+    assert health["execution_status"] == "completed"
+    assert health["selected_obligation_count"] == 2
     assert health["empty_findings_means_no_bugs"] is False
 
 
@@ -120,117 +178,94 @@ def test_product_health_keeps_partial_experiment_run_degraded_not_blocked() -> N
 
 
 def test_build_funnel_embeds_pipeline_health_and_warns_on_zero_bugs():
-    funnel = build_funnel({
-        "phases": {
-            "incremental_discovery": {"selected_slice_ids": ["s1", "s2"], "total_slices": 2},
-            "execution": {
-                "status": "completed",
-                "executed": 0,
-                "observability_status": "FAILED_SAFE",
-                "observability": [
-                    {"kind": "disabled_account_login_probe", "status": "failed", "reason": "boom"},
-                ],
-                "reason": "execution_observability_gap",
-            },
-            "oracle": {"total_evaluated": 0, "violations_found": 0},
-        },
-        "findings": [],
-        "behavior_slice_ledger": {"total_slices": 2, "selected_slice_ids": ["s1", "s2"]},
-    })
+    result = _attempt_result([("HARNESS_FAILED", "EXECUTION_OBSERVABILITY_GAP")])
+    result["stage_failures"] = ["execution_observability_gap"]
+    funnel = build_funnel(result)
     assert funnel["pipeline_health"]["status"] == "FAILED_SAFE"
     assert funnel["validated_bug_count"] == 0
     assert "FAILED_SAFE" in funnel["explanation"] or "不能据此宣称" in funnel["explanation"]
     assert any(
-        str(item.get("reason") or "") == "execution_observability_gap"
+        str(item.get("reason") or "") == "EXECUTION_OBSERVABILITY_GAP"
         for item in funnel["top_blocking_reasons"]
     )
 
 
 def test_pipeline_health_ok_when_execution_healthy():
-    health = build_pipeline_health({
-        "phases": {
-            "execution": {
-                "status": "completed",
-                "executed": 3,
-                "observability": [{"kind": "multi_role_accounts", "status": "ok", "roles": ["admin:a"]}],
-            }
-        },
-        "findings": [],
-    })
+    health = build_pipeline_health(_attempt_result([
+        ("REJECTED", "ORACLE_NOT_VIOLATED"),
+        ("REJECTED", "ORACLE_NOT_VIOLATED"),
+        ("REJECTED", "ORACLE_NOT_VIOLATED"),
+    ]))
+
     assert health["status"] == "OK"
     assert health["empty_findings_means_no_bugs"] is True
 
 
-def test_pipeline_health_degraded_when_slice_budget_leaves_unattempted():
+def test_pipeline_health_surfaces_offline_reasoner_as_degraded() -> None:
     health = build_pipeline_health({
-        "phases": {
-            "execution": {"status": "completed", "executed": 2},
-            "incremental_discovery": {
-                "stop_reason": "slice_budget_reached",
-                "pending_slice_ids": ["s3", "s4", "s5"],
-                "selected_slice_ids": ["s1", "s2"],
-                "total_slices": 5,
-            },
-        },
-        "findings": [],
-    })
-    assert health["status"] == "DEGRADED"
-    assert health["empty_findings_means_no_bugs"] is False
-    assert "未执行" in health["operator_note"] or "slice_budget" in health["operator_note"]
-
-
-def test_pipeline_health_failed_safe_when_path_binding_blocks_all_execution():
-    health = build_pipeline_health({
+        **_attempt_result([("REJECTED", "ORACLE_NOT_VIOLATED")]),
         "phases": {
             "execution": {
                 "status": "completed",
-                "executed": 0,
-                "skip_telemetry": {
-                    "reason_counts": {"missing_runtime_path_binding": 4, "precondition_not_met": 2},
-                    "path_binding_misses": {"order_id": 2, "patient_id": 2},
-                    "scenarios_blocked": 4,
-                    "scenarios_with_http": 0,
-                },
+                "executed": 3,
+                "observability": [{"kind": "multi_role_accounts", "status": "ok"}],
+            }
+        },
+        "mainline_unification": {
+            "llm_reasoner": {
+                "status": "degraded",
+                "failed_engine_count": 11,
+                "failed_engine_names": ["causality", "invariant"],
+                "engine_error_class_counts": {"network": 11},
+                "observed_model_request_count": 0,
+                "model_usage": {"request_count": 0},
             }
         },
         "findings": [],
     })
-    assert health["status"] == "FAILED_SAFE"
+
+    assert health["status"] == "DEGRADED"
+    assert health["reasoner_status"] == "degraded"
+    assert health["reasoner_failure_count"] == 11
+    assert health["reasoner_error_class_counts"] == {"network": 11}
     assert health["empty_findings_means_no_bugs"] is False
+
+
+def test_pipeline_health_degraded_when_slice_budget_leaves_unattempted():
+    health = build_pipeline_health(_attempt_result([
+        ("REJECTED", "ORACLE_NOT_VIOLATED"),
+        ("DEFERRED", "SLICE_BUDGET_REACHED"),
+    ]))
+
+    assert health["status"] == "DEGRADED"
+    assert health["empty_findings_means_no_bugs"] is False
+    assert health["blocked_obligation_count"] == 1
+    assert health["terminal_reason_counts"]["SLICE_BUDGET_REACHED"] == 1
+    assert "未执行" in health["operator_note"] or "slice_budget" in health["operator_note"]
+
+
+def test_pipeline_health_blocked_when_path_binding_blocks_all_execution():
+    health = build_pipeline_health(_attempt_result([
+        ("BLOCKED", "BLOCKED_MISSING_BINDING"),
+        ("BLOCKED", "BLOCKED_MISSING_BINDING"),
+    ]))
+
+    assert health["status"] == "BLOCKED"
+    assert health["empty_findings_means_no_bugs"] is False
+    assert health["terminal_reason_counts"]["BLOCKED_MISSING_BINDING"] == 2
     assert "binding" in health["operator_note"].lower() or "路径" in health["operator_note"]
 
 
 def test_funnel_surfaces_unexecuted_and_binding_blockers():
-    funnel = build_funnel({
-        "phases": {
-            "incremental_discovery": {
-                "selected_slice_ids": ["s1"],
-                "pending_slice_ids": ["s2", "s3"],
-                "total_slices": 3,
-                "stop_reason": "slice_budget_reached",
-            },
-            "execution": {
-                "status": "completed",
-                "executed": 1,
-                "skip_telemetry": {
-                    "reason_counts": {"missing_runtime_path_binding": 2},
-                    "path_binding_misses": {"appointment_id": 2},
-                },
-            },
-            "oracle": {"total_evaluated": 1, "violations_found": 0},
-        },
-        "findings": [],
-        "behavior_slice_ledger": {
-            "total_slices": 3,
-            "selected_slice_ids": ["s1"],
-            "pending_slice_ids": ["s2", "s3"],
-            "stop_reason": "slice_budget_reached",
-        },
-    })
+    funnel = build_funnel(_attempt_result([
+        ("REJECTED", "ORACLE_NOT_VIOLATED"),
+        ("DEFERRED", "SLICE_BUDGET_REACHED"),
+        ("BLOCKED", "BLOCKED_MISSING_BINDING"),
+    ]))
     reasons = {str(item.get("reason") or "") for item in funnel["top_blocking_reasons"]}
-    assert "slice_budget_reached" in reasons or "unattempted_behavior_slices" in reasons
-    assert "missing_runtime_path_binding" in reasons
-    assert funnel["pipeline_health"]["status"] in {"DEGRADED", "FAILED_SAFE"}
+    assert "SLICE_BUDGET_REACHED" in reasons
+    assert "BLOCKED_MISSING_BINDING" in reasons
+    assert funnel["pipeline_health"]["status"] == "DEGRADED"
     assert funnel["pipeline_health"]["empty_findings_means_no_bugs"] is False
 
 def test_v12_failure_preserves_grounded_candidate_pool_in_funnel() -> None:
@@ -263,8 +298,6 @@ def test_v12_failure_preserves_grounded_candidate_pool_in_funnel() -> None:
         result,
         RuntimeError("api_document_parse_failed:ScannerError"),
     )
-    funnel = build_funnel(result)
-
     assert result["phases"]["pipeline"]["status"] == "FAILED_SAFE"
     assert result["phases"]["pipeline"]["preserved_slice_count"] == 2
     assert result["stage_status"]["pipeline"] == "FAILED_SAFE"
@@ -275,18 +308,8 @@ def test_v12_failure_preserves_grounded_candidate_pool_in_funnel() -> None:
         "slice-permission",
         "slice-state",
     ]
-    generation = next(
-        stage for stage in funnel["stages"]
-        if stage["name"] == "candidate_generation"
-    )
-    selection = next(
-        stage for stage in funnel["stages"]
-        if stage["name"] == "probe_selection"
-    )
-    assert generation["output"] == 2
-    assert selection["output"] == 0
-    assert funnel["pipeline_health"]["status"] == "FAILED_SAFE"
-    assert funnel["pipeline_health"]["empty_findings_means_no_bugs"] is False
+    with pytest.raises(DiscoveryFunnelError, match="obligation_attempt_ledger_missing"):
+        build_funnel(result)
 
 
 def test_markdown_api_is_normalized_before_runtime_scenario_generation() -> None:

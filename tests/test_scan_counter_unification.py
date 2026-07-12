@@ -5,6 +5,7 @@ import json
 from ai_test_asset_center.__main__ import scan
 import ai_test_asset_center.__main__ as main_module
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 
 
 API_SPEC = json.dumps(
@@ -17,6 +18,23 @@ API_SPEC = json.dumps(
         },
     }
 )
+
+
+def _empty_attempt_receipts(*, run_id: str, campaign_id: str) -> dict:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": run_id, "campaign_id": campaign_id},
+        selected=[],
+        compile_results={},
+        execution_results={},
+        gate_results={},
+    )
+    return {
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "formal_customer_deliverable_count": 0,
+            "formal_finding_ids": [],
+        },
+    }
 
 
 def test_scan_updates_shared_scan_counter_before_customer_ready_snapshot(monkeypatch, tmp_path) -> None:
@@ -39,6 +57,10 @@ def test_scan_updates_shared_scan_counter_before_customer_ready_snapshot(monkeyp
 
     def fake_v12_pipeline(*, project, root, prd_text, api_spec_text, db_schema_text, base_url, campaign_context):
         return {
+            **_empty_attempt_receipts(
+                run_id="RUN_SCAN_COUNTER",
+                campaign_id="CMP_SCAN_COUNTER",
+            ),
             "runtime_contract": {"status": "approved", "approved_base_url": base_url},
             "phases": {
                 "execution": {"status": "completed", "executed": 0},
@@ -107,3 +129,101 @@ def test_scan_updates_shared_scan_counter_before_customer_ready_snapshot(monkeyp
     assert second["customer_ready_snapshot"]["scan_meta"]["run_count"] == 2
     assert saved_scan["customer_ready_snapshot"]["scan_meta"]["run_count"] == 2
     assert saved_scan["customer_ready_snapshot"]["scan_meta"]["last_scan_at"] == counter["last_scan_at"]
+
+
+def test_scan_calls_mainline_once_and_preserves_reasoner_telemetry(monkeypatch, tmp_path) -> None:
+    manifest = register_source_asset(
+        "round-project",
+        "api-contract",
+        API_SPEC,
+        source_type="openapi",
+        root=tmp_path,
+    )
+    calls = 0
+
+    def fake_v12_pipeline(**kwargs):
+        nonlocal calls
+        calls += 1
+        first = calls == 1
+        reasoner = {
+            "status": "degraded" if first else "ok",
+            "observed_model_request_count": 3 if first else 2,
+            "observed_model_response_count": 2,
+            "model_usage": {
+                "request_count": 2,
+                "prompt_tokens": 100 if first else 80,
+                "completion_tokens": 20 if first else 15,
+                "total_tokens": 120 if first else 95,
+                "cost_usd": 0.0,
+                "responses_with_cost": 0,
+            },
+            "successful_engine_names": ["invariant"],
+            "failed_engine_names": ["causality"] if first else [],
+            "degraded_engine_names": [],
+            "engine_error_classes": {"causality": "network"} if first else {},
+            "engine_error_codes": {"causality": "tls_eof"} if first else {},
+            "engine_error_class_counts": {"network": 1} if first else {},
+            "input": 2,
+            "bound": 1,
+        }
+        return {
+            **_empty_attempt_receipts(
+                run_id=f"RUN_REASONER_ROUND_{calls}",
+                campaign_id="CMP_REASONER_ROUNDS",
+            ),
+            "runtime_contract": {"status": "approved", "approved_base_url": kwargs.get("base_url", "")},
+            "phases": {
+                "execution": {"status": "completed", "executed": 0},
+                "state_graph": {"coverage_gaps": []},
+                "incremental_discovery": {"selected_slices": []},
+            },
+            "campaign": {
+                "campaign_id": "CMP_REASONER_ROUNDS",
+                "campaign_status": "active" if first else "completed",
+                "scope_id": "service-a",
+                "environment_ref": "test-a",
+                "source_hash": manifest["source_hash"],
+            },
+            "behavior_slice_ledger": {"next_round": 2 if first else None},
+            "mainline_unification": {"llm_reasoner": reasoner},
+            "findings": [],
+            "external_findings": [],
+            "evidence_graphs": [],
+            "execution_trace_summaries": [],
+            "auto_har": {"status": "captured"},
+            "total_duration_ms": 1,
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.scan_diagnostics.run_preflight",
+        lambda config, api_doc_text: {"ready": True, "checks": [], "summary": "ok"},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.__main__._persist_execution_evidence",
+        lambda *args, **kwargs: {"status": "persisted", "bundle_id": "bundle_reasoner_rounds"},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.__main__._evaluate_release_gate",
+        lambda **kwargs: {"verdict": "not_ready", "status": "ready"},
+    )
+    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+
+    result = scan(
+        project="round-project",
+        root=tmp_path,
+        api_doc_text=API_SPEC,
+        campaign_context={
+            "scope_id": "service-a",
+            "environment_ref": "test-a",
+            "source_manifest": manifest,
+        },
+    )
+
+    reasoner = result["v12"]["mainline_unification"]["llm_reasoner"]
+    assert calls == 1
+    assert reasoner["status"] == "degraded"
+    assert reasoner["observed_model_request_count"] == 3
+    assert reasoner["observed_model_response_count"] == 2
+    assert reasoner["model_usage"]["total_tokens"] == 120
+    assert reasoner["failed_engine_names"] == ["causality"]
+    assert "multi_round_summary" not in result["v12"]

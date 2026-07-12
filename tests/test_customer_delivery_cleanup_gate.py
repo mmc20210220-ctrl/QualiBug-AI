@@ -289,14 +289,14 @@ def test_campaign_cleanup_readjudication_updates_formal_projection() -> None:
     )
 
     assert projected["formal_count_projection"]["formal_customer_deliverable_count"] == 1
-    assert projected["discovery_funnel"]["validated_bug_count"] == 1
+    assert projected["discovery_funnel"]["validated_bug_count"] == 0
     assert projected["discovery_funnel"]["formal_count_projection"]["formal_customer_deliverable_count"] == 1
-    assert projected["discovery_funnel"]["formal_count_projection"]["funnel_validated_bug_count"] == 1
+    assert projected["discovery_funnel"]["formal_count_projection"]["funnel_validated_bug_count"] == 0
     assert (
         projected["discovery_funnel"]["formal_count_projection"]["count_consistency"][
             "formal_equals_funnel_validated"
         ]
-        is True
+        is False
     )
 
 

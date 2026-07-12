@@ -238,9 +238,23 @@ def build_obligation_attempt_ledger(
                 )
                 if _text(value)
             ],
+            "actor_refs": [
+                _text(value)
+                for value in (
+                    selected_row.get("actor_refs")
+                    or selected_row.get("required_actors")
+                    or []
+                )
+                if _text(value)
+            ],
             "adapter": _text(
                 selected_row.get("adapter")
                 or selected_row.get("execution_adapter")
+            ),
+            "round": _text(
+                selected_row.get("planning_round")
+                if selected_row.get("planning_round") is not None
+                else selected_row.get("round")
             ),
             "behavior_slice_id": _text(
                 selected_row.get("behavior_slice_id")

@@ -23,6 +23,62 @@ from ai_test_asset_center.discovery_quality_projection import (
     build_formal_count_projection,
     suppress_benchmark_quality_when_not_measured,
 )
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
+
+
+def _attempt_health_result(
+    *,
+    terminal_status: str = "REJECTED",
+    reason_code: str = "ORACLE_NOT_VIOLATED",
+    cost_coverage_status: str = "MEASURED",
+    observation_received: bool = True,
+) -> dict:
+    compile_results = {
+        "obl-phase0": {
+            "status": "COMPILED",
+            "experiment_id": "exp-phase0",
+            "cost_coverage_status": cost_coverage_status,
+        }
+    }
+    execution_results = {
+        "obl-phase0": {
+            "status": "EXECUTED",
+            "execution_id": "exec-phase0",
+            "observation_receipt_ids": ["obs-phase0"] if observation_received else [],
+            "oracle_receipt_id": "oracle-phase0",
+            "cost_coverage_status": cost_coverage_status,
+        }
+    }
+    gate_results: dict[str, dict] = {
+        "obl-phase0": {
+            "status": terminal_status,
+            "reason_code": reason_code,
+            "gate_receipt_id": "gate-phase0",
+            "cost_coverage_status": cost_coverage_status,
+        }
+    }
+    if terminal_status == "HARNESS_FAILED":
+        execution_results["obl-phase0"] = {
+            "status": terminal_status,
+            "reason_code": reason_code,
+            "execution_id": "exec-phase0",
+            "cost_coverage_status": cost_coverage_status,
+        }
+        gate_results = {}
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "run-phase0", "campaign_id": "campaign-phase0"},
+        selected=[{"obligation_id": "obl-phase0", "risk_family": "generic"}],
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results=gate_results,
+    )
+    return {
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "formal_customer_deliverable_count": 0,
+            "formal_finding_ids": [],
+        },
+    }
 
 
 def test_redact_removes_jwt_password_and_bearer() -> None:
@@ -195,26 +251,24 @@ def test_suppress_benchmark_metrics_when_not_measured() -> None:
 
 def test_pipeline_health_failed_safe_on_result_error() -> None:
     health = build_pipeline_health({
+        **_attempt_health_result(),
         "error": "boom",
-        "phases": {"execution": {"status": "completed", "executed": 1}},
     })
     assert health["status"] == "FAILED_SAFE"
     assert health["empty_findings_means_no_bugs"] is False
     assert "result.error" in health["operator_note"] or "error" in health["operator_note"].lower()
 
 
-def test_pipeline_health_failed_safe_on_no_traffic() -> None:
-    health = build_pipeline_health({
-        "phases": {"execution": {"status": "completed", "executed": 3}},
-        "auto_har": {"status": "no_traffic", "entry_count": 0},
-    })
+def test_pipeline_health_failed_safe_on_missing_observation_receipt() -> None:
+    health = build_pipeline_health(_attempt_health_result(observation_received=False))
+
     assert health["status"] == "FAILED_SAFE"
-    assert health["no_real_traffic"] is True
+    assert health["observation_receipt_missing_count"] == 1
 
 
 def test_pipeline_health_degraded_on_unknown_usage_cost() -> None:
     health = build_pipeline_health({
-        "phases": {"execution": {"status": "completed", "executed": 2}},
+        **_attempt_health_result(cost_coverage_status="UNKNOWN"),
         "mainline_unification": {
             "llm_reasoner": {
                 "model_usage": {"request_count": 22},
@@ -228,19 +282,21 @@ def test_pipeline_health_degraded_on_unknown_usage_cost() -> None:
 
 
 def test_pipeline_health_degraded_on_cleanup_failure() -> None:
-    health = build_pipeline_health({
-        "phases": {"execution": {"status": "completed", "executed": 1}},
-        "findings": [{"id": "f1", "cleanup": {"status": "CLEANUP_NOT_SUCCEEDED"}}],
-    })
+    health = build_pipeline_health(_attempt_health_result(
+        terminal_status="HARNESS_FAILED",
+        reason_code="CLEANUP_NOT_SUCCEEDED",
+    ))
+
     assert health["status"] == "DEGRADED"
     assert health["cleanup_failure_count"] >= 1
 
 
 def test_pipeline_health_degraded_on_not_reversible_cleanup() -> None:
-    health = build_pipeline_health({
-        "phases": {"execution": {"status": "completed", "executed": 1}},
-        "findings": [{"id": "f1", "evidence": {"cleanup": {"status": "not_reversible"}}}],
-    })
+    health = build_pipeline_health(_attempt_health_result(
+        terminal_status="HARNESS_FAILED",
+        reason_code="CLEANUP_NOT_REVERSIBLE",
+    ))
+
     assert health["status"] == "DEGRADED"
     assert health["cleanup_failure_count"] == 1
 

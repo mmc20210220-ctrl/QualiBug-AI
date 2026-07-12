@@ -1,135 +1,204 @@
-"""Tests for discovery funnel aggregation (no mock findings as bugs)."""
+"""Attempt-receipt-only discovery funnel and pipeline health tests."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from copy import deepcopy
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+import pytest
 
-from ai_test_asset_center.discovery_funnel import build_funnel
+from ai_test_asset_center.discovery_funnel import (
+    DiscoveryFunnelError,
+    build_funnel,
+    build_pipeline_health,
+    effective_execution_status,
+)
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 
 
-def test_build_funnel_five_stages_and_separates_validated_from_pending():
-    v12_result = {
-        "behavior_slices": [{"slice_id": f"BHV_{i}"} for i in range(10)],
-        "phases": {
-            "incremental_discovery": {
-                "selected_slice_ids": [f"BHV_{i}" for i in range(4)],
-                "status": "planned",
-            },
-            "execution": {
-                "status": "completed",
-                "executed": 3,
-                "failed": 1,
-                "planned_only": 0,
-                "production_data_blocked": 1,
-                "skip_telemetry": {
-                    "cleanup_status_counts": {"failed": 2, "not_reversible": 1},
-                    "observer_status_counts": {
-                        "before:documented_observer_missing": 1,
-                        "after:documented_observer_missing": 1,
-                    },
-                },
-            },
-            "oracle": {
-                "status": "completed",
-                "total_evaluated": 3,
-                "violations_found": 2,
-            },
+REQUIRED_STAGES = [
+    "obligation_generation",
+    "experiment_compile",
+    "binding_materialization",
+    "fixture_setup",
+    "governed_execution",
+    "observation",
+    "assertion",
+    "oracle_resolution",
+    "delivery_gate",
+    "cleanup",
+    "formal_projection",
+]
+
+
+def _result(*, harness_failed: bool = False) -> dict:
+    selected = [
+        {
+            "obligation_id": "obl-1",
+            "risk_family": "authorization",
+            "required_operations": ["op-read"],
+            "required_actors": ["actor-admin"],
+            "adapter": "http_api",
+            "planning_round": 1,
+            "source_refs": [{"source_type": "openapi", "source_id": "SRC-1"}],
         },
-        "mainline_unification": {
-            "analyzer": {"input": 8, "bound": 5, "dropped_no_endpoint": 3},
+        {
+            "obligation_id": "obl-2",
+            "risk_family": "state",
+            "required_operations": ["op-write"],
+            "adapter": "http_api",
+            "planning_round": 2,
+            "source_refs": [{"source_type": "requirement", "source_id": "SRC-2"}],
         },
-        "findings": [
-            {
-                "candidate_id": "candidate-validated",
-                "slice_id": "slice-validated",
-                "obligation_id": "obligation-validated",
-                "experiment_id": "experiment-validated",
-                "execution_id": "execution-validated",
-                "evidence_id": "evidence-validated",
-                "finding_id": "finding-validated",
-                "title": "validated bug",
-                "gate_passed": True,
-                "bug_status": "reproduced",
-                "customer_delivery_status": "defect",
-                "final_review_status": "VALIDATED_CANDIDATE",
-                "business_evidence_status": "VALIDATED",
-                "execution_status": "executed",
-                "confirmation_status": "confirmed",
-                "expected": "HTTP 403",
-                "actual": "HTTP 200",
-                "evidence_status": {
-                    "semantic_verdict": "SEMANTIC_CONFIRMED",
-                    "business_evidence_status": "VALIDATED",
-                    "final_review_status": "VALIDATED_CANDIDATE",
-                    "missing_requirements": [],
-                },
-                "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
-                "raw_evidence": {
-                    "request_raw": {"method": "GET", "path": "/source-derived-path"},
-                    "response_raw": {"status_code": 200},
-                    "timestamp": "2026-01-01T00:00:00Z",
-                    "has_real_evidence": True,
-                },
-                "reproduction": {
-                    "method": "GET",
-                    "path": "/source-derived-path",
-                    "har_evidence": {"status_code": 200},
-                },
-            },
-            {
-                "title": "pending clue",
-                "gate_passed": False,
-                "bug_status": "suspected",
-                "customer_delivery_status": "defect",
-                "evidence_quality": {"level": "needs_evidence", "can_reproduce": False},
-                "final_review_status": "NEEDS_MORE_EVIDENCE",
-                "business_evidence_status": "PENDING_EVIDENCE",
-                "business_gate_missing": ["BEFORE_SNAPSHOT_MISSING", "CLEANUP_PENDING"],
-            },
-        ],
+    ]
+    compile_results = {
+        "obl-1": {
+            "status": "COMPILED",
+            "experiment_id": "exp-1",
+            "elapsed_ms": 4,
+        },
+        "obl-2": {
+            "status": "COMPILED" if harness_failed else "BLOCKED",
+            "experiment_id": "exp-2" if harness_failed else "",
+            "reason_code": "" if harness_failed else "BLOCKED_MISSING_BINDING",
+            "elapsed_ms": 8,
+        },
+    }
+    execution_results = {
+        "obl-1": {
+            "status": "EXECUTED",
+            "execution_id": "exec-1",
+            "observation_receipt_ids": ["obs-1"],
+            "oracle_receipt_id": "oracle-1",
+            "elapsed_ms": 12,
+        }
+    }
+    gate_results = {
+        "obl-1": {
+            "status": "REJECTED",
+            "reason_code": "ORACLE_NOT_VIOLATED",
+            "gate_receipt_id": "gate-1",
+            "elapsed_ms": 3,
+        }
+    }
+    if harness_failed:
+        execution_results["obl-2"] = {
+            "status": "HARNESS_FAILED",
+            "reason_code": "CLEANUP_COMPENSATION_FAILED",
+            "execution_id": "exec-2",
+            "elapsed_ms": 20,
+        }
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "RUN-1", "campaign_id": "CMP-1"},
+        selected=selected,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results=gate_results,
+    )
+    return {
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "schema_version": "qualibug.discovery-quality-projection.v1",
+            "formal_customer_deliverable_count": 0,
+            "formal_finding_ids": [],
+        },
+        # Conflicting legacy counters must have no authority.
+        "phases": {"execution": {"status": "completed", "executed": 999}},
+        "experiment_execution": {"selected_count": 999, "executed_count": 999},
+        "findings": [{"finding_id": "legacy-fake", "gate_passed": True}],
     }
 
-    funnel = build_funnel(v12_result)
 
-    assert len(funnel["stages"]) == 5
-    names = [s["name"] for s in funnel["stages"]]
-    assert names == [
-        "candidate_generation",
-        "probe_selection",
-        "execution",
-        "verification",
-        "formal_accounting",
-    ]
-    assert funnel["validated_bug_count"] == 1
-    assert funnel["pending_finding_count"] == 1
-    # Formal accounting output must equal validated only (pending excluded)
-    accounting = next(s for s in funnel["stages"] if s["name"] == "formal_accounting")
-    assert accounting["output"] == funnel["validated_bug_count"]
-    assert accounting["output"] != funnel["validated_bug_count"] + funnel["pending_finding_count"]
-
-    reasons = {item["reason"]: item["count"] for item in funnel["top_blocking_reasons"]}
-    assert reasons.get("BEFORE_SNAPSHOT_MISSING", 0) >= 1
-    assert reasons.get("CLEANUP_PENDING", 0) >= 1
-    assert reasons.get("dropped_no_endpoint", 0) == 3
-    assert reasons.get("production_data_blocked", 0) == 1
-    assert reasons.get("sandbox_cleanup_failed", 0) == 2
-    assert reasons.get("sandbox_cleanup_not_reversible", 0) == 1
-    assert reasons.get("documented_observer_missing", 0) == 2
-
-    assert isinstance(funnel["explanation"], str) and funnel["explanation"]
-    assert "已验证" in funnel["explanation"] or "正式" in funnel["explanation"]
-    # Actionable suggestion when cleanup/snapshot missing
-    assert "QUALIBUG_ENABLE_SANDBOX_WRITE" in funnel["explanation"] or "沙箱" in funnel["explanation"]
+def test_execution_status_requires_attempt_ledger() -> None:
+    with pytest.raises(DiscoveryFunnelError, match="obligation_attempt_ledger_missing"):
+        effective_execution_status({
+            "phases": {"execution": {"status": "completed"}},
+        })
 
 
-def test_build_funnel_empty_result_has_zero_validated_no_fake_numbers():
-    funnel = build_funnel({})
+def test_attempt_ledger_is_the_only_execution_status_source() -> None:
+    result = _result()
+
+    assert effective_execution_status(result) == "completed"
+    assert build_pipeline_health(result)["selected_obligation_count"] == 2
+    assert build_pipeline_health(result)["terminal_obligation_count"] == 2
+
+
+def test_pipeline_health_requires_formal_projection_receipt() -> None:
+    result = _result()
+    result.pop("formal_count_projection")
+
+    with pytest.raises(DiscoveryFunnelError, match="formal_count_projection_missing"):
+        build_pipeline_health(result)
+
+
+def test_pipeline_health_rejects_formal_ids_not_backed_by_attempts() -> None:
+    result = _result()
+    result["formal_count_projection"] = {
+        "formal_customer_deliverable_count": 1,
+        "formal_finding_ids": ["finding-without-attempt"],
+    }
+
+    with pytest.raises(DiscoveryFunnelError, match="formal_projection_attempt_id_mismatch"):
+        build_pipeline_health(result)
+
+
+def test_zero_selected_obligations_cannot_claim_no_bugs() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "RUN-EMPTY", "campaign_id": "CMP-EMPTY"},
+        selected=[],
+        compile_results={},
+        execution_results={},
+        gate_results={},
+    )
+
+    health = build_pipeline_health({
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "formal_customer_deliverable_count": 0,
+            "formal_finding_ids": [],
+        },
+    })
+
+    assert health["status"] == "BLOCKED"
+    assert health["empty_findings_means_no_bugs"] is False
+    assert health["planning_gap_reason"] == "NO_OBLIGATIONS_SELECTED"
+
+
+def test_funnel_exposes_required_stage_receipt_metrics_and_does_not_mutate_formal_count() -> None:
+    result = _result()
+    before = deepcopy(result["formal_count_projection"])
+
+    funnel = build_funnel(result)
+
+    assert [stage["name"] for stage in funnel["stages"]] == REQUIRED_STAGES
+    for stage in funnel["stages"]:
+        assert set(("input", "success", "blocked", "failed", "elapsed_ms", "reason_counts")) <= set(stage)
+        assert set(("p50", "p95")) <= set(stage["elapsed_ms"])
+    compile_stage = next(
+        stage for stage in funnel["stages"] if stage["name"] == "experiment_compile"
+    )
+    assert compile_stage["input"] == 2
+    assert compile_stage["success"] == 1
+    assert compile_stage["blocked"] == 1
+    assert compile_stage["reason_counts"] == {"BLOCKED_MISSING_BINDING": 1}
+    assert compile_stage["elapsed_ms"] == {"p50": 4, "p95": 8}
+    assert compile_stage["dimensions"]["actor"] == {"actor-admin": 1}
+    assert compile_stage["dimensions"]["round"] == {"1": 1, "2": 1}
     assert funnel["validated_bug_count"] == 0
-    assert funnel["pending_finding_count"] == 0
-    assert len(funnel["stages"]) == 5
-    assert all(isinstance(s.get("input"), int) for s in funnel["stages"])
-    assert isinstance(funnel["explanation"], str)
+    assert funnel["formal_finding_ids"] == []
+    assert result["formal_count_projection"] == before
+
+
+def test_harness_failure_is_visible_and_empty_findings_never_mean_no_bugs() -> None:
+    result = _result(harness_failed=True)
+
+    health = build_pipeline_health(result)
+    funnel = build_funnel(result)
+
+    assert health["status"] == "DEGRADED"
+    assert health["harness_failure_count"] == 1
+    assert health["empty_findings_means_no_bugs"] is False
+    assert funnel["pipeline_health"]["status"] == "DEGRADED"
+    assert funnel["top_blocking_reasons"][0] == {
+        "reason": "CLEANUP_COMPENSATION_FAILED",
+        "count": 1,
+    }
