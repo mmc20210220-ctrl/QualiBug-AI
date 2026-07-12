@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ai_test_asset_center.campaign_api_contract import (
+    CampaignContractError,
     build_campaign_view,
     build_evaluation_submission,
     create_campaign,
 )
+from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
 from ai_test_asset_center.enterprise_knowledge_center import _parse_source
 
 
@@ -52,11 +56,37 @@ def _deliverable() -> dict:
     }
 
 
-def _write_scan(root: Path) -> None:
+def _write_scan(root: Path, *, evaluation_mode: str = "operational") -> None:
     output = root / "platform_outputs" / "project-a"
     output.mkdir(parents=True)
+    mainline_run = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id="scan-source-derived",
+        campaign_id="cmp-source-derived",
+        target_id="qa-target-a",
+        environment_id="qa-target-a",
+        policy_version="v2",
+        evaluation_mode=evaluation_mode,
+    )
+    deliverable = _deliverable()
+    deliverable["mainline_run"] = {
+        "contract_fingerprint": mainline_run["contract_fingerprint"]
+    }
+    rejected = {
+        "id": "rejected",
+        "finding_id": "rejected",
+        "title": "not executed",
+        "mainline_run": {"contract_fingerprint": mainline_run["contract_fingerprint"]},
+    }
+    candidate = {
+        "id": "candidate",
+        "finding_id": "candidate",
+        "title": "needs observer",
+        "mainline_run": {"contract_fingerprint": mainline_run["contract_fingerprint"]},
+    }
     payload = {
         "scan_id": "scan-source-derived",
+        "mainline_run": mainline_run,
         "campaign": {
             "campaign_id": "cmp-source-derived",
             "campaign_status": "completed",
@@ -64,9 +94,10 @@ def _write_scan(root: Path) -> None:
             "environment_ref": "qa-target-a",
         },
         "pipeline_health": {"status": "DEGRADED", "cleanup_failure_count": 0},
-        "findings": [_deliverable(), {"id": "rejected", "title": "not executed"}],
-        "candidate_findings": [{"id": "candidate", "title": "needs observer"}],
+        "findings": [deliverable, rejected],
+        "candidate_findings": [candidate],
         "v12": {
+            "mainline_run": mainline_run,
             "total_duration_ms": 1200,
             "test_obligations": {
                 "count": 1,
@@ -134,21 +165,47 @@ def test_campaign_view_uses_formal_gate_and_exposes_complete_identity_trace(tmp_
         "deliverable": 1,
         "candidate": 1,
         "rejected": 1,
+        "shadow": 0,
     }
     assert view["every_selected_experiment_has_receipt"] is True
     assert view["complete_identity_trace_count"] == 1
 
 
-def test_evaluation_submission_is_ground_truth_free_and_not_measured(tmp_path: Path) -> None:
+def test_evaluation_submission_is_ground_truth_free_authority_scoped_and_not_measured(
+    tmp_path: Path,
+) -> None:
     _write_scan(tmp_path)
-    submission = build_evaluation_submission(tmp_path, "project-a", {"evaluation_mode": "shadow"})
+    submission = build_evaluation_submission(
+        tmp_path,
+        "project-a",
+        {"evaluation_mode": "operational"},
+    )
     assert submission["ground_truth_included"] is False
     assert submission["measurement_status"] == "NOT_MEASURED"
+    assert [row["finding_id"] for row in submission["scan_result"]["findings"]] == [
+        "finding-source-derived"
+    ]
+    assert submission["scan_result"]["candidate_findings"] == []
+    assert submission["formal_id_consistency"]["consistent"] is True
     persisted = json.loads(Path(submission["artifact_ref"]).read_text(encoding="utf-8"))
     serialized = json.dumps(persisted).lower()
     assert "ground_truth_ref" not in serialized
     assert persisted["ground_truth_included"] is False
     assert persisted["operational_metrics"]["wall_clock_seconds"] == 1.2
+
+
+def test_product_submission_rejects_shadow_run(tmp_path: Path) -> None:
+    _write_scan(tmp_path, evaluation_mode="shadow")
+
+    with pytest.raises(
+        CampaignContractError,
+        match="product_evaluation_submission_not_authorized",
+    ):
+        build_evaluation_submission(
+            tmp_path,
+            "project-a",
+            {"evaluation_mode": "shadow"},
+        )
 
 
 def test_parser_receipt_records_bad_yaml_without_silently_dropping_source() -> None:

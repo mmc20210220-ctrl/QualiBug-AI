@@ -14,6 +14,11 @@ from .customer_delivery_gate import (
     is_customer_deliverable_defect,
     split_customer_delivery_tracks,
 )
+from .discovery_mainline_contract import (
+    MainlineContractError,
+    MainlineRunContract,
+    validate_mainline_run_contract,
+)
 
 
 SCHEMA_VERSION = "qualibug.discovery-quality-projection.v1"
@@ -35,6 +40,64 @@ def formal_customer_deliverable_findings(findings: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _finding_id(item: dict[str, Any]) -> str:
+    return _text(item.get("finding_id") or item.get("id") or item.get("bug_id"))
+
+
+def authority_scoped_findings(scan_result: dict[str, Any]) -> dict[str, Any]:
+    """Bind every projected row to the immutable run authority fingerprint."""
+
+    result = _dict(scan_result)
+    v12 = _dict(result.get("v12"))
+    raw_findings = [item for item in _list(result.get("findings")) if isinstance(item, dict)]
+    raw_candidates = [
+        item for item in _list(result.get("candidate_findings")) if isinstance(item, dict)
+    ]
+    raw_contract = result.get("mainline_run") or v12.get("mainline_run")
+    if raw_contract is None:
+        if raw_findings or raw_candidates:
+            raise MainlineContractError("mainline_run_missing")
+        return {
+            "mainline_run": None,
+            "authoritative_findings": [],
+            "authoritative_candidates": [],
+            "shadow": [],
+        }
+    contract: MainlineRunContract = validate_mainline_run_contract(raw_contract)
+    expected_fingerprint = contract["contract_fingerprint"]
+    for item in raw_findings + raw_candidates:
+        finding_id = _finding_id(item) or "MISSING"
+        observed_fingerprint = _text(
+            _dict(item.get("mainline_run")).get("contract_fingerprint")
+            or item.get("mainline_contract_fingerprint")
+        )
+        if not observed_fingerprint:
+            raise MainlineContractError(
+                f"finding_authority_fingerprint_missing:{finding_id}"
+            )
+        if observed_fingerprint != expected_fingerprint:
+            raise MainlineContractError(
+                f"finding_authority_fingerprint_mismatch:{finding_id}"
+            )
+    if contract["customer_outputs_published"]:
+        return {
+            "mainline_run": contract,
+            "authoritative_findings": raw_findings,
+            "authoritative_candidates": raw_candidates,
+            "shadow": [],
+        }
+    shadow: list[dict[str, Any]] = []
+    for source, rows in (("finding", raw_findings), ("candidate", raw_candidates)):
+        for item in rows:
+            shadow.append({**item, "finding_class": "shadow", "shadow_origin": source})
+    return {
+        "mainline_run": contract,
+        "authoritative_findings": [],
+        "authoritative_candidates": [],
+        "shadow": shadow,
+    }
+
+
 def build_formal_count_projection(
     *,
     findings: Any = None,
@@ -47,10 +110,17 @@ def build_formal_count_projection(
     defects, clues_from_findings = split_customer_delivery_tracks(all_findings)
     funnel = _dict(discovery_funnel)
     funnel_validated = int(funnel.get("validated_bug_count") or 0)
-    formal_count = len(defects)
+    formal_ids = [_finding_id(item) for item in defects]
+    if not all(formal_ids):
+        raise MainlineContractError("formal_finding_id_missing")
+    if len(formal_ids) != len(set(formal_ids)):
+        raise MainlineContractError("formal_finding_id_duplicate")
+    formal_ids = sorted(formal_ids)
+    formal_count = len(formal_ids)
     return {
         "schema_version": SCHEMA_VERSION,
         "formal_customer_deliverable_count": formal_count,
+        "formal_finding_ids": formal_ids,
         "executed_clue_count": len(clues_from_findings) + len(candidates),
         "confirmation_receipt_count": len(all_findings),
         "candidate_count": len(candidates),
@@ -71,6 +141,7 @@ def build_finding_classification_projection(
     *,
     findings: Any = None,
     candidate_findings: Any = None,
+    shadow_findings: Any = None,
 ) -> dict[str, Any]:
     """Partition product results without reinterpreting the delivery gate."""
     deliverable: list[dict[str, Any]] = []
@@ -93,16 +164,52 @@ def build_finding_classification_projection(
             row = dict(item)
             row["finding_class"] = "candidate"
             candidates.append(row)
+    shadow = []
+    for item in _list(shadow_findings):
+        if isinstance(item, dict):
+            row = dict(item)
+            row["finding_class"] = "shadow"
+            shadow.append(row)
     return {
         "schema_version": SCHEMA_VERSION,
         "deliverable": deliverable,
         "candidate": candidates,
         "rejected": rejected,
+        "shadow": shadow,
         "counts": {
             "deliverable": len(deliverable),
             "candidate": len(candidates),
             "rejected": len(rejected),
+            "shadow": len(shadow),
         },
+    }
+
+
+def build_formal_id_consistency(**scopes: list[str]) -> dict[str, Any]:
+    """Compare exact formal finding ID sets without reconciling disagreements."""
+
+    if not scopes:
+        raise ValueError("formal ID consistency requires at least one scope")
+    normalized: dict[str, list[str]] = {}
+    duplicate_scopes: dict[str, list[str]] = {}
+    for name, values in scopes.items():
+        if not isinstance(values, list):
+            raise ValueError(f"formal ID scope must be a list: {name}")
+        ids = [_text(value) for value in values]
+        if not all(ids):
+            raise ValueError(f"formal ID scope contains empty identity: {name}")
+        duplicates = sorted({value for value in ids if ids.count(value) > 1})
+        if duplicates:
+            duplicate_scopes[name] = duplicates
+        normalized[name] = sorted(set(ids))
+    unique_sets = {tuple(values) for values in normalized.values()}
+    consistent = len(unique_sets) <= 1 and not duplicate_scopes
+    return {
+        "schema_version": "qualibug.formal-id-consistency.v1",
+        "consistent": consistent,
+        "status": "OK" if consistent else "PIPELINE_DEGRADED_COUNT_MISMATCH",
+        "scopes": normalized,
+        "duplicate_ids": duplicate_scopes,
     }
 
 
@@ -168,11 +275,13 @@ def build_obligation_execution_projection(scan_result: dict[str, Any] | None = N
     ir_phase = _dict(phases.get("behavior_ir"))
     oracle_phase = _dict(phases.get("oracle"))
     execution_phase = _dict(phases.get("execution"))
-    formal = build_formal_count_projection(
-        findings=result.get("findings") or v12.get("findings"),
-        candidate_findings=result.get("candidate_findings"),
-        discovery_funnel=_dict(result.get("discovery_funnel")),
-    )
+    formal = _dict(result.get("formal_count_projection"))
+    if formal.get("schema_version") != SCHEMA_VERSION:
+        formal = build_formal_count_projection(
+            findings=result.get("findings") or v12.get("findings"),
+            candidate_findings=result.get("candidate_findings"),
+            discovery_funnel=_dict(result.get("discovery_funnel")),
+        )
     obligation_count = int(obligations.get("count") or obligations.get("obligation_count") or ir_phase.get("obligation_count") or 0)
     compiled = int(experiments.get("compiled_count") or ir_phase.get("compiled_experiments") or 0)
     blocked = int(experiments.get("blocked_count") or ir_phase.get("blocked_experiments") or 0)
@@ -243,9 +352,12 @@ def _text(value: Any) -> str:
 def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dict[str, Any]:
     """Mutate-safe: return a copy of scan_result with SSOT quality projection."""
     result = dict(scan_result or {})
+    scoped = authority_scoped_findings(result)
+    authoritative_findings = scoped["authoritative_findings"]
+    authoritative_candidates = scoped["authoritative_candidates"]
     initial_counts = build_formal_count_projection(
-        findings=result.get("findings"),
-        candidate_findings=result.get("candidate_findings"),
+        findings=authoritative_findings,
+        candidate_findings=authoritative_candidates,
         discovery_funnel=_dict(result.get("discovery_funnel")),
     )
     # Align legacy funnel diagnostics to the formal customer-delivery SSOT before
@@ -258,10 +370,11 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
         funnel["validated_bug_count"] = initial_counts["formal_customer_deliverable_count"]
         result["discovery_funnel"] = funnel
     counts = build_formal_count_projection(
-        findings=result.get("findings"),
-        candidate_findings=result.get("candidate_findings"),
+        findings=authoritative_findings,
+        candidate_findings=authoritative_candidates,
         discovery_funnel=_dict(result.get("discovery_funnel")),
     )
+    result["formal_count_projection"] = counts
     existing_external = _dict(result.get("external_evaluation"))
     external = build_external_evaluation_projection(
         measurement_status=str(existing_external.get("measurement_status") or "NOT_MEASURED"),
@@ -276,13 +389,36 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
             external[key] = value
     obligation_proj = build_obligation_execution_projection(result)
     finding_classification = build_finding_classification_projection(
-        findings=result.get("findings"),
-        candidate_findings=result.get("candidate_findings"),
+        findings=authoritative_findings,
+        candidate_findings=authoritative_candidates,
+        shadow_findings=scoped["shadow"],
     )
-    result["formal_count_projection"] = counts
+    contract = scoped["mainline_run"]
+    if contract is not None and not contract["customer_outputs_published"]:
+        external["commercial_promotion_evidence"] = False
     result["external_evaluation"] = external
     result["obligation_execution_projection"] = obligation_proj
     result["finding_classification"] = finding_classification
+    formal_ids = list(counts["formal_finding_ids"])
+    result["formal_id_consistency"] = build_formal_id_consistency(
+        delivery_gate_ids=formal_ids,
+        formal_projection_ids=formal_ids,
+        product_projection_ids=formal_ids,
+    )
+    result["authority_scope"] = {
+        "status": "BOUND" if contract is not None else "UNBOUND_EMPTY",
+        "contract_fingerprint": (
+            contract["contract_fingerprint"] if contract is not None else ""
+        ),
+        "mainline_authority": (
+            contract["mainline_authority"] if contract is not None else ""
+        ),
+        "evaluation_mode": contract["evaluation_mode"] if contract is not None else "",
+        "customer_outputs_published": (
+            contract["customer_outputs_published"] if contract is not None else False
+        ),
+        "shadow_count": len(scoped["shadow"]),
+    }
     result["scope_counts"] = {
         "current_run_formal_deliverable": counts["formal_customer_deliverable_count"],
         "current_campaign_formal_deliverable": counts["formal_customer_deliverable_count"],

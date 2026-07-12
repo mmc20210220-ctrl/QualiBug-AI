@@ -9,6 +9,18 @@ from ai_test_asset_center.customer_delivery_gate import (
     is_customer_deliverable_defect,
 )
 from ai_test_asset_center.discovery_quality_projection import attach_quality_projection_to_scan_result
+from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
+
+
+MAINLINE_RUN = build_mainline_run_contract(
+    mainline_authority="experiment_candidate",
+    run_id="RUN-CLEANUP-1",
+    campaign_id="CMP-CLEANUP-1",
+    target_id="TARGET-CLEANUP-1",
+    environment_id="ENV-CLEANUP-1",
+    policy_version="v2",
+    evaluation_mode="operational",
+)
 
 
 def _valid_finding() -> dict:
@@ -20,6 +32,9 @@ def _valid_finding() -> dict:
         "execution_id": "execution-1",
         "evidence_id": "evidence-1",
         "finding_id": "finding-1",
+        "mainline_run": {
+            "contract_fingerprint": MAINLINE_RUN["contract_fingerprint"]
+        },
         "title": "observed defect",
         "severity": "P1",
         "bug_status": "reproduced",
@@ -247,6 +262,7 @@ def test_campaign_cleanup_readjudication_updates_formal_projection() -> None:
     demoted["customer_delivery_status"] = "candidate"
     demoted["customer_delivery_gate_reasons"] = ["CLEANUP_NOT_SUCCEEDED"]
     scan_result = {
+        "mainline_run": MAINLINE_RUN,
         "findings": [],
         "candidate_findings": [demoted],
         "discovery_funnel": {

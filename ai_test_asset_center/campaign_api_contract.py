@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_redactor import write_json_redacted
-from .discovery_quality_projection import attach_quality_projection_to_scan_result
+from .discovery_mainline_contract import validate_mainline_run_contract
+from .discovery_quality_projection import (
+    attach_quality_projection_to_scan_result,
+    build_formal_id_consistency,
+)
 from .target_policy import build_target_policy_decision
 
 
@@ -257,6 +261,11 @@ def build_identity_traces(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
 def build_campaign_view(root: Path, project_id: str, campaign_id: str = "") -> dict[str, Any]:
     scan_result = load_scan_result(root, project_id)
     projected = attach_quality_projection_to_scan_result(scan_result)
+    mainline_run = validate_mainline_run_contract(
+        projected.get("mainline_run") or _v12(projected).get("mainline_run")
+    )
+    if not mainline_run["customer_outputs_published"]:
+        raise CampaignContractError("customer_output_not_authorized")
     campaign = _campaign(projected)
     actual_campaign_id = _text(campaign.get("campaign_id"))
     if campaign_id and actual_campaign_id and campaign_id != actual_campaign_id:
@@ -275,6 +284,23 @@ def build_campaign_view(root: Path, project_id: str, campaign_id: str = "") -> d
         execution_status = "failed_safe"
     selected = _selected_experiments(projected)
     traces = build_identity_traces(projected)
+    formal_ids = list(
+        _dict(projected.get("formal_count_projection")).get("formal_finding_ids")
+        or []
+    )
+    trace_formal_ids = sorted({
+        _text(item.get("finding_id"))
+        for item in traces
+        if _text(item.get("finding_id")) in set(formal_ids)
+    })
+    formal_id_consistency = build_formal_id_consistency(
+        delivery_gate_ids=formal_ids,
+        formal_projection_ids=formal_ids,
+        trace_ledger_ids=trace_formal_ids,
+        product_projection_ids=formal_ids,
+    )
+    if not formal_id_consistency["consistent"]:
+        health_status = "DEGRADED"
     return _fingerprinted({
         "schema_version": CAMPAIGN_VIEW_SCHEMA,
         "campaign_id": actual_campaign_id,
@@ -289,7 +315,9 @@ def build_campaign_view(root: Path, project_id: str, campaign_id: str = "") -> d
         "identity_trace_count": len(traces),
         "complete_identity_trace_count": sum(1 for item in traces if item.get("identity_complete")),
         "identity_traces": traces,
+        "mainline_run": mainline_run,
         "formal_count_projection": _dict(projected.get("formal_count_projection")),
+        "formal_id_consistency": formal_id_consistency,
         "finding_classification": _dict(projected.get("finding_classification")),
         "obligation_execution_projection": _dict(projected.get("obligation_execution_projection")),
         "external_evaluation": _dict(projected.get("external_evaluation")),
@@ -321,8 +349,10 @@ def build_identity_traces_from_view(view: dict[str, Any]) -> list[dict[str, Any]
 
 def finding_rows(view: dict[str, Any], classification: str) -> list[dict[str, Any]]:
     normalized = _text(classification).lower() or "deliverable"
-    if normalized not in {"deliverable", "candidate", "rejected"}:
-        raise CampaignContractError("classification must be deliverable, candidate, or rejected")
+    if normalized not in {"deliverable", "candidate", "rejected", "shadow"}:
+        raise CampaignContractError(
+            "classification must be deliverable, candidate, rejected, or shadow"
+        )
     projection = _dict(view.get("finding_classification"))
     rows: list[dict[str, Any]] = []
     for item in _list(projection.get(normalized)):
@@ -331,13 +361,9 @@ def finding_rows(view: dict[str, Any], classification: str) -> list[dict[str, An
         row = dict(item)
         identity = _text(row.get("id") or row.get("finding_id") or row.get("bug_id") or row.get("risk_id"))
         if not identity:
-            identity = "finding_" + hashlib.sha256(_canonical_bytes({
-                "title": row.get("title"),
-                "experiment_id": row.get("experiment_id"),
-                "obligation_id": row.get("obligation_id"),
-                "timestamp": row.get("timestamp"),
-                "classification": normalized,
-            })).hexdigest()[:20]
+            raise CampaignContractError(
+                f"finding identity missing for classification {normalized}"
+            )
         row["id"] = identity
         row["finding_id"] = identity
         row["finding_class"] = normalized
@@ -346,7 +372,7 @@ def finding_rows(view: dict[str, Any], classification: str) -> list[dict[str, An
 
 
 def finding_resource(view: dict[str, Any], finding_id: str) -> tuple[str, dict[str, Any]]:
-    for classification in ("deliverable", "candidate", "rejected"):
+    for classification in ("deliverable", "candidate", "rejected", "shadow"):
         for item in finding_rows(view, classification):
             identity = _text(item.get("id") or item.get("finding_id") or item.get("bug_id"))
             if identity == finding_id:
@@ -358,6 +384,14 @@ def build_evaluation_submission(root: Path, project_id: str, body: dict[str, Any
     scan_result = load_scan_result(root, project_id)
     projected = attach_quality_projection_to_scan_result(scan_result)
     v12 = _v12(projected)
+    mainline_run = validate_mainline_run_contract(
+        projected.get("mainline_run") or v12.get("mainline_run")
+    )
+    requested_mode = _text(body.get("evaluation_mode") or mainline_run["evaluation_mode"]).lower()
+    if requested_mode != mainline_run["evaluation_mode"]:
+        raise CampaignContractError("evaluation_mode_mainline_contract_mismatch")
+    if not mainline_run["product_evaluation_submission_published"]:
+        raise CampaignContractError("product_evaluation_submission_not_authorized")
     operational = _dict(projected.get("operational_metrics") or v12.get("operational_metrics"))
     required_operational = (
         "wall_clock_seconds",
@@ -379,23 +413,52 @@ def build_evaluation_submission(root: Path, project_id: str, body: dict[str, Any
         metrics["cleanup_failures"] = pipeline_health.get("cleanup_failure_count")
     submission_id = f"evalsub_{uuid.uuid4().hex}"
     policy_id = _text(body.get("policy_id") or _dict(projected.get("policy")).get("policy_version") or _campaign(projected).get("policy_version")) or "unversioned"
+    classification = _dict(projected.get("finding_classification"))
+    deliverable_findings = [
+        item for item in _list(classification.get("deliverable")) if isinstance(item, dict)
+    ]
+    formal_ids = list(
+        _dict(projected.get("formal_count_projection")).get("formal_finding_ids")
+        or []
+    )
+    evaluator_submission_ids = sorted({
+        _text(item.get("finding_id") or item.get("id"))
+        for item in deliverable_findings
+        if _text(item.get("finding_id") or item.get("id"))
+    })
+    trace_formal_ids = sorted({
+        _text(item.get("finding_id"))
+        for item in build_identity_traces(projected)
+        if _text(item.get("finding_id")) in set(formal_ids)
+    })
+    formal_id_consistency = build_formal_id_consistency(
+        delivery_gate_ids=formal_ids,
+        formal_projection_ids=formal_ids,
+        evaluator_submission_ids=evaluator_submission_ids,
+        trace_ledger_ids=trace_formal_ids,
+        product_projection_ids=formal_ids,
+    )
+    if not formal_id_consistency["consistent"]:
+        raise CampaignContractError("PIPELINE_DEGRADED_COUNT_MISMATCH")
     envelope = _fingerprinted({
         "schema_version": SUBMISSION_SCHEMA,
         "submission_id": submission_id,
         "run_id": _text(body.get("run_id") or projected.get("scan_id")) or submission_id,
         "project_id": project_id,
         "policy_id": policy_id,
-        "evaluation_mode": _text(body.get("evaluation_mode") or "replay").lower(),
+        "evaluation_mode": requested_mode,
         "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "ground_truth_included": False,
         "measurement_status": "NOT_MEASURED",
         "pipeline_health": pipeline_health,
         "operational_metrics": metrics,
         "scan_result": {
-            "findings": _list(projected.get("findings")),
-            "candidate_findings": _list(projected.get("candidate_findings")),
+            "findings": deliverable_findings,
+            "candidate_findings": [],
         },
+        "mainline_run": mainline_run,
         "formal_count_projection": _dict(projected.get("formal_count_projection")),
+        "formal_id_consistency": formal_id_consistency,
         "source_fingerprints": _dict(_dict(projected.get("obligation_execution_projection")).get("fingerprints")),
     })
     output = root / "platform_outputs" / project_id / "evaluation_submissions" / f"{submission_id}.json"
