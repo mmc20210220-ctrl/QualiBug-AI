@@ -5,6 +5,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -113,6 +115,41 @@ def test_write_json_redacted_rejects_residual_secret(tmp_path: Path) -> None:
     assert receipt["safe_to_persist"] is True
 
 
+def test_write_json_redacted_uses_unique_atomic_files_for_concurrent_writers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "scan_result.json"
+    original_replace = Path.replace
+    replace_lock = threading.Lock()
+    second_replace_finished = threading.Event()
+    replace_order = 0
+
+    def synchronized_replace(source: Path, target: Path) -> Path:
+        nonlocal replace_order
+        with replace_lock:
+            replace_order += 1
+            order = replace_order
+        if order == 1:
+            if not second_replace_finished.wait(timeout=5):
+                raise TimeoutError("second concurrent artifact replace did not run")
+            return original_replace(source, target)
+        result = original_replace(source, target)
+        second_replace_finished.set()
+        return result
+
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
+    payloads = [{"writer": "first"}, {"writer": "second"}]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        receipts = list(
+            executor.map(lambda payload: write_json_redacted(path, payload), payloads)
+        )
+
+    assert all(receipt["safe_to_persist"] for receipt in receipts)
+    assert json.loads(path.read_text(encoding="utf-8")) in payloads
+    assert list(tmp_path.glob(".q-*.tmp")) == []
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows sharing violation regression")
 def test_write_json_redacted_retries_transient_windows_reader_lock(tmp_path: Path) -> None:
     path = tmp_path / "submission.json"
@@ -156,10 +193,13 @@ def test_write_json_redacted_preserves_recovery_file_after_replace_failure(
     monkeypatch.setattr(Path, "replace", deny_replace)
     monkeypatch.setattr("ai_test_asset_center.artifact_redactor.ARTIFACT_REPLACE_RETRY_SECONDS", 0.0, raising=False)
 
-    with pytest.raises(PermissionError, match="recoverable artifact retained"):
+    with pytest.raises(PermissionError, match="recoverable artifact retained") as raised:
         write_json_redacted(path, {"state": "new"})
 
-    recovery = path.with_suffix(path.suffix + ".tmp")
+    recovery_files = list(tmp_path.glob(".q-*.tmp"))
+    assert len(recovery_files) == 1
+    recovery = recovery_files[0]
+    assert str(recovery) in str(raised.value)
     assert json.loads(recovery.read_text(encoding="utf-8")) == {"state": "new"}
 
 

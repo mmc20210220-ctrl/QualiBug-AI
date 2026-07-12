@@ -10,7 +10,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -252,19 +254,38 @@ def write_json_redacted(path: Path | str, payload: Any, *, indent: int = 2) -> d
     target = Path(path)
     redacted, receipt = redact_and_validate(payload)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary: Path | None = None
     try:
-        temporary.write_text(
-            json.dumps(redacted, ensure_ascii=False, indent=indent, default=str),
+        with tempfile.NamedTemporaryFile(
+            mode="w",
             encoding="utf-8",
-        )
-    except Exception:
-        if temporary.exists():
+            dir=target.parent,
+            prefix=".q-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(
+                redacted,
+                handle,
+                ensure_ascii=False,
+                indent=indent,
+                default=str,
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception as write_error:
+        if temporary is not None and temporary.exists():
             try:
                 temporary.unlink()
-            except OSError:
-                pass
+            except OSError as cleanup_error:
+                raise RuntimeError(
+                    "artifact temporary cleanup failed after "
+                    f"{type(write_error).__name__}: {temporary}"
+                ) from cleanup_error
         raise
+    if temporary is None:
+        raise RuntimeError("artifact temporary path was not created")
 
     for attempt in range(ARTIFACT_REPLACE_ATTEMPTS):
         try:
