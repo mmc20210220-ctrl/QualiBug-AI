@@ -1,10 +1,11 @@
 """Compile Behavior IR into industry-agnostic Test Obligations."""
 from __future__ import annotations
 
-import re
+import hashlib
+from itertools import permutations
 from typing import Any
 
-from .enterprise_knowledge_center import _lexicon_dict
+from .behavior_ir import BehaviorIRError, SCHEMA_VERSION as BEHAVIOR_IR_SCHEMA, validate_behavior_ir
 from .test_obligation import RISK_FAMILIES, dedupe_obligations, make_obligation
 
 
@@ -31,153 +32,87 @@ def _accepted(nodes: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _singular(value: Any) -> str:
-    token = _text(value).lower().replace("-", "_")
-    if token.endswith("ies") and len(token) > 3:
-        return token[:-3] + "y"
-    if token.endswith("ses") and len(token) > 3:
-        return token[:-2]
-    if token.endswith("s") and not token.endswith("ss") and len(token) > 2:
-        return token[:-1]
-    return token
+def related_operations(
+    behavior_ir: dict[str, Any],
+    *,
+    node_ref: str,
+    relation_types: set[str],
+) -> list[dict[str, Any]]:
+    """Join a node to operations only through explicit Behavior IR relations."""
 
-
-_RESOURCE_STOP_TOKENS = {"api", "v1", "v2", "v3", "admin", "id", "ids", "by", "me", "self"}
-_READ_ACTIONS = {"get", "read", "view", "list", "query", "head", "options"}
-_WRITE_ACTIONS = {"post", "create", "submit", "request", "put", "patch", "update", "modify", "adjust", "delete", "remove", "write"}
-
-
-def _resource_tokens(value: Any) -> set[str]:
-    raw = _text(value).lower().replace("-", "_")
-    if not raw:
-        return set()
-    if raw == "*":
-        return {"*"}
-    tokens: set[str] = set()
-    for part in re.split(r"[/\\\s{}:?.#&=,;()\[\]_]+", raw):
-        token = _singular(part)
-        if token and token not in _RESOURCE_STOP_TOKENS and not token.isdigit():
-            tokens.add(token)
-    return tokens
-
-
-def _operation_resource_candidates(op: dict[str, Any]) -> set[str]:
-    candidates = _resource_tokens(op.get("path"))
-    for value in _list(op.get("entity_refs")):
-        candidates.update(_resource_tokens(value))
-    for value in _list(op.get("tags")):
-        candidates.update(_resource_tokens(value))
-    return candidates
-
-
-def _operation_resource(op: dict[str, Any]) -> str:
-    for part in _text(op.get("path")).strip("/").split("/"):
-        normalized = _singular(part)
-        if normalized and normalized not in _RESOURCE_STOP_TOKENS and not part.startswith(("{", ":")):
-            return normalized
-    return ""
-
-
-def _operation_actions(op: dict[str, Any]) -> set[str]:
-    method = _text(op.get("method")).upper()
-    method_actions = {
-        "GET": {"get", "read", "view", "list", "query"},
-        "HEAD": {"head", "read"},
-        "OPTIONS": {"options", "read"},
-        "POST": {"post", "create", "submit", "request", "write"},
-        "PUT": {"put", "update", "modify", "write"},
-        "PATCH": {"patch", "update", "modify", "adjust", "write"},
-        "DELETE": {"delete", "remove", "write"},
+    relation_rows = _accepted(_list(_dict(behavior_ir).get("relations")))
+    operation_ids = {
+        _text(row.get("operation_ref"))
+        for row in relation_rows
+        if _text(row.get("relation_type")) in relation_types
+        and _text(node_ref) in {_text(row.get("from_ref")), _text(row.get("to_ref"))}
+        and _text(row.get("operation_ref"))
     }
-    actions = set(method_actions.get(method, {method.lower()} if method else set()))
-    parts = [
-        _singular(part)
-        for part in _text(op.get("path")).strip("/").split("/")
-        if part and not part.startswith(("{", ":")) and _singular(part) not in _RESOURCE_STOP_TOKENS
+    return [
+        row
+        for row in _accepted(_list(_dict(behavior_ir).get("operations")))
+        if _text(row.get("id")) in operation_ids
     ]
-    if len(parts) > 1:
-        actions.add(parts[-1])
-    evidence = " ".join(
-        [
-            _text(op.get("summary")),
-            _text(op.get("description")),
-            _text(op.get("operation_id")),
-            " ".join(_text(tag) for tag in _list(op.get("tags"))),
-            " ".join(parts),
-        ]
-    ).lower()
-    for source_token, aliases in _lexicon_dict("verb_action_lexicon").items():
-        alias_values = [_text(source_token), *[_text(token) for token in _list(aliases)]]
-        if any(token.lower() in evidence for token in alias_values if token):
-            actions.update(token.lower() for token in alias_values if token)
-    return actions
 
 
-def _summary_declared_roles(op: dict[str, Any], actors: list[dict[str, Any]]) -> set[str]:
-    summary = " ".join(
-        [
-            _text(op.get("summary")),
-            _text(op.get("description")),
-            _text(op.get("operation_id")),
-            " ".join(_text(tag) for tag in _list(op.get("tags"))),
-        ]
-    ).lower()
-    if not summary.strip():
-        return set()
-    role_words = _lexicon_dict("role_words")
-    declared: set[str] = set()
-    for actor in actors:
-        role = _text(actor.get("role")).lower()
-        if not role:
-            continue
-        aliases = [role, *role_words.get(role, [])]
-        if any(
-            re.search(rf"(?<![a-z0-9_]){re.escape(alias.lower())}(?![a-z0-9_])", summary)
-            if alias.isascii() else alias.lower() in summary
-            for alias in aliases
-            if alias
-        ):
-            declared.add(role)
-    return declared
+def _relations_for_operation(
+    relations: list[dict[str, Any]],
+    operation_ref: str,
+    relation_types: set[str],
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in relations
+        if _text(row.get("operation_ref")) == _text(operation_ref)
+        and _text(row.get("relation_type")) in relation_types
+    ]
 
 
-def _actor_is_allowed(actor: dict[str, Any], op: dict[str, Any], direct_roles: set[str]) -> bool:
-    role = _text(actor.get("role")).lower()
-    if direct_roles:
-        return role in direct_roles
-    resources: set[str] = set()
-    for value in _list(actor.get("allowed_resources")):
-        resources.update(_resource_tokens(value))
-    actions = {_text(value).lower() for value in _list(actor.get("allowed_actions")) if _text(value)}
-    if "*" in resources and ("*" in actions or "manage" in actions):
-        return True
-    if not resources or not (_operation_resource_candidates(op) & resources):
-        return False
-    return _action_matches(actions, op)
+def _relation_actor_ref(relation: dict[str, Any]) -> str:
+    return _text(relation.get("actor_ref") or relation.get("from_ref"))
 
 
-def _action_matches(actions: set[str], op: dict[str, Any]) -> bool:
-    if "*" in actions or "manage" in actions:
-        return True
-    op_actions = _operation_actions(op)
-    if actions & op_actions:
-        return True
-    method = _text(op.get("method")).upper()
-    if method in {"GET", "HEAD", "OPTIONS"}:
-        return bool(actions & _READ_ACTIONS)
-    if method in {"POST", "PUT", "PATCH", "DELETE"}:
-        return bool(actions & _WRITE_ACTIONS)
-    return False
+def _compile_gap(*, subject_ref: str, relation_types: set[str]) -> dict[str, Any]:
+    relation_label = ",".join(sorted(relation_types))
+    material = f"BLOCKED_MISSING_IR_RELATION|{subject_ref}|{relation_label}"
+    return {
+        "id": f"compile_gap_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]}",
+        "code": "BLOCKED_MISSING_IR_RELATION",
+        "subject_ref": _text(subject_ref),
+        "required_relation_types": sorted(relation_types),
+        "description": "No explicit Behavior IR relation resolves the required operation join",
+        "status": "unsupported",
+        "source_refs": [],
+    }
 
 
-def _actor_has_specific_permission(actor: dict[str, Any], op: dict[str, Any]) -> bool:
-    resources: set[str] = set()
-    for value in _list(actor.get("allowed_resources")):
-        resources.update(_resource_tokens(value))
-    actions = {_text(value).lower() for value in _list(actor.get("allowed_actions")) if _text(value)}
-    if not resources or "*" in resources or not actions or "*" in actions:
-        return False
-    return bool(resources & _operation_resource_candidates(op)) and _action_matches(actions, op)
+def _cleanup_requirement(
+    operation: dict[str, Any],
+    operations: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    *,
+    required: bool | None = None,
+) -> dict[str, Any]:
+    """Bind cleanup only through one explicit ``compensates`` relation."""
+    op = _dict(operation)
+    is_write = _text(op.get("read_write")) == "write"
+    must_cleanup = is_write if required is None else bool(required)
+    requirement: dict[str, Any] = {"required": must_cleanup, "mode": "reverse_order"}
+    if not must_cleanup:
+        return requirement
+    operation_ids = {_text(row.get("id")) for row in operations if _text(row.get("id"))}
+    compensation_refs = {
+        _text(relation.get("operation_ref"))
+        for relation in relations
+        if _text(relation.get("relation_type")) == "compensates"
+        and _text(relation.get("to_ref")) == _text(op.get("id"))
+        and _text(relation.get("from_ref")) == _text(relation.get("operation_ref"))
+        and _text(relation.get("operation_ref")) in operation_ids
+        and _text(relation.get("operation_ref")) != _text(op.get("id"))
+    }
+    if len(compensation_refs) == 1:
+        requirement["operation_ref"] = next(iter(compensation_refs))
+    return requirement
 
 
 def _active_actors(actors: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -187,16 +122,6 @@ def _active_actors(actors: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for actor in actors
         if _text(actor.get("account_status")).lower() not in blocked
     ]
-
-
-def _actor_sort_key(actor: dict[str, Any]) -> tuple[int, int, str]:
-    role = _text(actor.get("role")).lower()
-    secret = _text(actor.get("credential_secret_ref"))
-    return (
-        0 if secret.startswith("secret_ref:test_accounts:") else 1,
-        1 if role in {"admin", "administrator", "superadmin", "root"} else 0,
-        _text(actor.get("id")),
-    )
 
 
 def _combined_source_refs(*nodes: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
@@ -223,6 +148,11 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
     that encode a specific industry or benchmark answer.
     """
     ir = _dict(behavior_ir)
+    if _text(ir.get("schema_version")) != BEHAVIOR_IR_SCHEMA:
+        raise BehaviorIRError("behavior_ir_v2_required")
+    validation_errors = validate_behavior_ir(ir, require_explicit_relations=True)
+    if validation_errors:
+        raise BehaviorIRError("behavior_ir_v2_invalid:" + ",".join(validation_errors))
     operations = _accepted(_list(ir.get("operations")))
     actors = _accepted(_list(ir.get("actors")))
     invariants = _accepted(_list(ir.get("invariants")))
@@ -230,127 +160,166 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
     states = _accepted(_list(ir.get("states")))
     entities = _accepted(_list(ir.get("entities")))
     obligations: list[dict[str, Any]] = []
+    coverage_gaps = [dict(item) for item in _list(ir.get("coverage_gaps")) if isinstance(item, dict)]
 
     write_ops = [op for op in operations if _text(op.get("read_write") or op.get("side_effect_class")) == "write"]
     read_ops = [op for op in operations if _text(op.get("read_write") or op.get("side_effect_class")) != "write"]
 
     active_actors = _active_actors(actors)
+    active_actors_by_id = {
+        _text(actor.get("id")): actor
+        for actor in active_actors
+        if _text(actor.get("id"))
+    }
 
-    # Authorization: source-permitted actor control vs source-denied treatment
-    # on the same operation. Never infer allow/deny from actor ordering.
-    if len(active_actors) >= 2 and operations:
-        for op in operations[:120]:
-            direct_roles = _summary_declared_roles(op, active_actors)
-            allowed_actors = [
-                actor for actor in active_actors
-                if _actor_is_allowed(actor, op, direct_roles)
-            ]
-            specific_allowed = [
-                actor for actor in allowed_actors
-                if _text(actor.get("role")).lower() in direct_roles or _actor_has_specific_permission(actor, op)
-            ]
-            if not specific_allowed:
+    # Authorization joins explicit permit and deny relations for one operation.
+    for op in operations[:120]:
+        operation_ref = _text(op.get("id"))
+        permit_relations = _relations_for_operation(relations, operation_ref, {"permits"})
+        deny_relations = _relations_for_operation(relations, operation_ref, {"denies"})
+        for permit_relation in permit_relations:
+            allowed = active_actors_by_id.get(_relation_actor_ref(permit_relation))
+            if not allowed:
                 continue
-            allowed_roles = {_text(actor.get("role")).lower() for actor in allowed_actors}
-            denied_actors = [
-                actor for actor in active_actors
-                if _text(actor.get("role")).lower() not in allowed_roles
-                and not _actor_is_allowed(actor, op, direct_roles)
-            ]
-            if not denied_actors:
-                continue
-            allowed = sorted(specific_allowed, key=_actor_sort_key)[0]
-            denied_candidates = [
-                actor for actor in denied_actors
-                if _text(actor.get("role")).lower() != _text(allowed.get("role")).lower()
-            ]
-            if not denied_candidates:
-                continue
-            denied = sorted(denied_candidates, key=_actor_sort_key)[0]
-            obligations.append(make_obligation(
-                risk_family="authorization",
-                subject_refs=[_text(op.get("id")), _text(allowed.get("id")), _text(denied.get("id"))],
-                property_spec={
-                    "template": "authorization_control_treatment",
-                    "control_actor_ref": _text(allowed.get("id")),
-                    "treatment_actor_ref": _text(denied.get("id")),
-                    "operation_ref": _text(op.get("id")),
-                    "require_same_resource": True,
-                },
-                required_actors=[_text(allowed.get("id")), _text(denied.get("id"))],
-                required_operations=[_text(op.get("id"))],
-                required_observers=["http_response", "actor_identity"],
-                cleanup_requirement={"required": _text(op.get("read_write")) == "write", "mode": "reverse_order"},
-                source_refs=_combined_source_refs(op, allowed, denied),
-                confidence=min(
-                    0.9 if direct_roles else 0.82,
-                    float(op.get("confidence") or 0.7),
-                    float(allowed.get("confidence") or 0.7),
-                    float(denied.get("confidence") or 0.7),
-                ),
-            ))
+            for deny_relation in deny_relations:
+                denied = active_actors_by_id.get(_relation_actor_ref(deny_relation))
+                if not denied or _text(denied.get("id")) == _text(allowed.get("id")):
+                    continue
+                obligations.append(make_obligation(
+                    risk_family="authorization",
+                    subject_refs=[
+                        operation_ref,
+                        _text(allowed.get("id")),
+                        _text(denied.get("id")),
+                    ],
+                    property_spec={
+                        "template": "authorization_control_treatment",
+                        "control_actor_ref": _text(allowed.get("id")),
+                        "treatment_actor_ref": _text(denied.get("id")),
+                        "operation_ref": operation_ref,
+                        "require_same_resource": True,
+                    },
+                    required_actors=[_text(allowed.get("id")), _text(denied.get("id"))],
+                    required_operations=[operation_ref],
+                    required_observers=["http_response", "actor_identity"],
+                    cleanup_requirement=_cleanup_requirement(op, operations, relations),
+                    source_refs=_combined_source_refs(
+                        op,
+                        allowed,
+                        denied,
+                        permit_relation,
+                        deny_relation,
+                    ),
+                    relation_refs=[
+                        _text(permit_relation.get("id")),
+                        _text(deny_relation.get("id")),
+                    ],
+                    confidence=min(
+                        float(op.get("confidence") or 0.7),
+                        float(allowed.get("confidence") or 0.7),
+                        float(denied.get("confidence") or 0.7),
+                        float(permit_relation.get("confidence") or 0.8),
+                        float(deny_relation.get("confidence") or 0.8),
+                    ),
+                ))
 
-    # Isolation: two concrete active accounts with the same role on an owned
-    # resource. Without two account-bound actors, leave this to the legacy
-    # source-grounded isolation slices instead of compiling an arbitrary pair.
-    by_role: dict[str, list[dict[str, Any]]] = {}
-    for actor in active_actors:
-        if _text(actor.get("account_ref")):
-            by_role.setdefault(_text(actor.get("role")).lower(), []).append(actor)
+    # Isolation uses only account-bound actors explicitly linked by ownership.
     owned_read_ops = [
         op for op in read_ops
         if ("{" in _text(op.get("path")) or "/:" in _text(op.get("path")))
     ]
-    for group in by_role.values():
-        if len(group) < 2:
-            continue
-        owner, viewer = sorted(group, key=_actor_sort_key)[:2]
-        op = next((candidate for candidate in owned_read_ops if _actor_is_allowed(owner, candidate, set())), None)
-        if not op:
-            continue
-        obligations.append(make_obligation(
-            risk_family="isolation",
-            subject_refs=[_text(op.get("id")), _text(owner.get("id")), _text(viewer.get("id"))],
-            property_spec={
-                "template": "owner_viewer_isolation",
-                "owner_actor_ref": _text(owner.get("id")),
-                "viewer_actor_ref": _text(viewer.get("id")),
-                "operation_ref": _text(op.get("id")),
-                "require_ownership_evidence": True,
-            },
-            required_actors=[_text(owner.get("id")), _text(viewer.get("id"))],
-            required_operations=[_text(op.get("id"))],
-            required_fixtures=["owned_resource"],
-            required_observers=["http_response", "resource_ownership"],
-            source_refs=_combined_source_refs(op, owner, viewer),
-            confidence=0.7,
-        ))
+    for op in owned_read_ops:
+        ownership_relations = _relations_for_operation(relations, _text(op.get("id")), {"owns"})
+        relation_by_actor: dict[str, list[dict[str, Any]]] = {}
+        for relation in ownership_relations:
+            actor_ref = _relation_actor_ref(relation)
+            actor = active_actors_by_id.get(actor_ref)
+            if actor and _text(actor.get("account_ref")):
+                relation_by_actor.setdefault(actor_ref, []).append(relation)
+        by_role: dict[str, list[str]] = {}
+        for actor_ref in relation_by_actor:
+            actor = active_actors_by_id[actor_ref]
+            by_role.setdefault(_text(actor.get("role")).lower(), []).append(actor_ref)
+        for actor_refs in by_role.values():
+            for owner_ref, viewer_ref in permutations(sorted(set(actor_refs)), 2):
+                owner = active_actors_by_id[owner_ref]
+                viewer = active_actors_by_id[viewer_ref]
+                pair_relations = relation_by_actor[owner_ref] + relation_by_actor[viewer_ref]
+                obligations.append(make_obligation(
+                    risk_family="isolation",
+                    subject_refs=[_text(op.get("id")), owner_ref, viewer_ref],
+                    property_spec={
+                        "template": "owner_viewer_isolation",
+                        "owner_actor_ref": owner_ref,
+                        "viewer_actor_ref": viewer_ref,
+                        "operation_ref": _text(op.get("id")),
+                        "require_ownership_evidence": True,
+                    },
+                    required_actors=[owner_ref, viewer_ref],
+                    required_operations=[_text(op.get("id"))],
+                    required_fixtures=["owned_resource"],
+                    required_observers=["http_response", "resource_ownership"],
+                    source_refs=_combined_source_refs(op, owner, viewer, *pair_relations),
+                    relation_refs=sorted({
+                        _text(relation.get("id"))
+                        for relation in pair_relations
+                        if _text(relation.get("id"))
+                    }),
+                    confidence=min(
+                        float(op.get("confidence") or 0.7),
+                        float(owner.get("confidence") or 0.7),
+                        float(viewer.get("confidence") or 0.7),
+                    ),
+                ))
 
-    # State transitions from IR states
-    if states and write_ops:
-        by_entity: dict[str, list[dict[str, Any]]] = {}
-        for st in states:
-            by_entity.setdefault(_text(st.get("entity_ref") or "entity"), []).append(st)
-        for entity_ref, entity_states in list(by_entity.items())[:10]:
-            if len(entity_states) < 2:
-                continue
-            op = write_ops[0]
-            obligations.append(make_obligation(
-                risk_family="state",
-                subject_refs=[_text(op.get("id")), entity_ref, _text(entity_states[0].get("id")), _text(entity_states[1].get("id"))],
-                property_spec={
-                    "template": "state_transition",
-                    "entity_ref": entity_ref,
-                    "from_state_ref": _text(entity_states[0].get("id")),
-                    "to_state_ref": _text(entity_states[1].get("id")),
-                    "operation_ref": _text(op.get("id")),
-                },
-                required_operations=[_text(op.get("id"))],
-                required_fixtures=[f"entity_in_state:{_text(entity_states[0].get('id'))}"],
-                required_observers=["before_state", "after_state"],
-                cleanup_requirement={"required": True, "mode": "reverse_order"},
-                source_refs=list(entity_states[0].get("source_refs") or [])[:2],
-                confidence=0.6,
+    # State obligations require an explicit state -> operation -> state join.
+    states_by_id = {_text(state.get("id")): state for state in states if _text(state.get("id"))}
+    operations_by_id = {_text(op.get("id")): op for op in operations if _text(op.get("id"))}
+    state_entities_with_transition: set[str] = set()
+    for relation in relations:
+        if _text(relation.get("relation_type")) != "transitions":
+            continue
+        from_state = states_by_id.get(_text(relation.get("from_ref")))
+        to_state = states_by_id.get(_text(relation.get("to_ref")))
+        op = operations_by_id.get(_text(relation.get("operation_ref")))
+        if not from_state or not to_state or not op:
+            continue
+        entity_ref = _text(from_state.get("entity_ref") or to_state.get("entity_ref"))
+        state_entities_with_transition.add(entity_ref)
+        obligations.append(make_obligation(
+            risk_family="state",
+            subject_refs=[
+                _text(op.get("id")),
+                entity_ref,
+                _text(from_state.get("id")),
+                _text(to_state.get("id")),
+            ],
+            property_spec={
+                "template": "state_transition",
+                "entity_ref": entity_ref,
+                "from_state_ref": _text(from_state.get("id")),
+                "to_state_ref": _text(to_state.get("id")),
+                "operation_ref": _text(op.get("id")),
+            },
+            required_operations=[_text(op.get("id"))],
+            required_fixtures=[f"entity_in_state:{_text(from_state.get('id'))}"],
+            required_observers=["before_state", "after_state"],
+            cleanup_requirement=_cleanup_requirement(op, operations, relations, required=True),
+            source_refs=_combined_source_refs(relation, from_state, to_state, op),
+            relation_refs=[_text(relation.get("id"))],
+            confidence=min(
+                float(relation.get("confidence") or 0.6),
+                float(op.get("confidence") or 0.7),
+            ),
+        ))
+    states_by_entity: dict[str, list[dict[str, Any]]] = {}
+    for state in states:
+        states_by_entity.setdefault(_text(state.get("entity_ref")), []).append(state)
+    for entity_ref, entity_states in states_by_entity.items():
+        if len(entity_states) >= 2 and entity_ref not in state_entities_with_transition:
+            coverage_gaps.append(_compile_gap(
+                subject_ref=entity_ref,
+                relation_types={"transitions"},
             ))
 
     # Idempotency / concurrency for write ops
@@ -365,7 +334,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             },
             required_operations=[_text(op.get("id"))],
             required_observers=["business_effect", "http_response"],
-            cleanup_requirement={"required": True, "mode": "reverse_order"},
+            cleanup_requirement=_cleanup_requirement(op, operations, relations, required=True),
             source_refs=list(op.get("source_refs") or [])[:2],
             confidence=0.55,
         ))
@@ -379,7 +348,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             },
             required_operations=[_text(op.get("id"))],
             required_observers=["final_state", "barrier_timeline"],
-            cleanup_requirement={"required": True, "mode": "reverse_order"},
+            cleanup_requirement=_cleanup_requirement(op, operations, relations, required=True),
             source_refs=list(op.get("source_refs") or [])[:2],
             confidence=0.55,
         ))
@@ -397,41 +366,108 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             family = "temporal"
         elif any(token in kind for token in ("visib", "scope", "可见")):
             family = "visibility"
-        op_ref = _text(operations[0].get("id")) if operations else ""
-        obligations.append(make_obligation(
-            risk_family=family if family in RISK_FAMILIES else "validation",
-            subject_refs=[_text(inv.get("id")), op_ref] if op_ref else [_text(inv.get("id"))],
-            property_spec={
-                "template": f"invariant_{family}",
-                "invariant_ref": _text(inv.get("id")),
-                "expression": expr,
-                "operation_ref": op_ref,
-            },
-            required_operations=[op_ref] if op_ref else [],
-            required_observers=["typed_assertion", "source_invariant"],
-            source_refs=list(inv.get("source_refs") or [])[:3],
-            confidence=float(inv.get("confidence") or 0.6),
-        ))
+        relation_types = {
+            "conservation": {"conserves"},
+            "privacy": {"observes", "scopes"},
+            "temporal": {"transitions", "observes"},
+            "visibility": {"scopes", "observes"},
+            "validation": {"produces", "consumes", "transitions", "observes"},
+        }[family]
+        invariant_ref = _text(inv.get("id"))
+        joined_relations = [
+            relation
+            for relation in relations
+            if _text(relation.get("relation_type")) in relation_types
+            and invariant_ref in {
+                _text(relation.get("from_ref")),
+                _text(relation.get("to_ref")),
+            }
+            and _text(relation.get("operation_ref")) in operations_by_id
+        ]
+        if not joined_relations:
+            coverage_gaps.append(_compile_gap(
+                subject_ref=invariant_ref,
+                relation_types=relation_types,
+            ))
+            continue
+        relations_by_operation: dict[str, list[dict[str, Any]]] = {}
+        for relation in joined_relations:
+            relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
+        for operation_ref, operation_relations in relations_by_operation.items():
+            op = operations_by_id[operation_ref]
+            obligations.append(make_obligation(
+                risk_family=family if family in RISK_FAMILIES else "validation",
+                subject_refs=[invariant_ref, operation_ref],
+                property_spec={
+                    "template": f"invariant_{family}",
+                    "invariant_ref": invariant_ref,
+                    "expression": expr,
+                    "operation_ref": operation_ref,
+                },
+                required_operations=[operation_ref],
+                required_observers=["typed_assertion", "source_invariant"],
+                cleanup_requirement=_cleanup_requirement(op, operations, relations),
+                source_refs=_combined_source_refs(inv, op, *operation_relations),
+                relation_refs=sorted({
+                    _text(relation.get("id"))
+                    for relation in operation_relations
+                    if _text(relation.get("id"))
+                }),
+                confidence=min(
+                    float(inv.get("confidence") or 0.6),
+                    float(op.get("confidence") or 0.7),
+                ),
+            ))
 
-    # Entity+operation validation mutation template (generic)
-    if entities and write_ops:
-        ent = entities[0]
-        op = write_ops[0]
-        obligations.append(make_obligation(
-            risk_family="validation",
-            subject_refs=[_text(ent.get("id")), _text(op.get("id"))],
-            property_spec={
-                "template": "single_dimension_mutation",
-                "entity_ref": _text(ent.get("id")),
-                "operation_ref": _text(op.get("id")),
-                "require_control_success": True,
-            },
-            required_operations=[_text(op.get("id"))],
-            required_observers=["http_response", "entity_state"],
-            cleanup_requirement={"required": True, "mode": "reverse_order"},
-            source_refs=list(ent.get("source_refs") or [])[:2],
-            confidence=0.5,
-        ))
+    # Entity mutation templates require an explicit operation/entity relation.
+    entity_relation_types = {"produces", "consumes", "transitions", "scopes"}
+    write_operation_ids = {_text(op.get("id")) for op in write_ops}
+    for ent in entities:
+        entity_ref = _text(ent.get("id"))
+        joined_relations = [
+            relation
+            for relation in relations
+            if _text(relation.get("relation_type")) in entity_relation_types
+            and entity_ref in {
+                _text(relation.get("from_ref")),
+                _text(relation.get("to_ref")),
+            }
+            and _text(relation.get("operation_ref")) in write_operation_ids
+        ]
+        if not joined_relations:
+            coverage_gaps.append(_compile_gap(
+                subject_ref=entity_ref,
+                relation_types=entity_relation_types,
+            ))
+            continue
+        relations_by_operation: dict[str, list[dict[str, Any]]] = {}
+        for relation in joined_relations:
+            relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
+        for operation_ref, operation_relations in relations_by_operation.items():
+            op = operations_by_id[operation_ref]
+            obligations.append(make_obligation(
+                risk_family="validation",
+                subject_refs=[entity_ref, operation_ref],
+                property_spec={
+                    "template": "single_dimension_mutation",
+                    "entity_ref": entity_ref,
+                    "operation_ref": operation_ref,
+                    "require_control_success": True,
+                },
+                required_operations=[operation_ref],
+                required_observers=["http_response", "entity_state"],
+                cleanup_requirement=_cleanup_requirement(op, operations, relations, required=True),
+                source_refs=_combined_source_refs(ent, op, *operation_relations),
+                relation_refs=sorted({
+                    _text(relation.get("id"))
+                    for relation in operation_relations
+                    if _text(relation.get("id"))
+                }),
+                confidence=min(
+                    float(ent.get("confidence") or 0.6),
+                    float(op.get("confidence") or 0.7),
+                ),
+            ))
 
     deduped = dedupe_obligations(obligations)
     return {
@@ -443,5 +479,5 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             for family in RISK_FAMILIES
         },
         "obligations": deduped,
-        "coverage_gaps": list(ir.get("coverage_gaps") or []),
+        "coverage_gaps": coverage_gaps,
     }

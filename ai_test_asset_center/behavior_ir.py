@@ -1,6 +1,6 @@
 """Versioned Behavior IR — structured executable fact model for discovery.
 
-Schema: qualibug.behavior-ir.v1
+Schema: qualibug.behavior-ir.v2
 
 Natural language is for explanation only. Downstream obligation/experiment
 compilation must reference IR node IDs. No industry or benchmark hardcoding.
@@ -9,12 +9,31 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from copy import deepcopy
 from typing import Any
 
 
-SCHEMA_VERSION = "qualibug.behavior-ir.v1"
+SCHEMA_VERSION = "qualibug.behavior-ir.v2"
+V1_SCHEMA_VERSION = "qualibug.behavior-ir.v1"
+ALLOWED_RELATION_TYPES = frozenset({
+    "produces",
+    "consumes",
+    "transitions",
+    "permits",
+    "denies",
+    "owns",
+    "scopes",
+    "conserves",
+    "observes",
+    "compensates",
+})
 _DERIVATIONS = {"explicit", "schema-derived", "runtime-observed", "model-inferred"}
 _STATUSES = {"accepted", "conflicting", "unsupported", "unknown"}
+
+
+class BehaviorIRError(ValueError):
+    """Behavior IR is not valid for authoritative runtime compilation."""
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -27,6 +46,28 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def normalize_relation(value: dict[str, Any]) -> dict[str, Any]:
+    """Normalize one typed relation without inventing missing join targets."""
+
+    if not isinstance(value, dict):
+        raise BehaviorIRError("relation_not_object")
+    relation_type = _text(value.get("relation_type"))
+    if relation_type not in ALLOWED_RELATION_TYPES:
+        raise BehaviorIRError(f"relation_type_invalid:{relation_type}")
+    for field in ("id", "from_ref", "to_ref"):
+        if not _text(value.get(field)):
+            raise BehaviorIRError(f"relation_field_missing:{field}")
+    return {
+        **value,
+        "relation_type": relation_type,
+        "operation_ref": _text(value.get("operation_ref")),
+        "actor_ref": _text(value.get("actor_ref")),
+        "preconditions": list(value.get("preconditions") or []),
+        "effects": list(value.get("effects") or []),
+        "source_refs": list(value.get("source_refs") or []),
+    }
 
 
 def _stable_id(*parts: Any) -> str:
@@ -44,6 +85,88 @@ def _source_ref(source_id: str = "", *, version: str = "", locator: str = "", qu
         "kind": _text(kind),
         "quote_hash": hashlib.sha256(quote_text.encode("utf-8")).hexdigest()[:16] if quote_text else "",
     }
+
+
+_METHOD_ACTIONS = {
+    "GET": {"get", "read", "view", "list", "query"},
+    "HEAD": {"head", "read", "view"},
+    "OPTIONS": {"options", "read"},
+    "POST": {"post", "create", "submit", "request", "write"},
+    "PUT": {"put", "update", "modify", "write"},
+    "PATCH": {"patch", "update", "modify", "write"},
+    "DELETE": {"delete", "remove", "write"},
+}
+
+
+def _path_shape(value: Any) -> str:
+    path = _text(value).split("?", 1)[0].strip().lower()
+    if not path:
+        return ""
+    segments = []
+    for segment in path.strip("/").split("/"):
+        if not segment:
+            continue
+        if (
+            (segment.startswith("{") and segment.endswith("}"))
+            or segment.startswith(":")
+            or segment == "*"
+        ):
+            segments.append("{}")
+        else:
+            segments.append(segment)
+    return "/" + "/".join(segments)
+
+
+def _resource_matches_operation(resource: Any, operation: dict[str, Any]) -> bool:
+    resource_text = _text(resource).lower()
+    operation_path = _text(operation.get("path"))
+    if not resource_text or not operation_path:
+        return False
+    if resource_text.startswith("/"):
+        return _path_shape(resource_text) == _path_shape(operation_path)
+    resource_tokens = set(re.findall(r"[a-z0-9_]+", resource_text))
+    operation_tokens = set(re.findall(r"[a-z0-9_]+", operation_path.lower()))
+    for value in _list(operation.get("tags")) + _list(operation.get("entity_refs")):
+        operation_tokens.update(re.findall(r"[a-z0-9_]+", _text(value).lower()))
+    return bool(resource_tokens and resource_tokens.intersection(operation_tokens))
+
+
+def _permission_allows_operation(actions: list[Any], operation: dict[str, Any]) -> bool:
+    normalized = {_text(action).lower() for action in actions if _text(action)}
+    if normalized.intersection({"*", "all", "any"}):
+        return True
+    method = _text(operation.get("method")).upper()
+    return bool(normalized.intersection(_METHOD_ACTIONS.get(method, {method.lower()})))
+
+
+def _relation_node(
+    *,
+    relation_type: str,
+    from_ref: str,
+    to_ref: str,
+    operation_ref: str = "",
+    actor_ref: str = "",
+    preconditions: list[Any] | None = None,
+    effects: list[Any] | None = None,
+    source_refs: list[dict[str, Any]] | None = None,
+    confidence: float = 0.8,
+    derivation: str = "schema-derived",
+) -> dict[str, Any]:
+    return _fact_node(
+        node_id=_stable_id("rel", relation_type, from_ref, to_ref, operation_ref, actor_ref),
+        typed_fields={
+            "relation_type": relation_type,
+            "from_ref": from_ref,
+            "to_ref": to_ref,
+            "operation_ref": operation_ref,
+            "actor_ref": actor_ref,
+            "preconditions": list(preconditions or []),
+            "effects": list(effects or []),
+        },
+        source_refs=source_refs,
+        confidence=confidence,
+        derivation=derivation,
+    )
 
 
 def _fact_node(
@@ -66,6 +189,281 @@ def _fact_node(
         "derivation": der,
         "status": st,
     }
+
+
+def _derive_permission_relations(
+    model: dict[str, Any],
+    permission_rows: list[Any],
+) -> list[dict[str, Any]]:
+    actors_by_role: dict[str, list[dict[str, Any]]] = {}
+    for actor in _list(model.get("actors")):
+        if not isinstance(actor, dict):
+            continue
+        role_key = _text(actor.get("role_key") or actor.get("role")).lower()
+        if role_key:
+            actors_by_role.setdefault(role_key, []).append(actor)
+
+    rows_by_role: dict[str, list[dict[str, Any]]] = {}
+    for row in permission_rows:
+        if not isinstance(row, dict):
+            continue
+        role_key = _text(row.get("role") or row.get("actor") or row.get("principal")).lower()
+        if role_key:
+            rows_by_role.setdefault(role_key, []).append(row)
+
+    relations: list[dict[str, Any]] = []
+    for role_key, actors in actors_by_role.items():
+        role_rows = rows_by_role.get(role_key, [])
+        if not role_rows:
+            continue
+        for operation in _list(model.get("operations")):
+            if not isinstance(operation, dict):
+                continue
+            matching_rows = [
+                row
+                for row in role_rows
+                if _resource_matches_operation(row.get("resource"), operation)
+            ]
+            if not matching_rows:
+                continue
+            permitted = any(
+                _permission_allows_operation(_list(row.get("actions")), operation)
+                for row in matching_rows
+            )
+            relation_type = "permits" if permitted else "denies"
+            source_refs = [
+                _source_ref(
+                    _text(row.get("source_id")) or "permission_matrix",
+                    locator=f"{role_key}->{_text(row.get('resource'))}",
+                    kind="permission_matrix",
+                )
+                for row in matching_rows
+            ]
+            actions = sorted({
+                _text(action)
+                for row in matching_rows
+                for action in _list(row.get("actions"))
+                if _text(action)
+            })
+            for actor in actors:
+                actor_ref = _text(actor.get("id"))
+                operation_ref = _text(operation.get("id"))
+                relations.append(_relation_node(
+                    relation_type=relation_type,
+                    from_ref=actor_ref,
+                    to_ref=operation_ref,
+                    operation_ref=operation_ref,
+                    actor_ref=actor_ref,
+                    effects=[{"allowed_actions": actions}],
+                    source_refs=source_refs,
+                    confidence=0.82 if permitted else 0.76,
+                    derivation="explicit" if permitted else "schema-derived",
+                ))
+                owns_scope = permitted and any(
+                    "own" in _text(row.get("scope")).lower()
+                    for row in matching_rows
+                )
+                if owns_scope:
+                    relations.append(_relation_node(
+                        relation_type="owns",
+                        from_ref=actor_ref,
+                        to_ref=operation_ref,
+                        operation_ref=operation_ref,
+                        actor_ref=actor_ref,
+                        preconditions=[{"scope": "own"}],
+                        source_refs=source_refs,
+                        confidence=0.78,
+                        derivation="explicit",
+                    ))
+    return relations
+
+
+def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
+    operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
+    relations: list[dict[str, Any]] = []
+    for create_operation in operations:
+        if _text(create_operation.get("method")).upper() != "POST":
+            continue
+        create_shape = _path_shape(create_operation.get("path")).rstrip("/")
+        if not create_shape or "{}" in create_shape:
+            continue
+        candidates: list[dict[str, Any]] = []
+        for candidate in operations:
+            if _text(candidate.get("method")).upper() != "DELETE":
+                continue
+            delete_shape = _path_shape(candidate.get("path")).rstrip("/")
+            segments = delete_shape.split("/")
+            if not segments or segments[-1] != "{}":
+                continue
+            collection_shape = "/".join(segments[:-1]).rstrip("/")
+            if collection_shape == create_shape:
+                candidates.append(candidate)
+        if len(candidates) != 1:
+            continue
+        compensation = candidates[0]
+        relations.append(_relation_node(
+            relation_type="compensates",
+            from_ref=_text(compensation.get("id")),
+            to_ref=_text(create_operation.get("id")),
+            operation_ref=_text(compensation.get("id")),
+            effects=[{"cleanup_target_operation_ref": _text(create_operation.get("id"))}],
+            source_refs=(
+                list(compensation.get("source_refs") or [])
+                + list(create_operation.get("source_refs") or [])
+            )[:5],
+            confidence=min(
+                float(compensation.get("confidence") or 0.7),
+                float(create_operation.get("confidence") or 0.7),
+            ),
+        ))
+    return relations
+
+
+def _derive_operation_entity_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
+    entities = [row for row in _list(model.get("entities")) if isinstance(row, dict)]
+    by_key: dict[str, list[dict[str, Any]]] = {}
+    for entity in entities:
+        for key in {_text(entity.get("id")).lower(), _text(entity.get("name")).lower()}:
+            if key:
+                by_key.setdefault(key, []).append(entity)
+    relation_type_by_method = {
+        "GET": "observes",
+        "HEAD": "observes",
+        "OPTIONS": "observes",
+        "POST": "produces",
+        "DELETE": "consumes",
+        "PUT": "transitions",
+        "PATCH": "transitions",
+    }
+    relations: list[dict[str, Any]] = []
+    for operation in _list(model.get("operations")):
+        if not isinstance(operation, dict):
+            continue
+        for entity_hint in _list(operation.get("entity_refs")):
+            matches = by_key.get(_text(entity_hint).lower(), [])
+            if len(matches) != 1:
+                continue
+            entity = matches[0]
+            operation_ref = _text(operation.get("id"))
+            relations.append(_relation_node(
+                relation_type=relation_type_by_method.get(
+                    _text(operation.get("method")).upper(),
+                    "observes",
+                ),
+                from_ref=operation_ref,
+                to_ref=_text(entity.get("id")),
+                operation_ref=operation_ref,
+                source_refs=(
+                    list(operation.get("source_refs") or [])
+                    + list(entity.get("source_refs") or [])
+                )[:5],
+                confidence=min(
+                    float(operation.get("confidence") or 0.7),
+                    float(entity.get("confidence") or 0.7),
+                ),
+            ))
+    return relations
+
+
+def _resolve_operation(
+    operations: list[dict[str, Any]],
+    relation_source: dict[str, Any],
+) -> dict[str, Any] | None:
+    operation_hint = _text(
+        relation_source.get("operation_ref")
+        or relation_source.get("operation_id")
+        or relation_source.get("operation")
+    )
+    method_hint = _text(relation_source.get("method")).upper()
+    path_hint = _text(relation_source.get("path"))
+    candidates = operations
+    if operation_hint:
+        candidates = [
+            row
+            for row in candidates
+            if operation_hint in {_text(row.get("id")), _text(row.get("operation_id"))}
+        ]
+    if method_hint:
+        candidates = [row for row in candidates if _text(row.get("method")).upper() == method_hint]
+    if path_hint:
+        candidates = [row for row in candidates if _path_shape(row.get("path")) == _path_shape(path_hint)]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _derive_state_transition_relations(
+    model: dict[str, Any],
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
+    states_by_key = {
+        (_text(row.get("entity_ref")).lower(), _text(row.get("name")).lower()): row
+        for row in _list(model.get("states"))
+        if isinstance(row, dict)
+    }
+    relations: list[dict[str, Any]] = []
+    for machine in _list(data.get("state_machines") or data.get("states")):
+        if not isinstance(machine, dict):
+            continue
+        entity = _text(machine.get("entity") or machine.get("object") or "entity").lower()
+        for transition in _list(machine.get("transitions")):
+            if not isinstance(transition, dict):
+                continue
+            from_state = states_by_key.get((entity, _text(transition.get("from") or transition.get("from_state")).lower()))
+            to_state = states_by_key.get((entity, _text(transition.get("to") or transition.get("to_state")).lower()))
+            operation = _resolve_operation(operations, transition)
+            if not from_state or not to_state or not operation:
+                continue
+            operation_ref = _text(operation.get("id"))
+            relations.append(_relation_node(
+                relation_type="transitions",
+                from_ref=_text(from_state.get("id")),
+                to_ref=_text(to_state.get("id")),
+                operation_ref=operation_ref,
+                preconditions=_list(transition.get("preconditions")),
+                effects=_list(transition.get("effects")),
+                source_refs=[_source_ref(
+                    _text(transition.get("source_id")) or "state_machine",
+                    locator=f"{entity}:{_text(from_state.get('name'))}->{_text(to_state.get('name'))}",
+                    kind="state_transition",
+                )],
+                confidence=float(transition.get("confidence") or 0.8),
+                derivation="explicit",
+            ))
+    return relations
+
+
+def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
+    operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
+    relations: list[dict[str, Any]] = []
+    for invariant in _list(model.get("invariants")):
+        if not isinstance(invariant, dict):
+            continue
+        expr = _dict(invariant.get("expression"))
+        kind = _text(expr.get("kind")).lower()
+        relation_type = "conserves" if any(
+            token in kind for token in ("conserv", "balance", "amount", "quantity")
+        ) else "observes"
+        for hint in _list(invariant.get("operation_refs")):
+            operation = _resolve_operation(operations, {"operation_ref": hint})
+            if not operation:
+                continue
+            operation_ref = _text(operation.get("id"))
+            relations.append(_relation_node(
+                relation_type=relation_type,
+                from_ref=operation_ref,
+                to_ref=_text(invariant.get("id")),
+                operation_ref=operation_ref,
+                source_refs=(
+                    list(operation.get("source_refs") or [])
+                    + list(invariant.get("source_refs") or [])
+                )[:5],
+                confidence=min(
+                    float(operation.get("confidence") or 0.7),
+                    float(invariant.get("confidence") or 0.7),
+                ),
+                derivation="explicit",
+            ))
+    return relations
 
 
 def empty_behavior_ir(*, project_id: str = "", source_snapshot_hash: str = "") -> dict[str, Any]:
@@ -95,7 +493,11 @@ def _content_addressed_id(model: dict[str, Any]) -> str:
     return f"bir_model_{hashlib.sha256(blob.encode('utf-8')).hexdigest()[:24]}"
 
 
-def validate_behavior_ir(model: dict[str, Any]) -> list[str]:
+def validate_behavior_ir(
+    model: dict[str, Any],
+    *,
+    require_explicit_relations: bool = True,
+) -> list[str]:
     errors: list[str] = []
     if _text(model.get("schema_version")) != SCHEMA_VERSION:
         errors.append("schema_version_mismatch")
@@ -116,7 +518,38 @@ def validate_behavior_ir(model: dict[str, Any]) -> list[str]:
                 errors.append(f"bad_status:{item.get('id')}")
             if "ground_truth" in json.dumps(item, ensure_ascii=False, default=str).lower():
                 errors.append(f"forbidden_ground_truth_ref:{item.get('id')}")
+            if collection == "relations":
+                try:
+                    normalize_relation(item)
+                except BehaviorIRError as exc:
+                    errors.append(str(exc))
+                    continue
+                if require_explicit_relations:
+                    for field in (
+                        "operation_ref",
+                        "actor_ref",
+                        "preconditions",
+                        "effects",
+                        "source_refs",
+                    ):
+                        if field not in item:
+                            errors.append(f"relation_field_missing:{field}:{item.get('id')}")
     return errors
+
+
+def migrate_behavior_ir_v1_to_v2(value: dict[str, Any]) -> dict[str, Any]:
+    """Explicitly migrate a persisted V1 diagnostic artifact to V2 shape."""
+
+    if not isinstance(value, dict) or _text(value.get("schema_version")) != V1_SCHEMA_VERSION:
+        raise BehaviorIRError("behavior_ir_v1_required")
+    migrated = deepcopy(value)
+    migrated["schema_version"] = SCHEMA_VERSION
+    migrated["relations"] = [normalize_relation(row) for row in _list(value.get("relations"))]
+    errors = validate_behavior_ir(migrated, require_explicit_relations=True)
+    if errors:
+        raise BehaviorIRError("behavior_ir_v2_invalid:" + ",".join(errors))
+    migrated["model_id"] = _content_addressed_id(migrated)
+    return migrated
 
 
 def build_behavior_ir_from_knowledge_asset(
@@ -409,32 +842,27 @@ def build_behavior_ir_from_knowledge_asset(
                     "operands": _list(rule.get("operands")),
                     "raw": statement,
                 },
+                "operation_refs": [
+                    _text(value)
+                    for value in _list(
+                        rule.get("operation_refs")
+                        or ([rule.get("operation_ref") or rule.get("operation_id")]
+                            if rule.get("operation_ref") or rule.get("operation_id") else [])
+                    )
+                    if _text(value)
+                ],
             },
             source_refs=[_source_ref(_text(rule.get("source_id")) or "rule_library", quote=statement[:200])],
             confidence=float(rule.get("confidence") or 0.7),
             derivation="explicit",
         ))
 
-    # Relations from permission resource links and module maps
-    for perm in _list(data.get("permission_matrix") or data.get("permissions")):
-        if not isinstance(perm, dict):
-            continue
-        role = _text(perm.get("role"))
-        resource = _text(perm.get("resource"))
-        if not role or not resource:
-            continue
-        model["relations"].append(_fact_node(
-            node_id=_stable_id("rel", "permits", role, resource),
-            typed_fields={
-                "relation_type": "permits",
-                "from_ref": _stable_id("actor", role),
-                "to_ref": resource,
-                "actions": [_text(a) for a in _list(perm.get("actions")) if _text(a)],
-            },
-            source_refs=[_source_ref("permission_matrix", locator=f"{role}->{resource}", kind="permission_matrix")],
-            confidence=0.8,
-            derivation="explicit",
-        ))
+    # Runtime V2 relations are the only semantic joins used by the compiler.
+    model["relations"].extend(_derive_permission_relations(model, permission_rows))
+    model["relations"].extend(_derive_operation_entity_relations(model))
+    model["relations"].extend(_derive_state_transition_relations(model, data))
+    model["relations"].extend(_derive_invariant_relations(model))
+    model["relations"].extend(_derive_compensation_relations(model))
 
     # Default observation surfaces based on available capabilities
     surfaces = [("http_api", "HTTP/API"), ("ui_browser", "Browser/UI"), ("db_snapshot", "DB read snapshot")]
@@ -470,6 +898,7 @@ def build_behavior_ir_from_knowledge_asset(
             status="unsupported",
         ))
 
+    model["relations"] = [normalize_relation(row) for row in model["relations"]]
     model["model_id"] = _content_addressed_id(model)
     return model
 
