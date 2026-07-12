@@ -17,6 +17,10 @@ from urllib.parse import quote
 from .assertion_dsl import evaluate_assertion, materialize_assertion
 from .contract_oracles import evaluate_contract_oracle, mark_as_internal_clue
 from .customer_delivery_gate import build_customer_delivery_gate_receipt
+from .observer_contracts import (
+    observe_experiment_requirements,
+    validate_observer_declarations,
+)
 from .real_id_resolver import (
     bind_entity_fields,
     infer_path_params,
@@ -159,6 +163,17 @@ def preflight_experiment_executable(
             return False, "BLOCKED_MISSING_OBSERVER", f"write_observer_unresolved:{op_ref}:{path}"
     if not _list(exp.get("observers")):
         return False, "BLOCKED_MISSING_OBSERVER", "none"
+    assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
+    risk_family = _text(assertion.get("kind") or assertion.get("type"))
+    if risk_family == "owner_tenant_visibility":
+        risk_family = "authorization"
+    observer_reason, observer_detail = validate_observer_declarations(
+        [row for row in _list(exp.get("observers")) if isinstance(row, dict)],
+        risk_family=risk_family,
+        available_adapters={"http_api"},
+    )
+    if observer_reason:
+        return False, observer_reason, observer_detail
     safety = _dict(exp.get("safety_contract"))
     is_write = bool(safety.get("governed_write"))
     if is_write and not _list(exp.get("cleanup_plan")):
@@ -263,7 +278,8 @@ def execute_one_experiment(
     ops = _index_by_id(_list(ir.get("operations")))
     steps_out: list[dict[str, Any]] = []
     observations: dict[str, Any] = {
-        "observer_ids": [_text(o.get("observer_id")) for o in _list(exp.get("observers")) if isinstance(o, dict)],
+        "observer_ids": [],
+        "observer_receipts": [],
         "control_succeeded": False,
         "harness_error": False,
     }
@@ -614,26 +630,18 @@ def execute_one_experiment(
             obs["actor_ref"] = actor_ref
             obs["operation_ref"] = op_ref
             results.append(obs)
-            # Default observer surface
-            for observer in _list(exp.get("observers")):
-                oid_obs = _text(_dict(observer).get("observer_id"))
-                if oid_obs:
-                    observations[oid_obs] = True
-                    observations.setdefault(oid_obs + "_observation", obs)
-            if phase == "control" and 200 <= int(obs.get("status_code") or 0) < 300:
-                observations["control_succeeded"] = True
-                observations["authorized_control"] = True
+            if phase == "control":
                 observations["control_observation"] = obs
-                observations["owner_can_access"] = True
+                observations["control_actor_ref"] = actor_ref
+                if 200 <= int(obs.get("status_code") or 0) < 300:
+                    observations["control_succeeded"] = True
+                    observations["authorized_control"] = True
             if phase == "treatment":
                 observations["treatment_observation"] = obs
                 observations["treatment_result"] = obs
+                observations["treatment_actor_ref"] = actor_ref
                 observations["status_code"] = obs.get("status_code")
                 observations["body"] = obs.get("body")
-                observations["viewer_can_access"] = 200 <= int(obs.get("status_code") or 0) < 300
-                observations["leak_detected"] = bool(observations.get("viewer_can_access")) and _text(
-                    (_dict(exp.get("assertions")[0] if _list(exp.get("assertions")) else {}).get("kind"))
-                ) in {"authorization", "isolation", "visibility", "owner_tenant_visibility", "privacy"}
         return results
 
     steps_out.extend(_exec_plan(_list(exp.get("control_plan")), phase="control"))
@@ -759,6 +767,21 @@ def execute_one_experiment(
             else:
                 observations["cleanup_status"] = "completed"
 
+    # A declared observer is satisfied only by an OBSERVED typed receipt.
+    observer_receipts = observe_experiment_requirements(exp, observations=observations)
+    observations["observer_receipts"] = observer_receipts
+    observed_ids: list[str] = []
+    for receipt in observer_receipts:
+        observer_id = _text(receipt.get("observer_id"))
+        if _text(receipt.get("status")).upper() == "OBSERVED" and observer_id:
+            observed_ids.append(observer_id)
+            observations[observer_id] = True
+            observations[observer_id + "_observation"] = receipt
+        if observer_id == "authorization_comparison":
+            observations.update(_dict(receipt.get("evidence")))
+            observations["observer_receipt"] = receipt
+    observations["observer_ids"] = list(dict.fromkeys(observed_ids))
+
     # Materialize + evaluate typed assertions via contract oracle.
     assertions = []
     for raw in _list(exp.get("assertions")):
@@ -787,6 +810,7 @@ def execute_one_experiment(
             "steps": steps_out,
             "fixture_receipts": fixture_receipts,
             "binding_materialization_receipts": binding_materialization_receipts,
+            "observer_receipts": observer_receipts,
             "oracle_verdict": verdict,
             "finding": None,
             "cleanup_failures": cleanup_failures,
@@ -952,6 +976,7 @@ def execute_one_experiment(
         "steps": steps_out,
         "fixture_receipts": fixture_receipts,
         "binding_materialization_receipts": binding_materialization_receipts,
+        "observer_receipts": observer_receipts,
         "oracle_verdict": verdict,
         "finding": finding,
         "cleanup_failures": cleanup_failures,
@@ -1152,6 +1177,13 @@ def execute_selected_experiments(
             )
             step["observation_receipt_id"] = observation_receipt_id
             observation_receipt_ids.append(observation_receipt_id)
+        for observer_receipt in _list(outcome.get("observer_receipts")):
+            if not isinstance(observer_receipt, dict):
+                continue
+            observer_receipt_id = _text(observer_receipt.get("receipt_id"))
+            if observer_receipt_id:
+                observation_receipt_ids.append(observer_receipt_id)
+        observation_receipt_ids = list(dict.fromkeys(observation_receipt_ids))
         oracle_verdict = _dict(outcome.get("oracle_verdict"))
         oracle_receipt_id = ""
         if oracle_verdict:
@@ -1194,6 +1226,8 @@ def execute_selected_experiments(
                 "experiment_id": eid,
                 "execution_id": execution_id,
                 "receipt_id": execution_id,
+                "observation_receipt_ids": observation_receipt_ids,
+                "oracle_receipt_id": oracle_receipt_id,
                 "elapsed_ms": outcome.get("elapsed_ms"),
             }
         elif status == "HARNESS_FAILURE":
@@ -1205,6 +1239,8 @@ def execute_selected_experiments(
                 "experiment_id": eid,
                 "execution_id": execution_id,
                 "receipt_id": execution_id,
+                "observation_receipt_ids": observation_receipt_ids,
+                "oracle_receipt_id": oracle_receipt_id,
                 "elapsed_ms": outcome.get("elapsed_ms"),
             }
         else:

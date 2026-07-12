@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from .experiment_contract import blocked_experiment, make_experiment
+from .observer_contracts import compile_observer_requirements
 from .runtime_binding_graph import build_binding_plan, unresolved_placeholders
 
 
@@ -41,12 +42,13 @@ def compile_experiment_for_obligation(
     oid = _text(obl.get("obligation_id")) or "unknown_obligation"
     ops = _index_by_id(_list(ir.get("operations")))
     actors = _index_by_id(_list(ir.get("actors")))
-    adapters = available_adapters or {"http_api"}
+    adapters = {"http_api"} if available_adapters is None else set(available_adapters)
     env = _text(environment_type).lower()
     if env in {"", "production", "prod", "live", "unknown"}:
         return blocked_experiment(oid, "BLOCKED_UNSUPPORTED_ADAPTER", "non_production_environment_required")
 
     prop = _dict(obl.get("property"))
+    family = _text(obl.get("risk_family"))
     required_ops = [_text(x) for x in _list(obl.get("required_operations")) if _text(x)]
     required_actors = [_text(x) for x in _list(obl.get("required_actors")) if _text(x)]
     required_fixtures = [_text(x) for x in _list(obl.get("required_fixtures")) if _text(x)]
@@ -139,7 +141,16 @@ def compile_experiment_for_obligation(
 
     control_actor = _text(prop.get("control_actor_ref") or prop.get("owner_actor_ref") or (required_actors[0] if required_actors else ""))
     treatment_actor = _text(prop.get("treatment_actor_ref") or prop.get("viewer_actor_ref") or (required_actors[1] if len(required_actors) > 1 else control_actor))
-    family = _text(obl.get("risk_family"))
+    observer_requirements = list(required_observers)
+    if is_write and family in {"authorization", "isolation", "visibility"}:
+        observer_requirements.append("business_effect")
+    observers, observer_reason, observer_detail = compile_observer_requirements(
+        observer_requirements,
+        risk_family=family,
+        available_adapters=adapters,
+    )
+    if observer_reason:
+        return blocked_experiment(oid, observer_reason, observer_detail)
 
     # Negative tests require a positive control on the same contract.
     needs_control = family in {"authorization", "isolation", "validation", "privacy", "visibility"}
@@ -170,8 +181,6 @@ def compile_experiment_for_obligation(
         "property": prop,
         "require_control": needs_control,
     }]
-    observers = [{"observer_id": name, "surface": "http_api"} for name in required_observers]
-
     return make_experiment(
         obligation_id=oid,
         policy_version=policy_version,
