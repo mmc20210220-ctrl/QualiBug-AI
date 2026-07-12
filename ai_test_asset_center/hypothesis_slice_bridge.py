@@ -1,6 +1,6 @@
-"""Bridge analyzer / LLM Reasoner hypotheses into source-bound behavior slices.
+"""Bind analyzer / LLM Reasoner hypotheses into source-only candidates.
 
-Only hypotheses that bind to a real API-document endpoint become slices.
+Only hypotheses that bind to a real API-document endpoint become candidates.
 Unbound hypotheses are dropped and counted in funnel stats — never injected
 as non-executable noise.
 """
@@ -63,11 +63,58 @@ def _entity_variants(entity: str) -> set[str]:
     variants = {raw}
     if raw.endswith("ies") and len(raw) > 4:
         variants.add(raw[:-3] + "y")
+    elif raw.endswith("es") and len(raw) > 4:
+        variants.add(raw[:-2])
     elif raw.endswith("s") and len(raw) > 3 and not raw.endswith("ss"):
         variants.add(raw[:-1])
+    elif raw.endswith(("s", "x", "z", "ch", "sh")):
+        variants.add(raw + "es")
     elif not raw.endswith("s"):
         variants.add(raw + "s")
     return variants
+
+
+_STRUCTURAL_ENTITY_SUFFIXES = {
+    "detail",
+    "details",
+    "dto",
+    "form",
+    "info",
+    "item",
+    "items",
+    "list",
+    "lists",
+    "model",
+    "page",
+    "record",
+    "records",
+    "request",
+    "response",
+    "view",
+}
+
+
+def _identifier_tokens(value: str) -> list[str]:
+    """Split common API identifier spellings without relying on domain terms."""
+    raw = _text(value)
+    if not raw:
+        return []
+    raw = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", raw)
+    raw = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", raw)
+    pieces = [
+        piece.lower()
+        for piece in re.split(r"[^A-Za-z0-9\u4e00-\u9fff]+", raw)
+        if len(piece.strip()) >= 2
+    ]
+    return list(dict.fromkeys(pieces))
+
+
+def _expanded_identifier_tokens(value: str) -> set[str]:
+    expanded: set[str] = set()
+    for token in _identifier_tokens(value):
+        expanded.add(token)
+        expanded.update(_entity_variants(token))
+    return expanded
 
 
 def _normalized_token(value: str) -> str:
@@ -95,11 +142,11 @@ def _path_action_tokens(path: str) -> set[str]:
     for segment in _text(path).lower().strip("/").split("/"):
         if not segment or segment.startswith(":") or segment.startswith("{"):
             continue
-        normalized = _normalized_token(segment)
-        if not normalized:
-            continue
-        tokens.add(normalized)
-        tokens.update(_entity_variants(normalized))
+        for normalized in _identifier_tokens(segment):
+            if not normalized:
+                continue
+            tokens.add(normalized)
+            tokens.update(_entity_variants(normalized))
     return tokens
 
 
@@ -304,7 +351,8 @@ def _bind_endpoint(
                     "entity": _text(ep.get("entity")) or _text(hypothesis.get("entity")) or "resource",
                 }
 
-    entity = _text(hypothesis.get("entity") or hypothesis.get("source_entity") or hypothesis.get("resource")).lower()
+    entity_raw = _text(hypothesis.get("entity") or hypothesis.get("source_entity") or hypothesis.get("resource"))
+    entity = entity_raw.lower()
     method_hint = _method_hint_from_hypothesis(hypothesis)
     if "schema_parameter_compatibility" in strategies:
         declared_parameters = hypothesis.get("parameters") or hypothesis.get("request_parameters") or {}
@@ -336,6 +384,50 @@ def _bind_endpoint(
                 "path": _text(endpoint.get("path")),
                 "method": _text(endpoint.get("method")).upper() or "GET",
                 "entity": _text(endpoint.get("entity")) or entity or "resource",
+            }
+    compound_entity_tokens = _identifier_tokens(entity_raw)
+    if len(compound_entity_tokens) >= 2:
+        core_tokens = [
+            token
+            for token in compound_entity_tokens
+            if token not in _STRUCTURAL_ENTITY_SUFFIXES
+        ] or compound_entity_tokens
+        required_core_overlap = min(2, len(core_tokens))
+
+        def _overlap_count(parts: list[str], endpoint_tokens: set[str]) -> int:
+            count = 0
+            for part in parts:
+                variants = _entity_variants(part)
+                variants.add(part)
+                if variants & endpoint_tokens:
+                    count += 1
+            return count
+
+        compound_matches: list[tuple[int, dict[str, Any]]] = []
+        for endpoint in catalog:
+            endpoint_tokens = _path_action_tokens(_text(endpoint.get("path")))
+            endpoint_tokens.update(_expanded_identifier_tokens(_text(endpoint.get("entity"))))
+            endpoint_tokens.update(_expanded_identifier_tokens(_text(endpoint.get("action"))))
+            endpoint_tokens.update(_expanded_identifier_tokens(_text(endpoint.get("summary"))))
+            core_overlap = _overlap_count(core_tokens, endpoint_tokens)
+            if core_overlap < required_core_overlap:
+                continue
+            full_overlap = _overlap_count(compound_entity_tokens, endpoint_tokens)
+            method = _text(endpoint.get("method")).upper() or "GET"
+            method_bonus = 3 if method_hint and method == method_hint else 0
+            method_penalty = 2 if method_hint and method != method_hint else 0
+            read_bonus = 1 if not method_hint and method == "GET" else 0
+            score = (core_overlap * 10) + (full_overlap * 3) + method_bonus + read_bonus - method_penalty
+            compound_matches.append((score, endpoint))
+        if compound_matches:
+            _, endpoint = max(
+                compound_matches,
+                key=lambda item: (item[0], _text(item[1].get("path"))),
+            )
+            return {
+                "path": _text(endpoint.get("path")),
+                "method": _text(endpoint.get("method")).upper() or "GET",
+                "entity": _text(endpoint.get("entity")) or core_tokens[0] or entity or "resource",
             }
     entity_name, action_name = _entity_action_hint(entity)
     if entity_name and action_name:
@@ -538,11 +630,18 @@ def _source_refs(hypothesis: dict[str, Any], origin: str) -> list[dict[str, str]
     existing = hypothesis.get("source_refs")
     if isinstance(existing, list):
         for item in existing:
-            if isinstance(item, dict) and (_text(item.get("quote")) or _text(item.get("kind"))):
-                refs.append({
-                    "kind": _text(item.get("kind")) or "source",
-                    "quote": _text(item.get("quote"))[:300],
-                })
+            if isinstance(item, dict) and any(
+                _text(item.get(field))
+                for field in ("source_id", "locator", "quote", "quote_hash", "kind")
+            ):
+                preserved = {
+                    key: value
+                    for key, value in item.items()
+                    if key in {"source_id", "version", "locator", "kind", "quote", "quote_hash"}
+                }
+                preserved["kind"] = _text(item.get("kind")) or "source"
+                preserved["quote"] = _text(item.get("quote"))[:300]
+                refs.append(preserved)
     return refs
 
 
@@ -561,20 +660,20 @@ def _priority(hypothesis: dict[str, Any]) -> float:
     return {"P0": 0.9, "P1": 0.75, "P2": 0.55, "P3": 0.4}.get(severity, 0.5)
 
 
-def hypotheses_to_slices(
+def hypotheses_to_source_candidates(
     hypotheses: list[dict],
     *,
     api_endpoints: list[dict],
     origin: str,
 ) -> tuple[list[dict], dict]:
-    """Convert hypotheses into source-grounded behavior slices.
+    """Convert hypotheses into source-only, endpoint-bound candidates.
 
-    Returns ``(slices, funnel_stats)`` where funnel_stats contains at least
+    Returns ``(candidates, funnel_stats)`` where funnel_stats contains at least
     ``input``, ``bound``, ``dropped_no_endpoint``, and ``by_origin``.
     """
     origin_key = _text(origin) or "unknown"
     items = [h for h in (hypotheses or []) if isinstance(h, dict)]
-    slices: list[dict] = []
+    candidates: list[dict] = []
     dropped = 0
     dropped_reason_counts: dict[str, int] = {}
     dropped_samples: list[dict[str, Any]] = []
@@ -601,67 +700,56 @@ def hypotheses_to_slices(
             continue
 
         family = _hypothesis_family(hypothesis)
-        kind, oracle_field, oracle_name = _oracle_binding(family)
         entity = binding["entity"] or _text(hypothesis.get("entity")) or "resource"
         path = binding["path"]
         method = binding["method"]
         hyp_id = _text(hypothesis.get("hypothesis_id") or hypothesis.get("id") or hypothesis.get("title"))[:80]
-        slice_id = behavior_slice_id(kind, entity, origin_key, family, method, path, hyp_id)
-
-        slice_row: dict[str, Any] = {
-            "slice_id": slice_id,
+        if not hyp_id:
+            hyp_id = behavior_slice_id("candidate", entity, origin_key, family, method, path)[:80]
+        matched_endpoint = next(
+            (
+                endpoint
+                for endpoint in api_endpoints
+                if isinstance(endpoint, dict)
+                and _text(endpoint.get("path")) == path
+                and (_text(endpoint.get("method")).upper() or "GET") == method
+            ),
+            {},
+        )
+        intent = _text(
+            hypothesis.get("expected_behavior")
+            or hypothesis.get("title")
+            or hypothesis.get("description")
+        )
+        candidate: dict[str, Any] = {
+            "candidate_id": hyp_id,
+            "risk_family": family,
+            "method": method,
+            "path": path,
+            "operation_id": _text(
+                matched_endpoint.get("operation_id")
+                or matched_endpoint.get("operationId")
+            ),
             "entity": entity,
-            "kind": kind,
-            "states": [],
-            "endpoints": [path],
             "priority": _priority(hypothesis),
             "source_refs": _source_refs(hypothesis, origin_key),
-            "evidence_gaps": [],
-            oracle_field: oracle_name,
-            "_hypothesis_origin": origin_key,
-            "_hypothesis_id": hyp_id,
-            "_hypothesis_family": family,
-            "_bound_method": method,
-            "_bound_path": path,
-            "_selection_family": f"unified:{origin_key}:{family}",
-        }
-        # Kind-specific fields expected by SemanticScenarioGenerator fallbacks
-        if kind == "permission":
-            slice_row["_permission_method"] = method
-            slice_row["_permission_path"] = path
-            slice_row["_permission_actor"] = _text(
+            "property": {"source_intent": intent[:500]} if intent else {},
+            "actor_ref_hint": _text(
                 hypothesis.get("actor_role")
                 or hypothesis.get("actor")
                 or hypothesis.get("required_role")
-            )
-            slice_row["_permission_expected_permitted"] = []
-        elif kind == "concurrency":
-            slice_row["_concurrency_method"] = method
-            slice_row["_concurrency_path"] = path
-        elif kind == "money":
-            slice_row["_money_method"] = method
-            slice_row["_money_path"] = path
-            if oracle_field == "_inventory_oracle":
-                slice_row["_inventory_oracle"] = oracle_name
-        else:
-            # invariant / observation-friendly
-            invariant_text = _text(
-                hypothesis.get("expected_behavior")
-                or hypothesis.get("title")
-                or hypothesis.get("description")
-            )
-            if invariant_text:
-                slice_row["_invariant_text"] = invariant_text[:300]
-            slice_row.setdefault(oracle_field, oracle_name)
-            if oracle_field != "_consistency_oracle":
-                slice_row.setdefault("_consistency_oracle", "ConsistencyOracle")
-
-        slices.append(slice_row)
+            ),
+            "origin": origin_key,
+            "engine": _text(
+                hypothesis.get("_reasoner_engine") or hypothesis.get("engine")
+            ),
+        }
+        candidates.append(candidate)
         by_origin[origin_key]["bound"] += 1
 
     funnel_stats = {
         "input": len(items),
-        "bound": len(slices),
+        "bound": len(candidates),
         "dropped_no_endpoint": dropped,
         "dropped_reason_counts": dict(sorted(dropped_reason_counts.items())),
         "dropped_samples": dropped_samples,
@@ -669,4 +757,109 @@ def hypotheses_to_slices(
         "by_origin": by_origin,
         "origin": origin_key,
     }
-    return slices, funnel_stats
+    return candidates, funnel_stats
+
+
+def _candidate_to_legacy_slice(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility projection for the temporary legacy champion only."""
+
+    family = _text(candidate.get("risk_family")) or "invariant"
+    kind, oracle_field, oracle_name = _oracle_binding(family)
+    entity = _text(candidate.get("entity")) or "resource"
+    method = _text(candidate.get("method")).upper() or "GET"
+    path = _text(candidate.get("path"))
+    origin = _text(candidate.get("origin")) or "unknown"
+    candidate_id = _text(candidate.get("candidate_id"))
+    slice_row: dict[str, Any] = {
+        "slice_id": behavior_slice_id(
+            kind,
+            entity,
+            origin,
+            family,
+            method,
+            path,
+            candidate_id,
+        ),
+        "entity": entity,
+        "kind": kind,
+        "states": [],
+        "endpoints": [path],
+        "priority": float(candidate.get("priority") or 0.5),
+        "source_refs": list(candidate.get("source_refs") or []),
+        "evidence_gaps": [],
+        oracle_field: oracle_name,
+        "_hypothesis_origin": origin,
+        "_hypothesis_id": candidate_id,
+        "_hypothesis_family": family,
+        "_bound_method": method,
+        "_bound_path": path,
+        "_selection_family": f"unified:{origin}:{family}",
+        "_source_candidate_id": candidate_id,
+    }
+    if kind == "permission":
+        slice_row.update({
+            "_permission_method": method,
+            "_permission_path": path,
+            "_permission_actor": _text(candidate.get("actor_ref_hint")),
+            "_permission_expected_permitted": [],
+        })
+    elif kind == "concurrency":
+        slice_row.update({
+            "_concurrency_method": method,
+            "_concurrency_path": path,
+        })
+    elif kind == "money":
+        slice_row.update({
+            "_money_method": method,
+            "_money_path": path,
+        })
+        if oracle_field == "_inventory_oracle":
+            slice_row["_inventory_oracle"] = oracle_name
+    else:
+        property_spec = candidate.get("property") if isinstance(candidate.get("property"), dict) else {}
+        invariant_text = _text(property_spec.get("source_intent"))
+        if invariant_text:
+            slice_row["_invariant_text"] = invariant_text[:300]
+        if oracle_field != "_consistency_oracle":
+            slice_row.setdefault("_consistency_oracle", "ConsistencyOracle")
+    return slice_row
+
+
+def hypotheses_to_slices(
+    hypotheses: list[dict],
+    *,
+    api_endpoints: list[dict],
+    origin: str,
+) -> tuple[list[dict], dict]:
+    """Project source candidates into temporary legacy-champion slices."""
+
+    candidates, funnel = hypotheses_to_source_candidates(
+        hypotheses,
+        api_endpoints=api_endpoints,
+        origin=origin,
+    )
+    return [_candidate_to_legacy_slice(candidate) for candidate in candidates], funnel
+
+
+def hypotheses_to_obligations(
+    hypotheses: list[dict],
+    *,
+    api_endpoints: list[dict],
+    behavior_ir: dict[str, Any],
+    origin: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Route bridge candidates through the pure Obligation adapter."""
+
+    from .obligation_source_adapter import adapt_source_candidates_to_obligations
+
+    candidates, funnel = hypotheses_to_source_candidates(
+        hypotheses,
+        api_endpoints=api_endpoints,
+        origin=origin,
+    )
+    adapted = adapt_source_candidates_to_obligations(candidates, behavior_ir)
+    return adapted, {
+        **funnel,
+        "adapted_obligation_count": len(adapted["obligations"]),
+        "adapter_coverage_gap_count": len(adapted["coverage_gaps"]),
+    }

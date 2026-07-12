@@ -1,14 +1,199 @@
 """Tests for hypothesis → behavior-slice bridge (mainline unification)."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ai_test_asset_center.hypothesis_slice_bridge import hypotheses_to_slices
+from ai_test_asset_center.behavior_ir import empty_behavior_ir
+from ai_test_asset_center.hypothesis_slice_bridge import (
+    hypotheses_to_obligations,
+    hypotheses_to_slices,
+    hypotheses_to_source_candidates,
+)
+from ai_test_asset_center.obligation_source_adapter import adapt_source_candidates_to_obligations
+
+
+def _adapter_ir() -> dict:
+    ir = empty_behavior_ir(project_id="adapter-test")
+    ir.update({
+        "operations": [{
+            "id": "op-create-resource",
+            "operation_id": "createResource",
+            "method": "POST",
+            "path": "/resources",
+            "read_write": "write",
+            "source_refs": [{"source_id": "SRC-API"}],
+        }],
+        "relations": [{
+            "id": "relation-produces-resource",
+            "relation_type": "produces",
+            "from_ref": "op-create-resource",
+            "to_ref": "entity-resource",
+            "operation_ref": "op-create-resource",
+            "actor_ref": "",
+            "preconditions": [],
+            "effects": [],
+            "source_refs": [{"source_id": "SRC-API"}],
+        }],
+    })
+    return ir
+
+
+def test_adapter_preserves_intent_without_execution_authority() -> None:
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-1",
+            "risk_family": "idempotency",
+            "method": "POST",
+            "path": "/resources",
+            "source_refs": [{"source_id": "SRC-1"}],
+            "property": {"template": "idempotent_effect_cardinality"},
+        }],
+        _adapter_ir(),
+    )
+
+    obligation = result["obligations"][0]
+    assert obligation["source_refs"]
+    assert obligation["required_operations"] == ["op-create-resource"]
+    assert obligation["relation_refs"] == ["relation-produces-resource"]
+    serialized = json.dumps(result)
+    assert "send_request" not in serialized
+    assert "gate_passed" not in serialized
+    assert "oracle" not in serialized.lower()
+
+
+def test_adapter_blocks_candidate_without_exact_ir_join() -> None:
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-unbound",
+            "risk_family": "state",
+            "method": "POST",
+            "path": "/unknown",
+            "source_refs": [{"source_id": "SRC-1"}],
+        }],
+        _adapter_ir(),
+    )
+
+    assert result["obligations"] == []
+    assert result["coverage_gaps"][0]["code"] == "BLOCKED_MISSING_IR_RELATION"
+
+
+def test_adapter_preserves_explicit_state_transition_refs() -> None:
+    ir = empty_behavior_ir(project_id="adapter-state-test")
+    ir.update({
+        "operations": [{
+            "id": "op-activate",
+            "method": "PATCH",
+            "path": "/resources/{id}",
+            "read_write": "write",
+        }],
+        "states": [
+            {"id": "state-draft", "entity_ref": "entity-resource"},
+            {"id": "state-active", "entity_ref": "entity-resource"},
+        ],
+        "relations": [{
+            "id": "relation-activate",
+            "relation_type": "transitions",
+            "from_ref": "state-draft",
+            "to_ref": "state-active",
+            "operation_ref": "op-activate",
+            "actor_ref": "",
+            "preconditions": [],
+            "effects": [],
+            "source_refs": [{"source_id": "SRC-STATE"}],
+        }],
+    })
+
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-state",
+            "risk_family": "state",
+            "method": "PATCH",
+            "path": "/resources/:resourceId",
+            "source_refs": [{"source_id": "SRC-STATE"}],
+        }],
+        ir,
+    )
+
+    obligation = result["obligations"][0]
+    assert obligation["property"]["from_state_ref"] == "state-draft"
+    assert obligation["property"]["to_state_ref"] == "state-active"
+    assert obligation["property"]["entity_ref"] == "entity-resource"
+
+
+def test_adapter_module_has_no_execution_or_delivery_dependencies(monkeypatch) -> None:
+    source = (
+        _REPO_ROOT / "ai_test_asset_center" / "obligation_source_adapter.py"
+    ).read_text(encoding="utf-8")
+    for forbidden in (
+        "experiment_executor",
+        "oracle_engine",
+        "customer_delivery_gate",
+        "requests",
+        "urllib",
+    ):
+        assert forbidden not in source
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: pytest.fail("pure adapter attempted HTTP"),
+    )
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-pure",
+            "risk_family": "idempotency",
+            "method": "POST",
+            "path": "/resources",
+            "source_refs": [{"source_id": "SRC-1"}],
+        }],
+        _adapter_ir(),
+    )
+    assert result["obligations"]
+
+
+def test_bridge_exposes_source_candidates_and_routes_them_to_adapter() -> None:
+    hypotheses = [{
+        "hypothesis_id": "hypothesis-1",
+        "title": "Repeated create may duplicate the business effect",
+        "category": "idempotency",
+        "method": "POST",
+        "related_endpoints": ["/resources"],
+        "source_refs": [{"source_id": "SRC-1", "quote": "create once"}],
+    }]
+    endpoints = [{
+        "operation_id": "createResource",
+        "entity": "resource",
+        "action": "create",
+        "path": "/resources",
+        "method": "POST",
+    }]
+
+    candidates, funnel = hypotheses_to_source_candidates(
+        hypotheses,
+        api_endpoints=endpoints,
+        origin="llm_reasoner",
+    )
+    adapted, adapted_funnel = hypotheses_to_obligations(
+        hypotheses,
+        api_endpoints=endpoints,
+        behavior_ir=_adapter_ir(),
+        origin="llm_reasoner",
+    )
+
+    assert funnel["bound"] == 1
+    assert candidates[0]["candidate_id"] == "hypothesis-1"
+    assert candidates[0]["path"] == "/resources"
+    assert not any(key.endswith("_oracle") for key in candidates[0])
+    assert "gate_passed" not in candidates[0]
+    assert adapted["obligations"][0]["required_operations"] == ["op-create-resource"]
+    assert adapted_funnel["adapted_obligation_count"] == 1
 
 
 def test_hypotheses_to_slices_binds_real_endpoint_and_drops_unbound():
@@ -131,6 +316,58 @@ def test_hypotheses_to_slices_binds_entity_action_hint_to_endpoint():
     paths = {row["_bound_path"] for row in slices}
     assert "/api/claims/:id/approve" in paths
     assert "/api/payments/pay" in paths
+
+
+def test_hypotheses_to_slices_binds_compound_entity_names_to_path_tokens():
+    api_endpoints = [
+        {
+            "entity": "user",
+            "action": "addresses",
+            "path": "/api/users/:userId/addresses",
+            "method": "GET",
+        },
+        {
+            "entity": "order",
+            "action": "list",
+            "path": "/api/orders",
+            "method": "GET",
+        },
+        {
+            "entity": "product",
+            "action": "detail",
+            "path": "/api/products/:productId",
+            "method": "GET",
+        },
+    ]
+    hypotheses = [
+        {
+            "hypothesis_id": "compound_snake",
+            "title": "Ownership checks can be bypassed",
+            "category": "permission",
+            "severity": "P1",
+            "entity": "user_address",
+            "method": "GET",
+        },
+        {
+            "hypothesis_id": "compound_camel",
+            "title": "Returned records are inconsistent",
+            "category": "invariant",
+            "severity": "P2",
+            "entity": "OrderList",
+            "method": "GET",
+        },
+    ]
+
+    slices, funnel = hypotheses_to_slices(
+        hypotheses, api_endpoints=api_endpoints, origin="llm_reasoner"
+    )
+
+    assert funnel["bound"] == 2
+    assert funnel["dropped_no_endpoint"] == 0
+    assert {row["_bound_path"] for row in slices} == {
+        "/api/users/:userId/addresses",
+        "/api/orders",
+    }
 
 
 def test_hypotheses_to_slices_empty_catalog_drops_all():
