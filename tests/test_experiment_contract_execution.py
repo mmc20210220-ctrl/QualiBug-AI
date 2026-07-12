@@ -275,7 +275,13 @@ def test_empty_runtime_read_uses_governed_fixture_and_cleans_it_after_experiment
             assert kwargs["body"] == {"ownerId": "owner-1", "name": "source-name"}
             assert kwargs["actor_identity"] == "fixture_creator"
             assert kwargs["actor_token"] == "fixture-token"
-            return {"write": {"status": 201, "body": {"id": "r-1"}}, "status": "completed"}
+            return {
+                "write": {
+                    "status": 201,
+                    "body": {"items": [{"sku": "unrelated-sku"}], "id": "r-1"},
+                },
+                "status": "completed",
+            }
         assert kwargs["operation_phase"] == "experiment_fixture_cleanup"
         assert kwargs["path"] == "/api/resources/r-1/archive"
         return {"write": {"status": 204, "body": {}}, "status": "completed"}

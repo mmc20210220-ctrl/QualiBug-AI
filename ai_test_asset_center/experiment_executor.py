@@ -22,6 +22,7 @@ from .real_id_resolver import (
     bind_entity_fields,
     infer_path_params,
     normalize_path_placeholders,
+    param_field_candidates,
     path_has_placeholders,
 )
 from .sandbox_write_executor import (
@@ -208,6 +209,23 @@ def _runtime_value_from_response(body: Any, target: str, target_path: str) -> An
     if not candidates and normalized.endswith("id"):
         candidates = list(dict.fromkeys(fields.get("id") or []))
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _runtime_setup_value_from_response(body: Any, target: str) -> Any:
+    """Capture the created resource identity without descending into child items."""
+    candidates = param_field_candidates(target)
+    sources = [body] if isinstance(body, dict) else []
+    if isinstance(body, dict):
+        for wrapper in ("data", "result", "resource", "item"):
+            nested = body.get(wrapper)
+            if isinstance(nested, dict):
+                sources.append(nested)
+    for source in sources:
+        for field in candidates:
+            value = source.get(field)
+            if value not in (None, "", [], {}):
+                return value
+    return None
 
 
 def _validated_fixture_setup(
@@ -679,10 +697,9 @@ def execute_one_experiment(
                         "completed" if 200 <= setup_status < 300 else "failed"
                     )
                     if 200 <= setup_status < 300:
-                        value = _runtime_value_from_response(
+                        value = _runtime_setup_value_from_response(
                             setup_write.get("body"),
                             target,
-                            target_path,
                         )
                     if value not in (None, "", [], {}):
                         runtime_bindings[target] = value
