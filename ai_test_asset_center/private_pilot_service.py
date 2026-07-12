@@ -1140,66 +1140,6 @@ def _resolve_followup_ui_test_data_browser_plan(
     return {}, "", dict(metadata)
 
 
-def _has_campaign_id_mismatch(result: dict[str, Any]) -> bool:
-    runtime_contract = result.get("runtime_contract") if isinstance(result, dict) else {}
-    if not isinstance(runtime_contract, dict):
-        return False
-    requirements = runtime_contract.get("missing_requirements")
-    if isinstance(requirements, list) and "EXECUTION_APPROVAL_CAMPAIGN_ID_MISMATCH" in {str(item) for item in requirements}:
-        return True
-    approval = runtime_contract.get("execution_approval")
-    return isinstance(approval, dict) and str(approval.get("code") or "") == "EXECUTION_APPROVAL_CAMPAIGN_ID_MISMATCH"
-
-
-def _issue_runtime_approval_for_result(
-    project: str,
-    root: Path,
-    actor: dict[str, str],
-    prepared_body: dict[str, Any],
-    scan_result: dict[str, Any],
-    *,
-    local_dev_mode: bool,
-) -> str:
-    if not local_dev_mode:
-        return ""
-    campaign = scan_result.get("campaign") if isinstance(scan_result, dict) else {}
-    if not isinstance(campaign, dict):
-        return ""
-    campaign_id = str(campaign.get("campaign_id") or "").strip()
-    scope_id = str(campaign.get("scope_id") or "").strip()
-    environment_ref = str(campaign.get("environment_ref") or "").strip()
-    source_hash = str(campaign.get("source_hash") or "").strip().lower()
-    base_url = str(prepared_body.get("base_url") or "").strip()
-    execution_mode = str(prepared_body.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
-    if (
-        not campaign_id
-        or not scope_id
-        or not environment_ref
-        or len(source_hash) != 64
-        or not base_url
-        or execution_mode not in {"safe_read_only", "approved_sandbox_write"}
-    ):
-        return ""
-    try:
-        from .execution_approvals import issue_execution_approval
-
-        expires_at_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
-        approval = issue_execution_approval(
-            project,
-            root=root,
-            campaign_id=campaign_id,
-            scope_id=scope_id,
-            environment_ref=environment_ref,
-            source_hash=source_hash,
-            target_base_url=base_url,
-            execution_mode=execution_mode,
-            expires_at_utc=expires_at_utc,
-            actor=actor,
-        )
-    except Exception:
-        return ""
-    return str(approval.get("approval_id") or "").strip()
-
 def _tenant_from_headers(headers: dict) -> str:
     """Resolve tenant from request headers (Bearer JWT, Cookie, or API key)."""
     # 1. Bearer JWT
@@ -4108,49 +4048,6 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 trace_id=trace_id,
             )
             # #endregion
-            retry_approval_id = _issue_runtime_approval_for_result(
-                project,
-                root,
-                actor,
-                prepared_body,
-                result,
-                local_dev_mode=_is_local_private_service(self.server),
-            )
-            if retry_approval_id and _has_campaign_id_mismatch(result):
-                prepared_body["execution_approval_id"] = retry_approval_id
-                campaign_context = build_campaign_context_from_scan_body(prepared_body)
-                # #region debug-point D:retry-http-scan-body
-                _dbg_report(
-                    hypothesis_id="D",
-                    msg="[DEBUG] retry http scan payload",
-                    data={
-                        "prepared_body": _dbg_fingerprint_payload(prepared_body),
-                        "campaign_context": _dbg_fingerprint_payload(campaign_context),
-                        "retry_approval_id": retry_approval_id,
-                    },
-                    trace_id=trace_id,
-                )
-                # #endregion
-                result = scan(
-                    project=project,
-                    root=root,
-                    prd_text=str(prepared_body.get("prd", "")),
-                    api_doc_text=str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or api_doc),
-                    base_url=str(prepared_body.get("base_url") or base_url).strip(),
-                    multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
-                    campaign_context=campaign_context,
-                )
-                # #region debug-point E:retry-http-scan-result
-                _dbg_report(
-                    hypothesis_id="E",
-                    msg="[DEBUG] retry http scan result campaign",
-                    data={
-                        "campaign": result.get("campaign") if isinstance(result.get("campaign"), dict) else {},
-                        "runtime_contract": result.get("runtime_contract") if isinstance(result.get("runtime_contract"), dict) else {},
-                    },
-                    trace_id=trace_id,
-                )
-                # #endregion
             # Persist to DB — use cumulative merge so bugs accumulate across scans
             try:
                 db_persist.init_db(root)

@@ -27,6 +27,12 @@ def test_v12_authorizes_source_bound_nonproduction_without_per_probe_approval(tm
         db_schema_text="CREATE TABLE cases (id TEXT PRIMARY KEY, state TEXT);",
         base_url="https://example.invalid",
         campaign_context={
+            "mainline_authority": "experiment_candidate",
+            "run_id": "RUN-NONPRODUCTION-AUTHORIZATION",
+            "target_id": "TARGET-NONPRODUCTION",
+            "environment_id": "ENV-NONPRODUCTION",
+            "policy_version": "policy-nonproduction",
+            "evaluation_mode": "operational",
             "scope_id": "case-lifecycle",
             "environment_ref": "approved-test",
             "environment_type": "test",
@@ -36,8 +42,7 @@ def test_v12_authorizes_source_bound_nonproduction_without_per_probe_approval(tm
     )
 
     assert result["runtime_contract"]["status"] == "approved"
-    assert result["runtime_contract"]["execution_approval"]["authorization_basis"] == "source_bound_nonproduction_campaign"
-    assert result["phases"]["execution"]["status"] == "blocked"
-    assert result["phases"]["execution"]["reason"] == "test_actor_identity_missing"
-    assert result["auto_har"]["status"] == "no_traffic"
+    assert result["runtime_contract"]["target_policy_decision"]["write_allowed"] is True
+    assert result["discovery_funnel"]["pipeline_health"]["status"] == "BLOCKED"
+    assert result["auto_har"]["entry_count"] == 0
     assert result["campaign"]["source_hash"] == SOURCE_MANIFEST["source_hash"]

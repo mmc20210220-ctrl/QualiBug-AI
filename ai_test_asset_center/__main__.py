@@ -131,6 +131,70 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
 
+def _bind_discovery_mainline_identity(
+    *,
+    project: str,
+    context: dict[str, Any],
+    started: float,
+) -> dict[str, Any]:
+    """Bind one immutable run identity before V12 planning or execution."""
+
+    normalized = dict(context or {})
+    from .policy_registry import get_policy_registry
+    from .policy_wiring import get_policy_value
+
+    active_policy = get_policy_registry().get_active()
+    policy_version = str(
+        normalized.get("policy_version")
+        or getattr(active_policy, "policy_version", "")
+        or getattr(active_policy, "policy_id", "")
+        or ""
+    ).strip()
+    if not policy_version:
+        raise RuntimeError("discovery_mainline_policy_version_missing")
+    target_id = str(
+        normalized.get("target_id")
+        or normalized.get("scope_id")
+        or ""
+    ).strip()
+    environment_id = str(
+        normalized.get("environment_id")
+        or normalized.get("environment_ref")
+        or normalized.get("target_environment")
+        or ""
+    ).strip()
+    if not target_id:
+        raise RuntimeError("discovery_mainline_target_id_missing")
+    if not environment_id:
+        raise RuntimeError("discovery_mainline_environment_id_missing")
+    source_hash = str(
+        _as_dict(normalized.get("source_manifest")).get("source_hash") or ""
+    ).strip()
+    run_material = "|".join(
+        (project, target_id, environment_id, source_hash, f"{started:.9f}")
+    )
+    normalized.setdefault(
+        "run_id",
+        "RUN_" + hashlib.sha256(run_material.encode("utf-8")).hexdigest()[:24],
+    )
+    normalized.setdefault("target_id", target_id)
+    normalized.setdefault("environment_id", environment_id)
+    normalized.setdefault("policy_version", policy_version)
+    normalized.setdefault(
+        "mainline_authority",
+        str(
+            get_policy_value(
+                "discovery",
+                "mainline_authority",
+                "experiment_candidate",
+            )
+            or ""
+        ).strip(),
+    )
+    normalized.setdefault("evaluation_mode", "operational")
+    return normalized
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     """Persist JSON only after unified recursive redaction + secret scan."""
     from .artifact_redactor import ArtifactSecretLeakError, write_json_redacted
@@ -4121,6 +4185,11 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     except Exception as exc:
         diagnostics = {"ready": False, "checks": [], "summary": f"preflight_unavailable:{type(exc).__name__}"}
 
+    context = _bind_discovery_mainline_identity(
+        project=project,
+        context=context,
+        started=started,
+    )
     try:
         from .v12_pipeline import run_v12_pipeline
         v12 = run_v12_pipeline(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, campaign_context=context)
@@ -4135,6 +4204,15 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
 
     execution_status = effective_execution_status(v12)
     confirmed, candidates = _classify_findings(v12.get("findings"))
+    candidates.extend(
+        dict(item)
+        for item in (
+            v12.get("candidate_findings")
+            if isinstance(v12.get("candidate_findings"), list)
+            else []
+        )
+        if isinstance(item, dict)
+    )
     # Collapse state-graph cross-product duplicates so one real defect is not
     # reported as N near-identical P0 rows. Collapsed lifecycle variants are
     # preserved as coverage on the survivor.
@@ -4436,7 +4514,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         _evaluation_mode = str(context.get("evaluation_mode") or "operational").strip()
         _trace_ledger = build_discovery_trace_ledger(
             v12,
-            run_id=scan_id,
+            run_id=str(context["run_id"]),
             policy_id=_policy_id,
             target_id=_target_id,
             project_id=project,
@@ -4472,24 +4550,45 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             "harness_proposals_ref": str(_proposal_path.relative_to(root)).replace("\\", "/"),
         }
     except Exception as evolution_error:
-        # This feature is not allowed to disappear silently. The scan remains
-        # inspectable, but Harness evolution is explicitly FAILED_SAFE and may
-        # not claim readiness or promote a policy from this run.
+        # This feature is not allowed to disappear silently. An empty plan is
+        # explicitly BLOCKED; a trace/mining failure is FAILED_SAFE. Neither may
+        # claim readiness or promote a policy from this run.
+        _attempt_ledger = _as_dict(v12.get("obligation_attempt_ledger"))
+        _no_selected_obligations = int(
+            _attempt_ledger.get("selected_count") or 0
+        ) == 0
         result["discovery_evolution"] = {
-            "status": "FAILED_SAFE",
+            "status": "BLOCKED" if _no_selected_obligations else "FAILED_SAFE",
             "error_type": type(evolution_error).__name__,
             "error": str(evolution_error)[:500],
+            "reason": (
+                "NO_OBLIGATIONS_SELECTED"
+                if _no_selected_obligations
+                else "DISCOVERY_EVOLUTION_OBSERVABILITY_FAILED"
+            ),
             "promotion_allowed": False,
         }
         coverage_gaps.append(
             _gap(
-                "DISCOVERY_EVOLUTION_OBSERVABILITY_FAILED",
-                f"Trace ledger or weakness mining failed ({type(evolution_error).__name__}); policy promotion is blocked.",
+                (
+                    "NO_OBLIGATIONS_SELECTED"
+                    if _no_selected_obligations
+                    else "DISCOVERY_EVOLUTION_OBSERVABILITY_FAILED"
+                ),
+                (
+                    "No source-grounded obligations were selected; planning and policy promotion are blocked."
+                    if _no_selected_obligations
+                    else f"Trace ledger or weakness mining failed ({type(evolution_error).__name__}); policy promotion is blocked."
+                ),
             )
         )
         import sys as _evolution_sys
         print(
-            f"[scan] Discovery evolution observability failed: {evolution_error}",
+            (
+                "[scan] Discovery evolution blocked: no obligations selected"
+                if _no_selected_obligations
+                else f"[scan] Discovery evolution observability failed: {evolution_error}"
+            ),
             file=_evolution_sys.stderr,
         )
     if save_report:

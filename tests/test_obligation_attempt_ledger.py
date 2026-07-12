@@ -244,3 +244,15 @@ def test_harness_failure_degrades_campaign_status() -> None:
     )
 
     assert derive_campaign_terminal_status(ledger) == "degraded"
+
+
+def test_zero_selected_obligations_block_campaign_completion() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "RUN-EMPTY", "campaign_id": "CMP-EMPTY"},
+        selected=[],
+        compile_results={},
+        execution_results={},
+        gate_results={},
+    )
+
+    assert derive_campaign_terminal_status(ledger) == "blocked"

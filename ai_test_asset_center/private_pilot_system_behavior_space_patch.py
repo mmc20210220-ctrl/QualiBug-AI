@@ -1273,8 +1273,22 @@ def _install_system_behavior_scenario_patch() -> None:
     if not callable(original):
         return
 
-    def _invariant_from_meta_with_system_behavior(self: Any, slice_meta: dict[str, Any], discovery_round: int, api_doc: str) -> Any:
-        item = original(self, slice_meta, discovery_round, api_doc)
+    def _invariant_from_meta_with_system_behavior(
+        self: Any,
+        slice_meta: dict[str, Any],
+        discovery_round: int,
+        api_doc: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        item = original(
+            self,
+            slice_meta,
+            discovery_round,
+            api_doc,
+            *args,
+            **kwargs,
+        )
         return _enrich_system_behavior_scenario(item, slice_meta, discovery_round, api_doc=api_doc)
 
     _ssg.SemanticScenarioGenerator._ORIGINAL_INVARIANT_FROM_META_SYSTEM_BEHAVIOR = original  # type: ignore[attr-defined]

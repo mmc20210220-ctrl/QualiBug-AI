@@ -2438,7 +2438,133 @@ def _extract_runtime_actors_for_ir(root: Path, project: str, context: dict[str, 
     return actors
 
 
-def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None) -> dict[str, Any]:
+_MAINLINE_IDENTITY_FIELDS = (
+    "mainline_authority",
+    "run_id",
+    "target_id",
+    "environment_id",
+    "policy_version",
+    "evaluation_mode",
+)
+
+
+def _require_mainline_identity(context: dict[str, Any]) -> None:
+    from .discovery_mainline_contract import MainlineContractError
+
+    for field in _MAINLINE_IDENTITY_FIELDS:
+        if not str(context.get(field) or "").strip():
+            raise MainlineContractError(f"{field}_missing")
+
+
+def _build_mainline_campaign(inputs: Any) -> dict[str, Any]:
+    settings = _behavior_slice_settings()
+    campaign, store, mode = _campaign_context(
+        inputs.project,
+        inputs.prd_text,
+        inputs.api_spec_text,
+        inputs.db_schema_text,
+        inputs.approved_base_url,
+        settings,
+        inputs.campaign_context,
+        inputs.root,
+        inputs.api_spec_text,
+    )
+    expected_campaign_id = str(
+        inputs.campaign_context.get("campaign_id") or ""
+    ).strip()
+    if expected_campaign_id and expected_campaign_id != campaign.campaign_id:
+        from .discovery_mainline_contract import MainlineContractError
+
+        raise MainlineContractError("mainline_campaign_identity_mismatch")
+    return {
+        "campaign_id": campaign.campaign_id,
+        "campaign": campaign,
+        "store": store,
+        "mode": mode,
+    }
+
+
+def _run_legacy_champion(
+    inputs: Any,
+    campaign_handle: Any,
+    plan: Any,
+) -> dict[str, Any]:
+    from .discovery_runtime import adapt_legacy_champion_result
+
+    legacy = _run_legacy_champion_domain(
+        project=inputs.project,
+        root=inputs.root,
+        prd_text=inputs.prd_text,
+        api_spec_text=inputs.api_spec_text,
+        db_schema_text=inputs.db_schema_text,
+        base_url=inputs.approved_base_url,
+        existing_findings=list(inputs.existing_findings),
+        campaign_context=dict(inputs.campaign_context),
+    )
+    return adapt_legacy_champion_result(
+        inputs,
+        campaign_handle,
+        plan,
+        legacy,
+    )
+
+
+def run_v12_pipeline(
+    project: str,
+    root: Path,
+    prd_text: str = "",
+    api_spec_text: str = "",
+    db_schema_text: str = "",
+    base_url: str = "",
+    existing_findings: list[dict] | None = None,
+    campaign_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compatibility entry point backed by exactly one mainline coordinator."""
+
+    from .discovery_mainline import DiscoveryMainlineInputs, run_discovery_mainline
+    from .discovery_mainline_contract import MainlineContractError
+    from .discovery_runtime import build_discovery_plan, run_experiment_candidate
+
+    context = dict(campaign_context or {})
+    _require_mainline_identity(context)
+    submitted_api_spec_text = str(api_spec_text or "")
+    context.setdefault("_source_verification_text", submitted_api_spec_text)
+    _, source_issues = _source_manifest_details(context, submitted_api_spec_text)
+    if source_issues:
+        raise MainlineContractError(
+            "source_identity_invalid:" + ",".join(sorted(source_issues))
+        )
+    normalized_api_spec_text, normalization = _normalize_executable_api_document(
+        submitted_api_spec_text
+    )
+    if str(normalization.get("status") or "").upper() == "FAILED_SAFE":
+        raise MainlineContractError(
+            "api_document_normalization_failed:"
+            f"{normalization.get('error_type') or normalization.get('reason') or 'UNKNOWN'}"
+        )
+    runtime_contract = _runtime_contract(context, base_url, submitted_api_spec_text)
+    context["_runtime_contract"] = runtime_contract
+    context.setdefault("campaign_rerun_key", str(context["run_id"]))
+    inputs = DiscoveryMainlineInputs(
+        project=str(project),
+        root=Path(root),
+        prd_text=str(prd_text or ""),
+        api_spec_text=normalized_api_spec_text,
+        db_schema_text=str(db_schema_text or ""),
+        approved_base_url=str(runtime_contract.get("approved_base_url") or ""),
+        campaign_context=context,
+        existing_findings=tuple(existing_findings or ()),
+    )
+    return run_discovery_mainline(
+        inputs,
+        build_campaign=_build_mainline_campaign,
+        build_plan=build_discovery_plan,
+        legacy_runner=_run_legacy_champion,
+        experiment_runner=run_experiment_candidate,
+    )
+
+
+def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None) -> dict[str, Any]:
     global _v12_har_entries
     _v12_har_entries = []
     started = time.time()
@@ -2711,6 +2837,11 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 ).strip(),
             }
         result["runtime_contract"] = runtime_contract
+        if str(context.get("mainline_authority") or "") == "legacy_champion":
+            _behavior_ir = {}
+            _obligation_plan = {}
+            _experiment_execution = {}
+            result.pop("experiment_execution", None)
         if _behavior_ir and _obligation_plan:
             try:
                 from .experiment_executor import execute_selected_experiments
@@ -3810,34 +3941,6 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 )
     result["total_duration_ms"] = int((time.time() - started) * 1000)
     result["auto_har"] = _v12_har_report()
-    try:
-        from .discovery_funnel import build_funnel
-
-        gate_results = []
-        for finding in result.get("findings") or []:
-            if not isinstance(finding, dict):
-                continue
-            missing = finding.get("business_gate_missing")
-            if missing:
-                gate_results.append({"business_gate_missing": missing})
-            status = str(finding.get("final_review_status") or finding.get("business_evidence_status") or "")
-            if status and ("NEEDS_MORE_EVIDENCE" in status.upper() or status.upper().startswith("PENDING")):
-                gate_results.append({
-                    "business_gate_missing": list(
-                        (finding.get("evidence_status") or {}).get("missing_requirements") or []
-                    ) or ([status] if status else []),
-                })
-        result["discovery_funnel"] = build_funnel(result, gate_results)
-    except Exception as exc:
-        result["discovery_funnel"] = {
-            "error": f"{type(exc).__name__}: {str(exc)[:200]}",
-            "stages": [],
-            "top_blocking_reasons": [],
-            "validated_bug_count": 0,
-            "pending_finding_count": 0,
-            "candidate_count": 0,
-            "explanation": f"漏斗聚合失败：{type(exc).__name__}",
-        }
     return result
 
 

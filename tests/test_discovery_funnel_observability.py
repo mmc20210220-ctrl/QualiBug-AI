@@ -11,6 +11,7 @@ from ai_test_asset_center.discovery_funnel import (
     build_pipeline_health,
     effective_execution_status,
 )
+from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
 from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 
 
@@ -141,6 +142,49 @@ def test_pipeline_health_rejects_formal_ids_not_backed_by_attempts() -> None:
         build_pipeline_health(result)
 
 
+def test_shadow_attempt_deliverables_stay_out_of_formal_product_scope() -> None:
+    contract = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id="RUN-SHADOW",
+        campaign_id="CMP-SHADOW",
+        target_id="TARGET-SHADOW",
+        environment_id="ENV-SHADOW",
+        policy_version="policy-shadow",
+        evaluation_mode="shadow",
+    )
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=contract,
+        selected=[{"obligation_id": "obl-shadow"}],
+        compile_results={"obl-shadow": {"status": "COMPILED"}},
+        execution_results={
+            "obl-shadow": {
+                "status": "EXECUTED",
+                "observation_receipt_ids": ["obs-shadow"],
+                "oracle_receipt_id": "oracle-shadow",
+            }
+        },
+        gate_results={
+            "obl-shadow": {
+                "status": "DELIVERABLE",
+                "finding_id": "finding-shadow",
+                "gate_receipt_id": "gate-shadow",
+            }
+        },
+    )
+
+    health = build_pipeline_health({
+        "mainline_run": contract,
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "formal_customer_deliverable_count": 0,
+            "formal_finding_ids": [],
+        },
+    })
+
+    assert health["formal_customer_deliverable_count"] == 0
+    assert health["shadow_attempt_deliverable_count"] == 1
+
+
 def test_zero_selected_obligations_cannot_claim_no_bugs() -> None:
     ledger = build_obligation_attempt_ledger(
         mainline_run={"run_id": "RUN-EMPTY", "campaign_id": "CMP-EMPTY"},
@@ -158,9 +202,27 @@ def test_zero_selected_obligations_cannot_claim_no_bugs() -> None:
         },
     })
 
+    assert effective_execution_status({"obligation_attempt_ledger": ledger}) == "not_executed"
     assert health["status"] == "BLOCKED"
     assert health["empty_findings_means_no_bugs"] is False
     assert health["planning_gap_reason"] == "NO_OBLIGATIONS_SELECTED"
+
+
+def test_all_terminal_obligations_blocked_reports_blocked_execution() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "RUN-BLOCKED", "campaign_id": "CMP-BLOCKED"},
+        selected=[{"obligation_id": "obl-blocked"}],
+        compile_results={
+            "obl-blocked": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+            }
+        },
+        execution_results={},
+        gate_results={},
+    )
+
+    assert effective_execution_status({"obligation_attempt_ledger": ledger}) == "blocked"
 
 
 def test_funnel_exposes_required_stage_receipt_metrics_and_does_not_mutate_formal_count() -> None:

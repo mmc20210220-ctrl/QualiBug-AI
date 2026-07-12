@@ -1,6 +1,7 @@
 """Integration: Behavior IR vertical slice is invoked from run_v12_pipeline."""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from ai_test_asset_center.v12_pipeline import run_v12_pipeline
@@ -30,24 +31,27 @@ PUT /items/{id}
         db_schema_text="",
         base_url="",
         campaign_context={
+            "mainline_authority": "experiment_candidate",
+            "run_id": "RUN-VERTICAL-SLICE",
+            "target_id": "TARGET-VERTICAL-SLICE",
+            "environment_id": "ENV-VERTICAL-SLICE",
+            "policy_version": "policy-vertical-slice",
+            "evaluation_mode": "operational",
             "scope_id": "integration_scope",
             "environment_ref": "integration_test",
             "environment_kind": "test",
-            "source_manifest": {"source_id": "api", "source_hash": "deadbeef"},
+            "source_manifest": {
+                "source_id": "api",
+                "source_hash": hashlib.sha256(api.encode("utf-8")).hexdigest(),
+            },
         },
     )
     assert isinstance(result, dict)
-    # Knowledge asset may or may not materialize depending on parsers; when the
-    # IR phase runs it must be structured and never contain ground truth paths.
     phase = (result.get("phases") or {}).get("behavior_ir")
-    if isinstance(phase, dict) and phase.get("status") == "completed":
-        assert result.get("behavior_ir", {}).get("schema_version") or result.get("behavior_ir", {}).get("summary")
-        assert "test_obligations" in result
-        assert "experiment_compile" in result
-        blob = str(result.get("behavior_ir"))
-        assert "bugs.json" not in blob.lower()
-        assert "ground_truth" not in blob.lower()
-    else:
-        # Asset build can fail in empty temp projects; failure must be explicit.
-        assert isinstance(phase, dict)
-        assert phase.get("status") in {"FAILED_SAFE", None} or "error" in phase
+    assert phase["status"] == "completed"
+    assert result["behavior_ir"]["schema_version"] == "qualibug.behavior-ir.v2"
+    assert "test_obligations" in result
+    assert "experiment_compile" in result
+    blob = str(result.get("behavior_ir"))
+    assert "bugs.json" not in blob.lower()
+    assert "ground_truth" not in blob.lower()

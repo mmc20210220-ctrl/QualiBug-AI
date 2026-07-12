@@ -25,7 +25,7 @@ from ai_test_asset_center.v12_pipeline import (
     _rank_behavior_slices_for_selection,
     _runtime_contract,
     _schedule_behavior_slices,
-    run_v12_pipeline,
+    _run_legacy_champion_domain as run_v12_pipeline,
 )
 
 

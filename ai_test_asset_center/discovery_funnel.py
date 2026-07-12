@@ -9,6 +9,7 @@ from .obligation_attempt_ledger import (
     ObligationAttemptLedgerError,
     validate_obligation_attempt_ledger,
 )
+from .discovery_mainline_contract import validate_mainline_run_contract
 
 
 REQUIRED_STAGE_NAMES = (
@@ -67,7 +68,15 @@ def effective_execution_status(v12_result: dict[str, Any] | None) -> str:
     ledger = _attempt_ledger(v12_result)
     selected = _int(ledger.get("selected_count"))
     terminal = _int(ledger.get("terminal_count"))
+    if selected == 0:
+        return "not_executed"
     if bool(ledger.get("complete")) and selected == terminal:
+        terminal_statuses = {
+            _text(_dict(attempt).get("terminal_status")).upper()
+            for attempt in _list(ledger.get("attempts"))
+        }
+        if terminal_statuses and terminal_statuses <= {"BLOCKED", "DEFERRED"}:
+            return "blocked"
         return "completed"
     if terminal > 0:
         return "partial"
@@ -309,7 +318,14 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         if _text(item.get("terminal_status")).upper() == "DELIVERABLE"
         and _text(item.get("finding_id"))
     )
-    if attempt_deliverable_ids != formal["formal_finding_ids"]:
+    raw_contract = result.get("mainline_run") or _dict(result.get("v12")).get("mainline_run")
+    customer_outputs_published = True
+    if raw_contract is not None:
+        customer_outputs_published = bool(
+            validate_mainline_run_contract(raw_contract)["customer_outputs_published"]
+        )
+    expected_formal_ids = attempt_deliverable_ids if customer_outputs_published else []
+    if expected_formal_ids != formal["formal_finding_ids"]:
         raise DiscoveryFunnelError("formal_projection_attempt_id_mismatch")
     terminal_counts = Counter(_text(item.get("terminal_status")).upper() for item in attempts)
     selected = _int(ledger.get("selected_count"))
@@ -431,6 +447,9 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         "terminal_reason_counts": dict(sorted(reasons.items())),
         "formal_customer_deliverable_count": formal["formal_customer_deliverable_count"],
         "formal_finding_ids": list(formal["formal_finding_ids"]),
+        "shadow_attempt_deliverable_count": (
+            0 if customer_outputs_published else len(attempt_deliverable_ids)
+        ),
         "planning_gap_reason": "NO_OBLIGATIONS_SELECTED" if selected == 0 else "",
         "operator_note": operator_note,
     }

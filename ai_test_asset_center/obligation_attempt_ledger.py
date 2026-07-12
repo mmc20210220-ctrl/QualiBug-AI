@@ -384,6 +384,8 @@ def derive_campaign_terminal_status(ledger: dict[str, Any]) -> str:
         or not bool(value.get("complete"))
     ):
         return "active"
+    if selected_count == 0:
+        return "blocked"
     statuses = [_text(_object(row, field="obligation_attempt").get("terminal_status")).upper() for row in attempts]
     if any(status not in TERMINAL_STATUSES for status in statuses):
         raise ObligationAttemptLedgerError("obligation_terminal_status_invalid")

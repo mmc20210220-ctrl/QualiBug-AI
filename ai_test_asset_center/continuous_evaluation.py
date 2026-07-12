@@ -10,6 +10,7 @@ Three components:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import time
@@ -272,9 +273,49 @@ def ci_scan_and_evaluate(
     root = root or Path(".")
     db_path = db_path or root / "ci_scan_history.db"
 
-    # Run V12
-    v12 = run_v12_pipeline(project, root, prd, api_doc, base_url=base_url)
-    result = EvaluationEngine().evaluate(v12)
+    # Run one replay authority with immutable input and target identities.
+    from .policy_registry import get_policy_registry
+
+    source_hash = hashlib.sha256(str(api_doc or "").encode("utf-8")).hexdigest()
+    run_id = "RUN_CI_" + hashlib.sha256(
+        f"{project}|{source_hash}|{time.time_ns()}".encode("utf-8")
+    ).hexdigest()[:24]
+    active_policy = get_policy_registry().get_active()
+    policy_version = str(
+        getattr(active_policy, "policy_version", "")
+        or getattr(active_policy, "policy_id", "")
+        or ""
+    ).strip()
+    if not policy_version:
+        raise RuntimeError("continuous_evaluation_policy_version_missing")
+    v12 = run_v12_pipeline(
+        project,
+        root,
+        prd,
+        api_doc,
+        base_url=base_url,
+        campaign_context={
+            "mainline_authority": "experiment_candidate",
+            "run_id": run_id,
+            "target_id": f"ci-target:{project}",
+            "environment_id": f"ci-environment:{project}",
+            "environment_ref": f"ci-environment:{project}",
+            "scope_id": f"ci-scope:{project}",
+            "policy_version": policy_version,
+            "evaluation_mode": "replay",
+            "execution_mode": "safe_read_only",
+            "source_manifest": {
+                "source_id": f"ci-input:{project}",
+                "source_hash": source_hash,
+                "source_origin": "continuous_evaluation_input",
+            },
+        },
+    )
+    evaluation_view = {
+        **v12,
+        "findings": list(v12.get("shadow_findings") or []),
+    }
+    result = EvaluationEngine().evaluate(evaluation_view)
 
     # Save history
     history_db = ScanHistoryDB(db_path)

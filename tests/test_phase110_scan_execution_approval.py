@@ -5,6 +5,7 @@ import os
 
 from ai_test_asset_center.__main__ import scan
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 
 
 API_SPEC = json.dumps({
@@ -12,6 +13,23 @@ API_SPEC = json.dumps({
     "paths": {"/api/cases/{case_id}/approve": {"patch": {"operationId": "approveCase"}}},
     "components": {"schemas": {"Case": {"type": "object", "properties": {"state": {"type": "string", "enum": ["DRAFT", "APPROVED"]}}}}},
 })
+
+
+def _empty_attempt_receipts(*, run_id: str, campaign_id: str) -> dict:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": run_id, "campaign_id": campaign_id},
+        selected=[],
+        compile_results={},
+        execution_results={},
+        gate_results={},
+    )
+    return {
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "formal_customer_deliverable_count": 0,
+            "formal_finding_ids": [],
+        },
+    }
 
 
 def test_scan_loads_registered_manifest_without_reuploading_source_text(tmp_path):
@@ -27,7 +45,7 @@ def test_scan_loads_registered_manifest_without_reuploading_source_text(tmp_path
         },
     )
 
-    assert result["grade"] == "inconclusive"
+    assert result["grade"] == "blocked"
     assert result["runtime_contract"]["source_manifest"]["source_id"] == "api-contract"
     assert result["runtime_contract"]["source_manifest"]["source_version_id"] == manifest["source_version_id"]
 
@@ -50,13 +68,16 @@ def test_scan_authorizes_nonproduction_without_per_probe_approval_but_requires_r
 
     assert result["grade"] == "blocked"
     assert result["runtime_contract"]["status"] == "approved"
-    assert result["runtime_contract"]["execution_approval"]["authorization_basis"] == "source_bound_nonproduction_campaign"
+    target_policy = result["runtime_contract"]["target_policy_decision"]
+    assert target_policy["authorization_basis"] == "explicit_environment_and_exact_target"
+    assert target_policy["write_allowed"] is True
     assert result["execution_status"] == "blocked"
-    assert result["auto_har"]["status"] == "no_traffic"
+    assert result["auto_har"]["status"] == "receipt_backed"
+    assert result["auto_har"]["entry_count"] == 0
     assert result["release_gate"]["verdict"] == "not_ready"
 
 
-def test_scan_auto_issues_local_execution_approval_for_loopback_runtime(tmp_path, monkeypatch):
+def test_scan_does_not_retry_or_auto_issue_local_execution_approval(tmp_path, monkeypatch):
     manifest = register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
     calls: list[dict[str, object]] = []
 
@@ -80,6 +101,10 @@ def test_scan_auto_issues_local_execution_approval_for_loopback_runtime(tmp_path
         }
         if not str(context.get("execution_approval_id") or "").strip():
             return {
+                **_empty_attempt_receipts(
+                    run_id="RUN_LOCAL_APPROVAL_MISSING",
+                    campaign_id="camp_local_1",
+                ),
                 "runtime_contract": {
                     "status": "blocked",
                     "reason": "execution_approval_required",
@@ -96,6 +121,10 @@ def test_scan_auto_issues_local_execution_approval_for_loopback_runtime(tmp_path
                 "auto_har": {"status": "no_traffic"},
             }
         return {
+            **_empty_attempt_receipts(
+                run_id="RUN_LOCAL_APPROVED",
+                campaign_id="camp_local_1",
+            ),
             "runtime_contract": {
                 "status": "approved",
                 "reason": "",
@@ -132,17 +161,15 @@ def test_scan_auto_issues_local_execution_approval_for_loopback_runtime(tmp_path
         },
     )
 
-    assert result["grade"] == "inconclusive"
-    assert result["execution_status"] == "completed"
-    assert len(calls) == 2
+    assert result["grade"] == "blocked"
+    assert result["execution_status"] == "not_executed"
+    assert len(calls) == 1
     assert not calls[0]["campaign_context"].get("execution_approval_id")
-    second_approval_id = str(calls[1]["campaign_context"].get("execution_approval_id") or "")
-    assert second_approval_id.startswith("eap_")
     approvals_path = tmp_path / "platform_workspace" / "enterprise-project" / "execution_approvals" / "approvals.json"
-    assert approvals_path.exists()
+    assert not approvals_path.exists()
 
 
-def test_scan_refreshes_stale_local_execution_approval_when_campaign_mismatch(tmp_path, monkeypatch):
+def test_scan_does_not_retry_or_replace_stale_execution_approval(tmp_path, monkeypatch):
     manifest = register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
     calls: list[dict[str, object]] = []
 
@@ -167,6 +194,10 @@ def test_scan_refreshes_stale_local_execution_approval_when_campaign_mismatch(tm
         approval_id = str(context.get("execution_approval_id") or "").strip()
         if not approval_id:
             return {
+                **_empty_attempt_receipts(
+                    run_id="RUN_STALE_APPROVAL_MISSING",
+                    campaign_id="camp_local_2",
+                ),
                 "runtime_contract": {
                     "status": "blocked",
                     "reason": "execution_approval_required",
@@ -184,6 +215,10 @@ def test_scan_refreshes_stale_local_execution_approval_when_campaign_mismatch(tm
             }
         if approval_id == "eap_stale":
             return {
+                **_empty_attempt_receipts(
+                    run_id="RUN_STALE_APPROVAL_REJECTED",
+                    campaign_id="camp_local_2",
+                ),
                 "runtime_contract": {
                     "status": "blocked",
                     "reason": "execution_approval_required",
@@ -200,6 +235,10 @@ def test_scan_refreshes_stale_local_execution_approval_when_campaign_mismatch(tm
                 "auto_har": {"status": "no_traffic"},
             }
         return {
+            **_empty_attempt_receipts(
+                run_id="RUN_STALE_APPROVAL_REFRESHED",
+                campaign_id="camp_local_2",
+            ),
             "runtime_contract": {
                 "status": "approved",
                 "reason": "",
@@ -237,13 +276,10 @@ def test_scan_refreshes_stale_local_execution_approval_when_campaign_mismatch(tm
         },
     )
 
-    assert result["grade"] == "inconclusive"
-    assert result["execution_status"] == "completed"
-    assert len(calls) == 2
+    assert result["grade"] == "blocked"
+    assert result["execution_status"] == "not_executed"
+    assert len(calls) == 1
     assert str(calls[0]["campaign_context"].get("execution_approval_id") or "") == "eap_stale"
-    second_approval_id = str(calls[1]["campaign_context"].get("execution_approval_id") or "")
-    assert second_approval_id.startswith("eap_")
-    assert second_approval_id != "eap_stale"
 
 
 def test_scan_prefers_project_prd_asset_before_source_catalog_fallback(tmp_path, monkeypatch):
@@ -265,6 +301,10 @@ def test_scan_prefers_project_prd_asset_before_source_catalog_fallback(tmp_path,
     def fake_v12_pipeline(*, project, root, prd_text, api_spec_text, db_schema_text, base_url, campaign_context):
         calls.append({"prd_text": prd_text, "api_spec_text": api_spec_text})
         return {
+            **_empty_attempt_receipts(
+                run_id="RUN_PRD_SOURCE",
+                campaign_id="camp_prd_1",
+            ),
             "runtime_contract": {"status": "plan_only", "reason": ""},
             "phases": {
                 "execution": {"status": "skipped", "executed": 0},
@@ -338,6 +378,10 @@ def test_scan_aggregates_workspace_prd_and_template_business_rules_into_requirem
     def fake_v12_pipeline(*, project, root, prd_text, api_spec_text, db_schema_text, base_url, campaign_context):
         calls.append({"prd_text": prd_text})
         return {
+            **_empty_attempt_receipts(
+                run_id="RUN_PRD_AGGREGATE",
+                campaign_id="camp_prd_agg_1",
+            ),
             "runtime_contract": {"status": "plan_only", "reason": ""},
             "phases": {
                 "execution": {"status": "skipped", "executed": 0},
@@ -411,6 +455,10 @@ def test_scan_backfills_scope_and_environment_from_connector_registry_when_conte
     def fake_v12_pipeline(*, project, root, prd_text, api_spec_text, db_schema_text, base_url, campaign_context):
         calls.append({"campaign_context": dict(campaign_context or {})})
         return {
+            **_empty_attempt_receipts(
+                run_id="RUN_REGISTRY_DEFAULTS",
+                campaign_id="camp_registry_defaults_1",
+            ),
             "runtime_contract": {"status": "plan_only", "reason": ""},
             "phases": {
                 "execution": {"status": "skipped", "executed": 0},

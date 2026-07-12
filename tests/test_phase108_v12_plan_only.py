@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from ai_test_asset_center.v12_pipeline import run_v12_pipeline
+from ai_test_asset_center.v12_pipeline import (
+    _run_legacy_champion_domain as run_v12_pipeline,
+)
 
 
 API = """

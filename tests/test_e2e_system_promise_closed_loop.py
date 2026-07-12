@@ -135,7 +135,7 @@ def test_e2e_system_promise_closed_loop_scan_and_regression() -> None:
             assert sb_hints.get("dimensions"), f"Scenario {getattr(scenario, 'id', '?')} missing dimensions"
 
         # ── Phase 3: Run V12 pipeline (plan_only — no base_url, no real execution) ──
-        result = v12_pipeline.run_v12_pipeline(
+        result = v12_pipeline._run_legacy_champion_domain(
             project=project,
             root=root,
             prd_text=PRD,
