@@ -18,7 +18,12 @@ from urllib.parse import quote
 from .assertion_dsl import evaluate_assertion, materialize_assertion
 from .contract_oracles import evaluate_contract_oracle, mark_as_internal_clue
 from .customer_delivery_gate import build_customer_delivery_gate_receipt
-from .real_id_resolver import path_has_placeholders
+from .real_id_resolver import (
+    bind_entity_fields,
+    infer_path_params,
+    normalize_path_placeholders,
+    path_has_placeholders,
+)
 from .sandbox_write_executor import (
     _http_request,
     execute_governed_control_write,
@@ -96,6 +101,80 @@ def _runtime_cleanup_bindings(path_template: str, steps: list[dict[str, Any]]) -
     for name, value in bindings.items():
         materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
     return materialized, bindings, missing
+
+
+def _validated_runtime_resolvers(
+    binding: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    resolvers: list[dict[str, str]] = []
+    if _text(binding.get("status")) != "runtime_resolvable":
+        return resolvers
+    for raw in _list(binding.get("resolver_operations")):
+        if not isinstance(raw, dict):
+            continue
+        operation_ref = _text(raw.get("operation_ref"))
+        declared = operations.get(operation_ref) or {}
+        method = _text(raw.get("method")).upper()
+        path = normalize_path_placeholders(_text(raw.get("path")))
+        declared_method = _text(declared.get("method")).upper()
+        declared_path = normalize_path_placeholders(
+            _text(declared.get("path") or declared.get("raw_path"))
+        )
+        if (
+            not operation_ref
+            or method not in {"GET", "HEAD"}
+            or method != declared_method
+            or path != declared_path
+            or not path.startswith("/")
+            or path_has_placeholders(path)
+        ):
+            continue
+        resolvers.append({
+            "operation_ref": operation_ref,
+            "method": method,
+            "path": path,
+        })
+    return resolvers
+
+
+def _runtime_binding_contract_ready(
+    path: str,
+    *,
+    binding_plan: list[Any],
+    fixture_dag: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+) -> bool:
+    targets = infer_path_params(normalize_path_placeholders(path))
+    if not targets:
+        return True
+    bindings = {
+        _text(item.get("target")): item
+        for item in binding_plan
+        if isinstance(item, dict) and _text(item.get("target"))
+    }
+    dag_targets = {
+        _text(node.get("target"))
+        for node in _list(fixture_dag.get("nodes"))
+        if isinstance(node, dict)
+        and _text(node.get("kind")) == "runtime_read_binding"
+        and node.get("constructible") is not False
+    }
+    return all(
+        target in dag_targets
+        and bool(_validated_runtime_resolvers(bindings.get(target) or {}, operations))
+        for target in targets
+    )
+
+
+def _materialize_path(path: str, bindings: dict[str, Any]) -> str:
+    materialized = normalize_path_placeholders(path)
+    for name in infer_path_params(materialized):
+        value = bindings.get(name)
+        if value in (None, "", [], {}):
+            continue
+        materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
+    return materialized
 
 
 def _index_by_id(nodes: list[Any]) -> dict[str, dict[str, Any]]:
@@ -185,8 +264,15 @@ def preflight_experiment_executable(
         op = ops[op_ref]
         path = _text(op.get("path") or op.get("raw_path"))
         method = _text(op.get("method") or "GET").upper()
-        if not path.startswith("/") or path_has_placeholders(path):
+        if not path.startswith("/"):
             return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
+        if path_has_placeholders(path) and not _runtime_binding_contract_ready(
+            path,
+            binding_plan=_list(exp.get("binding_plan")),
+            fixture_dag=dag,
+            operations=ops,
+        ):
+            return False, "BLOCKED_MISSING_BINDING", f"runtime_resolver_unavailable:{op_ref}:{path}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         if method in {"POST", "PUT", "PATCH", "DELETE"} and not _declared_observation_path(path, ops):
@@ -303,6 +389,20 @@ def execute_one_experiment(
     }
     cleanup_failures = 0
     fixture_receipts: list[dict[str, Any]] = []
+    binding_materialization_receipts: list[dict[str, Any]] = []
+    runtime_bindings: dict[str, Any] = {}
+    binding_plan = {
+        _text(item.get("target")): item
+        for item in _list(exp.get("binding_plan"))
+        if isinstance(item, dict) and _text(item.get("target"))
+    }
+    resolver_actor_ref = ""
+    for planned in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
+        if isinstance(planned, dict) and _text(planned.get("actor_ref")):
+            resolver_actor_ref = _text(planned.get("actor_ref"))
+            break
+    resolver_actor = actors.get(resolver_actor_ref) or {}
+    resolver_token = _resolve_token(resolver_actor, tokens)
 
     # Fixture DAG: actor contexts are resolved via tokens; disposable fixtures
     # without a concrete create path remain BLOCKED (already caught in preflight
@@ -328,6 +428,89 @@ def execute_one_experiment(
                     "execution_receipt": {"status": "BLOCKED", "reason_code": "BLOCKED_MISSING_ACTOR"},
                 }
             fixture_receipts.append({"node_id": node_id, "kind": kind, "status": "resolved"})
+        elif kind == "runtime_read_binding":
+            target = _text(_dict(node).get("target"))
+            binding = binding_plan.get(target) or {}
+            resolvers = _validated_runtime_resolvers(binding, ops)
+            target_path = _text(binding.get("target_path"))
+            value: Any = None
+            receipt: dict[str, Any] = {
+                "target": target,
+                "status": "BLOCKED",
+                "source_priority": "same_actor_list_read",
+                "resolver_path": "",
+                "resolver_operation_ref": "",
+                "status_code": 0,
+                "value_fingerprint": "",
+            }
+            for index, resolver in enumerate(resolvers):
+                obs = _run_http_step(
+                    base_url=base_url,
+                    method=resolver["method"],
+                    path=resolver["path"],
+                    token=resolver_token,
+                )
+                obs.update({
+                    "phase": "binding_materialization",
+                    "step_id": f"bind:{target}:{index}",
+                    "actor_ref": resolver_actor_ref,
+                    "operation_ref": resolver["operation_ref"],
+                })
+                steps_out.append(obs)
+                receipt.update({
+                    "resolver_path": resolver["path"],
+                    "resolver_operation_ref": resolver["operation_ref"],
+                    "status_code": int(obs.get("status_code") or 0),
+                })
+                if not (200 <= int(obs.get("status_code") or 0) < 300):
+                    if int(obs.get("status_code") or 0) == 0:
+                        break
+                    continue
+                extracted = bind_entity_fields(obs.get("body"), target_path)
+                value = extracted.get(target)
+                if value in (None, "", [], {}):
+                    continue
+                runtime_bindings[target] = value
+                receipt.update({
+                    "status": "BOUND",
+                    "value_fingerprint": hashlib.sha256(
+                        str(value).encode("utf-8")
+                    ).hexdigest()[:12],
+                })
+                break
+            binding_materialization_receipts.append(receipt)
+            if value in (None, "", [], {}):
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": f"runtime_read_binding_unresolved:{target}",
+                })
+                return {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": f"runtime_read_binding_unresolved:{target}",
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "steps": steps_out,
+                    "fixture_receipts": fixture_receipts,
+                    "binding_materialization_receipts": binding_materialization_receipts,
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                    },
+                }
+            fixture_receipts.append({
+                "node_id": node_id,
+                "kind": kind,
+                "status": "resolved",
+                "target": target,
+                "value_fingerprint": receipt["value_fingerprint"],
+            })
         elif kind == "disposable_fixture":
             # Without a concrete create operation binding, refuse to invent IDs.
             fixture_receipts.append({
@@ -363,7 +546,10 @@ def execute_one_experiment(
             actor = actors.get(actor_ref) or {}
             op = ops.get(op_ref) or {}
             method = _text(op.get("method") or "GET").upper()
-            path = _text(op.get("path") or op.get("raw_path"))
+            path = _materialize_path(
+                _text(op.get("path") or op.get("raw_path")),
+                runtime_bindings,
+            )
             token = _resolve_token(actor, tokens)
             is_write = method in {"POST", "PUT", "PATCH", "DELETE"}
             if is_write:
@@ -385,7 +571,11 @@ def execute_one_experiment(
                         "path": path,
                     })
                     continue
-                observation_path = _declared_observation_path(path, ops)
+                observation_path = _declared_observation_path(
+                    path,
+                    ops,
+                    runtime_bindings=runtime_bindings,
+                )
                 if not observation_path:
                     observations["harness_error"] = True
                     results.append({
@@ -561,6 +751,7 @@ def execute_one_experiment(
             "elapsed_ms": int((time.time() - started) * 1000),
             "steps": steps_out,
             "fixture_receipts": fixture_receipts,
+            "binding_materialization_receipts": binding_materialization_receipts,
             "oracle_verdict": verdict,
             "finding": None,
             "cleanup_failures": cleanup_failures,
@@ -574,14 +765,20 @@ def execute_one_experiment(
         primary_plan_step = _dict(treatment_plan[0] if treatment_plan else control_plan[0] if control_plan else {})
         primary_op = ops.get(_text(primary_plan_step.get("operation_ref"))) or {}
         primary_method = _text(primary_op.get("method") or "GET").upper()
-        primary_path = _text(primary_op.get("path") or primary_op.get("raw_path"))
+        treatment_observation = _dict(observations.get("treatment_observation"))
+        primary_path = _text(
+            treatment_observation.get("path")
+            or _materialize_path(
+                _text(primary_op.get("path") or primary_op.get("raw_path")),
+                runtime_bindings,
+            )
+        )
         treatment_actor = actors.get(_text(primary_plan_step.get("actor_ref"))) or {}
         treatment_role = _text(treatment_actor.get("role") or primary_plan_step.get("actor_ref"))
         control_step = _dict(control_plan[0] if control_plan else {})
         control_actor = actors.get(_text(control_step.get("actor_ref"))) or {}
         control_role = _text(control_actor.get("role") or control_step.get("actor_ref"))
         assertion_kind = _text(first.get("kind") or "contract")
-        treatment_observation = _dict(observations.get("treatment_observation"))
         control_observation = _dict(observations.get("control_observation"))
         observed_status = int(treatment_observation.get("status_code") or 0)
         observed_body = treatment_observation.get("body")
@@ -719,6 +916,7 @@ def execute_one_experiment(
         "elapsed_ms": int((time.time() - started) * 1000),
         "steps": steps_out,
         "fixture_receipts": fixture_receipts,
+        "binding_materialization_receipts": binding_materialization_receipts,
         "oracle_verdict": verdict,
         "finding": finding,
         "cleanup_failures": cleanup_failures,
@@ -726,6 +924,7 @@ def execute_one_experiment(
             "status": status,
             "steps": len(steps_out),
             "cleanup_failures": cleanup_failures,
+            "binding_materialization_receipts": len(binding_materialization_receipts),
             "verdict": verdict.get("verdict"),
         },
     }

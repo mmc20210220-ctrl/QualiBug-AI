@@ -80,6 +80,7 @@ def compile_experiment_for_obligation(
         operation=primary_op,
         obligation=obl,
         actors=[actors[a] for a in required_actors if a in actors],
+        behavior_ir=ir,
     )
     unresolved = unresolved_placeholders(primary_op, binding_plan)
     if unresolved:

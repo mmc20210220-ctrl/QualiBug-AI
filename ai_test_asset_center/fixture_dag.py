@@ -83,7 +83,35 @@ def build_fixture_dag_for_experiment(
             continue
         status = _text(item.get("status"))
         nid = _node_id("bind", target)
-        if status == "unresolved" or status == "required":
+        if status == "runtime_resolvable":
+            resolver_operations = [
+                dict(resolver)
+                for resolver in _list(item.get("resolver_operations"))
+                if isinstance(resolver, dict)
+            ]
+            constructible = bool(resolver_operations) and all(
+                _text(resolver.get("operation_ref"))
+                and _text(resolver.get("method")).upper() in {"GET", "HEAD"}
+                and _text(resolver.get("path")).startswith("/")
+                and "{" not in _text(resolver.get("path"))
+                and ":" not in _text(resolver.get("path"))
+                for resolver in resolver_operations
+            )
+            nodes.append({
+                "node_id": nid,
+                "kind": "runtime_read_binding",
+                "target": target,
+                "source_priority": _text(item.get("source_priority") or "same_actor_list_read"),
+                "resolver_operations": resolver_operations,
+                "requires_read_proof": True,
+                "constructible": constructible,
+            })
+            if not constructible:
+                blocked.append({
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": f"runtime resolver invalid for {target}",
+                })
+        elif status == "unresolved" or status == "required":
             create_path = _text(item.get("create_path") or item.get("create_operation_ref"))
             # Disposable fixtures are only constructible when a concrete create path
             # is already resolved. Never mark COMPILED/READY on unresolved fixtures.
@@ -159,6 +187,7 @@ def build_fixture_dag_for_experiment(
     # Topological order: actors → deps → fixtures → setup
     kind_rank = {
         "actor_context": 0,
+        "runtime_read_binding": 1,
         "dependency_create": 1,
         "disposable_fixture": 2,
         "bound_value": 2,

@@ -154,6 +154,102 @@ def test_cleanup_template_uses_successful_write_response_binding(monkeypatch, tm
     assert result["cleanup_failures"] == 0
 
 
+def test_runtime_read_binding_materializes_same_resource_before_control_and_treatment(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def http_request(method, url, *, token="", body=None):
+        path = url.removeprefix("http://127.0.0.1:8080")
+        calls.append((method, path))
+        if path == "/resources":
+            return {"status": 200, "body": [{"id": "r-1"}], "headers": {}}
+        if path == "/resources/r-1":
+            return {"status": 200, "body": {"id": "r-1"}, "headers": {}}
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", http_request)
+    result = execute_one_experiment(
+        {
+            "experiment_id": "exp-runtime-binding",
+            "obligation_id": "obl-runtime-binding",
+            "compile_receipt": {"status": "COMPILED"},
+            "fixture_dag": {
+                "status": "READY",
+                "nodes": [{
+                    "node_id": "bind-id",
+                    "kind": "runtime_read_binding",
+                    "target": "id",
+                    "resolver_operations": [{
+                        "operation_ref": "list_resources",
+                        "method": "GET",
+                        "path": "/resources",
+                    }],
+                    "constructible": True,
+                }],
+                "setup_order": ["bind-id"],
+            },
+            "binding_plan": [{
+                "target": "id",
+                "status": "runtime_resolvable",
+                "source_priority": "same_actor_list_read",
+                "resolver_operations": [{
+                    "operation_ref": "list_resources",
+                    "method": "GET",
+                    "path": "/resources",
+                }],
+            }],
+            "control_plan": [{
+                "step_id": "control-1",
+                "actor_ref": "owner",
+                "operation_ref": "get_resource",
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment-1",
+                "actor_ref": "viewer",
+                "operation_ref": "get_resource",
+            }],
+            "cleanup_plan": [],
+            "observers": [{"observer_id": "http_response"}],
+            "assertions": [{"kind": "authorization", "property": {}}],
+            "safety_contract": {"governed_write": False},
+            "source_refs": [{"source_id": "api-contract"}],
+        },
+        behavior_ir={
+            "operations": [
+                {"id": "list_resources", "method": "GET", "path": "/resources"},
+                {"id": "get_resource", "method": "GET", "path": "/resources/{id}"},
+            ],
+            "actors": [
+                {"id": "owner", "role": "public"},
+                {"id": "viewer", "role": "public"},
+            ],
+        },
+        root=tmp_path,
+        project="generic-project",
+        base_url="http://127.0.0.1:8080",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign-1",
+        actor_tokens={},
+    )
+
+    assert calls == [
+        ("GET", "/resources"),
+        ("GET", "/resources/r-1"),
+        ("GET", "/resources/r-1"),
+    ]
+    assert result["status"] == "EXECUTED"
+    binding_receipt = result["binding_materialization_receipts"][0]
+    assert binding_receipt["status"] == "BOUND"
+    assert binding_receipt["target"] == "id"
+    assert binding_receipt["source_priority"] == "same_actor_list_read"
+    assert binding_receipt["resolver_path"] == "/resources"
+    assert binding_receipt["value_fingerprint"]
+    assert "value" not in binding_receipt
+    assert result["finding"]["reproduction"]["path"] == "/resources/r-1"
+
+
 def test_campaign_reset_preserves_cleanup_failures() -> None:
     out = ObservedProductScanExecutor(
         workspace_root=Path("."),

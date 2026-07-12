@@ -5,7 +5,12 @@ import hashlib
 import re
 from typing import Any
 
-from .real_id_resolver import normalize_path_placeholders
+from .real_id_resolver import (
+    alternate_collection_paths,
+    collection_path,
+    normalize_path_placeholders,
+    path_has_placeholders,
+)
 
 
 BINDING_PRIORITY = (
@@ -49,12 +54,74 @@ def extract_placeholders(*texts: Any) -> list[str]:
     return found
 
 
+def declared_runtime_read_resolvers(
+    operation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+    max_candidates: int = 2,
+) -> list[dict[str, str]]:
+    """Return source-declared concrete reads that may bind a target path.
+
+    Candidate paths are derived structurally from the target path, then joined
+    to operations already present in Behavior IR. No endpoint or identity value
+    is invented here; runtime execution must still emit a successful read and a
+    binding receipt before the target operation can run.
+    """
+
+    target_path = normalize_path_placeholders(_text(_dict(operation).get("path")))
+    if not target_path.startswith("/") or not path_has_placeholders(target_path):
+        return []
+
+    candidate_paths: list[str] = []
+    primary = normalize_path_placeholders(collection_path(target_path))
+    if primary.startswith("/") and not path_has_placeholders(primary):
+        candidate_paths.append(primary)
+    candidate_paths.extend(
+        normalize_path_placeholders(path)
+        for path in alternate_collection_paths(target_path)
+    )
+    ordered_paths = list(dict.fromkeys(
+        path
+        for path in candidate_paths
+        if path.startswith("/") and not path_has_placeholders(path)
+    ))
+
+    declared_by_path: dict[str, list[dict[str, Any]]] = {}
+    for candidate in _list(_dict(behavior_ir).get("operations")):
+        if not isinstance(candidate, dict):
+            continue
+        method = _text(candidate.get("method")).upper()
+        path = normalize_path_placeholders(_text(candidate.get("path") or candidate.get("raw_path")))
+        if (
+            method not in {"GET", "HEAD"}
+            or not _text(candidate.get("id"))
+            or not path.startswith("/")
+            or path_has_placeholders(path)
+        ):
+            continue
+        declared_by_path.setdefault(path, []).append(candidate)
+
+    resolvers: list[dict[str, str]] = []
+    limit = max(1, min(int(max_candidates or 1), 5))
+    for path in ordered_paths:
+        for candidate in declared_by_path.get(path, []):
+            resolvers.append({
+                "operation_ref": _text(candidate.get("id")),
+                "method": _text(candidate.get("method")).upper(),
+                "path": path,
+            })
+            if len(resolvers) >= limit:
+                return resolvers
+    return resolvers
+
+
 def build_binding_plan(
     *,
     operation: dict[str, Any],
     obligation: dict[str, Any],
     actors: list[dict[str, Any]] | None = None,
     available_values: dict[str, dict[str, Any]] | None = None,
+    behavior_ir: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build binding plan. available_values maps placeholder -> {value, source, priority}."""
     op = _dict(operation)
@@ -94,6 +161,20 @@ def build_binding_plan(
                 "previous_fingerprint": _text(existing.get("previous_fingerprint")),
             })
         else:
+            resolvers = declared_runtime_read_resolvers(
+                op,
+                behavior_ir=_dict(behavior_ir),
+            )
+            if resolvers:
+                plan.append({
+                    "target": name,
+                    "target_path": normalize_path_placeholders(_text(op.get("path"))),
+                    "status": "runtime_resolvable",
+                    "source_priority": "same_actor_list_read",
+                    "resolver_operations": resolvers,
+                    "value_fingerprint": "",
+                })
+                continue
             # Prefer disposable fixture for identity-like placeholders
             preferred = "disposable_fixture_receipt" if name.lower().endswith("id") or name.lower() == "id" else "schema_generated"
             plan.append({
@@ -173,5 +254,9 @@ def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]
         _text(item.get("target"))
         for item in plan
         if _text(item.get("status")) == "bound"
+        or (
+            _text(item.get("status")) == "runtime_resolvable"
+            and bool(_list(item.get("resolver_operations")))
+        )
     }
     return [name for name in needed if name not in bound]

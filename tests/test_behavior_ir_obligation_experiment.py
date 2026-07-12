@@ -554,8 +554,14 @@ def test_authorization_obligation_uses_source_permissions_not_actor_order() -> N
     assert ops[auth_obl["property"]["operation_ref"]]["operation_id"] == "update_resource"
 
 
-def test_experiment_compiler_blocks_missing_binding() -> None:
-    ir = build_behavior_ir_from_knowledge_asset(_sample_asset(), project_id="proj-a")
+def test_experiment_compiler_blocks_missing_binding_without_declared_read_resolver() -> None:
+    asset = _sample_asset()
+    asset["operations"] = [
+        operation
+        for operation in asset["operations"]
+        if operation["operation_id"] != "list_resources"
+    ]
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="proj-a")
     compiled = compile_obligations_from_behavior_ir(ir)
     write_op = next(op for op in ir["operations"] if "{id}" in str(op.get("path")))
     actors = ir["actors"]
@@ -584,7 +590,7 @@ def test_experiment_compiler_blocks_missing_binding() -> None:
     assert compiled["obligation_count"] > 0
 
 
-def test_colon_path_params_block_at_compile_before_planning() -> None:
+def test_colon_path_params_compile_with_source_declared_runtime_resolver() -> None:
     asset = _sample_asset()
     asset["operations"] = [
         {
@@ -632,14 +638,28 @@ def test_colon_path_params_block_at_compile_before_planning() -> None:
     receipt = experiment["compile_receipt"]
 
     assert extract_placeholders("/resources/:id") == ["id"]
-    assert receipt["status"] == "BLOCKED"
-    assert receipt["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert receipt["status"] == "COMPILED"
+    runtime_binding = next(
+        item for item in experiment["binding_plan"]
+        if item.get("target") == "id"
+    )
+    assert runtime_binding["status"] == "runtime_resolvable"
+    assert runtime_binding["source_priority"] == "same_actor_list_read"
+    assert runtime_binding["resolver_operations"] == [{
+        "operation_ref": next(
+            operation["id"]
+            for operation in ir["operations"]
+            if operation.get("operation_id") == "read_resources"
+        ),
+        "method": "GET",
+        "path": "/resources",
+    }]
     plan = plan_obligation_round(
         [obligation],
         experiments_by_obligation={obligation["obligation_id"]: experiment},
         budget=5,
     )
-    assert plan["selected_count"] == 0
+    assert plan["selected_count"] == 1
 
 
 def test_experiment_compiler_blocks_production_environment() -> None:

@@ -93,6 +93,13 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   `qualibug.discovery-trace-ledger.v2`, keyed by obligation attempt identity.
   V1 input requires the explicit offline migration; silent schema fallback is
   prohibited. Replay and shadow runs set `customer_outputs_published=false`.
+- A path placeholder may compile only when its binding plan names an exact,
+  source-declared concrete `GET`/`HEAD` operation from Behavior IR. Runtime
+  materializes that value with the control actor before control/treatment,
+  emits a fingerprint-only binding receipt, and reuses the same resource value
+  for both paths. Missing, invalid, or unsuccessful resolvers remain visibly
+  `BLOCKED_MISSING_BINDING`; invented identifiers and hidden seed reads are
+  prohibited.
 - Runtime rollback is a next-run policy decision only. Select
   `legacy_champion` before creating a new immutable run contract; never roll
   back inside an active campaign or after either runner has started.

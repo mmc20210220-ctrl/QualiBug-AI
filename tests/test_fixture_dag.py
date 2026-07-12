@@ -42,6 +42,33 @@ def test_fixture_dag_blocks_unresolved_binding_without_fixture() -> None:
     assert any(r["reason_code"] == "BLOCKED_MISSING_FIXTURE" for r in dag["blocked_reasons"])
 
 
+def test_fixture_dag_accepts_source_declared_runtime_read_binding() -> None:
+    experiment = {
+        "experiment_id": "exp_runtime_binding",
+        "control_plan": [],
+        "treatment_plan": [],
+        "binding_plan": [{
+            "target": "id",
+            "status": "runtime_resolvable",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [{
+                "operation_ref": "list_resources",
+                "method": "GET",
+                "path": "/resources",
+            }],
+        }],
+        "setup_plan": [],
+    }
+
+    dag = build_fixture_dag_for_experiment(experiment, behavior_ir={"actors": []})
+
+    assert dag["status"] == "READY"
+    binding_node = next(node for node in dag["nodes"] if node["kind"] == "runtime_read_binding")
+    assert binding_node["target"] == "id"
+    assert binding_node["resolver_operations"][0]["path"] == "/resources"
+    assert binding_node["requires_read_proof"] is True
+
+
 def test_attach_fixture_dag_moves_blocked_experiments() -> None:
     pack = {
         "experiments": [{
