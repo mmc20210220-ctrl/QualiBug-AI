@@ -2545,7 +2545,6 @@ def run_v12_pipeline(
         )
     runtime_contract = _runtime_contract(context, base_url, submitted_api_spec_text)
     context["_runtime_contract"] = runtime_contract
-    context.setdefault("campaign_rerun_key", str(context["run_id"]))
     inputs = DiscoveryMainlineInputs(
         project=str(project),
         root=Path(root),
