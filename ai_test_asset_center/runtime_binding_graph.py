@@ -7,6 +7,7 @@ from typing import Any
 
 from .real_id_resolver import (
     alternate_collection_paths,
+    body_field_collection_paths,
     collection_path,
     normalize_path_placeholders,
     path_has_placeholders,
@@ -23,6 +24,13 @@ BINDING_PRIORITY = (
 )
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+_BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
+_CLEANUP_ACTION_RE = re.compile(
+    r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|"
+    r"delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|"
+    r"discard|retire|freeze|reset|clear|purge)$",
+    re.I,
+)
 
 
 def _text(value: Any) -> str:
@@ -115,6 +123,266 @@ def declared_runtime_read_resolvers(
     return resolvers
 
 
+def _request_example(operation: dict[str, Any]) -> dict[str, Any]:
+    direct = _dict(operation).get("request_example")
+    if isinstance(direct, dict) and direct:
+        return dict(direct)
+    request_schema = _dict(_dict(operation).get("request_schema"))
+    content = _dict(request_schema.get("content"))
+    for media in content.values():
+        if not isinstance(media, dict):
+            continue
+        example = media.get("example")
+        if isinstance(example, dict) and example:
+            return dict(example)
+        examples = _dict(media.get("examples"))
+        for row in examples.values():
+            value = _dict(row).get("value")
+            if isinstance(value, dict) and value:
+                return dict(value)
+    return {}
+
+
+def _body_placeholder_rows(value: Any, path: str = "") -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            rows.extend(_body_placeholder_rows(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            rows.extend(_body_placeholder_rows(child, f"{path}[{index}]"))
+    elif isinstance(value, str):
+        match = _BODY_PLACEHOLDER_RE.match(value)
+        if match and path:
+            rows.append({
+                "target": path,
+                "template_token": _text(match.group(1)),
+            })
+    return rows
+
+
+def _api_prefix(path: str) -> str:
+    parts = [part for part in normalize_path_placeholders(path).split("/") if part]
+    return f"/{parts[0]}" if parts else "/api"
+
+
+def _declared_reads_for_paths(
+    paths: list[str],
+    *,
+    behavior_ir: dict[str, Any],
+    max_candidates: int = 2,
+) -> list[dict[str, str]]:
+    wanted = list(dict.fromkeys(
+        normalize_path_placeholders(path)
+        for path in paths
+        if _text(path).startswith("/")
+    ))
+    resolvers: list[dict[str, str]] = []
+    limit = max(1, min(int(max_candidates or 1), 5))
+    for path in wanted:
+        for operation in _list(_dict(behavior_ir).get("operations")):
+            if not isinstance(operation, dict):
+                continue
+            declared_path = normalize_path_placeholders(
+                _text(operation.get("path") or operation.get("raw_path"))
+            )
+            method = _text(operation.get("method")).upper()
+            if (
+                declared_path != path
+                or method not in {"GET", "HEAD"}
+                or path_has_placeholders(declared_path)
+                or not _text(operation.get("id"))
+            ):
+                continue
+            resolvers.append({
+                "operation_ref": _text(operation.get("id")),
+                "method": method,
+                "path": declared_path,
+            })
+            if len(resolvers) >= limit:
+                return resolvers
+    return resolvers
+
+
+def _declared_cleanup_operations(
+    create_path: str,
+    *,
+    behavior_ir: dict[str, Any],
+) -> list[dict[str, str]]:
+    created_collection = normalize_path_placeholders(create_path).rstrip("/")
+    candidates: list[tuple[int, dict[str, str]]] = []
+    for operation in _list(_dict(behavior_ir).get("operations")):
+        if not isinstance(operation, dict):
+            continue
+        method = _text(operation.get("method")).upper()
+        path = normalize_path_placeholders(
+            _text(operation.get("path") or operation.get("raw_path"))
+        )
+        if (
+            method not in {"DELETE", "POST", "PATCH", "PUT"}
+            or not _text(operation.get("id"))
+            or not path_has_placeholders(path)
+            or not path.startswith(created_collection + "/")
+        ):
+            continue
+        is_delete = method == "DELETE"
+        is_compensation = bool(_CLEANUP_ACTION_RE.search(path.rstrip("/")))
+        if not is_delete and not is_compensation:
+            continue
+        candidates.append((
+            0 if is_delete else 1,
+            {
+                "operation_ref": _text(operation.get("id")),
+                "method": method,
+                "path": path,
+            },
+        ))
+    ordered = [row for _, row in sorted(
+        candidates,
+        key=lambda item: (item[0], item[1]["path"].count("/"), item[1]["path"]),
+    )]
+    unique: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in ordered:
+        key = (row["operation_ref"], row["method"], row["path"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
+
+
+def _declared_fixture_actor_refs(
+    create_operation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+) -> list[str]:
+    create_ref = _text(create_operation.get("id"))
+    explicit = [
+        _text(relation.get("actor_ref"))
+        for relation in _list(_dict(behavior_ir).get("relations"))
+        if isinstance(relation, dict)
+        and _text(relation.get("relation_type")) == "permits"
+        and _text(relation.get("operation_ref")) == create_ref
+        and _text(relation.get("actor_ref"))
+    ]
+    if explicit:
+        return list(dict.fromkeys(explicit))
+
+    method = _text(create_operation.get("method")).upper()
+    action_tokens = {
+        "*", method.lower(), "write", "manage",
+        "create", "add", "register", "submit",
+    }
+    path_tokens = {
+        token
+        for token in re.findall(
+            r"[a-z0-9]+",
+            normalize_path_placeholders(_text(create_operation.get("path"))).lower(),
+        )
+        if token not in {"api", "admin", "v1", "v2", "v3"}
+        and not token.startswith("{")
+    }
+    path_token_forms = set(path_tokens)
+    for token in path_tokens:
+        if token.endswith("s") and len(token) > 3:
+            path_token_forms.add(token[:-1])
+        else:
+            path_token_forms.add(token + "s")
+    ranked: list[tuple[int, int, str]] = []
+    for index, actor in enumerate(_list(_dict(behavior_ir).get("actors"))):
+        if not isinstance(actor, dict) or not _text(actor.get("id")):
+            continue
+        actions = {
+            _text(action).lower()
+            for action in _list(actor.get("allowed_actions"))
+            if _text(action)
+        }
+        resources = set()
+        for resource in _list(actor.get("allowed_resources")):
+            resources.update(re.findall(r"[a-z0-9]+", _text(resource).lower()))
+        resource_forms = set(resources)
+        for token in resources:
+            if token.endswith("s") and len(token) > 3:
+                resource_forms.add(token[:-1])
+            else:
+                resource_forms.add(token + "s")
+        if not actions.intersection(action_tokens) or not resource_forms.intersection(path_token_forms):
+            continue
+        secret = _text(actor.get("credential_secret_ref"))
+        ranked.append((0 if "test_accounts" in secret or "context" in secret else 1, index, _text(actor.get("id"))))
+    return [actor_ref for _, _, actor_ref in sorted(ranked)]
+
+
+def _declared_fixture_setup(
+    operation: dict[str, Any],
+    *,
+    target: str,
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    target_path = normalize_path_placeholders(_text(operation.get("path")))
+    prefix = _api_prefix(target_path)
+    collection_candidates = body_field_collection_paths(target, api_prefix=prefix)
+    if not collection_candidates:
+        primary = normalize_path_placeholders(collection_path(target_path))
+        if primary.startswith("/") and not path_has_placeholders(primary):
+            collection_candidates = [primary]
+    operations = _list(_dict(behavior_ir).get("operations"))
+    for collection in collection_candidates:
+        create = next((
+            candidate
+            for candidate in operations
+            if isinstance(candidate, dict)
+            and _text(candidate.get("method")).upper() == "POST"
+            and normalize_path_placeholders(
+                _text(candidate.get("path") or candidate.get("raw_path"))
+            ) == normalize_path_placeholders(collection)
+            and not path_has_placeholders(normalize_path_placeholders(collection))
+            and _text(candidate.get("id"))
+        ), None)
+        if not isinstance(create, dict):
+            continue
+        body_template = _request_example(create)
+        if not body_template:
+            continue
+        body_bindings: list[dict[str, Any]] = []
+        unresolved_body = False
+        for row in _body_placeholder_rows(body_template):
+            field = _text(row.get("target")).split(".")[-1].split("[")[0]
+            token = _text(row.get("template_token"))
+            resolvers = _declared_reads_for_paths(
+                body_field_collection_paths(field or token, api_prefix=prefix)
+                or body_field_collection_paths(token, api_prefix=prefix),
+                behavior_ir=behavior_ir,
+            )
+            if not resolvers:
+                unresolved_body = True
+                break
+            body_bindings.append({
+                "target": _text(row.get("target")),
+                "template_token": token,
+                "resolver_operations": resolvers,
+            })
+        cleanup_operations = _declared_cleanup_operations(
+            normalize_path_placeholders(collection),
+            behavior_ir=behavior_ir,
+        )
+        actor_refs = _declared_fixture_actor_refs(create, behavior_ir=behavior_ir)
+        if unresolved_body or not cleanup_operations or not actor_refs:
+            continue
+        return {
+            "operation_ref": _text(create.get("id")),
+            "method": "POST",
+            "path": normalize_path_placeholders(collection),
+            "actor_refs": actor_refs,
+            "body_template": body_template,
+            "body_bindings": body_bindings,
+            "cleanup_operations": cleanup_operations,
+        }
+    return {}
+
+
 def build_binding_plan(
     *,
     operation: dict[str, Any],
@@ -166,14 +434,22 @@ def build_binding_plan(
                 behavior_ir=_dict(behavior_ir),
             )
             if resolvers:
-                plan.append({
+                binding = {
                     "target": name,
                     "target_path": normalize_path_placeholders(_text(op.get("path"))),
                     "status": "runtime_resolvable",
                     "source_priority": "same_actor_list_read",
                     "resolver_operations": resolvers,
                     "value_fingerprint": "",
-                })
+                }
+                fixture_setup = _declared_fixture_setup(
+                    op,
+                    target=name,
+                    behavior_ir=_dict(behavior_ir),
+                )
+                if fixture_setup:
+                    binding["fixture_setup"] = fixture_setup
+                plan.append(binding)
                 continue
             # Prefer disposable fixture for identity-like placeholders
             preferred = "disposable_fixture_receipt" if name.lower().endswith("id") or name.lower() == "id" else "schema_generated"

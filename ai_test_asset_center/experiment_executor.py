@@ -177,6 +177,119 @@ def _materialize_path(path: str, bindings: dict[str, Any]) -> str:
     return materialized
 
 
+_BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
+
+
+def _materialize_body_template(value: Any, token_values: dict[str, Any]) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _materialize_body_template(child, token_values)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_materialize_body_template(child, token_values) for child in value]
+    if isinstance(value, str):
+        match = _BODY_PLACEHOLDER_RE.match(value)
+        if match:
+            token = _text(match.group(1))
+            if token in token_values:
+                return token_values[token]
+    return value
+
+
+def _runtime_value_from_response(body: Any, target: str, target_path: str) -> Any:
+    bindings = bind_entity_fields(body, target_path or f"/{{{target}}}")
+    value = bindings.get(target)
+    if value not in (None, "", [], {}):
+        return value
+    normalized = _field_key(target)
+    fields = _response_scalar_fields(body)
+    candidates = list(dict.fromkeys(fields.get(normalized) or []))
+    if not candidates and normalized.endswith("id"):
+        candidates = list(dict.fromkeys(fields.get("id") or []))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _validated_fixture_setup(
+    binding: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+    actors: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    setup = _dict(binding.get("fixture_setup"))
+    operation_ref = _text(setup.get("operation_ref"))
+    operation = operations.get(operation_ref) or {}
+    method = _text(setup.get("method")).upper()
+    path = normalize_path_placeholders(_text(setup.get("path")))
+    if (
+        not operation_ref
+        or method != "POST"
+        or _text(operation.get("method")).upper() != method
+        or normalize_path_placeholders(_text(operation.get("path") or operation.get("raw_path"))) != path
+        or not path.startswith("/")
+        or path_has_placeholders(path)
+        or not isinstance(setup.get("body_template"), dict)
+        or not setup.get("body_template")
+    ):
+        return {}
+    body_bindings: list[dict[str, Any]] = []
+    for raw in _list(setup.get("body_bindings")):
+        if not isinstance(raw, dict):
+            return {}
+        resolvers = _validated_runtime_resolvers(
+            {
+                "status": "runtime_resolvable",
+                "resolver_operations": raw.get("resolver_operations"),
+            },
+            operations,
+        )
+        if not _text(raw.get("target")) or not _text(raw.get("template_token")) or not resolvers:
+            return {}
+        body_bindings.append({
+            "target": _text(raw.get("target")),
+            "template_token": _text(raw.get("template_token")),
+            "resolver_operations": resolvers,
+        })
+    cleanup_operations: list[dict[str, str]] = []
+    for raw in _list(setup.get("cleanup_operations")):
+        if not isinstance(raw, dict):
+            continue
+        cleanup_ref = _text(raw.get("operation_ref"))
+        cleanup = operations.get(cleanup_ref) or {}
+        cleanup_method = _text(raw.get("method")).upper()
+        cleanup_path = normalize_path_placeholders(_text(raw.get("path")))
+        if (
+            cleanup_ref
+            and cleanup_method in {"DELETE", "POST", "PATCH", "PUT"}
+            and _text(cleanup.get("method")).upper() == cleanup_method
+            and normalize_path_placeholders(_text(cleanup.get("path") or cleanup.get("raw_path"))) == cleanup_path
+            and cleanup_path.startswith("/")
+            and path_has_placeholders(cleanup_path)
+        ):
+            cleanup_operations.append({
+                "operation_ref": cleanup_ref,
+                "method": cleanup_method,
+                "path": cleanup_path,
+            })
+    if not cleanup_operations:
+        return {}
+    actor_refs = [
+        _text(actor_ref)
+        for actor_ref in _list(setup.get("actor_refs"))
+        if _text(actor_ref) in actors
+    ]
+    if not actor_refs:
+        return {}
+    return {
+        "operation_ref": operation_ref,
+        "method": method,
+        "path": path,
+        "actor_refs": list(dict.fromkeys(actor_refs)),
+        "body_template": dict(setup["body_template"]),
+        "body_bindings": body_bindings,
+        "cleanup_operations": cleanup_operations,
+    }
+
+
 def _index_by_id(nodes: list[Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for node in nodes:
@@ -391,6 +504,7 @@ def execute_one_experiment(
     fixture_receipts: list[dict[str, Any]] = []
     binding_materialization_receipts: list[dict[str, Any]] = []
     runtime_bindings: dict[str, Any] = {}
+    pending_fixture_cleanups: list[dict[str, Any]] = []
     binding_plan = {
         _text(item.get("target")): item
         for item in _list(exp.get("binding_plan"))
@@ -478,6 +592,121 @@ def execute_one_experiment(
                     ).hexdigest()[:12],
                 })
                 break
+            if value in (None, "", [], {}):
+                fixture_setup = _validated_fixture_setup(binding, ops, actors)
+                fixture_actor_ref = ""
+                fixture_actor: dict[str, Any] = {}
+                fixture_token = ""
+                for actor_ref in _list(fixture_setup.get("actor_refs")):
+                    actor = actors.get(_text(actor_ref)) or {}
+                    token = _resolve_token(actor, tokens)
+                    if _text(actor.get("role")).lower() in {"anonymous", "public"} or token:
+                        fixture_actor_ref = _text(actor_ref)
+                        fixture_actor = actor
+                        fixture_token = token
+                        break
+                if fixture_setup and not fixture_actor_ref:
+                    fixture_setup = {}
+                token_values: dict[str, Any] = {}
+                dependency_blocked = False
+                for dependency in _list(fixture_setup.get("body_bindings")):
+                    dependency_target = _text(_dict(dependency).get("target"))
+                    dependency_token = _text(_dict(dependency).get("template_token"))
+                    dependency_value: Any = None
+                    for index, resolver in enumerate(_list(_dict(dependency).get("resolver_operations"))):
+                        if not isinstance(resolver, dict):
+                            continue
+                        obs = _run_http_step(
+                            base_url=base_url,
+                            method=_text(resolver.get("method")).upper(),
+                            path=_text(resolver.get("path")),
+                            token=fixture_token,
+                        )
+                        obs.update({
+                            "phase": "binding_materialization_dependency",
+                            "step_id": f"bind:{target}:dependency:{dependency_token}:{index}",
+                            "actor_ref": fixture_actor_ref,
+                            "operation_ref": _text(resolver.get("operation_ref")),
+                        })
+                        steps_out.append(obs)
+                        if not (200 <= int(obs.get("status_code") or 0) < 300):
+                            if int(obs.get("status_code") or 0) == 0:
+                                break
+                            continue
+                        dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
+                        dependency_value = _runtime_value_from_response(
+                            obs.get("body"),
+                            dependency_leaf,
+                            f"/{{{dependency_leaf}}}",
+                        )
+                        if dependency_value not in (None, "", [], {}):
+                            token_values[dependency_token] = dependency_value
+                            break
+                    if dependency_value in (None, "", [], {}):
+                        dependency_blocked = True
+                        break
+                if fixture_setup and not dependency_blocked:
+                    setup_body = _materialize_body_template(
+                        fixture_setup.get("body_template"),
+                        token_values,
+                    )
+                    observation_path = _text(resolvers[0].get("path")) if resolvers else ""
+                    governed_setup = execute_governed_control_write(
+                        root=root,
+                        project=project,
+                        base_url=base_url,
+                        runtime_contract=runtime_contract,
+                        campaign_id=campaign_id,
+                        operation_phase="experiment_fixture_setup",
+                        actor_identity=_text(fixture_actor.get("role") or fixture_actor_ref),
+                        actor_token=fixture_token,
+                        method=_text(fixture_setup.get("method")).upper(),
+                        path=_text(fixture_setup.get("path")),
+                        body=setup_body,
+                        observation_path=observation_path,
+                    )
+                    setup_write = _dict(governed_setup.get("write"))
+                    setup_status = int(setup_write.get("status") or 0)
+                    steps_out.append({
+                        "phase": "fixture_setup",
+                        "method": _text(fixture_setup.get("method")).upper(),
+                        "path": _text(fixture_setup.get("path")),
+                        "status_code": setup_status,
+                        "operation_ref": _text(fixture_setup.get("operation_ref")),
+                        "governance_receipt": governed_setup,
+                    })
+                    receipt["fixture_setup_status"] = (
+                        "completed" if 200 <= setup_status < 300 else "failed"
+                    )
+                    if 200 <= setup_status < 300:
+                        value = _runtime_value_from_response(
+                            setup_write.get("body"),
+                            target,
+                            target_path,
+                        )
+                    if value not in (None, "", [], {}):
+                        runtime_bindings[target] = value
+                        receipt.update({
+                            "status": "BOUND",
+                            "source_priority": "experiment_setup_response",
+                            "resolver_path": _text(fixture_setup.get("path")),
+                            "resolver_operation_ref": _text(fixture_setup.get("operation_ref")),
+                            "status_code": setup_status,
+                            "value_fingerprint": hashlib.sha256(
+                                str(value).encode("utf-8")
+                            ).hexdigest()[:12],
+                            "fixture_cleanup_status": "pending",
+                        })
+                        pending_fixture_cleanups.append({
+                            "target": target,
+                            "value": value,
+                            "observation_path": observation_path,
+                            "cleanup": dict(_list(fixture_setup.get("cleanup_operations"))[0]),
+                            "receipt": receipt,
+                            "actor_ref": fixture_actor_ref,
+                            "actor_identity": _text(fixture_actor.get("role") or fixture_actor_ref),
+                            "actor_token": fixture_token,
+                        })
             binding_materialization_receipts.append(receipt)
             if value in (None, "", [], {}):
                 fixture_receipts.append({
@@ -643,6 +872,46 @@ def execute_one_experiment(
 
     steps_out.extend(_exec_plan(_list(exp.get("control_plan")), phase="control"))
     steps_out.extend(_exec_plan(_list(exp.get("treatment_plan")), phase="treatment"))
+
+    for pending in reversed(pending_fixture_cleanups):
+        cleanup = _dict(pending.get("cleanup"))
+        cleanup_bindings = dict(runtime_bindings)
+        cleanup_placeholders = infer_path_params(_text(cleanup.get("path")))
+        if len(cleanup_placeholders) == 1:
+            cleanup_bindings.setdefault(cleanup_placeholders[0], pending.get("value"))
+        cleanup_path = _materialize_path(_text(cleanup.get("path")), cleanup_bindings)
+        governed_cleanup = execute_governed_control_write(
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            operation_phase="experiment_fixture_cleanup",
+            actor_identity=_text(pending.get("actor_identity")),
+            actor_token=_text(pending.get("actor_token")),
+            method=_text(cleanup.get("method")).upper(),
+            path=cleanup_path,
+            body=None,
+            observation_path=_text(pending.get("observation_path")),
+        )
+        cleanup_write = _dict(governed_cleanup.get("write"))
+        cleanup_status = int(cleanup_write.get("status") or 0)
+        completed = 200 <= cleanup_status < 300
+        _dict(pending.get("receipt"))["fixture_cleanup_status"] = (
+            "completed" if completed else "failed"
+        )
+        if not completed:
+            cleanup_failures += 1
+        steps_out.append({
+            "phase": "fixture_cleanup",
+            "method": _text(cleanup.get("method")).upper(),
+            "path": cleanup_path,
+            "status_code": cleanup_status,
+            "operation_ref": _text(cleanup.get("operation_ref")),
+            "governance_receipt": governed_cleanup,
+        })
+    if pending_fixture_cleanups:
+        observations["cleanup_status"] = "failed" if cleanup_failures else "completed"
 
     # Cleanup compensation in reverse order for write experiments.
     safety = _dict(exp.get("safety_contract"))

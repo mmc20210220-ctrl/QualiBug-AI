@@ -250,6 +250,157 @@ def test_runtime_read_binding_materializes_same_resource_before_control_and_trea
     assert result["finding"]["reproduction"]["path"] == "/resources/r-1"
 
 
+def test_empty_runtime_read_uses_governed_fixture_and_cleans_it_after_experiment(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    read_calls: list[tuple[str, str]] = []
+    write_calls: list[dict] = []
+
+    def http_request(method, url, *, token="", body=None):
+        path = url.removeprefix("http://127.0.0.1:8080")
+        read_calls.append((method, path))
+        if path == "/api/resources":
+            return {"status": 200, "body": [], "headers": {}}
+        if path == "/api/owners":
+            return {"status": 200, "body": [{"id": "owner-1"}], "headers": {}}
+        if path == "/api/projections/resource/r-1":
+            return {"status": 200, "body": {"id": "r-1"}, "headers": {}}
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    def governed_write(**kwargs):
+        write_calls.append(dict(kwargs))
+        if kwargs["operation_phase"] == "experiment_fixture_setup":
+            assert kwargs["path"] == "/api/resources"
+            assert kwargs["body"] == {"ownerId": "owner-1", "name": "source-name"}
+            assert kwargs["actor_identity"] == "fixture_creator"
+            assert kwargs["actor_token"] == "fixture-token"
+            return {"write": {"status": 201, "body": {"id": "r-1"}}, "status": "completed"}
+        assert kwargs["operation_phase"] == "experiment_fixture_cleanup"
+        assert kwargs["path"] == "/api/resources/r-1/archive"
+        return {"write": {"status": 204, "body": {}}, "status": "completed"}
+
+    monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", http_request)
+    monkeypatch.setattr("ai_test_asset_center.experiment_executor.sandbox_write_allowed", lambda **_kwargs: (True, ""))
+    monkeypatch.setattr("ai_test_asset_center.experiment_executor.execute_governed_control_write", governed_write)
+    result = execute_one_experiment(
+        {
+            "experiment_id": "exp-fixture-binding",
+            "obligation_id": "obl-fixture-binding",
+            "compile_receipt": {"status": "COMPILED"},
+            "fixture_dag": {
+                "status": "READY",
+                "nodes": [{
+                    "node_id": "bind-resource",
+                    "kind": "runtime_read_binding",
+                    "target": "resourceId",
+                    "resolver_operations": [{
+                        "operation_ref": "list_resources",
+                        "method": "GET",
+                        "path": "/api/resources",
+                    }],
+                    "constructible": True,
+                }],
+                "setup_order": ["bind-resource"],
+            },
+            "binding_plan": [{
+                "target": "resourceId",
+                "target_path": "/api/projections/resource/{resourceId}",
+                "status": "runtime_resolvable",
+                "source_priority": "same_actor_list_read",
+                "resolver_operations": [{
+                    "operation_ref": "list_resources",
+                    "method": "GET",
+                    "path": "/api/resources",
+                }],
+                "fixture_setup": {
+                    "operation_ref": "create_resource",
+                    "method": "POST",
+                    "path": "/api/resources",
+                    "actor_refs": ["fixture_actor"],
+                    "body_template": {"ownerId": "<owner_id>", "name": "source-name"},
+                    "body_bindings": [{
+                        "target": "ownerId",
+                        "template_token": "owner_id",
+                        "resolver_operations": [{
+                            "operation_ref": "list_owners",
+                            "method": "GET",
+                            "path": "/api/owners",
+                        }],
+                    }],
+                    "cleanup_operations": [{
+                        "operation_ref": "archive_resource",
+                        "method": "POST",
+                        "path": "/api/resources/{id}/archive",
+                    }],
+                },
+            }],
+            "control_plan": [{
+                "step_id": "control-1",
+                "actor_ref": "owner",
+                "operation_ref": "read_projection",
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment-1",
+                "actor_ref": "viewer",
+                "operation_ref": "read_projection",
+            }],
+            "cleanup_plan": [],
+            "observers": [{"observer_id": "http_response"}],
+            "assertions": [{"kind": "authorization", "property": {}}],
+            "safety_contract": {"governed_write": False},
+            "source_refs": [{"source_id": "api-contract"}],
+        },
+        behavior_ir={
+            "operations": [
+                {"id": "list_resources", "method": "GET", "path": "/api/resources"},
+                {"id": "list_owners", "method": "GET", "path": "/api/owners"},
+                {"id": "create_resource", "method": "POST", "path": "/api/resources"},
+                {"id": "archive_resource", "method": "POST", "path": "/api/resources/{id}/archive"},
+                {"id": "read_projection", "method": "GET", "path": "/api/projections/resource/{resourceId}"},
+            ],
+            "actors": [
+                {"id": "owner", "role": "public"},
+                {"id": "viewer", "role": "public"},
+                {"id": "fixture_actor", "role": "fixture_creator"},
+            ],
+        },
+        root=tmp_path,
+        project="generic-project",
+        base_url="http://127.0.0.1:8080",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign-1",
+        actor_tokens={"fixture_creator": "fixture-token"},
+    )
+
+    assert read_calls == [
+        ("GET", "/api/resources"),
+        ("GET", "/api/owners"),
+        ("GET", "/api/projections/resource/r-1"),
+        ("GET", "/api/projections/resource/r-1"),
+    ]
+    assert [call["operation_phase"] for call in write_calls] == [
+        "experiment_fixture_setup",
+        "experiment_fixture_cleanup",
+    ]
+    assert [step["phase"] for step in result["steps"]] == [
+        "binding_materialization",
+        "binding_materialization_dependency",
+        "fixture_setup",
+        "control",
+        "treatment",
+        "fixture_cleanup",
+    ]
+    assert result["status"] == "EXECUTED"
+    assert result["cleanup_failures"] == 0
+    receipt = result["binding_materialization_receipts"][0]
+    assert receipt["status"] == "BOUND"
+    assert receipt["source_priority"] == "experiment_setup_response"
+    assert receipt["fixture_setup_status"] == "completed"
+    assert receipt["fixture_cleanup_status"] == "completed"
+    assert "value" not in receipt
+
+
 def test_campaign_reset_preserves_cleanup_failures() -> None:
     out = ObservedProductScanExecutor(
         workspace_root=Path("."),

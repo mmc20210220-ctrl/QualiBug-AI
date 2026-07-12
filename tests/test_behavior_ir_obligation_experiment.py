@@ -662,6 +662,158 @@ def test_colon_path_params_compile_with_source_declared_runtime_resolver() -> No
     assert plan["selected_count"] == 1
 
 
+def test_runtime_binding_plan_includes_governed_fixture_setup_from_declared_operations() -> None:
+    asset = _sample_asset()
+    asset["permission_matrix"] = [
+        {"role": "viewer_role", "resource": "resource", "actions": ["read"], "scope": "own"},
+        {"role": "owner_role", "resource": "resource", "actions": ["read", "write"], "scope": "own"},
+    ]
+    asset["operations"] = [
+        {
+            "operation_id": "list_resources",
+            "method": "GET",
+            "path": "/api/resources",
+            "side_effect_class": "read",
+        },
+        {
+            "operation_id": "read_resource_projection",
+            "method": "GET",
+            "path": "/api/projections/resource/:resourceId",
+            "side_effect_class": "read",
+        },
+        {
+            "operation_id": "list_owners",
+            "method": "GET",
+            "path": "/api/owners",
+            "side_effect_class": "read",
+        },
+        {
+            "operation_id": "create_resource",
+            "method": "POST",
+            "path": "/api/resources",
+            "side_effect_class": "write",
+            "request_schema": {
+                "content": {
+                    "application/json": {
+                        "example": {"ownerId": "<owner_id>", "name": "source-name"},
+                    },
+                },
+            },
+        },
+        {
+            "operation_id": "archive_resource",
+            "method": "POST",
+            "path": "/api/resources/:id/archive",
+            "side_effect_class": "write",
+        },
+        {
+            "operation_id": "archive_resource",
+            "method": "POST",
+            "path": "/api/resources/:id/archive",
+            "side_effect_class": "write",
+        },
+    ]
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="proj-a",
+        runtime_actors=[
+            {"role": "owner_role", "account_ref": "owner_a", "secret_ref": "secret_ref:test_accounts:owner_a"},
+            {"role": "viewer_role", "account_ref": "viewer_a", "secret_ref": "secret_ref:test_accounts:viewer_a"},
+        ],
+    )
+    target = next(op for op in ir["operations"] if op.get("operation_id") == "read_resource_projection")
+    experiment = compile_experiment_for_obligation(
+        {
+            "obligation_id": "obl_fixture_backed_binding",
+            "risk_family": "authorization",
+            "property": {
+                "template": "authorization_control_treatment",
+                "operation_ref": target["id"],
+                "control_actor_ref": ir["actors"][0]["id"],
+                "treatment_actor_ref": ir["actors"][1]["id"],
+            },
+            "required_actors": [ir["actors"][0]["id"], ir["actors"][1]["id"]],
+            "required_operations": [target["id"]],
+            "required_fixtures": [],
+            "required_observers": ["http_response"],
+            "cleanup_requirement": {"required": False},
+            "source_refs": [],
+        },
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    binding = next(item for item in experiment["binding_plan"] if item.get("target") == "resourceId")
+    fixture_setup = binding["fixture_setup"]
+    assert fixture_setup["method"] == "POST"
+    assert fixture_setup["path"] == "/api/resources"
+    fixture_actors = {actor["id"]: actor for actor in ir["actors"]}
+    assert fixture_setup["actor_refs"]
+    assert all(
+        "write" in fixture_actors[actor_ref]["allowed_actions"]
+        for actor_ref in fixture_setup["actor_refs"]
+    )
+    assert fixture_setup["body_template"] == {"ownerId": "<owner_id>", "name": "source-name"}
+    assert fixture_setup["body_bindings"] == [{
+        "target": "ownerId",
+        "template_token": "owner_id",
+        "resolver_operations": [{
+            "operation_ref": next(
+                op["id"] for op in ir["operations"] if op.get("operation_id") == "list_owners"
+            ),
+            "method": "GET",
+            "path": "/api/owners",
+        }],
+    }]
+    assert fixture_setup["cleanup_operations"] == [{
+        "operation_ref": next(
+            op["id"] for op in ir["operations"] if op.get("operation_id") == "archive_resource"
+        ),
+        "method": "POST",
+        "path": "/api/resources/{id}/archive",
+    }]
+
+
+def test_runtime_binding_plan_deduplicates_merged_cleanup_operations() -> None:
+    target = {"id": "read_projection", "method": "GET", "path": "/api/projections/resource/{resourceId}"}
+    create = {
+        "id": "create_resource",
+        "method": "POST",
+        "path": "/api/resources",
+        "request_schema": {
+            "content": {"application/json": {"example": {"name": "source-name"}}},
+        },
+    }
+    cleanup = {"id": "archive_resource", "method": "POST", "path": "/api/resources/{id}/archive"}
+    plan = build_binding_plan(
+        operation=target,
+        obligation={"required_fixtures": []},
+        behavior_ir={
+            "operations": [
+                {"id": "list_resources", "method": "GET", "path": "/api/resources"},
+                target,
+                create,
+                cleanup,
+                dict(cleanup),
+            ],
+            "actors": [{
+                "id": "fixture_actor",
+                "allowed_actions": ["write"],
+                "allowed_resources": ["resource"],
+                "credential_secret_ref": "secret_ref:test_accounts:fixture_actor",
+            }],
+        },
+    )
+
+    fixture_setup = next(item for item in plan if item["target"] == "resourceId")["fixture_setup"]
+    assert fixture_setup["cleanup_operations"] == [{
+        "operation_ref": "archive_resource",
+        "method": "POST",
+        "path": "/api/resources/{id}/archive",
+    }]
+
+
 def test_experiment_compiler_blocks_production_environment() -> None:
     ir = build_behavior_ir_from_knowledge_asset(_sample_asset(), project_id="proj-a")
     obl = compile_obligations_from_behavior_ir(ir)["obligations"][0]
