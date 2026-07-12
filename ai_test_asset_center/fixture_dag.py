@@ -111,6 +111,48 @@ def build_fixture_dag_for_experiment(
                     "reason_code": "BLOCKED_MISSING_BINDING",
                     "detail": f"runtime resolver invalid for {target}",
                 })
+        elif status == "fixture_proof":
+            create_path = _text(item.get("create_path"))
+            owner_actor_ref = _text(item.get("owner_actor_ref"))
+            binding_target = _text(item.get("binding_target"))
+            source_binding = next((
+                binding
+                for binding in _list(exp.get("binding_plan"))
+                if isinstance(binding, dict)
+                and _text(binding.get("target")) == binding_target
+                and binding.get("force_fixture_setup") is True
+            ), None)
+            constructible = bool(
+                create_path.startswith("/")
+                and not "{" in create_path
+                and owner_actor_ref
+                and binding_target
+                and source_binding
+                and _list(item.get("cleanup_operations"))
+                and _text(item.get("proof_operation_ref"))
+            )
+            nodes.append({
+                "node_id": nid,
+                "kind": "ownership_fixture_proof",
+                "fixture_id": _text(item.get("fixture_id") or target),
+                "binding_target": binding_target,
+                "owner_actor_ref": owner_actor_ref,
+                "create_operation_ref": _text(item.get("create_operation_ref")),
+                "create_path": create_path,
+                "proof_operation_ref": _text(item.get("proof_operation_ref")),
+                "cleanup_operations": [
+                    dict(row)
+                    for row in _list(item.get("cleanup_operations"))
+                    if isinstance(row, dict)
+                ],
+                "requires_read_proof": True,
+                "constructible": constructible,
+            })
+            if not constructible:
+                blocked.append({
+                    "reason_code": "BLOCKED_MISSING_FIXTURE",
+                    "detail": f"ownership fixture proof incomplete for {target}",
+                })
         elif status == "unresolved" or status == "required":
             create_path = _text(item.get("create_path") or item.get("create_operation_ref"))
             # Disposable fixtures are only constructible when a concrete create path
@@ -190,6 +232,7 @@ def build_fixture_dag_for_experiment(
         "runtime_read_binding": 1,
         "dependency_create": 1,
         "disposable_fixture": 2,
+        "ownership_fixture_proof": 2,
         "bound_value": 2,
         "setup_step": 3,
     }

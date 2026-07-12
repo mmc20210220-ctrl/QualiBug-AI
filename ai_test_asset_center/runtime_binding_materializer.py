@@ -90,6 +90,93 @@ def runtime_cleanup_bindings(
     return materialized, bindings, missing
 
 
+def runtime_cleanup_paths(
+    path_template: str,
+    steps: list[dict[str, Any]],
+) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
+    """Resolve one compensation target per accepted write response.
+
+    A multi-write experiment may create multiple resources. Aggregating every
+    response into one binding makes two distinct IDs look ambiguous and strands
+    both resources. Resolve each accepted write independently, preserve request
+    order, and deduplicate only identical materialized compensation paths.
+    """
+
+    template = _text(path_template)
+    placeholders = _PATH_PARAMETER_RE.findall(template)
+    accepted_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and _text(step.get("phase")) in {"control", "treatment"}
+        and _text(step.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and 200 <= int(step.get("status_code") or 0) < 300
+    ]
+    if not placeholders:
+        return ([(template, {})] if accepted_steps else []), []
+    if not accepted_steps:
+        return [], ["accepted_write_receipt"]
+
+    paths: list[tuple[str, dict[str, Any]]] = []
+    missing: list[str] = []
+    seen_paths: set[str] = set()
+    for index, step in enumerate(accepted_steps):
+        fields = _response_scalar_fields(step.get("body"))
+        governance = _dict(step.get("governance_receipt"))
+        before_fields = _response_scalar_fields(_dict(governance.get("before")).get("body"))
+        after_fields = _response_scalar_fields(_dict(governance.get("after")).get("body"))
+        bindings: dict[str, Any] = {}
+        step_missing: list[str] = []
+        for name in placeholders:
+            normalized = _field_key(name)
+            candidates = list(dict.fromkeys(fields.get(normalized) or []))
+            if not candidates and normalized == "id":
+                candidates = list(dict.fromkeys(
+                    value
+                    for key, values in fields.items()
+                    if key.endswith("id")
+                    for value in values
+                ))
+            if not candidates:
+                observed_after = list(dict.fromkeys(after_fields.get(normalized) or []))
+                observed_before = set(before_fields.get(normalized) or [])
+                candidates = [
+                    value for value in observed_after if value not in observed_before
+                ]
+            if not candidates and normalized == "id":
+                observed_after = list(dict.fromkeys(
+                    value
+                    for key, values in after_fields.items()
+                    if key.endswith("id")
+                    for value in values
+                ))
+                observed_before = {
+                    value
+                    for key, values in before_fields.items()
+                    if key.endswith("id")
+                    for value in values
+                }
+                candidates = [
+                    value for value in observed_after if value not in observed_before
+                ]
+            if len(candidates) != 1:
+                step_missing.append(name)
+                continue
+            bindings[name] = candidates[0]
+        if step_missing:
+            step_ref = _text(step.get("step_id")) or str(index)
+            missing.extend(f"{step_ref}:{name}" for name in step_missing)
+            continue
+        materialized = template
+        for name, value in bindings.items():
+            materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
+        if materialized in seen_paths:
+            continue
+        seen_paths.add(materialized)
+        paths.append((materialized, bindings))
+    return paths, missing
+
+
 def validated_runtime_resolvers(
     binding: dict[str, Any],
     operations: dict[str, dict[str, Any]],

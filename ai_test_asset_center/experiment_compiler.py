@@ -4,8 +4,13 @@ from __future__ import annotations
 from typing import Any
 
 from .experiment_contract import blocked_experiment, make_experiment
+from .experiment_protocols import compile_family_protocol
 from .observer_contracts import compile_observer_requirements
-from .runtime_binding_graph import build_binding_plan, unresolved_placeholders
+from .runtime_binding_graph import (
+    build_binding_plan,
+    declared_effect_observers,
+    unresolved_placeholders,
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -77,6 +82,13 @@ def compile_experiment_for_obligation(
         return blocked_experiment(oid, "BLOCKED_MISSING_OPERATION", primary_op_id or "none")
     primary_op = ops[primary_op_id]
     is_write = _text(primary_op.get("read_write")) == "write"
+    write_observers = (
+        declared_effect_observers(primary_op, behavior_ir=ir)
+        if is_write
+        else []
+    )
+    if is_write and not write_observers:
+        return blocked_experiment(oid, "BLOCKED_MISSING_OBSERVER", "write_observer")
 
     binding_plan = build_binding_plan(
         operation=primary_op,
@@ -139,8 +151,18 @@ def compile_experiment_for_obligation(
             "runtime_response_binding_required": "{" in cleanup_path,
         }]
 
-    control_actor = _text(prop.get("control_actor_ref") or prop.get("owner_actor_ref") or (required_actors[0] if required_actors else ""))
-    treatment_actor = _text(prop.get("treatment_actor_ref") or prop.get("viewer_actor_ref") or (required_actors[1] if len(required_actors) > 1 else control_actor))
+    control_actor = _text(
+        prop.get("control_actor_ref")
+        or prop.get("owner_actor_ref")
+        or prop.get("actor_ref")
+        or (required_actors[0] if required_actors else "")
+    )
+    treatment_actor = _text(
+        prop.get("treatment_actor_ref")
+        or prop.get("viewer_actor_ref")
+        or prop.get("actor_ref")
+        or (required_actors[1] if len(required_actors) > 1 else control_actor)
+    )
     observer_requirements = list(required_observers)
     if is_write and family in {"authorization", "isolation", "visibility"}:
         observer_requirements.append("business_effect")
@@ -151,35 +173,62 @@ def compile_experiment_for_obligation(
     )
     if observer_reason:
         return blocked_experiment(oid, observer_reason, observer_detail)
+    if any(_text(observer.get("observer_id")) == "resource_ownership" for observer in observers):
+        ownership_proofs = [
+            row
+            for row in binding_plan
+            if isinstance(row, dict)
+            and _text(row.get("status")) == "fixture_proof"
+            and _text(row.get("owner_actor_ref"))
+            and _text(row.get("binding_target"))
+        ]
+        if not ownership_proofs:
+            return blocked_experiment(oid, "BLOCKED_MISSING_FIXTURE", "ownership_proof")
+        for observer in observers:
+            if _text(observer.get("observer_id")) == "resource_ownership":
+                observer["fixture_proof_refs"] = [
+                    _text(row.get("fixture_id"))
+                    for row in ownership_proofs
+                    if _text(row.get("fixture_id"))
+                ]
+    if any(_text(observer.get("observer_id")) == "business_effect" for observer in observers):
+        if not write_observers:
+            return blocked_experiment(oid, "BLOCKED_MISSING_OBSERVER", "business_effect")
+        for observer in observers:
+            if _text(observer.get("observer_id")) == "business_effect":
+                observer["resolver_operations"] = write_observers
 
-    # Negative tests require a positive control on the same contract.
-    needs_control = family in {"authorization", "isolation", "validation", "privacy", "visibility"}
-    control_plan: list[dict[str, Any]] = []
-    if needs_control:
-        if not control_actor:
-            return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", "control_actor")
-        control_plan = [{
-            "step_id": "control_1",
-            "actor_ref": control_actor,
-            "operation_ref": primary_op_id,
-            "intent": "authorized_control",
-        }]
+    protocol = compile_family_protocol(
+        risk_family=family,
+        operation=primary_op,
+        operation_ref=primary_op_id,
+        control_actor_ref=control_actor,
+        treatment_actor_ref=treatment_actor,
+        property_spec=prop,
+    )
+    if _text(protocol.get("status")) != "COMPILED":
+        return blocked_experiment(
+            oid,
+            _text(protocol.get("reason_code")) or "BLOCKED_UNSUPPORTED_ADAPTER",
+            _text(protocol.get("detail")),
+        )
+    control_plan = [row for row in _list(protocol.get("control_plan")) if isinstance(row, dict)]
+    treatment_plan = [row for row in _list(protocol.get("treatment_plan")) if isinstance(row, dict)]
+    needs_control = bool(control_plan)
 
-    treatment_plan = [{
-        "step_id": "treatment_1",
-        "actor_ref": treatment_actor or control_actor,
-        "operation_ref": primary_op_id,
-        "intent": "treatment",
-        "property_template": _text(prop.get("template")),
-    }]
-
+    protocol_assertion = _dict(protocol.get("assertion"))
     assertions = [{
         "assertion_id": f"assert_{family or 'generic'}",
-        "kind": family or "validation",
+        "kind": _text(protocol_assertion.get("kind")) or family or "validation",
         "template": _text(prop.get("template")),
         "expected_from": "source_property",
         "property": prop,
         "require_control": needs_control,
+        **{
+            key: value
+            for key, value in protocol_assertion.items()
+            if key != "kind"
+        },
     }]
     return make_experiment(
         obligation_id=oid,

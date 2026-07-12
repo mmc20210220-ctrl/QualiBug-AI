@@ -54,6 +54,25 @@ def test_same_nonempty_resource_is_observed_authorization_violation() -> None:
     assert receipt["evidence"]["leak_detected"] is True
 
 
+def test_shared_foreign_key_does_not_prove_same_resource() -> None:
+    receipt = observe_authorization_comparison(
+        control=_http_observation(
+            status=200,
+            body={"id": "r-1", "owner_id": "owner-1"},
+            phase="control",
+        ),
+        treatment=_http_observation(
+            status=200,
+            body={"id": "r-2", "owner_id": "owner-1"},
+            phase="treatment",
+        ),
+        require_same_resource=True,
+    )
+
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "SAME_RESOURCE_NOT_PROVEN"
+
+
 def test_explicit_treatment_rejection_is_observed_property_held() -> None:
     receipt = observe_authorization_comparison(
         control=_http_observation(
@@ -329,7 +348,7 @@ def test_authorization_write_blocks_without_business_effect_observer() -> None:
 
     assert experiment["compile_receipt"]["status"] == "BLOCKED"
     assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
-    assert experiment["compile_receipt"]["detail"] == "business_effect"
+    assert experiment["compile_receipt"]["detail"] == "write_observer"
 
 
 def test_executor_uses_same_resource_receipt_for_violation(

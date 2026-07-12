@@ -94,9 +94,32 @@ def test_source_declared_cleanup_template_compiles_for_runtime_response_binding(
             "property": {"operation_ref": "create_resource", "treatment_actor_ref": "actor_a"},
             "cleanup_requirement": {"required": True, "operation_ref": "delete_resource"},
         },
-        behavior_ir={
-            "operations": [
-                {"id": "create_resource", "method": "POST", "path": "/api/resources", "read_write": "write"},
+            behavior_ir={
+                "operations": [
+                    {
+                        "id": "list_resources",
+                        "method": "GET",
+                        "path": "/api/resources",
+                        "read_write": "read",
+                    },
+                    {
+                        "id": "create_resource",
+                        "method": "POST",
+                        "path": "/api/resources",
+                        "read_write": "write",
+                        "request_schema": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["name"],
+                                        "properties": {"name": {"type": "string"}},
+                                    },
+                                    "example": {"name": "source-declared"},
+                                },
+                            },
+                        },
+                    },
                 {"id": "delete_resource", "method": "DELETE", "path": "/api/resources/{resourceId}", "read_write": "write"},
             ],
             "actors": [{"id": "actor_a", "role": "public"}],

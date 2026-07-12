@@ -377,6 +377,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             observers_by_family = {
                 "idempotency": ["business_effect", "http_response"],
                 "concurrency": ["final_state", "barrier_timeline"],
+                "validation": ["http_response"],
             }
             property_spec = {
                 "template": template_by_family.get(family, f"invariant_{family}"),
@@ -391,27 +392,55 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 })
             elif family == "concurrency":
                 property_spec["insufficient_signal"] = "dual_2xx_alone"
-            obligations.append(make_obligation(
-                risk_family=family if family in RISK_FAMILIES else "validation",
-                subject_refs=[invariant_ref, operation_ref],
-                property_spec=property_spec,
-                required_operations=[operation_ref],
-                required_observers=observers_by_family.get(
-                    family,
-                    ["typed_assertion", "source_invariant"],
-                ),
-                cleanup_requirement=_cleanup_requirement(op, operations, relations),
-                source_refs=_combined_source_refs(inv, op, *operation_relations),
-                relation_refs=sorted({
-                    _text(relation.get("id"))
-                    for relation in operation_relations
-                    if _text(relation.get("id"))
-                }),
-                confidence=min(
-                    float(inv.get("confidence") or 0.6),
-                    float(op.get("confidence") or 0.7),
-                ),
-            ))
+            permit_relations = _relations_for_operation(relations, operation_ref, {"permits"})
+            permitted_actor_refs = sorted({
+                _relation_actor_ref(relation)
+                for relation in permit_relations
+                if _relation_actor_ref(relation) in active_actors_by_id
+            })
+            for actor_ref in permitted_actor_refs or [""]:
+                actor = active_actors_by_id.get(actor_ref) or {}
+                actor_relations = [
+                    relation
+                    for relation in permit_relations
+                    if _relation_actor_ref(relation) == actor_ref
+                ]
+                actor_property = dict(property_spec)
+                if actor_ref:
+                    actor_property["actor_ref"] = actor_ref
+                obligations.append(make_obligation(
+                    risk_family=family if family in RISK_FAMILIES else "validation",
+                    subject_refs=[
+                        invariant_ref,
+                        operation_ref,
+                        *([actor_ref] if actor_ref else []),
+                    ],
+                    property_spec=actor_property,
+                    required_actors=[actor_ref] if actor_ref else [],
+                    required_operations=[operation_ref],
+                    required_observers=observers_by_family.get(
+                        family,
+                        ["typed_assertion", "source_invariant"],
+                    ),
+                    cleanup_requirement=_cleanup_requirement(op, operations, relations),
+                    source_refs=_combined_source_refs(
+                        inv,
+                        op,
+                        actor,
+                        *operation_relations,
+                        *actor_relations,
+                    ),
+                    relation_refs=sorted({
+                        _text(relation.get("id"))
+                        for relation in [*operation_relations, *actor_relations]
+                        if _text(relation.get("id"))
+                    }),
+                    confidence=min(
+                        float(inv.get("confidence") or 0.6),
+                        float(op.get("confidence") or 0.7),
+                        float(actor.get("confidence") or 0.7) if actor_ref else 0.7,
+                    ),
+                ))
 
     # Entity mutation templates require an explicit operation/entity relation.
     entity_relation_types = {"produces", "consumes", "transitions", "scopes"}

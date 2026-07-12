@@ -123,6 +123,47 @@ def declared_runtime_read_resolvers(
     return resolvers
 
 
+def declared_effect_observers(
+    operation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+    max_candidates: int = 2,
+) -> list[dict[str, str]]:
+    """Return exact source-declared reads for before/after effect observation."""
+
+    target_path = normalize_path_placeholders(_text(_dict(operation).get("path")))
+    if not target_path.startswith("/"):
+        return []
+    candidate_paths = [target_path]
+    collection = normalize_path_placeholders(collection_path(target_path))
+    if collection.startswith("/") and collection not in candidate_paths:
+        candidate_paths.append(collection)
+    limit = max(1, min(int(max_candidates or 1), 5))
+    resolvers: list[dict[str, str]] = []
+    for wanted in candidate_paths:
+        for candidate in _list(_dict(behavior_ir).get("operations")):
+            if not isinstance(candidate, dict):
+                continue
+            method = _text(candidate.get("method")).upper()
+            path = normalize_path_placeholders(
+                _text(candidate.get("path") or candidate.get("raw_path"))
+            )
+            if (
+                method not in {"GET", "HEAD"}
+                or path != wanted
+                or not _text(candidate.get("id"))
+            ):
+                continue
+            resolvers.append({
+                "operation_ref": _text(candidate.get("id")),
+                "method": method,
+                "path": path,
+            })
+            if len(resolvers) >= limit:
+                return resolvers
+    return resolvers
+
+
 def _request_example(operation: dict[str, Any]) -> dict[str, Any]:
     direct = _dict(operation).get("request_example")
     if isinstance(direct, dict) and direct:
@@ -475,6 +516,46 @@ def build_binding_plan(
         name = _text(fixture)
         if not name:
             continue
+        property_spec = _dict(obl.get("property"))
+        owner_actor_ref = _text(
+            property_spec.get("owner_actor_ref")
+            or property_spec.get("control_actor_ref")
+        )
+        if name == "owned_resource" and property_spec.get("require_ownership_evidence"):
+            source_binding = next((
+                item
+                for item in plan
+                if isinstance(item, dict)
+                and _text(item.get("status")) == "runtime_resolvable"
+                and _dict(item.get("fixture_setup"))
+                and owner_actor_ref in {
+                    _text(actor_ref)
+                    for actor_ref in _list(_dict(item.get("fixture_setup")).get("actor_refs"))
+                }
+            ), None)
+            if isinstance(source_binding, dict):
+                setup = _dict(source_binding.get("fixture_setup"))
+                source_binding["force_fixture_setup"] = True
+                source_binding["required_fixture_id"] = name
+                source_binding["fixture_owner_actor_ref"] = owner_actor_ref
+                plan.append({
+                    "target": f"fixture:{name}",
+                    "fixture_id": name,
+                    "status": "fixture_proof",
+                    "source_priority": "experiment_setup_response",
+                    "binding_target": _text(source_binding.get("target")),
+                    "owner_actor_ref": owner_actor_ref,
+                    "create_operation_ref": _text(setup.get("operation_ref")),
+                    "create_path": _text(setup.get("path")),
+                    "proof_operation_ref": _text(op.get("id")),
+                    "cleanup_operations": [
+                        dict(row)
+                        for row in _list(setup.get("cleanup_operations"))
+                        if isinstance(row, dict)
+                    ],
+                    "value_fingerprint": "",
+                })
+                continue
         plan.append({
             "target": f"fixture:{name}",
             "fixture_id": name,

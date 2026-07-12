@@ -83,12 +83,12 @@ OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
     "resource_ownership": {
         "surface": "http_api",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
     "business_effect": {
         "surface": "business_effect",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
     "before_state": {
         "surface": "business_state",
@@ -191,6 +191,14 @@ def _response_status(observation: dict[str, Any]) -> int:
         return 0
 
 
+def _raw_http_status(observation: dict[str, Any]) -> int:
+    row = _dict(observation)
+    try:
+        return int(row.get("status_code") or row.get("status") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _is_success(observation: dict[str, Any]) -> bool:
     return 200 <= _response_status(observation) < 300
 
@@ -227,14 +235,34 @@ def _identity_fingerprints(value: Any) -> set[str]:
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
+            scalar_identities: list[tuple[str, Any]] = []
             for key, child in node.items():
                 normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
-                if (
-                    normalized_key in {"id", "uuid", "key"}
-                    or normalized_key.endswith("_id")
-                ) and isinstance(child, (str, int, float)) and str(child).strip():
-                    result.add(_fingerprint({"key": normalized_key, "value": child}))
-                walk(child)
+                if isinstance(child, (str, int, float)) and str(child).strip():
+                    if normalized_key in {"id", "uuid", "key"}:
+                        scalar_identities.append((normalized_key, child))
+            if not scalar_identities:
+                fallback_identities = []
+                for key, child in node.items():
+                    normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+                    if (
+                        normalized_key.endswith("_id")
+                        and isinstance(child, (str, int, float))
+                        and str(child).strip()
+                    ):
+                        fallback_identities.append((normalized_key, child))
+                if len(fallback_identities) == 1:
+                    scalar_identities = fallback_identities
+            if scalar_identities:
+                key, child = sorted(
+                    scalar_identities,
+                    key=lambda item: ({"id": 0, "uuid": 1, "key": 2}.get(item[0], 3), item[0]),
+                )[0]
+                result.add(_fingerprint({"key": key, "value": child}))
+                return
+            for child in node.values():
+                if isinstance(child, (dict, list)):
+                    walk(child)
         elif isinstance(node, list):
             for child in node:
                 walk(child)
@@ -248,6 +276,7 @@ def observe_authorization_comparison(
     control: dict[str, Any],
     treatment: dict[str, Any],
     require_same_resource: bool,
+    business_effect: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare authorized and restricted observations without status-only proof."""
 
@@ -272,6 +301,51 @@ def observe_authorization_comparison(
             evidence=base_evidence,
         )
     if _text(control_row.get("method")).upper() != "GET":
+        effect = _dict(business_effect)
+        control_effect = effect.get("control_effect_count")
+        treatment_effect = effect.get("treatment_effect_count")
+        base_evidence.update({
+            "control_effect_count": control_effect,
+            "treatment_effect_count": treatment_effect,
+        })
+        if effect.get("business_effect_observed") is not True or control_effect is None:
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="INDETERMINATE",
+                reason_code="WRITE_EFFECT_EVIDENCE_REQUIRED",
+                evidence=base_evidence,
+            )
+        if int(control_effect) <= 0:
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="INDETERMINATE",
+                reason_code="AUTHORIZED_CONTROL_EFFECT_MISSING",
+                evidence=base_evidence,
+            )
+        if treatment_effect is not None and int(treatment_effect) > 0:
+            base_evidence.update({
+                "same_resource_proven": True,
+                "resource_match_basis": "source_grounded_business_effect",
+                "owner_can_access": True,
+                "viewer_can_access": True,
+                "leak_detected": True,
+            })
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="OBSERVED",
+                evidence=base_evidence,
+            )
+        if _response_status(treatment_row) in {401, 403, 404} and int(treatment_effect or 0) == 0:
+            base_evidence.update({
+                "owner_can_access": True,
+                "viewer_can_access": False,
+                "leak_detected": False,
+            })
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="OBSERVED",
+                evidence=base_evidence,
+            )
         return _receipt(
             observer_id="authorization_comparison",
             status="INDETERMINATE",
@@ -402,6 +476,130 @@ def _observe_actor_identity(
     )
 
 
+def _observe_resource_ownership(
+    binding_receipts: list[dict[str, Any]],
+    *,
+    expected_owner_actor_ref: str,
+) -> dict[str, Any]:
+    proof = next((
+        receipt
+        for receipt in binding_receipts
+        if isinstance(receipt, dict)
+        and _text(receipt.get("ownership_proof_status")) == "OBSERVED"
+        and _text(receipt.get("owner_actor_ref")) == _text(expected_owner_actor_ref)
+        and _text(receipt.get("value_fingerprint"))
+    ), None)
+    if not isinstance(proof, dict):
+        return _receipt(
+            observer_id="resource_ownership",
+            status="INDETERMINATE",
+            reason_code="RESOURCE_OWNERSHIP_PROOF_MISSING",
+            evidence={
+                "owner_actor_ref_fingerprint": (
+                    _fingerprint(expected_owner_actor_ref)
+                    if _text(expected_owner_actor_ref)
+                    else ""
+                ),
+                "resource_identity_fingerprint": "",
+            },
+        )
+    return _receipt(
+        observer_id="resource_ownership",
+        status="OBSERVED",
+        evidence={
+            "fixture_id": _text(proof.get("fixture_id")),
+            "owner_actor_ref_fingerprint": _fingerprint(expected_owner_actor_ref),
+            "resource_identity_fingerprint": _text(proof.get("value_fingerprint")),
+            "ownership_proof_ref": _text(proof.get("ownership_proof_ref")),
+        },
+    )
+
+
+def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
+    if not steps:
+        return {}, "BUSINESS_EFFECT_WRITE_MISSING"
+    first_governance = _dict(steps[0].get("governance_receipt"))
+    last_governance = _dict(steps[-1].get("governance_receipt"))
+    before = _dict(first_governance.get("before"))
+    after = _dict(last_governance.get("after"))
+    if not (
+        200 <= _raw_http_status(before) < 300
+        and 200 <= _raw_http_status(after) < 300
+    ):
+        return {}, "BUSINESS_EFFECT_OBSERVATION_FAILED"
+    if not isinstance(before.get("body"), (dict, list)) or not isinstance(after.get("body"), (dict, list)):
+        return {}, "BUSINESS_EFFECT_BODY_UNSUPPORTED"
+    before_ids = _identity_fingerprints(before.get("body"))
+    after_ids = _identity_fingerprints(after.get("body"))
+    return {
+        "before_identity_count": len(before_ids),
+        "after_identity_count": len(after_ids),
+        "effect_count": len(after_ids - before_ids),
+        "before_fingerprint": _fingerprint(before.get("body")),
+        "after_fingerprint": _fingerprint(after.get("body")),
+    }, ""
+
+
+def _observe_business_effect(execution_steps: list[dict[str, Any]]) -> dict[str, Any]:
+    write_steps = [
+        step
+        for step in execution_steps
+        if isinstance(step, dict)
+        and _text(step.get("phase")) in {"control", "treatment"}
+        and _text(step.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and _dict(step.get("governance_receipt"))
+    ]
+    evidence: dict[str, Any] = {
+        "http_statuses": [_response_status(step) for step in write_steps],
+        "business_effect_observed": False,
+    }
+    if not write_steps:
+        return _receipt(
+            observer_id="business_effect",
+            status="INDETERMINATE",
+            reason_code="BUSINESS_EFFECT_WRITE_MISSING",
+            evidence=evidence,
+        )
+
+    phase_windows: dict[str, dict[str, Any]] = {}
+    for phase in ("control", "treatment"):
+        phase_steps = [step for step in write_steps if _text(step.get("phase")) == phase]
+        if not phase_steps:
+            continue
+        window, reason = _effect_window(phase_steps)
+        if reason:
+            return _receipt(
+                observer_id="business_effect",
+                status="INDETERMINATE",
+                reason_code=reason,
+                evidence=evidence,
+            )
+        phase_windows[phase] = window
+        evidence[f"{phase}_effect_count"] = window["effect_count"]
+
+    selected = phase_windows.get("treatment") or phase_windows.get("control")
+    if not selected:
+        return _receipt(
+            observer_id="business_effect",
+            status="INDETERMINATE",
+            reason_code="BUSINESS_EFFECT_WINDOW_MISSING",
+            evidence=evidence,
+        )
+    evidence.update({
+        "effect_count": selected["effect_count"],
+        "before_identity_count": selected["before_identity_count"],
+        "after_identity_count": selected["after_identity_count"],
+        "before_fingerprint": selected["before_fingerprint"],
+        "after_fingerprint": selected["after_fingerprint"],
+        "business_effect_observed": True,
+    })
+    return _receipt(
+        observer_id="business_effect",
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
 def observe_experiment_requirements(
     experiment: dict[str, Any],
     *,
@@ -416,7 +614,26 @@ def observe_experiment_requirements(
     assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
     prop = _dict(assertion.get("property"))
     receipts: list[dict[str, Any]] = []
-    for observer in _list(exp.get("observers")):
+    observer_rows = [
+        observer
+        for observer in _list(exp.get("observers"))
+        if isinstance(observer, dict)
+    ]
+    business_effect_receipt: dict[str, Any] = {}
+    if any(_text(observer.get("observer_id")) == "business_effect" for observer in observer_rows):
+        business_effect_receipt = _observe_business_effect(
+            [
+                step
+                for step in _list(evidence.get("execution_steps"))
+                if isinstance(step, dict)
+            ]
+        )
+    business_effect_evidence = (
+        _dict(business_effect_receipt.get("evidence"))
+        if _text(business_effect_receipt.get("status")) == "OBSERVED"
+        else {}
+    )
+    for observer in observer_rows:
         observer_id = _text(_dict(observer).get("observer_id"))
         if observer_id == "http_response":
             receipt = _observe_http_response(control, treatment)
@@ -425,12 +642,26 @@ def observe_experiment_requirements(
                 _text(evidence.get("control_actor_ref")),
                 _text(evidence.get("treatment_actor_ref")),
             )
+        elif observer_id == "resource_ownership":
+            receipt = _observe_resource_ownership(
+                [
+                    row
+                    for row in _list(evidence.get("binding_materialization_receipts"))
+                    if isinstance(row, dict)
+                ],
+                expected_owner_actor_ref=_text(
+                    prop.get("owner_actor_ref") or prop.get("control_actor_ref")
+                ),
+            )
         elif observer_id == "authorization_comparison":
             receipt = observe_authorization_comparison(
                 control=control,
                 treatment=treatment,
                 require_same_resource=bool(prop.get("require_same_resource", True)),
+                business_effect=business_effect_evidence,
             )
+        elif observer_id == "business_effect":
+            receipt = business_effect_receipt
         else:
             receipt = _receipt(
                 observer_id=observer_id,

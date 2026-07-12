@@ -31,7 +31,7 @@ from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
     materialize_path as _materialize_path,
     runtime_binding_contract_ready as _runtime_binding_contract_ready,
-    runtime_cleanup_bindings as _runtime_cleanup_bindings,
+    runtime_cleanup_paths as _runtime_cleanup_paths,
     runtime_setup_value_from_response as _runtime_setup_value_from_response,
     runtime_value_from_response as _runtime_value_from_response,
     validated_fixture_setup as _validated_fixture_setup,
@@ -59,6 +59,14 @@ def _text(value: Any) -> str:
 def _stable_id(prefix: str, *parts: Any) -> str:
     material = "\x1f".join(_text(part) for part in parts)
     return f"{prefix}_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+
+
+def _body_contains_scalar(value: Any, expected: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_body_contains_scalar(child, expected) for child in value.values())
+    if isinstance(value, list):
+        return any(_body_contains_scalar(child, expected) for child in value)
+    return value == expected
 
 
 def _index_by_id(nodes: list[Any]) -> dict[str, dict[str, Any]]:
@@ -329,8 +337,10 @@ def execute_one_experiment(
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
             resolvers = _validated_runtime_resolvers(binding, ops)
+            force_fixture_setup = binding.get("force_fixture_setup") is True
             target_path = _text(binding.get("target_path"))
             value: Any = None
+            fixture_setup_accepted = False
             receipt: dict[str, Any] = {
                 "target": target,
                 "status": "BLOCKED",
@@ -340,7 +350,7 @@ def execute_one_experiment(
                 "status_code": 0,
                 "value_fingerprint": "",
             }
-            for index, resolver in enumerate(resolvers):
+            for index, resolver in enumerate([] if force_fixture_setup else resolvers):
                 obs = _run_http_step(
                     base_url=base_url,
                     method=resolver["method"],
@@ -450,6 +460,10 @@ def execute_one_experiment(
                     )
                     setup_write = _dict(governed_setup.get("write"))
                     setup_status = int(setup_write.get("status") or 0)
+                    fixture_setup_accepted = bool(
+                        governed_setup.get("accepted") is True
+                        or 200 <= setup_status < 300
+                    )
                     steps_out.append({
                         "phase": "fixture_setup",
                         "method": _text(fixture_setup.get("method")).upper(),
@@ -467,6 +481,16 @@ def execute_one_experiment(
                             target,
                         )
                     if value not in (None, "", [], {}):
+                        ownership_required = force_fixture_setup and bool(
+                            _text(binding.get("fixture_owner_actor_ref"))
+                        )
+                        setup_after = _dict(governed_setup.get("after"))
+                        ownership_observed = bool(
+                            ownership_required
+                            and fixture_actor_ref == _text(binding.get("fixture_owner_actor_ref"))
+                            and 200 <= int(setup_after.get("status") or 0) < 300
+                            and _body_contains_scalar(setup_after.get("body"), value)
+                        )
                         runtime_bindings[target] = value
                         receipt.update({
                             "status": "BOUND",
@@ -478,6 +502,16 @@ def execute_one_experiment(
                                 str(value).encode("utf-8")
                             ).hexdigest()[:12],
                             "fixture_cleanup_status": "pending",
+                            "fixture_id": _text(binding.get("required_fixture_id")),
+                            "owner_actor_ref": _text(binding.get("fixture_owner_actor_ref")),
+                            "ownership_proof_status": (
+                                "OBSERVED"
+                                if ownership_observed
+                                else "NOT_REQUIRED"
+                                if not ownership_required
+                                else "INDETERMINATE"
+                            ),
+                            "ownership_proof_ref": _text(governed_setup.get("after_ref")),
                         })
                         pending_fixture_cleanups.append({
                             "target": target,
@@ -491,6 +525,32 @@ def execute_one_experiment(
                         })
             binding_materialization_receipts.append(receipt)
             if value in (None, "", [], {}):
+                if fixture_setup_accepted:
+                    cleanup_failures += 1
+                    receipt.update({
+                        "status": "HARNESS_FAILURE",
+                        "reason_code": "FIXTURE_SETUP_IDENTITY_UNRESOLVED",
+                        "fixture_cleanup_status": "failed",
+                    })
+                    return {
+                        "schema_version": "qualibug.experiment-execution.v1",
+                        "experiment_id": eid,
+                        "obligation_id": oid,
+                        "status": "HARNESS_FAILURE",
+                        "reason_code": "FIXTURE_SETUP_IDENTITY_UNRESOLVED",
+                        "detail": f"accepted_fixture_identity_unresolved:{target}",
+                        "elapsed_ms": int((time.time() - started) * 1000),
+                        "steps": steps_out,
+                        "fixture_receipts": fixture_receipts,
+                        "binding_materialization_receipts": binding_materialization_receipts,
+                        "finding": None,
+                        "cleanup_failures": cleanup_failures,
+                        "execution_receipt": {
+                            "status": "HARNESS_FAILURE",
+                            "reason_code": "FIXTURE_SETUP_IDENTITY_UNRESOLVED",
+                            "cleanup_failures": cleanup_failures,
+                        },
+                    }
                 fixture_receipts.append({
                     "node_id": node_id,
                     "kind": kind,
@@ -696,17 +756,16 @@ def execute_one_experiment(
             op_ref = _text(_dict(cleanup).get("operation_ref"))
             op = ops.get(op_ref) or {}
             path_template = _text(_dict(cleanup).get("path") or op.get("path") or op.get("raw_path"))
-            path, runtime_bindings, missing_bindings = _runtime_cleanup_bindings(path_template, steps_out)
             method = _text(op.get("method") or "").upper()
-            if missing_bindings:
+            cleanup_targets, missing_bindings = _runtime_cleanup_paths(path_template, steps_out)
+            if missing_bindings or not cleanup_targets:
                 cleanup_failures += 1
                 observations["cleanup_status"] = "failed"
-                observations["cleanup_reason"] = f"cleanup_binding_unresolved:{','.join(missing_bindings)}"
-                continue
-            if not path.startswith("/") or path_has_placeholders(path) or method not in {"DELETE", "POST", "PUT", "PATCH"}:
-                cleanup_failures += 1
-                observations["cleanup_status"] = "failed"
-                observations["cleanup_reason"] = "cleanup_compensation_unresolved"
+                observations["cleanup_reason"] = (
+                    f"cleanup_binding_unresolved:{','.join(missing_bindings)}"
+                    if missing_bindings
+                    else "cleanup_accepted_write_missing"
+                )
                 continue
             # Prefer first control/treatment actor token for cleanup.
             actor_ref = ""
@@ -729,45 +788,57 @@ def execute_one_experiment(
                 observations["cleanup_status"] = "failed"
                 observations["cleanup_reason"] = reason
                 continue
-            observation_path = _declared_observation_path(path, ops, runtime_bindings=runtime_bindings)
-            if not observation_path:
-                cleanup_failures += 1
-                observations["cleanup_status"] = "failed"
-                observations["cleanup_reason"] = "cleanup_observer_unresolved"
-                continue
-            governed_cleanup = execute_governed_control_write(
-                root=root,
-                project=project,
-                base_url=base_url,
-                runtime_contract=runtime_contract,
-                campaign_id=campaign_id,
-                operation_phase="experiment_cleanup",
-                actor_identity=_text(actor.get("role") or actor_ref),
-                actor_token=token,
-                method=cleanup_method,
-                path=path,
-                body=_dict(cleanup).get("body"),
-                observation_path=observation_path,
-            )
-            cleanup_write = _dict(governed_cleanup.get("write"))
-            cobs = {
-                "method": cleanup_method,
-                "path": path,
-                "status_code": int(cleanup_write.get("status") or 0),
-                "body": cleanup_write.get("body"),
-                "headers": cleanup_write.get("headers") or {},
-                "duration_ms": cleanup_write.get("duration_ms"),
-                "error": cleanup_write.get("error") or governed_cleanup.get("reason") or "",
-                "governance_receipt": governed_cleanup,
-            }
-            steps_out.append({**cobs, "phase": "cleanup"})
-            if not (200 <= int(cobs.get("status_code") or 0) < 300):
-                cleanup_failures += 1
-                observations["cleanup_status"] = "failed"
-            else:
-                observations["cleanup_status"] = "completed"
+            for path, target_bindings in reversed(cleanup_targets):
+                if not path.startswith("/") or path_has_placeholders(path) or method not in {"DELETE", "POST", "PUT", "PATCH"}:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = "cleanup_compensation_unresolved"
+                    continue
+                observation_path = _declared_observation_path(
+                    path,
+                    ops,
+                    runtime_bindings={**runtime_bindings, **target_bindings},
+                )
+                if not observation_path:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = "cleanup_observer_unresolved"
+                    continue
+                governed_cleanup = execute_governed_control_write(
+                    root=root,
+                    project=project,
+                    base_url=base_url,
+                    runtime_contract=runtime_contract,
+                    campaign_id=campaign_id,
+                    operation_phase="experiment_cleanup",
+                    actor_identity=_text(actor.get("role") or actor_ref),
+                    actor_token=token,
+                    method=cleanup_method,
+                    path=path,
+                    body=_dict(cleanup).get("body"),
+                    observation_path=observation_path,
+                )
+                cleanup_write = _dict(governed_cleanup.get("write"))
+                cobs = {
+                    "method": cleanup_method,
+                    "path": path,
+                    "status_code": int(cleanup_write.get("status") or 0),
+                    "body": cleanup_write.get("body"),
+                    "headers": cleanup_write.get("headers") or {},
+                    "duration_ms": cleanup_write.get("duration_ms"),
+                    "error": cleanup_write.get("error") or governed_cleanup.get("reason") or "",
+                    "governance_receipt": governed_cleanup,
+                }
+                steps_out.append({**cobs, "phase": "cleanup"})
+                if not (200 <= int(cobs.get("status_code") or 0) < 300):
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                elif not cleanup_failures:
+                    observations["cleanup_status"] = "completed"
 
     # A declared observer is satisfied only by an OBSERVED typed receipt.
+    observations["execution_steps"] = steps_out
+    observations["binding_materialization_receipts"] = binding_materialization_receipts
     observer_receipts = observe_experiment_requirements(exp, observations=observations)
     observations["observer_receipts"] = observer_receipts
     observed_ids: list[str] = []
@@ -780,6 +851,9 @@ def execute_one_experiment(
         if observer_id == "authorization_comparison":
             observations.update(_dict(receipt.get("evidence")))
             observations["observer_receipt"] = receipt
+        elif observer_id == "business_effect":
+            observations.update(_dict(receipt.get("evidence")))
+            observations["business_effect_observer_receipt"] = receipt
     observations["observer_ids"] = list(dict.fromkeys(observed_ids))
 
     # Materialize + evaluate typed assertions via contract oracle.
