@@ -18,6 +18,8 @@ from ai_test_asset_center.discovery_evaluation_contract import (
     policy_metrics_from_evaluation_reports,
     persist_evaluation_receipt,
 )
+from ai_test_asset_center.discovery_trace_ledger import build_discovery_trace_ledger_v2
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -185,51 +187,53 @@ def _trace_ledger(
     oracle_failure_votes: int = 0,
     formal_defect_count: int = 0,
 ) -> dict:
-    return {
-        "schema_version": "qualibug.discovery-trace-ledger.v1",
-        "run_id": f"run-{target_id}",
-        "policy_id": policy_id,
-        "target_id": target_id,
-        "project_id": f"project-{target_id}",
-        "industry": "commerce",
-        "evaluation_mode": evaluation_mode,
-        "trace_count": 1,
-        "redaction_contract": {
-            "raw_request_bodies_persisted": False,
-            "raw_response_bodies_persisted": False,
-            "credentials_persisted": False,
-            "ground_truth_persisted": False,
-        },
-        "traces": [
-            {
-                "trace_id": f"TRACE-{target_id}",
-                "behavior_slice_id": f"slice-{target_id}",
-                "generation": {
-                    "family": "authorization_access_control",
-                    "endpoint_count": 1,
-                    "endpoint_shapes": [f"/api/{target_id}"],
-                    "bound_method": "GET",
-                    "bound_path_shape": f"/api/{target_id}",
-                },
-                "selection": {"selected": True, "attempted_in_campaign": True},
-                "execution": {
-                    "trace_observed": True,
-                    "scenario_id": f"scenario-{target_id}",
-                    "http_step_count": 1,
-                    "methods": ["GET"],
-                    "normalized_paths": [f"/api/{target_id}"],
-                },
-                "verification": {
-                    "oracle_evaluated_count": 1,
-                    "oracle_failure_votes": oracle_failure_votes,
-                    "oracle_pass_votes": 1 if oracle_failure_votes == 0 else 0,
-                    "formal_defect_count": formal_defect_count,
-                },
-                "failure_signatures": [],
-                "outcome": "valid_success_control",
+    run_id = f"run-{target_id}"
+    finding_id = f"finding-{target_id}" if formal_defect_count else ""
+    attempt_ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": run_id, "campaign_id": f"campaign-{target_id}"},
+        selected=[{
+            "obligation_id": f"obl-{target_id}",
+            "risk_family": "authorization_access_control",
+            "required_operations": [f"op-{target_id}"],
+            "behavior_slice_id": f"slice-{target_id}",
+        }],
+        compile_results={
+            f"obl-{target_id}": {
+                "status": "COMPILED",
+                "experiment_id": f"exp-{target_id}",
             }
-        ],
-    }
+        },
+        execution_results={
+            f"obl-{target_id}": {
+                "status": "EXECUTED",
+                "execution_id": f"exec-{target_id}",
+                "observation_receipt_ids": [f"obs-{target_id}"],
+                "oracle_receipt_id": f"oracle-{target_id}",
+            }
+        },
+        gate_results={
+            f"obl-{target_id}": {
+                "status": "DELIVERABLE" if formal_defect_count else "REJECTED",
+                "reason_code": "" if formal_defect_count else "ORACLE_NOT_VIOLATED",
+                "gate_receipt_id": f"gate-{target_id}",
+                "finding_id": finding_id,
+            }
+        },
+    )
+    return build_discovery_trace_ledger_v2(
+        {
+            "obligation_attempt_ledger": attempt_ledger,
+            "formal_count_projection": {
+                "formal_finding_ids": [finding_id] if finding_id else []
+            },
+        },
+        run_id=run_id,
+        policy_id=policy_id,
+        target_id=target_id,
+        project_id=f"project-{target_id}",
+        industry="commerce",
+        evaluation_mode=evaluation_mode,
+    )
 
 
 def test_runtime_view_never_exposes_evaluator_ground_truth(tmp_path: Path) -> None:

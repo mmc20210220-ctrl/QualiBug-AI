@@ -384,7 +384,11 @@ def _validate_trace_ledger(
     if not isinstance(trace_ledger, dict):
         raise EvaluationContractError("trace_ledger must be an object when supplied")
 
-    from .discovery_trace_ledger import TRACE_LEDGER_SCHEMA
+    from .discovery_trace_ledger import (
+        TRACE_LEDGER_SCHEMA,
+        DiscoveryTraceError,
+        validate_trace_ledger,
+    )
 
     if trace_ledger.get("schema_version") != TRACE_LEDGER_SCHEMA:
         raise EvaluationContractError("trace_ledger uses an unsupported schema")
@@ -400,22 +404,12 @@ def _validate_trace_ledger(
             raise EvaluationContractError(
                 f"trace_ledger.{field} does not match the evaluated run"
             )
-    redaction = trace_ledger.get("redaction_contract")
-    if not isinstance(redaction, dict) or any(
-        redaction.get(field) is not False
-        for field in (
-            "raw_request_bodies_persisted",
-            "raw_response_bodies_persisted",
-            "credentials_persisted",
-            "ground_truth_persisted",
-        )
-    ):
+    try:
+        return validate_trace_ledger(trace_ledger)
+    except DiscoveryTraceError as exc:
         raise EvaluationContractError(
-            "trace_ledger does not prove the required redaction contract"
-        )
-    if not isinstance(trace_ledger.get("traces"), list):
-        raise EvaluationContractError("trace_ledger.traces must be a list")
-    return trace_ledger
+            f"trace_ledger contract invalid: {exc}"
+        ) from exc
 
 
 def evaluate_completed_scan(

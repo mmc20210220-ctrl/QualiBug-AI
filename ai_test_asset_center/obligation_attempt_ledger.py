@@ -228,6 +228,24 @@ def build_obligation_attempt_ledger(
                 for value in selected_row.get("source_refs", []) or []
                 if isinstance(value, dict)
             ],
+            "risk_family": _text(selected_row.get("risk_family")),
+            "operation_refs": [
+                _text(value)
+                for value in (
+                    selected_row.get("operation_refs")
+                    or selected_row.get("required_operations")
+                    or []
+                )
+                if _text(value)
+            ],
+            "adapter": _text(
+                selected_row.get("adapter")
+                or selected_row.get("execution_adapter")
+            ),
+            "behavior_slice_id": _text(
+                selected_row.get("behavior_slice_id")
+                or selected_row.get("slice_id")
+            ),
             "behavior_ir_refs": [
                 _text(value)
                 for value in selected_row.get("behavior_ir_refs", []) or []
@@ -244,6 +262,10 @@ def build_obligation_attempt_ledger(
             "oracle_receipt_id": _text(
                 execution_receipt.get("oracle_receipt_id")
                 or gate_receipt.get("oracle_receipt_id")
+            ),
+            "oracle_reason_code": _text(
+                execution_receipt.get("oracle_reason_code")
+                or gate_receipt.get("oracle_reason_code")
             ),
             "gate_receipt_id": _text(
                 gate_receipt.get("gate_receipt_id")

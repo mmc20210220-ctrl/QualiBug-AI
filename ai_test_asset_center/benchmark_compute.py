@@ -669,6 +669,7 @@ def _trace_paths(trace: dict[str, Any]) -> set[str]:
     values = list(generation.get("endpoint_shapes") or [])
     values.append(generation.get("bound_path_shape"))
     values.extend(execution.get("normalized_paths") or [])
+    values.extend(trace.get("operation_refs") or [])
     return _extract_api_paths(" ".join(str(item or "") for item in values))
 
 
@@ -729,7 +730,7 @@ def compute_stage_loss_matrix(
     """
 
     truth_bugs = _load_truth_bugs(Path(ground_truth_path))
-    traces = [item for item in (trace_ledger.get("traces") or []) if isinstance(item, dict)]
+    traces = [item for item in (trace_ledger.get("attempts") or []) if isinstance(item, dict)]
     delivered = {str(item) for item in delivered_bug_ids if str(item).strip()}
     candidate_rows = [item for item in (candidates or []) if isinstance(item, dict)]
 
@@ -770,7 +771,9 @@ def compute_stage_loss_matrix(
         family_only_collision = False
         for trace in traces:
             generation = trace.get("generation") if isinstance(trace.get("generation"), dict) else {}
-            trace_family = _trace_family(generation.get("family"))
+            trace_family = _trace_family(
+                trace.get("risk_family") or generation.get("family")
+            )
             trace_path_values = _trace_paths(trace)
             trace_method_values = _trace_methods(trace)
             slice_id = str(trace.get("behavior_slice_id") or "").strip()
@@ -789,7 +792,12 @@ def compute_stage_loss_matrix(
             elif family_link:
                 family_only_collision = True
 
-        trace_matches.sort(key=lambda item: (-item[0], str(item[2].get("trace_id") or "")))
+        trace_matches.sort(
+            key=lambda item: (
+                -item[0],
+                str(item[2].get("attempt_id") or item[2].get("trace_id") or ""),
+            )
+        )
         matched_traces = [item[2] for item in trace_matches]
         is_delivered = bug_id in delivered
         ambiguous = bool(
@@ -811,21 +819,33 @@ def compute_stage_loss_matrix(
                 or any(_finding_paths(item) for item in matched_candidates)
                 or any(
                     int((trace.get("generation") or {}).get("endpoint_count") or 0) > 0
+                    or bool(trace.get("operation_refs"))
                     for trace in matched_traces
                 )
             )
             selected = bool(
                 is_delivered
-                or any(bool((trace.get("selection") or {}).get("selected")) for trace in matched_traces)
+                or any(
+                    bool((trace.get("selection") or {}).get("selected"))
+                    or bool(trace.get("obligation_id"))
+                    for trace in matched_traces
+                )
             )
             executed = bool(
                 is_delivered
-                or any(int((trace.get("execution") or {}).get("http_step_count") or 0) > 0 for trace in matched_traces)
+                or any(
+                    int((trace.get("execution") or {}).get("http_step_count") or 0) > 0
+                    or str(trace.get("execution_status") or "").upper() == "EXECUTED"
+                    or str(trace.get("terminal_status") or "").upper()
+                    in {"DELIVERABLE", "REJECTED"}
+                    for trace in matched_traces
+                )
             )
             oracle_evaluated = bool(
                 is_delivered
                 or any(
                     int((trace.get("verification") or {}).get("oracle_evaluated_count") or 0) > 0
+                    or bool(trace.get("oracle_receipt_id"))
                     for trace in matched_traces
                 )
             )
@@ -833,6 +853,12 @@ def compute_stage_loss_matrix(
                 is_delivered
                 or any(
                     int((trace.get("verification") or {}).get("oracle_failure_votes") or 0) > 0
+                    or str(trace.get("terminal_status") or "").upper() == "DELIVERABLE"
+                    or (
+                        str(trace.get("gate_status") or "").upper() == "REJECTED"
+                        and str(trace.get("gate_reason_code") or "").upper()
+                        != "ORACLE_NOT_VIOLATED"
+                    )
                     for trace in matched_traces
                 )
             )

@@ -10,6 +10,7 @@ from ai_test_asset_center.discovery_funnel import (
     reconcile_product_pipeline_health,
 )
 from ai_test_asset_center.discovery_trace_ledger import build_discovery_trace_ledger
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 from ai_test_asset_center.v12_pipeline import (
     _normalize_executable_api_document,
     _publish_behavior_contract_snapshot,
@@ -357,27 +358,38 @@ def test_successful_execution_without_violation_remains_in_trace_ledger() -> Non
     summary["oracle_results"].append(
         {"oracle_name": "ConsistencyOracle", "passed": True}
     )
-    v12_result = {
-        "behavior_slices": [
-            {
-                "slice_id": "slice-1",
-                "kind": "invariant",
-                "endpoints": ["/api/orders/{id}"],
-                "source_refs": [{"kind": "api", "quote": "orders"}],
+    selected = [{
+        "obligation_id": "obl-1",
+        "risk_family": "invariant",
+        "required_operations": ["op-read-order"],
+        "behavior_slice_id": "slice-1",
+        "source_refs": [{"kind": "api", "source_id": "SRC-1"}],
+    }]
+    attempt_ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "run-1", "campaign_id": "campaign-1"},
+        selected=selected,
+        compile_results={
+            "obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}
+        },
+        execution_results={
+            "obl-1": {
+                "status": "EXECUTED",
+                "execution_id": "exec-1",
+                "observation_receipt_ids": ["obs-1"],
+                "oracle_receipt_id": "oracle-1",
             }
-        ],
-        "behavior_slice_ledger": {
-            "campaign_id": "campaign-1",
-            "round": 1,
-            "selected_slice_ids": ["slice-1"],
-            "attempted_slice_ids": ["slice-1"],
         },
-        "phases": {
-            "scenario_generation": {"selected_slice_ids": ["slice-1"]},
-            "execution": {"status": "completed", "executed": 1},
+        gate_results={
+            "obl-1": {
+                "status": "REJECTED",
+                "reason_code": "ORACLE_NOT_VIOLATED",
+                "gate_receipt_id": "gate-1",
+            }
         },
-        "findings": [],
-        "evidence_graphs": [],
+    )
+    v12_result = {
+        "obligation_attempt_ledger": attempt_ledger,
+        "formal_count_projection": {"formal_finding_ids": []},
         "execution_trace_summaries": [summary],
     }
 
@@ -391,13 +403,12 @@ def test_successful_execution_without_violation_remains_in_trace_ledger() -> Non
         evaluation_mode="replay",
     )
 
-    trace = ledger["traces"][0]
-    assert trace["execution"]["trace_observed"] is True
-    assert trace["execution"]["http_step_count"] == 1
-    assert trace["execution"]["normalized_paths"] == ["/api/orders/{id}"]
-    assert trace["verification"]["oracle_pass_votes"] == 1
+    trace = ledger["attempts"][0]
+    assert trace["obligation_id"] == "obl-1"
+    assert trace["observation_receipt_ids"] == ["obs-1"]
+    assert trace["oracle_receipt_id"] == "oracle-1"
     assert trace["outcome"] == "valid_success_control"
-    assert "SELECTED_WITHOUT_EXECUTION_TRACE" not in trace["failure_signatures"]
-    serialized = json.dumps(summary, ensure_ascii=False)
+    assert trace["failure_signatures"] == []
+    serialized = json.dumps(ledger, ensure_ascii=False)
     assert "do-not-persist" not in serialized
     assert "password" not in serialized

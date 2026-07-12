@@ -10,7 +10,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .discovery_trace_ledger import TRACE_LEDGER_SCHEMA
+from .artifact_redactor import redact_and_validate
+from .discovery_trace_ledger import (
+    TRACE_LEDGER_SCHEMA,
+    DiscoveryTraceError,
+    validate_trace_ledger,
+)
 
 
 WEAKNESS_REPORT_SCHEMA = "qualibug.discovery-weakness-report.v1"
@@ -182,8 +187,12 @@ def _validate_ledgers(ledgers: list[dict[str, Any]]) -> None:
     if not ledgers:
         raise WeaknessMiningError("weakness mining requires at least one trace ledger")
     for ledger in ledgers:
-        if not isinstance(ledger, dict) or ledger.get("schema_version") != TRACE_LEDGER_SCHEMA:
-            raise WeaknessMiningError("weakness mining received an unsupported trace ledger")
+        try:
+            validate_trace_ledger(ledger)
+        except DiscoveryTraceError as exc:
+            raise WeaknessMiningError(
+                "weakness mining received an unsupported trace ledger"
+            ) from exc
         redaction = ledger.get("redaction_contract") or {}
         if any(
             redaction.get(key) is not False
@@ -208,7 +217,7 @@ def _good_trace_ids_by_surface(traces: list[dict[str, Any]]) -> dict[str, list[s
             if signature in _SIGNATURE_CATALOG
         }
         for surface in {item["surface"] for item in _SIGNATURE_CATALOG.values()} - failed_surfaces:
-            result.setdefault(surface, []).append(str(trace.get("trace_id") or ""))
+            result.setdefault(surface, []).append(str(trace.get("attempt_id") or ""))
     return result
 
 
@@ -232,10 +241,54 @@ def _pattern(
     industries = sorted({str(item.get("industry") or "") for item in rows if str(item.get("industry") or "")})
     families = sorted(
         {
-            str((item.get("generation") or {}).get("family") or "unclassified")
+            str(
+                item.get("risk_family")
+                or (item.get("generation") or {}).get("family")
+                or "unclassified"
+            )
             for item in rows
         }
     )
+    source_kinds = sorted({
+        str(value)
+        for item in rows
+        for value in (item.get("source_kinds") or [])
+        if str(value)
+    })
+    operation_refs = sorted({
+        str(value)
+        for item in rows
+        for value in (item.get("operation_refs") or [])
+        if str(value)
+    })
+    adapters = sorted({
+        str(item.get("adapter") or "") for item in rows if str(item.get("adapter") or "")
+    })
+    compile_reasons = sorted({
+        str(item.get("compile_reason_code") or "")
+        for item in rows
+        if str(item.get("compile_reason_code") or "")
+    })
+    execution_reasons = sorted({
+        str(item.get("execution_reason_code") or "")
+        for item in rows
+        if str(item.get("execution_reason_code") or "")
+    })
+    oracle_reasons = sorted({
+        str(item.get("oracle_reason_code") or "")
+        for item in rows
+        if str(item.get("oracle_reason_code") or "")
+    })
+    gate_reasons = sorted({
+        str(item.get("gate_reason_code") or "")
+        for item in rows
+        if str(item.get("gate_reason_code") or "")
+    })
+    terminal_statuses = sorted({
+        str(item.get("terminal_status") or "")
+        for item in rows
+        if str(item.get("terminal_status") or "")
+    })
     outcomes: dict[str, int] = {}
     for item in rows:
         outcome = str(item.get("outcome") or "unresolved")
@@ -266,8 +319,18 @@ def _pattern(
         "affected_run_count": len(run_ids),
         "affected_industry_count": len(industries),
         "affected_families": families,
+        "affected_risk_families": families,
+        "affected_source_kinds": source_kinds,
+        "affected_operation_refs": operation_refs,
+        "affected_adapters": adapters,
+        "compile_reason_codes": compile_reasons,
+        "execution_reason_codes": execution_reasons,
+        "oracle_reason_codes": oracle_reasons,
+        "gate_reason_codes": gate_reasons,
+        "terminal_statuses": terminal_statuses,
         "outcome_counts": dict(sorted(outcomes.items())),
-        "example_trace_ids": [str(item.get("trace_id") or "") for item in rows[:5]],
+        "example_trace_ids": [str(item.get("attempt_id") or "") for item in rows[:5]],
+        "example_attempt_ids": [str(item.get("attempt_id") or "") for item in rows[:5]],
         "preserved_good_trace_ids": preserved_good.get(catalog["surface"], [])[:5],
         "verifier_grounded": bool(rows),
         "proposal_eligible": proposal_eligible,
@@ -288,11 +351,11 @@ def mine_discovery_weaknesses(ledgers: list[dict[str, Any]]) -> dict[str, Any]:
     traces = [
         item
         for ledger in ledgers
-        for item in (ledger.get("traces") or [])
+        for item in (ledger.get("attempts") or [])
         if isinstance(item, dict)
     ]
     if not traces:
-        raise WeaknessMiningError("trace ledgers contain no candidate traces")
+        raise WeaknessMiningError("trace ledgers contain no obligation attempts")
     grouped: dict[str, list[dict[str, Any]]] = {}
     for trace in traces:
         for signature in trace.get("failure_signatures") or []:
@@ -327,6 +390,7 @@ def mine_discovery_weaknesses(ledgers: list[dict[str, Any]]) -> dict[str, Any]:
         "source_policy_ids": sorted({str(item.get("policy_id") or "") for item in ledgers}),
         "source_industries": sorted({str(item.get("industry") or "") for item in ledgers}),
         "trace_count": len(traces),
+        "attempt_count": len(traces),
         "pattern_count": len(patterns),
         "proposal_eligible_pattern_count": len(eligible),
         "patterns": patterns,
@@ -360,7 +424,12 @@ def persist_weakness_report(report: dict[str, Any], output_root: Path | str) -> 
     ).hexdigest()[:16]
     path = Path(output_root) / f"{name}_{fingerprint}.weakness-report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    redacted, _redaction_receipt = redact_and_validate(report)
+    if redacted != report:
+        raise WeaknessMiningError(
+            "weakness report still contained redactable material before persistence"
+        )
+    payload = json.dumps(redacted, ensure_ascii=False, indent=2)
     if path.exists():
         if json.loads(path.read_text(encoding="utf-8")) != json.loads(payload):
             raise WeaknessMiningError(f"immutable weakness report already exists with different content: {path}")

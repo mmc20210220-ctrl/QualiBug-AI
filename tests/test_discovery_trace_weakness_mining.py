@@ -1,185 +1,241 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 
-from ai_test_asset_center.discovery_trace_ledger import build_discovery_trace_ledger
+import pytest
+
+from ai_test_asset_center.discovery_trace_ledger import (
+    DiscoveryTraceError,
+    build_discovery_trace_ledger_v2,
+    migrate_trace_ledger_v1_to_v2,
+    validate_trace_ledger,
+)
 from ai_test_asset_center.discovery_weakness_miner import mine_discovery_weaknesses
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 
 
-def _formal_finding() -> dict:
+def _attempt_result(
+    *,
+    run_id: str = "RUN-1",
+    terminal_status: str = "REJECTED",
+    reason_code: str = "ORACLE_NOT_VIOLATED",
+    finding_id: str = "",
+) -> dict:
+    selected = [{
+        "obligation_id": "obl-1",
+        "candidate_id": "cand-1",
+        "risk_family": "authorization",
+        "required_operations": ["op-read-resource"],
+        "adapter": "http_api",
+        "behavior_slice_id": "BHV-LINEAGE-1",
+        "source_refs": [{"source_type": "openapi", "source_id": "SRC-1"}],
+    }]
+    compile_results = {
+        "obl-1": {
+            "status": "COMPILED",
+            "experiment_id": "exp-1",
+            "receipt_id": "private/path/must-not-persist",
+        }
+    }
+    execution_results: dict[str, dict] = {}
+    gate_results: dict[str, dict] = {}
+    if terminal_status in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}:
+        execution_results["obl-1"] = {
+            "status": terminal_status,
+            "reason_code": reason_code,
+            "execution_id": "exec-1",
+            "receipt_id": "execution-1",
+            "elapsed_ms": 8,
+        }
+    else:
+        execution_results["obl-1"] = {
+            "status": "EXECUTED",
+            "execution_id": "exec-1",
+            "receipt_id": "execution-1",
+            "observation_receipt_ids": ["obs-1"],
+            "oracle_receipt_id": "oracle-1",
+            "elapsed_ms": 8,
+        }
+        gate_results["obl-1"] = {
+            "status": terminal_status,
+            "reason_code": reason_code,
+            "gate_receipt_id": "gate-1",
+            "finding_id": finding_id,
+        }
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": run_id, "campaign_id": "CMP-1"},
+        selected=selected,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results=gate_results,
+    )
     return {
-        "title": "observed finding",
-        "severity": "P1",
-        "behavior_slice_id": "BHV_INVALID",
-        "evidence_id": "EVID_INVALID",
-        "bug_status": "reproduced",
-        "gate_passed": True,
-        "execution_status": "executed",
-        "confirmation_status": "confirmed",
-        "customer_delivery_status": "defect",
-        "expected": "request rejected",
-        "actual": "request accepted",
-        "timestamp": "2026-07-10T00:00:00Z",
-        "evidence_consistency": {"verdict": "confirmed"},
-        "evidence_quality": {"level": "validated", "score": 95, "can_reproduce": True},
-        "evidence_status": {
-            "semantic_verdict": "SEMANTIC_CONFIRMED",
-            "business_evidence_status": "VALIDATED",
-            "final_review_status": "CUSTOMER_READY",
-            "missing_requirements": [],
+        "obligation_attempt_ledger": ledger,
+        "formal_count_projection": {
+            "formal_finding_ids": [finding_id] if terminal_status == "DELIVERABLE" else [],
         },
-        "reproduction": {
-            "method": "POST",
-            "path": "/api/resources/{id}",
-            "is_synthetic": False,
-            "har_evidence": {"status_code": 200, "response_body": {"result": "redacted"}},
-        },
-        "raw_evidence": {
-            "request_raw": {"method": "POST", "path": "/api/resources/{id}"},
-            "response_raw": {"status_code": 200, "body": {"result": "redacted"}},
-            "timestamp": "2026-07-10T00:00:00Z",
-            "has_real_evidence": True,
+        "private_payload": {
+            "request_body": "must-not-persist",
+            "response_body": "must-not-persist",
         },
     }
 
 
-def _observed_v12() -> dict:
-    return {
-        "runtime_status": "OK",
-        "behavior_slices": [
-            {
-                "slice_id": "BHV_INVALID",
-                "kind": "state_machine",
-                "endpoints": ["/api/resources/{id}"],
-                "priority": 0.9,
-                "source_refs": [{"source_type": "requirement", "quote": "not emitted"}],
-                "_hypothesis_origin": "reasoner",
-                "_hypothesis_id": "HYP-1",
-                "_hypothesis_family": "state_machine",
-                "_bound_method": "POST",
-                "_bound_path": "/api/resources/{id}",
-            },
-            {
-                "slice_id": "BHV_UNBOUND",
-                "kind": "invariant",
-                "endpoints": [],
-                "priority": 0.2,
-                "source_refs": [],
-            },
-        ],
-        "behavior_slice_ledger": {
-            "campaign_id": "CMP-1",
-            "round": 1,
-            "selected_slice_ids": ["BHV_INVALID"],
-            "attempted_slice_ids": ["BHV_INVALID"],
-        },
-        "phases": {
-            "scenario_generation": {"selected_slice_ids": ["BHV_INVALID"]},
-            "execution": {
-                "status": "completed",
-                "executed": 0,
-                "observability_status": "ok",
-                "skip_telemetry": {
-                    "blocked_samples": [
-                        {
-                            "behavior_slice_id": "BHV_INVALID",
-                            "reason": "missing_runtime_path_binding:id",
-                        }
-                    ]
-                },
-            },
-        },
-        "findings": [_formal_finding()],
-        "evidence_graphs": [
-            {
-                "scenario": {
-                    "id": "SCN-1",
-                    "behavior_slice_id": "BHV_INVALID",
-                    "discovery_round": 1,
-                },
-                "evidence_id": "EVID_INVALID",
-                "execution_trace": {
-                    "scenario_id": "SCN-1",
-                    "steps": [
-                        {"method": "GET", "path": "/api/resources", "status": 200},
-                        {
-                            "method": "POST",
-                            "path": "/api/resources/{id}",
-                            "status": 0,
-                            "skipped_reason": "missing_runtime_path_binding:id",
-                            "request": {"secret": "must-not-persist"},
-                            "response": {"body": "must-not-persist"},
-                        },
-                    ],
-                    "errors": ["missing_runtime_path_binding:id"],
-                    "precondition_not_met": [{"missing_path_params": ["id"]}],
-                    "sandbox_write": {
-                        "status": "cleanup_incomplete",
-                        "audit_path": "private-path-not-emitted",
-                        "cleanup": {"status": "failed", "receipt_ref": ""},
-                    },
-                },
-                "oracle_results": [
-                    {
-                        "passed": False,
-                        "oracle_name": "HttpStatusOracle",
-                        "actual": "HTTP 0",
-                    }
-                ],
-                "layers_triggered": ["L1"],
-            }
-        ],
-        "mainline_unification": {
-            "reasoner": {"input": 5, "bound": 2, "dropped_no_endpoint": 3}
-        },
-    }
-
-
-def test_trace_ledger_exposes_causal_failure_without_raw_customer_payloads() -> None:
-    ledger = build_discovery_trace_ledger(
-        _observed_v12(),
-        run_id="RUN-1",
+def _trace(result: dict, *, run_id: str = "RUN-1", target_id: str = "TARGET-1") -> dict:
+    return build_discovery_trace_ledger_v2(
+        result,
+        run_id=run_id,
         policy_id="POLICY-1",
-        target_id="TARGET-1",
+        target_id=target_id,
         project_id="PROJECT-1",
         industry="industry-a",
         evaluation_mode="replay",
     )
 
-    invalid = next(item for item in ledger["traces"] if item["behavior_slice_id"] == "BHV_INVALID")
-    assert invalid["outcome"] == "invalid_promotion_or_verification"
-    assert {
-        "RUNTIME_PATH_BINDING_MISSING",
-        "ZERO_STATUS_NON_EXECUTION",
-        "PRECONDITION_NOT_MET",
-        "ORACLE_CONFIRMED_NON_EXECUTION",
-        "CLEANUP_FAILED",
-        "CLEANUP_EVIDENCE_MISSING",
-    } <= set(invalid["failure_signatures"])
-    unbound = next(item for item in ledger["traces"] if item["behavior_slice_id"] == "BHV_UNBOUND")
-    assert {"ENDPOINT_BINDING_MISSING", "SOURCE_GROUNDING_MISSING", "CANDIDATE_NOT_SELECTED"} <= set(
-        unbound["failure_signatures"]
-    )
-    assert ledger["aggregate_stage_events"]["dropped_no_endpoint"] == 3
+
+def test_trace_v2_has_one_row_per_obligation_attempt_without_raw_payloads() -> None:
+    ledger = _trace(_attempt_result())
+
+    assert ledger["schema_version"] == "qualibug.discovery-trace-ledger.v2"
+    assert ledger["attempt_count"] == 1
+    assert {row["obligation_id"] for row in ledger["attempts"]} == {"obl-1"}
+    attempt = ledger["attempts"][0]
+    assert attempt["risk_family"] == "authorization"
+    assert attempt["operation_refs"] == ["op-read-resource"]
+    assert attempt["adapter"] == "http_api"
+    assert attempt["behavior_slice_id"] == "BHV-LINEAGE-1"
+    assert attempt["source_kinds"] == ["openapi"]
+    assert attempt["compile_reason_code"] == ""
+    assert attempt["execution_reason_code"] == ""
+    assert attempt["gate_reason_code"] == "ORACLE_NOT_VIOLATED"
+    assert attempt["terminal_status"] == "REJECTED"
+    assert attempt["outcome"] == "valid_success_control"
+    assert ledger["formal_finding_ids"] == []
+    assert ledger["redaction_contract"]["ground_truth_persisted"] is False
     serialized = json.dumps(ledger, ensure_ascii=False)
     assert "must-not-persist" not in serialized
-    assert "private-path-not-emitted" not in serialized
-    assert ledger["redaction_contract"]["ground_truth_persisted"] is False
 
 
-def test_weakness_miner_prioritizes_verifier_and_cleanup_failures() -> None:
-    first = build_discovery_trace_ledger(
-        _observed_v12(),
-        run_id="RUN-1",
-        policy_id="POLICY-1",
-        target_id="TARGET-1",
-        project_id="PROJECT-1",
-        industry="industry-a",
-        evaluation_mode="replay",
+def test_runtime_rejects_v1_without_explicit_migration() -> None:
+    with pytest.raises(DiscoveryTraceError, match="trace_ledger_v2_required"):
+        validate_trace_ledger({
+            "schema_version": "qualibug.discovery-trace-ledger.v1",
+            "traces": [],
+        })
+
+
+def test_v1_migration_requires_complete_operator_mapping() -> None:
+    v1 = {
+        "schema_version": "qualibug.discovery-trace-ledger.v1",
+        "run_id": "RUN-OLD",
+        "policy_id": "POLICY-1",
+        "target_id": "TARGET-1",
+        "project_id": "PROJECT-1",
+        "industry": "industry-a",
+        "evaluation_mode": "replay",
+        "redaction_contract": {
+            "raw_request_bodies_persisted": False,
+            "raw_response_bodies_persisted": False,
+            "credentials_persisted": False,
+            "ground_truth_persisted": False,
+        },
+        "traces": [
+            {
+                "trace_id": "TRACE-1",
+                "behavior_slice_id": "BHV-1",
+                "outcome": "harness_or_execution_failure",
+                "failure_signatures": ["RUNTIME_PATH_BINDING_MISSING"],
+            }
+        ],
+    }
+
+    with pytest.raises(
+        DiscoveryTraceError,
+        match="v1_migration_obligation_map_incomplete:BHV-1",
+    ):
+        migrate_trace_ledger_v1_to_v2(v1, obligation_map={})
+
+    migrated = migrate_trace_ledger_v1_to_v2(
+        v1,
+        obligation_map={"BHV-1": "obl-1"},
     )
-    second = build_discovery_trace_ledger(
-        _observed_v12(),
+    assert migrated["schema_version"] == "qualibug.discovery-trace-ledger.v2"
+    assert migrated["migration"] == {
+        "source_schema": "qualibug.discovery-trace-ledger.v1",
+        "explicit": True,
+    }
+    assert migrated["attempts"][0]["obligation_id"] == "obl-1"
+    assert validate_trace_ledger(migrated)["ledger_fingerprint"]
+
+
+def test_v1_migration_cli_writes_new_immutable_artifact(tmp_path) -> None:
+    from tools.migrate_discovery_trace_ledger import main
+
+    source = tmp_path / "trace-v1.json"
+    mapping = tmp_path / "obligation-map.json"
+    output = tmp_path / "trace-v2.json"
+    source.write_text(json.dumps({
+        "schema_version": "qualibug.discovery-trace-ledger.v1",
+        "run_id": "RUN-OLD",
+        "policy_id": "POLICY-1",
+        "target_id": "TARGET-1",
+        "project_id": "PROJECT-1",
+        "industry": "industry-a",
+        "evaluation_mode": "replay",
+        "redaction_contract": {
+            "raw_request_bodies_persisted": False,
+            "raw_response_bodies_persisted": False,
+            "credentials_persisted": False,
+            "ground_truth_persisted": False,
+        },
+        "traces": [{
+            "trace_id": "TRACE-1",
+            "behavior_slice_id": "BHV-1",
+            "outcome": "valid_success_control",
+            "failure_signatures": [],
+        }],
+    }), encoding="utf-8")
+    mapping.write_text(json.dumps({"BHV-1": "obl-1"}), encoding="utf-8")
+
+    assert main([
+        "--input", str(source),
+        "--obligation-map", str(mapping),
+        "--output", str(output),
+    ]) == 0
+    assert validate_trace_ledger(json.loads(output.read_text(encoding="utf-8")))
+    with pytest.raises(FileExistsError, match="migration output already exists"):
+        main([
+            "--input", str(source),
+            "--obligation-map", str(mapping),
+            "--output", str(output),
+        ])
+
+
+def test_formal_finding_ids_must_equal_deliverable_attempt_ids() -> None:
+    result = _attempt_result(
+        terminal_status="DELIVERABLE",
+        reason_code="",
+        finding_id="FINDING-1",
+    )
+    result["formal_count_projection"]["formal_finding_ids"] = []
+
+    with pytest.raises(DiscoveryTraceError, match="formal_finding_ids_mismatch"):
+        _trace(result)
+
+
+def test_weakness_miner_clusters_attempt_stage_reasons_and_dimensions() -> None:
+    first = _trace(
+        _attempt_result(
+            terminal_status="HARNESS_FAILED",
+            reason_code="CLEANUP_COMPENSATION_FAILED",
+        )
+    )
+    second = build_discovery_trace_ledger_v2(
+        _attempt_result(
+            run_id="RUN-2",
+            terminal_status="HARNESS_FAILED",
+            reason_code="CLEANUP_COMPENSATION_FAILED",
+        ),
         run_id="RUN-2",
         policy_id="POLICY-1",
         target_id="TARGET-2",
@@ -190,75 +246,31 @@ def test_weakness_miner_prioritizes_verifier_and_cleanup_failures() -> None:
 
     report = mine_discovery_weaknesses([first, second])
     patterns = {item["failure_signature"]: item for item in report["patterns"]}
-
-    assert patterns["ORACLE_CONFIRMED_NON_EXECUTION"]["severity"] == "critical"
-    assert patterns["ORACLE_CONFIRMED_NON_EXECUTION"]["proposal_eligible"] is True
-    assert patterns["ORACLE_CONFIRMED_NON_EXECUTION"]["affected_run_count"] == 2
-    assert patterns["ORACLE_CONFIRMED_NON_EXECUTION"]["affected_industry_count"] == 2
-    assert patterns["CLEANUP_FAILED"]["harness_surface"] == "sandbox_write_policy"
-    assert patterns["ENDPOINT_BINDING_DROPPED_AGGREGATE"]["observed_count"] == 6
+    cleanup = patterns["CLEANUP_FAILED"]
+    assert cleanup["severity"] == "critical"
+    assert cleanup["proposal_eligible"] is True
+    assert cleanup["affected_run_count"] == 2
+    assert cleanup["affected_industry_count"] == 2
+    assert cleanup["affected_risk_families"] == ["authorization"]
+    assert cleanup["affected_operation_refs"] == ["op-read-resource"]
+    assert cleanup["affected_adapters"] == ["http_api"]
+    assert cleanup["execution_reason_codes"] == ["CLEANUP_COMPENSATION_FAILED"]
+    assert cleanup["terminal_statuses"] == ["HARNESS_FAILED"]
     assert report["privacy_contract"]["ground_truth_used"] is False
-    serialized = json.dumps(report, ensure_ascii=False)
-    assert "/api/resources" not in serialized
-    assert "observed finding" not in serialized
 
 
-def test_non_reversible_cleanup_remains_a_commercial_weakness() -> None:
-    observed = deepcopy(_observed_v12())
-    sandbox = observed["evidence_graphs"][0]["execution_trace"]["sandbox_write"]
-    sandbox["status"] = "cleanup_incomplete"
-    sandbox["cleanup"] = {"status": "not_reversible", "receipt_ref": "/api/resources/{id}"}
-
-    ledger = build_discovery_trace_ledger(
-        observed,
-        run_id="RUN-NONREVERSIBLE",
-        policy_id="POLICY-1",
-        target_id="TARGET-1",
-        project_id="PROJECT-1",
-        industry="industry-a",
-        evaluation_mode="replay",
+def test_multi_write_audit_reason_maps_to_sandbox_weakness() -> None:
+    ledger = _trace(
+        _attempt_result(
+            terminal_status="HARNESS_FAILED",
+            reason_code="MULTI_WRITE_AUDIT_INCOMPLETE",
+        )
     )
-    trace = next(item for item in ledger["traces"] if item["behavior_slice_id"] == "BHV_INVALID")
-    assert "SANDBOX_WRITE_INCOMPLETE" in trace["failure_signatures"]
-    assert "CLEANUP_NOT_REVERSIBLE" in trace["failure_signatures"]
-
     report = mine_discovery_weaknesses([ledger])
-    pattern = next(item for item in report["patterns"] if item["failure_signature"] == "CLEANUP_NOT_REVERSIBLE")
+    pattern = next(
+        row
+        for row in report["patterns"]
+        if row["failure_signature"] == "MULTI_WRITE_AUDIT_INCOMPLETE"
+    )
     assert pattern["severity"] == "critical"
     assert pattern["harness_surface"] == "sandbox_write_policy"
-
-
-def test_multi_write_scenario_requires_one_governed_receipt_per_write() -> None:
-    observed = deepcopy(_observed_v12())
-    trace = observed["evidence_graphs"][0]["execution_trace"]
-    trace["steps"].insert(
-        1,
-        {
-            "action": "bootstrap_create_id",
-            "method": "POST",
-            "path": "/api/resources",
-            "status": 201,
-        },
-    )
-    trace["steps"][2]["status"] = 200
-    trace["steps"][2].pop("skipped_reason", None)
-    trace["sandbox_write"]["status"] = "completed"
-    trace["sandbox_write"]["cleanup"] = {"status": "completed", "receipt_ref": "cleanup-1"}
-
-    ledger = build_discovery_trace_ledger(
-        observed,
-        run_id="RUN-MULTI-WRITE",
-        policy_id="POLICY-1",
-        target_id="TARGET-1",
-        project_id="PROJECT-1",
-        industry="industry-a",
-        evaluation_mode="replay",
-    )
-    item = next(row for row in ledger["traces"] if row["behavior_slice_id"] == "BHV_INVALID")
-    assert item["execution"]["write_step_count"] == 2
-    assert item["execution"]["governed_write_receipt_count"] == 1
-    assert "MULTI_WRITE_AUDIT_INCOMPLETE" in item["failure_signatures"]
-
-    report = mine_discovery_weaknesses([ledger])
-    pattern = next(row for row in report["patterns"] if row["failure_signature"] == "MULTI_WRITE_AUDIT_INCOMPLETE")
-    assert pattern["severity"] == "critical"
