@@ -876,8 +876,9 @@ def test_assertion_concurrency_rejects_dual_2xx_alone() -> None:
         {"kind": "concurrency_final_invariant", "assertion_id": "a1"},
         observations={"dual_2xx": True},
     )
-    assert result["passed"] is False
-    assert result["error"] == "dual_2xx_insufficient"
+    assert result["status"] == "INDETERMINATE"
+    assert result["passed"] is None
+    assert result["reason_code"] == "FINAL_INVARIANT_MISSING"
 
 
 def test_assertion_isolation_requires_control() -> None:
@@ -890,15 +891,18 @@ def test_assertion_isolation_requires_control() -> None:
             "control_succeeded": False,
         },
     )
-    assert result["passed"] is False
+    assert result["status"] == "INDETERMINATE"
+    assert result["passed"] is None
+    assert result["reason_code"] == "AUTHORIZED_CONTROL_NOT_PROVEN"
 
 
 def test_contract_oracle_harness_error_not_defect() -> None:
     verdict = evaluate_contract_oracle(
-        experiment={"control_plan": [{"x": 1}], "treatment_plan": [{"y": 1}], "observers": [{"observer_id": "http_response"}], "assertions": [{"kind": "http_status", "expected": 403}]},
+        experiment={"experiment_id": "exp-harness", "obligation_id": "obl-harness", "campaign_id": "campaign-harness", "execution_id": "execution-harness", "source_refs": [{"kind": "api_contract", "source_id": "source", "locator": "GET /resource"}], "control_plan": [{"x": 1}], "treatment_plan": [{"y": 1}], "observers": [{"observer_id": "http_response"}], "assertions": [{"kind": "http_status", "expected": 403}]},
         evidence={"harness_error": True, "control_succeeded": True, "treatment_observation": {}, "http_response": True},
     )
     assert verdict["verdict"] == "harness_failure"
+    assert verdict["status"] == "HARNESS_FAILED"
     assert verdict["customer_deliverable"] is False
 
 

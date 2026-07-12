@@ -41,6 +41,8 @@ def _receipt(
     status: str,
     reason_code: str = "",
     evidence: dict[str, Any] | None = None,
+    campaign_id: str = "",
+    execution_id: str = "",
 ) -> dict[str, Any]:
     normalized_status = _text(status).upper()
     if normalized_status not in OBSERVER_STATUSES:
@@ -51,15 +53,105 @@ def _receipt(
         "status": normalized_status,
         "reason_code": reason_code,
         "evidence": safe_evidence,
+        "campaign_id": _text(campaign_id),
+        "execution_id": _text(execution_id),
     })
     return {
         "schema_version": SCHEMA_VERSION,
         "receipt_id": receipt_id,
+        "campaign_id": _text(campaign_id),
+        "execution_id": _text(execution_id),
         "observer_id": _text(observer_id),
         "status": normalized_status,
         "reason_code": _text(reason_code),
         "evidence": safe_evidence,
     }
+
+
+def build_observer_receipt(
+    *,
+    observer_id: str,
+    status: str,
+    reason_code: str = "",
+    evidence: dict[str, Any] | None = None,
+    campaign_id: str = "",
+    execution_id: str = "",
+) -> dict[str, Any]:
+    """Create one content-addressed typed observer receipt."""
+
+    if not _text(observer_id):
+        raise ValueError("observer_id_missing")
+    return _receipt(
+        observer_id=observer_id,
+        status=status,
+        reason_code=reason_code,
+        evidence=evidence,
+        campaign_id=campaign_id,
+        execution_id=execution_id,
+    )
+
+
+def validate_observer_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Validate schema, status, identity, and content fingerprint strictly."""
+
+    row = _dict(receipt)
+    required_fields = {
+        "schema_version",
+        "receipt_id",
+        "campaign_id",
+        "execution_id",
+        "observer_id",
+        "status",
+        "reason_code",
+        "evidence",
+    }
+    if set(row) != required_fields:
+        raise ValueError("observer_receipt_fields_invalid")
+    if row.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("observer_receipt_schema_invalid")
+    observer_id = _text(row.get("observer_id"))
+    if not observer_id or not isinstance(row.get("evidence"), dict):
+        raise ValueError("observer_receipt_content_invalid")
+    expected = _receipt(
+        observer_id=observer_id,
+        status=_text(row.get("status")),
+        reason_code=_text(row.get("reason_code")),
+        evidence=dict(row["evidence"]),
+        campaign_id=_text(row.get("campaign_id")),
+        execution_id=_text(row.get("execution_id")),
+    )
+    if row != expected:
+        raise ValueError("observer_receipt_fingerprint_invalid")
+    return dict(expected)
+
+
+def bind_observer_receipt_lineage(
+    receipt: dict[str, Any],
+    *,
+    campaign_id: str,
+    execution_id: str,
+) -> dict[str, Any]:
+    """Bind a typed observer receipt to exactly one runtime execution."""
+
+    resolved_campaign_id = _text(campaign_id)
+    resolved_execution_id = _text(execution_id)
+    if not resolved_campaign_id or not resolved_execution_id:
+        raise ValueError("observer_receipt_lineage_missing")
+    validated = validate_observer_receipt(receipt)
+    existing_campaign_id = _text(validated.get("campaign_id"))
+    existing_execution_id = _text(validated.get("execution_id"))
+    if existing_campaign_id and existing_campaign_id != resolved_campaign_id:
+        raise ValueError("observer_receipt_campaign_mismatch")
+    if existing_execution_id and existing_execution_id != resolved_execution_id:
+        raise ValueError("observer_receipt_execution_mismatch")
+    return _receipt(
+        observer_id=_text(validated.get("observer_id")),
+        status=_text(validated.get("status")),
+        reason_code=_text(validated.get("reason_code")),
+        evidence=dict(validated["evidence"]),
+        campaign_id=resolved_campaign_id,
+        execution_id=resolved_execution_id,
+    )
 
 
 # ``implemented`` means the current candidate runtime emits a typed receipt for
@@ -363,7 +455,20 @@ def observe_authorization_comparison(
 
     treatment_status = _response_status(treatment_row)
     if treatment_status in {401, 403, 404}:
+        same_path = (
+            _text(control_row.get("path")).split("?", 1)[0]
+            == _text(treatment_row.get("path")).split("?", 1)[0]
+        )
+        if require_same_resource and not same_path:
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="INDETERMINATE",
+                reason_code="SAME_RESOURCE_NOT_PROVEN",
+                evidence=base_evidence,
+            )
         base_evidence.update({
+            "same_resource_proven": same_path,
+            "resource_match_basis": "same_requested_resource_path",
             "viewer_can_access": False,
             "leak_detected": False,
         })
@@ -540,7 +645,11 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
     }, ""
 
 
-def _observe_business_effect(execution_steps: list[dict[str, Any]]) -> dict[str, Any]:
+def _observe_business_effect(
+    execution_steps: list[dict[str, Any]],
+    *,
+    aggregate_control_treatment: bool = False,
+) -> dict[str, Any]:
     write_steps = [
         step
         for step in execution_steps
@@ -577,7 +686,22 @@ def _observe_business_effect(execution_steps: list[dict[str, Any]]) -> dict[str,
         phase_windows[phase] = window
         evidence[f"{phase}_effect_count"] = window["effect_count"]
 
-    selected = phase_windows.get("treatment") or phase_windows.get("control")
+    combined_window: dict[str, Any] = {}
+    if aggregate_control_treatment:
+        combined_window, combined_reason = _effect_window(write_steps)
+        if combined_reason:
+            return _receipt(
+                observer_id="business_effect",
+                status="INDETERMINATE",
+                reason_code=combined_reason,
+                evidence=evidence,
+            )
+        evidence["combined_effect_count"] = combined_window["effect_count"]
+    selected = (
+        combined_window
+        or phase_windows.get("treatment")
+        or phase_windows.get("control")
+    )
     if not selected:
         return _receipt(
             observer_id="business_effect",
@@ -604,10 +728,16 @@ def observe_experiment_requirements(
     experiment: dict[str, Any],
     *,
     observations: dict[str, Any],
+    campaign_id: str = "",
+    execution_id: str = "",
 ) -> list[dict[str, Any]]:
     """Emit one typed receipt for every observer declared by the experiment."""
 
     exp = _dict(experiment)
+    resolved_campaign_id = _text(campaign_id or exp.get("campaign_id"))
+    resolved_execution_id = _text(execution_id or exp.get("execution_id"))
+    if bool(resolved_campaign_id) != bool(resolved_execution_id):
+        raise ValueError("observer_receipt_lineage_incomplete")
     evidence = _dict(observations)
     control = _dict(evidence.get("control_observation"))
     treatment = _dict(evidence.get("treatment_observation"))
@@ -626,7 +756,11 @@ def observe_experiment_requirements(
                 step
                 for step in _list(evidence.get("execution_steps"))
                 if isinstance(step, dict)
-            ]
+            ],
+            aggregate_control_treatment=(
+                _text(assertion.get("kind") or assertion.get("type"))
+                in {"idempotency", "idempotency_effect"}
+            ),
         )
     business_effect_evidence = (
         _dict(business_effect_receipt.get("evidence"))
@@ -668,6 +802,12 @@ def observe_experiment_requirements(
                 status="UNSUPPORTED",
                 reason_code="OBSERVER_IMPLEMENTATION_MISSING",
                 evidence={},
+            )
+        if resolved_campaign_id:
+            receipt = bind_observer_receipt_lineage(
+                receipt,
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
             )
         receipts.append(receipt)
     return receipts

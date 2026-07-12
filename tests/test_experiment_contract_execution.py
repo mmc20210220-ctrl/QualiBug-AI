@@ -6,15 +6,98 @@ from pathlib import Path
 import pytest
 
 from ai_test_asset_center.assertion_dsl import evaluate_assertion, materialize_assertion
+from ai_test_asset_center.contract_oracles import (
+    build_contract_evidence_receipt,
+    evaluate_contract_oracle,
+)
 from ai_test_asset_center.discovery_funnel import reconcile_pipeline_health_after_campaign_cleanup
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
 from ai_test_asset_center.experiment_executor import (
+    _cleanup_restores_governed_write,
     execute_one_experiment,
     execute_selected_experiments,
     preflight_experiment_executable,
 )
 from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 from ai_test_asset_center.observed_product_scan_executor import ObservedProductScanExecutor
+from ai_test_asset_center.observer_contracts import build_observer_receipt
+
+
+def _property_held_oracle_receipt() -> dict:
+    campaign_id = "campaign-oracle"
+    execution_id = "execution-oracle"
+    observer = build_observer_receipt(
+        observer_id="http_response",
+        status="OBSERVED",
+        evidence={"status_code": 200},
+        campaign_id=campaign_id,
+        execution_id=execution_id,
+    )
+    contract_receipts = [
+        build_contract_evidence_receipt(
+            kind=kind,
+            experiment_id="exp-1",
+            obligation_id="obl-1",
+            campaign_id=campaign_id,
+            execution_id=execution_id,
+            subject_id=subject_id,
+            status="OBSERVED",
+            evidence=evidence,
+        )
+        for kind, subject_id, evidence in (
+            (
+                "control",
+                "control-1",
+                {
+                    "response_observed": True,
+                    "status_code": 200,
+                    "control_succeeded": True,
+                },
+            ),
+            (
+                "treatment",
+                "treatment-1",
+                {"response_observed": True, "status_code": 200},
+            ),
+            ("actor", "actor-a", {"role": "public"}),
+        )
+    ]
+    return evaluate_contract_oracle(
+        experiment={
+            "experiment_id": "exp-1",
+            "obligation_id": "obl-1",
+            "campaign_id": campaign_id,
+            "execution_id": execution_id,
+            "source_refs": [{
+                "kind": "api_contract",
+                "source_id": "resource-api",
+                "locator": "GET /api/resources",
+            }],
+            "control_plan": [{
+                "step_id": "control-1",
+                "actor_ref": "actor-a",
+                "operation_ref": "read-resource",
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment-1",
+                "actor_ref": "actor-a",
+                "operation_ref": "read-resource",
+            }],
+            "fixture_dag": {"nodes": [], "setup_order": []},
+            "observers": [{"observer_id": "http_response"}],
+            "cleanup_plan": [],
+            "assertions": [{
+                "assertion_id": "assert-status",
+                "kind": "http_status",
+                "expected": 200,
+            }],
+        },
+        evidence={
+            "status_code": 200,
+            "observer_receipts": [observer],
+            "contract_evidence_receipts": contract_receipts,
+        },
+    )
 
 
 def test_json_path_type_and_conservation_sum() -> None:
@@ -137,8 +220,28 @@ def test_cleanup_template_uses_successful_write_response_binding(monkeypatch, tm
     def governed_write(**kwargs):
         calls.append(dict(kwargs))
         if kwargs["operation_phase"] == "experiment_cleanup":
-            return {"write": {"status": 204, "body": {}}, "status": "completed"}
-        return {"write": {"status": 201, "body": {"resourceId": "r-1"}}, "status": "completed"}
+            return {
+                "accepted": True,
+                "method": "DELETE",
+                "path": kwargs["path"],
+                "before": {"status": 200, "body": {"resourceId": "r-1"}},
+                "write": {"status": 204, "body": {}},
+                "after": {"status": 404, "body": {}},
+                "audit_path": "sandbox_write_audit.jsonl",
+                "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
+                "status": "completed",
+            }
+        return {
+            "accepted": True,
+            "method": "POST",
+            "path": kwargs["path"],
+            "before": {"status": 200, "body": []},
+            "write": {"status": 201, "body": {"resourceId": "r-1"}},
+            "after": {"status": 200, "body": [{"resourceId": "r-1"}]},
+            "audit_path": "sandbox_write_audit.jsonl",
+            "audit_record": {"phase": "treatment", "path": kwargs["path"]},
+            "status": "completed",
+        }
 
     monkeypatch.setattr("ai_test_asset_center.experiment_executor.sandbox_write_allowed", lambda **_kwargs: (True, ""))
     monkeypatch.setattr("ai_test_asset_center.experiment_executor.execute_governed_control_write", governed_write)
@@ -170,11 +273,40 @@ def test_cleanup_template_uses_successful_write_response_binding(monkeypatch, tm
         base_url="http://127.0.0.1:8080",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign-1",
+        execution_id="execution-runtime-binding",
         actor_tokens={},
     )
 
     assert [call["path"] for call in calls] == ["/api/resources", "/api/resources/r-1"]
     assert result["cleanup_failures"] == 0
+
+
+def test_cleanup_http_2xx_without_restoration_is_not_completion_proof() -> None:
+    original = {
+        "accepted": True,
+        "method": "POST",
+        "path": "/resources",
+        "before": {"status": 200, "body": []},
+        "write": {"status": 201, "body": {"id": "r-1"}},
+        "after": {"status": 200, "body": [{"id": "r-1"}]},
+        "audit_path": "sandbox_write_audit.jsonl",
+        "audit_record": {"phase": "treatment", "path": "/resources"},
+    }
+    no_op_cleanup = {
+        "accepted": True,
+        "method": "POST",
+        "path": "/resources/r-1/archive",
+        "before": {"status": 200, "body": {"id": "r-1", "active": True}},
+        "write": {"status": 204, "body": {}},
+        "after": {"status": 200, "body": {"id": "r-1", "active": True}},
+        "audit_path": "sandbox_write_audit.jsonl",
+        "audit_record": {
+            "phase": "cleanup",
+            "path": "/resources/r-1/archive",
+        },
+    }
+
+    assert _cleanup_restores_governed_write(original, no_op_cleanup) is False
 
 
 def test_runtime_read_binding_materializes_same_resource_before_control_and_treatment(
@@ -258,6 +390,7 @@ def test_runtime_read_binding_materializes_same_resource_before_control_and_trea
         base_url="http://127.0.0.1:8080",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign-1",
+        execution_id="execution-cleanup-template",
         actor_tokens={},
     )
 
@@ -275,6 +408,75 @@ def test_runtime_read_binding_materializes_same_resource_before_control_and_trea
     assert binding_receipt["value_fingerprint"]
     assert "value" not in binding_receipt
     assert result["finding"]["reproduction"]["path"] == "/resources/r-1"
+
+
+def test_failed_positive_control_cannot_produce_violation_candidate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def http_request(method, url, *, token="", body=None):
+        del method, token, body
+        if url.endswith("/control"):
+            return {"status": 500, "body": {"error": "failed"}, "headers": {}}
+        if url.endswith("/treatment"):
+            return {"status": 200, "body": {"accepted": True}, "headers": {}}
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor._http_request",
+        http_request,
+    )
+    result = execute_one_experiment(
+        {
+            "experiment_id": "exp-failed-control",
+            "obligation_id": "obl-failed-control",
+            "compile_receipt": {"status": "COMPILED"},
+            "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
+            "control_plan": [{
+                "step_id": "control-1",
+                "actor_ref": "actor-a",
+                "operation_ref": "control-op",
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment-1",
+                "actor_ref": "actor-a",
+                "operation_ref": "treatment-op",
+            }],
+            "cleanup_plan": [],
+            "observers": [{"observer_id": "http_response"}],
+            "assertions": [{
+                "assertion_id": "assert-status",
+                "kind": "http_status",
+                "expected": 403,
+            }],
+            "safety_contract": {"governed_write": False},
+            "source_refs": [{
+                "kind": "api_contract",
+                "source_id": "generic-api",
+                "locator": "GET /treatment",
+            }],
+        },
+        behavior_ir={
+            "operations": [
+                {"id": "control-op", "method": "GET", "path": "/control"},
+                {"id": "treatment-op", "method": "GET", "path": "/treatment"},
+            ],
+            "actors": [{"id": "actor-a", "role": "public"}],
+        },
+        root=tmp_path,
+        project="generic-project",
+        base_url="http://127.0.0.1:8080",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign-1",
+        execution_id="execution-failed-control",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["finding"] is None
+    assert "CONTROL_RECEIPT_BLOCKED:control-1" in result["oracle_verdict"][
+        "missing_requirements"
+    ]
 
 
 def test_empty_runtime_read_uses_governed_fixture_and_cleans_it_after_experiment(
@@ -303,15 +505,32 @@ def test_empty_runtime_read_uses_governed_fixture_and_cleans_it_after_experiment
             assert kwargs["actor_identity"] == "fixture_creator"
             assert kwargs["actor_token"] == "fixture-token"
             return {
+                "accepted": True,
+                "method": "POST",
+                "path": kwargs["path"],
+                "before": {"status": 200, "body": []},
                 "write": {
                     "status": 201,
                     "body": {"items": [{"sku": "unrelated-sku"}], "id": "r-1"},
                 },
+                "after": {"status": 200, "body": [{"id": "r-1"}]},
+                "audit_path": "sandbox_write_audit.jsonl",
+                "audit_record": {"phase": "fixture_setup", "path": kwargs["path"]},
                 "status": "completed",
             }
         assert kwargs["operation_phase"] == "experiment_fixture_cleanup"
         assert kwargs["path"] == "/api/resources/r-1/archive"
-        return {"write": {"status": 204, "body": {}}, "status": "completed"}
+        return {
+            "accepted": True,
+            "method": "POST",
+            "path": kwargs["path"],
+            "before": {"status": 200, "body": {"id": "r-1"}},
+            "write": {"status": 204, "body": {}},
+            "after": {"status": 404, "body": {}},
+            "audit_path": "sandbox_write_audit.jsonl",
+            "audit_record": {"phase": "fixture_cleanup", "path": kwargs["path"]},
+            "status": "completed",
+        }
 
     monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", http_request)
     monkeypatch.setattr("ai_test_asset_center.experiment_executor.sandbox_write_allowed", lambda **_kwargs: (True, ""))
@@ -407,6 +626,7 @@ def test_empty_runtime_read_uses_governed_fixture_and_cleans_it_after_experiment
         base_url="http://127.0.0.1:8080",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign-1",
+        execution_id="execution-fixture-binding",
         actor_tokens={"fixture_creator": "fixture-token"},
     )
 
@@ -554,7 +774,7 @@ def test_executed_experiment_emits_joinable_observation_oracle_and_gate_receipts
                     "status_code": 200,
                 }
             ],
-            "oracle_verdict": {"verdict": "executed_clue"},
+            "oracle_verdict": _property_held_oracle_receipt(),
             "finding": None,
             "cleanup_failures": 0,
             "execution_receipt": {"status": "EXECUTED"},
@@ -613,7 +833,7 @@ def test_cleanup_failure_is_terminal_harness_failure_not_rejected_finding(
             "reason_code": "",
             "elapsed_ms": 7,
             "steps": [],
-            "oracle_verdict": {"verdict": "executed_clue"},
+            "oracle_verdict": _property_held_oracle_receipt(),
             "finding": None,
             "cleanup_failures": 1,
             "execution_receipt": {"status": "EXECUTED", "cleanup_failures": 1},

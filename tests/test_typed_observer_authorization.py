@@ -89,6 +89,7 @@ def test_explicit_treatment_rejection_is_observed_property_held() -> None:
     )
 
     assert receipt["status"] == "OBSERVED"
+    assert receipt["evidence"]["same_resource_proven"] is True
     assert receipt["evidence"]["viewer_can_access"] is False
     assert receipt["evidence"]["leak_detected"] is False
 
@@ -212,6 +213,7 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         base_url="http://target.invalid",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign",
+        execution_id="execution-readable-denial",
         actor_tokens={
             "secret_ref:owner": "owner-token",
             "secret_ref:restricted": "restricted-token",
@@ -373,6 +375,7 @@ def test_executor_uses_same_resource_receipt_for_violation(
         base_url="http://target.invalid",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign",
+        execution_id="execution-same-resource",
         actor_tokens={
             "secret_ref:owner": "owner-token",
             "secret_ref:restricted": "restricted-token",
@@ -381,6 +384,19 @@ def test_executor_uses_same_resource_receipt_for_violation(
 
     assert result["status"] == "EXECUTED"
     assert result["finding"] is not None
+    assert result["oracle_verdict"]["status"] == "VIOLATION"
+    assert result["oracle_verdict"]["activation_receipt"]["status"] == "ACTIVE"
+    assert {
+        receipt["kind"] for receipt in result["contract_evidence_receipts"]
+    }.issuperset({"actor", "control", "treatment"})
+    assert result["finding"]["gate_passed"] is False
+    assert result["finding"]["confirmation_status"] == "candidate"
+    assert result["finding"]["customer_delivery_status"] == "candidate"
+    assert result["finding"]["oracle"]["receipt_id"] == result[
+        "oracle_verdict"
+    ]["receipt_id"]
+    assert result["finding"]["failed_assertions"][0]["status"] == "VIOLATION"
+    assert result["finding"].get("evidence_quality", {}).get("level") != "validated"
     comparison = next(
         receipt
         for receipt in result["observer_receipts"]
@@ -419,6 +435,7 @@ def test_executor_treatment_rejection_does_not_emit_finding(
         base_url="http://target.invalid",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign",
+        execution_id="execution-different-resource",
         actor_tokens={
             "secret_ref:owner": "owner-token",
             "secret_ref:restricted": "restricted-token",

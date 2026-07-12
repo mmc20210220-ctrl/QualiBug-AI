@@ -14,8 +14,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .assertion_dsl import evaluate_assertion, materialize_assertion
-from .contract_oracles import evaluate_contract_oracle, mark_as_internal_clue
+from .assertion_dsl import materialize_assertion
+from .contract_oracles import (
+    build_contract_evidence_receipt,
+    contract_activation_requirements,
+    evaluate_contract_oracle,
+    mark_as_internal_clue,
+    validate_contract_oracle_receipt,
+)
 from .customer_delivery_gate import build_customer_delivery_gate_receipt
 from .observer_contracts import (
     observe_experiment_requirements,
@@ -60,6 +66,116 @@ def _text(value: Any) -> str:
 def _stable_id(prefix: str, *parts: Any) -> str:
     material = "\x1f".join(_text(part) for part in parts)
     return f"{prefix}_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _observation_state(value: Any) -> dict[str, Any]:
+    row = _dict(value)
+    return {
+        "status": int(row.get("status") or row.get("status_code") or 0),
+        "body": row.get("body"),
+    }
+
+
+def _governance_audit_receipt_id(governed: dict[str, Any]) -> str:
+    row = _dict(governed)
+    audit_record = _dict(row.get("audit_record"))
+    audit_path = _text(row.get("audit_path"))
+    if not audit_record and not audit_path:
+        return ""
+    material = {
+        "audit_record": audit_record,
+        "audit_path": audit_path,
+        "before_ref": _text(row.get("before_ref")),
+        "after_ref": _text(row.get("after_ref")),
+        "accepted": row.get("accepted") is True,
+    }
+    return "audit_" + hashlib.sha256(
+        _canonical_json(material).encode("utf-8")
+    ).hexdigest()[:24]
+
+
+def _resource_identity_candidates(value: Any) -> set[str]:
+    identities: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+                if (
+                    normalized in {"id", "uuid", "key"}
+                    or normalized.endswith("id")
+                ) and not isinstance(child, (dict, list)) and _text(child):
+                    identities.add(_text(child))
+                elif isinstance(child, (dict, list)):
+                    walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return identities
+
+
+def _cleanup_restores_governed_write(
+    original: dict[str, Any],
+    cleanup: dict[str, Any],
+) -> bool:
+    original_row = _dict(original)
+    cleanup_row = _dict(cleanup)
+    if original_row.get("accepted") is not True or cleanup_row.get("accepted") is not True:
+        return False
+    if not _governance_audit_receipt_id(original_row) or not _governance_audit_receipt_id(cleanup_row):
+        return False
+    original_before = _observation_state(original_row.get("before"))
+    cleanup_after = _observation_state(cleanup_row.get("after"))
+    if original_before == cleanup_after:
+        return True
+    original_method = _text(original_row.get("method")).upper()
+    cleanup_path = _text(cleanup_row.get("path"))
+    created_identities = _resource_identity_candidates(
+        _dict(original_row.get("write")).get("body")
+    )
+    identity_bound = any(
+        identity and identity in cleanup_path for identity in created_identities
+    )
+    cleanup_before = _observation_state(cleanup_row.get("before"))
+    return bool(
+        original_method == "POST"
+        and identity_bound
+        and 200 <= int(cleanup_before.get("status") or 0) < 300
+        and int(cleanup_after.get("status") or 0) in {404, 410}
+    )
+
+
+def _governed_write_attempts(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _dict(step.get("governance_receipt"))
+        for step in steps
+        if _text(step.get("phase")) in {"control", "treatment"}
+        and isinstance(step.get("governance_receipt"), dict)
+    ]
+
+
+def _rejected_writes_left_state_unchanged(
+    attempts: list[dict[str, Any]],
+) -> bool:
+    return bool(attempts) and all(
+        attempt.get("accepted") is not True
+        and bool(_governance_audit_receipt_id(attempt))
+        and _observation_state(attempt.get("before"))
+        == _observation_state(attempt.get("after"))
+        for attempt in attempts
+    )
 
 
 def _body_contains_scalar(value: Any, expected: Any) -> bool:
@@ -260,12 +376,19 @@ def execute_one_experiment(
     base_url: str,
     runtime_contract: dict[str, Any],
     campaign_id: str,
+    execution_id: str,
     actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Execute one experiment or return an explicit blocked/harness receipt."""
     exp = _dict(experiment)
     eid = _text(exp.get("experiment_id"))
     oid = _text(exp.get("obligation_id"))
+    resolved_campaign_id = _text(campaign_id)
+    resolved_execution_id = _text(execution_id)
+    if not resolved_campaign_id or not resolved_execution_id:
+        raise ValueError("experiment execution campaign_id and execution_id are required")
+    exp["campaign_id"] = resolved_campaign_id
+    exp["execution_id"] = resolved_execution_id
     tokens = actor_tokens if actor_tokens is not None else load_actor_tokens(root, project)
     ok, reason, detail = preflight_experiment_executable(exp, behavior_ir=behavior_ir, actor_tokens=tokens)
     started = time.time()
@@ -292,6 +415,8 @@ def execute_one_experiment(
         "control_succeeded": False,
         "harness_error": False,
     }
+    activation_requirements = contract_activation_requirements(exp)
+    contract_evidence_receipts: list[dict[str, Any]] = []
     cleanup_failures = 0
     fixture_receipts: list[dict[str, Any]] = []
     binding_materialization_receipts: list[dict[str, Any]] = []
@@ -523,6 +648,7 @@ def execute_one_experiment(
                             "actor_ref": fixture_actor_ref,
                             "actor_identity": _text(fixture_actor.get("role") or fixture_actor_ref),
                             "actor_token": fixture_token,
+                            "governed_setup": governed_setup,
                         })
             binding_materialization_receipts.append(receipt)
             if value in (None, "", [], {}):
@@ -607,14 +733,68 @@ def execute_one_experiment(
         else:
             fixture_receipts.append({"node_id": node_id, "kind": kind or "unknown", "status": "resolved"})
 
+    for actor_ref in activation_requirements["actor"]:
+        actor = actors.get(actor_ref) or {}
+        role = _text(actor.get("role"))
+        token = _resolve_token(actor, tokens)
+        actor_observed = role.lower() in {"anonymous", "public"} or bool(token)
+        contract_evidence_receipts.append(build_contract_evidence_receipt(
+            kind="actor",
+            experiment_id=eid,
+            obligation_id=oid,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+            subject_id=actor_ref,
+            status="OBSERVED" if actor_observed else "FAILED",
+            evidence={
+                "role": role,
+                "credential_secret_ref_present": bool(
+                    _text(actor.get("credential_secret_ref"))
+                ),
+                "credential_material_observed": bool(token),
+            },
+        ))
+    for fixture_id in activation_requirements["fixture"]:
+        fixture = next(
+            (
+                row for row in fixture_receipts
+                if _text(_dict(row).get("node_id")) == fixture_id
+            ),
+            {},
+        )
+        fixture_status = _text(_dict(fixture).get("status")).lower()
+        observed = fixture_status in {"bound", "completed", "ready", "resolved"}
+        contract_evidence_receipts.append(build_contract_evidence_receipt(
+            kind="fixture",
+            experiment_id=eid,
+            obligation_id=oid,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+            subject_id=fixture_id,
+            status="OBSERVED" if observed else "FAILED",
+            evidence={
+                "fixture_kind": _text(_dict(fixture).get("kind")),
+                "value_fingerprint": _text(
+                    _dict(fixture).get("value_fingerprint")
+                ),
+            },
+        ))
+
     def _exec_plan(plan: list[Any], *, phase: str) -> list[dict[str, Any]]:
         nonlocal cleanup_failures
         results = []
-        for step in plan:
+        planned_subjects = activation_requirements.get(phase) or []
+        for index, step in enumerate(plan):
             if not isinstance(step, dict):
                 continue
             actor_ref = _text(step.get("actor_ref"))
             op_ref = _text(step.get("operation_ref"))
+            subject_id = (
+                planned_subjects[index]
+                if index < len(planned_subjects)
+                else _text(step.get("step_id"))
+                or f"{phase}:{op_ref or 'operation'}:{index + 1}"
+            )
             actor = actors.get(actor_ref) or {}
             op = ops.get(op_ref) or {}
             method = _text(op.get("method") or "GET").upper()
@@ -634,9 +814,21 @@ def execute_one_experiment(
                 )
                 if not allowed:
                     observations["harness_error"] = True
+                    contract_evidence_receipts.append(
+                        build_contract_evidence_receipt(
+                            kind=phase,
+                            experiment_id=eid,
+                            obligation_id=oid,
+                            campaign_id=resolved_campaign_id,
+                            execution_id=resolved_execution_id,
+                            subject_id=subject_id,
+                            status="FAILED",
+                            evidence={"reason_code": _text(reason)},
+                        )
+                    )
                     results.append({
                         "phase": phase,
-                        "step_id": _text(step.get("step_id")),
+                        "step_id": subject_id,
                         "status": "blocked_write",
                         "reason": reason,
                         "method": method,
@@ -650,9 +842,21 @@ def execute_one_experiment(
                 )
                 if not observation_path:
                     observations["harness_error"] = True
+                    contract_evidence_receipts.append(
+                        build_contract_evidence_receipt(
+                            kind=phase,
+                            experiment_id=eid,
+                            obligation_id=oid,
+                            campaign_id=resolved_campaign_id,
+                            execution_id=resolved_execution_id,
+                            subject_id=subject_id,
+                            status="FAILED",
+                            evidence={"reason_code": "BLOCKED_MISSING_OBSERVER"},
+                        )
+                    )
                     results.append({
                         "phase": phase,
-                        "step_id": _text(step.get("step_id")),
+                        "step_id": subject_id,
                         "status": "blocked_write",
                         "reason": "BLOCKED_MISSING_OBSERVER",
                         "method": method,
@@ -687,9 +891,40 @@ def execute_one_experiment(
             else:
                 obs = _run_http_step(base_url=base_url, method=method, path=path, token=token)
             obs["phase"] = phase
-            obs["step_id"] = _text(step.get("step_id"))
+            obs["step_id"] = subject_id
             obs["actor_ref"] = actor_ref
             obs["operation_ref"] = op_ref
+            observed_status = int(obs.get("status_code") or 0)
+            contract_status = (
+                "OBSERVED"
+                if phase == "control" and 200 <= observed_status < 300
+                else "BLOCKED"
+                if phase == "control" and observed_status > 0
+                else "OBSERVED"
+                if phase == "treatment" and observed_status > 0
+                else "FAILED"
+            )
+            contract_evidence_receipts.append(build_contract_evidence_receipt(
+                kind=phase,
+                experiment_id=eid,
+                obligation_id=oid,
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
+                subject_id=subject_id,
+                status=contract_status,
+                evidence={
+                    "method": method,
+                    "path": path,
+                    "status_code": observed_status,
+                    "operation_ref": op_ref,
+                    "response_observed": observed_status > 0,
+                    "control_succeeded": (
+                        200 <= observed_status < 300
+                        if phase == "control"
+                        else None
+                    ),
+                },
+            ))
             results.append(obs)
             if phase == "control":
                 observations["control_observation"] = obs
@@ -731,14 +966,52 @@ def execute_one_experiment(
         )
         cleanup_write = _dict(governed_cleanup.get("write"))
         cleanup_status = int(cleanup_write.get("status") or 0)
-        completed = 200 <= cleanup_status < 300
+        governed_setup = _dict(pending.get("governed_setup"))
+        restoration_verified = _cleanup_restores_governed_write(
+            governed_setup,
+            governed_cleanup,
+        )
+        audit_receipt_ids = sorted({
+            receipt_id
+            for receipt_id in (
+                _governance_audit_receipt_id(governed_setup),
+                _governance_audit_receipt_id(governed_cleanup),
+            )
+            if receipt_id
+        })
+        completed = bool(
+            200 <= cleanup_status < 300
+            and restoration_verified
+            and audit_receipt_ids
+        )
         _dict(pending.get("receipt"))["fixture_cleanup_status"] = (
             "completed" if completed else "failed"
         )
         if not completed:
             cleanup_failures += 1
+        contract_evidence_receipts.append(build_contract_evidence_receipt(
+            kind="cleanup",
+            experiment_id=eid,
+            obligation_id=oid,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+            subject_id=f"fixture_cleanup:{_text(pending.get('target'))}",
+            status="COMPLETED" if completed else "FAILED",
+            evidence={
+                "method": _text(cleanup.get("method")).upper(),
+                "path": cleanup_path,
+                "status_code": cleanup_status,
+                "operation_ref": _text(cleanup.get("operation_ref")),
+                "accepted_write_count": 1,
+                "cleanup_write_count": 1 if governed_cleanup.get("accepted") is True else 0,
+                "restoration_verified": restoration_verified,
+                "state_unchanged": restoration_verified,
+                "audit_receipt_ids": audit_receipt_ids,
+            },
+        ))
         steps_out.append({
             "phase": "fixture_cleanup",
+            "cleanup_subject_id": f"fixture_cleanup:{_text(pending.get('target'))}",
             "method": _text(cleanup.get("method")).upper(),
             "path": cleanup_path,
             "status_code": cleanup_status,
@@ -750,8 +1023,68 @@ def execute_one_experiment(
 
     # Cleanup compensation in reverse order for write experiments.
     safety = _dict(exp.get("safety_contract"))
-    if safety.get("governed_write") and _list(exp.get("cleanup_plan")):
-        for cleanup in reversed(_list(exp.get("cleanup_plan"))):
+    governed_write_attempts = _governed_write_attempts(steps_out)
+    accepted_governed_writes = [
+        attempt
+        for attempt in governed_write_attempts
+        if attempt.get("accepted") is True
+    ]
+    if (
+        safety.get("governed_write")
+        and _list(exp.get("cleanup_plan"))
+        and not accepted_governed_writes
+    ):
+        rejected_state_unchanged = _rejected_writes_left_state_unchanged(
+            governed_write_attempts
+        )
+        rejected_audit_ids = sorted({
+            receipt_id
+            for receipt_id in (
+                _governance_audit_receipt_id(attempt)
+                for attempt in governed_write_attempts
+            )
+            if receipt_id
+        })
+        for cleanup_subject in activation_requirements["cleanup"]:
+            contract_evidence_receipts.append(build_contract_evidence_receipt(
+                kind="cleanup",
+                experiment_id=eid,
+                obligation_id=oid,
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
+                subject_id=cleanup_subject,
+                status="NOT_REQUIRED" if rejected_state_unchanged else "FAILED",
+                evidence={
+                    "accepted_write_count": 0,
+                    "cleanup_write_count": 0,
+                    "state_unchanged": rejected_state_unchanged,
+                    "audit_receipt_ids": rejected_audit_ids,
+                    "reason_code": (
+                        "NO_ACCEPTED_WRITE"
+                        if rejected_state_unchanged
+                        else "REJECTED_WRITE_STATE_NOT_PROVEN_UNCHANGED"
+                    ),
+                },
+            ))
+        observations["cleanup_status"] = (
+            "not_required" if rejected_state_unchanged else "failed"
+        )
+        if not rejected_state_unchanged:
+            cleanup_failures += 1
+    if (
+        safety.get("governed_write")
+        and _list(exp.get("cleanup_plan"))
+        and accepted_governed_writes
+    ):
+        cleanup_plan = _list(exp.get("cleanup_plan"))
+        cleanup_subjects = activation_requirements.get("cleanup") or []
+        for cleanup_index in reversed(range(len(cleanup_plan))):
+            cleanup = cleanup_plan[cleanup_index]
+            cleanup_subject_id = (
+                cleanup_subjects[cleanup_index]
+                if cleanup_index < len(cleanup_subjects)
+                else f"cleanup:operation:{cleanup_index + 1}"
+            )
             # Compensation is declared; without a concrete reverse operation we
             # record an honest cleanup failure rather than inventing success.
             op_ref = _text(_dict(cleanup).get("operation_ref"))
@@ -830,17 +1163,102 @@ def execute_one_experiment(
                     "error": cleanup_write.get("error") or governed_cleanup.get("reason") or "",
                     "governance_receipt": governed_cleanup,
                 }
-                steps_out.append({**cobs, "phase": "cleanup"})
+                steps_out.append({
+                    **cobs,
+                    "phase": "cleanup",
+                    "operation_ref": op_ref,
+                    "cleanup_subject_id": cleanup_subject_id,
+                })
                 if not (200 <= int(cobs.get("status_code") or 0) < 300):
                     cleanup_failures += 1
                     observations["cleanup_status"] = "failed"
                 elif not cleanup_failures:
                     observations["cleanup_status"] = "completed"
 
+    recorded_cleanup_subjects = {
+        _text(receipt.get("subject_id"))
+        for receipt in contract_evidence_receipts
+        if _text(receipt.get("kind")) == "cleanup"
+    }
+    for cleanup_subject in activation_requirements["cleanup"]:
+        if cleanup_subject in recorded_cleanup_subjects:
+            continue
+        matching_steps = [
+            step for step in steps_out
+            if _text(_dict(step).get("cleanup_subject_id")) == cleanup_subject
+        ]
+        cleanup_governance_receipts = [
+            _dict(step.get("governance_receipt"))
+            for step in matching_steps
+            if isinstance(step.get("governance_receipt"), dict)
+        ]
+        restoration_verified = bool(accepted_governed_writes) and all(
+            any(
+                _cleanup_restores_governed_write(original, cleanup)
+                for cleanup in cleanup_governance_receipts
+            )
+            for original in accepted_governed_writes
+        )
+        audit_receipt_ids = sorted({
+            receipt_id
+            for receipt_id in (
+                _governance_audit_receipt_id(governed)
+                for governed in [
+                    *accepted_governed_writes,
+                    *cleanup_governance_receipts,
+                ]
+            )
+            if receipt_id
+        })
+        cleanup_statuses_succeeded = bool(matching_steps) and all(
+            200 <= int(_dict(step).get("status_code") or 0) < 300
+            for step in matching_steps
+        )
+        completed = (
+            cleanup_statuses_succeeded
+            and restoration_verified
+            and bool(audit_receipt_ids)
+        )
+        if cleanup_statuses_succeeded and not completed:
+            cleanup_failures += 1
+            observations["cleanup_status"] = "failed"
+        contract_evidence_receipts.append(build_contract_evidence_receipt(
+            kind="cleanup",
+            experiment_id=eid,
+            obligation_id=oid,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+            subject_id=cleanup_subject,
+            status="COMPLETED" if completed else "FAILED",
+            evidence={
+                "step_count": len(matching_steps),
+                "status_codes": [
+                    int(_dict(step).get("status_code") or 0)
+                    for step in matching_steps
+                ],
+                "accepted_write_count": len(accepted_governed_writes),
+                "cleanup_write_count": sum(
+                    1
+                    for receipt in cleanup_governance_receipts
+                    if receipt.get("accepted") is True
+                ),
+                "restoration_verified": restoration_verified,
+                "state_unchanged": restoration_verified,
+                "audit_receipt_ids": audit_receipt_ids,
+            },
+        ))
+
     # A declared observer is satisfied only by an OBSERVED typed receipt.
     observations["execution_steps"] = steps_out
+    observations["campaign_id"] = resolved_campaign_id
+    observations["execution_id"] = resolved_execution_id
     observations["binding_materialization_receipts"] = binding_materialization_receipts
-    observer_receipts = observe_experiment_requirements(exp, observations=observations)
+    observer_receipts = observe_experiment_requirements(
+        exp,
+        observations=observations,
+        campaign_id=resolved_campaign_id,
+        execution_id=resolved_execution_id,
+    )
     observations["observer_receipts"] = observer_receipts
     observed_ids: list[str] = []
     for receipt in observer_receipts:
@@ -856,6 +1274,12 @@ def execute_one_experiment(
             observations.update(_dict(receipt.get("evidence")))
             observations["business_effect_observer_receipt"] = receipt
     observations["observer_ids"] = list(dict.fromkeys(observed_ids))
+    observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
+    observations["fixture_receipts"] = list(fixture_receipts)
+    observations["source_refs"] = [
+        dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
+    ]
+    observations["cleanup_failures"] = cleanup_failures
 
     # Materialize + evaluate typed assertions via contract oracle.
     assertions = []
@@ -886,12 +1310,17 @@ def execute_one_experiment(
             "fixture_receipts": fixture_receipts,
             "binding_materialization_receipts": binding_materialization_receipts,
             "observer_receipts": observer_receipts,
+            "contract_evidence_receipts": contract_evidence_receipts,
             "oracle_verdict": verdict,
             "finding": None,
             "cleanup_failures": cleanup_failures,
             "execution_receipt": {"status": status, "reason_code": reason, "detail": detail},
         }
-    elif verdict.get("customer_deliverable") and verdict.get("verdict") == "customer_deliverable_defect_candidate":
+    elif (
+        verdict.get("status") == "VIOLATION"
+        and verdict.get("customer_deliverable_candidate") is True
+        and verdict.get("verdict") == "customer_deliverable_defect_candidate"
+    ):
         failed = _list(verdict.get("failed_assertions"))
         first = _dict(failed[0] if failed else {})
         treatment_plan = [step for step in _list(exp.get("treatment_plan")) if isinstance(step, dict)]
@@ -945,9 +1374,15 @@ def execute_one_experiment(
             "oracle": {
                 "oracle_name": "ContractOracle",
                 "oracle_tier": "contract",
-                "customer_deliverable": True,
+                "customer_deliverable": False,
+                "customer_deliverable_candidate": True,
                 "verdict": verdict.get("verdict"),
+                "status": verdict.get("status"),
+                "receipt_id": verdict.get("receipt_id"),
+                "activation_receipt_id": verdict.get("activation_receipt_id"),
             },
+            "oracle_receipt_id": verdict.get("receipt_id"),
+            "activation_receipt_id": verdict.get("activation_receipt_id"),
             "expected": first.get("expected"),
             "actual": first.get("actual"),
             "evidence": {
@@ -997,32 +1432,30 @@ def execute_one_experiment(
             },
             "reproduction_steps": reproduction_steps,
             "evidence_quality": {
-                "level": "validated",
-                "score": 95,
-                "can_reproduce": True,
-                "evidence_strength": "control_treatment_contract",
+                "level": "executed_candidate",
+                "score": 0,
+                "can_reproduce": False,
+                "evidence_strength": "typed_contract_violation_pending_gate",
             },
             "evidence_status": {
-                "semantic_verdict": "SEMANTIC_CONFIRMED",
-                "business_evidence_status": "VALIDATED",
-                "final_review_status": "VALIDATED_CANDIDATE",
-                "missing_requirements": [],
+                "semantic_verdict": "ASSERTION_VIOLATION",
+                "business_evidence_status": "PENDING_DELIVERY_GATE",
+                "final_review_status": "PENDING_DELIVERY_GATE",
+                "missing_requirements": ["independent_delivery_gate_receipt"],
             },
-            "final_review_status": "VALIDATED_CANDIDATE",
-            "business_evidence_status": "VALIDATED",
+            "final_review_status": "PENDING_DELIVERY_GATE",
+            "business_evidence_status": "PENDING_DELIVERY_GATE",
             "failed_assertions": failed,
             "cleanup_failures": cleanup_failures,
+            "contract_evidence_receipt_ids": [
+                _text(receipt.get("receipt_id"))
+                for receipt in contract_evidence_receipts
+            ],
         }
-        # Delivery gate still applies downstream; contract path starts as candidate
-        # until cleanup/evidence completeness is proven.
+        # The executor authors evidence and a candidate only.  It never authors
+        # the independent delivery decision that consumes this receipt chain.
         if cleanup_failures:
             finding = mark_as_internal_clue(finding, reason="cleanup_compensation_failed")
-        else:
-            # Promote only when control+typed assertion failed with real HTTP evidence.
-            finding["gate_passed"] = True
-            finding["confirmation_status"] = "confirmed"
-            finding["bug_status"] = "reproduced"
-            finding["customer_delivery_status"] = "defect"
     elif verdict.get("verdict") == "executed_clue":
         finding = mark_as_internal_clue(
             {
@@ -1052,6 +1485,7 @@ def execute_one_experiment(
         "fixture_receipts": fixture_receipts,
         "binding_materialization_receipts": binding_materialization_receipts,
         "observer_receipts": observer_receipts,
+        "contract_evidence_receipts": contract_evidence_receipts,
         "oracle_verdict": verdict,
         "finding": finding,
         "cleanup_failures": cleanup_failures,
@@ -1196,6 +1630,7 @@ def execute_selected_experiments(
             base_url=base_url,
             runtime_contract=runtime_contract,
             campaign_id=campaign_id,
+            execution_id=execution_id,
             actor_tokens=tokens,
         )
         eid = _text(outcome.get("experiment_id")) or eid
@@ -1258,23 +1693,19 @@ def execute_selected_experiments(
             observer_receipt_id = _text(observer_receipt.get("receipt_id"))
             if observer_receipt_id:
                 observation_receipt_ids.append(observer_receipt_id)
+        for contract_receipt in _list(outcome.get("contract_evidence_receipts")):
+            if not isinstance(contract_receipt, dict):
+                continue
+            contract_receipt_id = _text(contract_receipt.get("receipt_id"))
+            if contract_receipt_id:
+                observation_receipt_ids.append(contract_receipt_id)
         observation_receipt_ids = list(dict.fromkeys(observation_receipt_ids))
         oracle_verdict = _dict(outcome.get("oracle_verdict"))
         oracle_receipt_id = ""
         if oracle_verdict:
-            oracle_receipt_id = _stable_id(
-                "oracle",
-                execution_id,
-                json.dumps(
-                    oracle_verdict,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            )
-            oracle_verdict["receipt_id"] = oracle_receipt_id
-            outcome["oracle_verdict"] = oracle_verdict
+            validated_oracle = validate_contract_oracle_receipt(oracle_verdict)
+            oracle_receipt_id = _text(validated_oracle.get("receipt_id"))
+            outcome["oracle_verdict"] = validated_oracle
         status = _text(outcome.get("status")).upper()
         if status not in {"EXECUTED", "BLOCKED", "HARNESS_FAILURE", "HARNESS_FAILED"}:
             raise ValueError(f"experiment_execution_status_invalid:{status or 'MISSING'}")

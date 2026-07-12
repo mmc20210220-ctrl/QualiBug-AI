@@ -124,27 +124,24 @@ def compile_family_protocol(
             }
         return {
             "status": "COMPILED",
-            "control_plan": [],
-            "treatment_plan": [
-                {
-                    "step_id": "treatment_1",
-                    "actor_ref": treatment_actor_ref,
-                    "operation_ref": operation_ref,
-                    "intent": "idempotency_initial_write",
-                    "protocol_step": "initial_write",
-                    "body": deepcopy(body),
-                    "property_template": _text(property_spec.get("template")),
-                },
-                {
-                    "step_id": "treatment_2",
-                    "actor_ref": treatment_actor_ref,
-                    "operation_ref": operation_ref,
-                    "intent": "idempotency_repeat_write",
-                    "protocol_step": "repeat_write",
-                    "body": deepcopy(body),
-                    "property_template": _text(property_spec.get("template")),
-                },
-            ],
+            "control_plan": [{
+                "step_id": "control_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "idempotency_initial_write",
+                "protocol_step": "initial_write",
+                "body": deepcopy(body),
+                "property_template": _text(property_spec.get("template")),
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "idempotency_repeat_write",
+                "protocol_step": "repeat_write",
+                "body": deepcopy(body),
+                "property_template": _text(property_spec.get("template")),
+            }],
         }
 
     if family == "validation":

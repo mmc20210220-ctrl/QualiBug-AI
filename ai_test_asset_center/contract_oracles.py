@@ -6,10 +6,34 @@ downgraded to internal clues and must not enter customer-delivery.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
-from .assertion_dsl import evaluate_assertion
+from .assertion_dsl import evaluate_assertion, validate_assertion_receipt
+from .observer_contracts import validate_observer_receipt
+
+
+CONTRACT_EVIDENCE_RECEIPT_SCHEMA = "qualibug.contract-evidence-receipt.v1"
+ACTIVATION_RECEIPT_SCHEMA = "qualibug.contract-oracle-activation-receipt.v1"
+CONTRACT_ORACLE_RECEIPT_SCHEMA = "qualibug.contract-oracle-receipt.v1"
+_CONTRACT_EVIDENCE_KINDS = frozenset({
+    "actor",
+    "cleanup",
+    "control",
+    "fixture",
+    "lineage",
+    "reproduction",
+    "treatment",
+})
+_CONTRACT_EVIDENCE_STATUSES = frozenset({
+    "BLOCKED",
+    "COMPLETED",
+    "FAILED",
+    "NOT_REQUIRED",
+    "OBSERVED",
+})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -24,21 +48,464 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def activation_requirements_met(experiment: dict[str, Any], evidence: dict[str, Any]) -> tuple[bool, list[str]]:
-    missing: list[str] = []
+def _canonical(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _content_receipt(prefix: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **payload,
+        "receipt_id": prefix + hashlib.sha256(
+            _canonical(payload).encode("utf-8")
+        ).hexdigest()[:24],
+    }
+
+
+def build_contract_evidence_receipt(
+    *,
+    kind: str,
+    experiment_id: str,
+    obligation_id: str,
+    campaign_id: str,
+    execution_id: str,
+    subject_id: str,
+    status: str,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_kind = _text(kind).lower()
+    normalized_status = _text(status).upper()
+    if normalized_kind not in _CONTRACT_EVIDENCE_KINDS:
+        raise ValueError(f"contract_evidence_kind_invalid:{normalized_kind}")
+    if normalized_status not in _CONTRACT_EVIDENCE_STATUSES:
+        raise ValueError(f"contract_evidence_status_invalid:{normalized_status}")
+    if not all(
+        _text(value)
+        for value in (
+            experiment_id,
+            obligation_id,
+            campaign_id,
+            execution_id,
+            subject_id,
+        )
+    ):
+        raise ValueError("contract_evidence_identity_missing")
+    payload = {
+        "schema_version": CONTRACT_EVIDENCE_RECEIPT_SCHEMA,
+        "kind": normalized_kind,
+        "experiment_id": _text(experiment_id),
+        "obligation_id": _text(obligation_id),
+        "campaign_id": _text(campaign_id),
+        "execution_id": _text(execution_id),
+        "subject_id": _text(subject_id),
+        "status": normalized_status,
+        "evidence": dict(evidence or {}),
+    }
+    return _content_receipt("contract_", payload)
+
+
+def validate_contract_evidence_receipt(
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    row = _dict(receipt)
+    required = {
+        "schema_version",
+        "receipt_id",
+        "kind",
+        "experiment_id",
+        "obligation_id",
+        "campaign_id",
+        "execution_id",
+        "subject_id",
+        "status",
+        "evidence",
+    }
+    if set(row) != required:
+        raise ValueError("contract_evidence_receipt_fields_invalid")
+    if row.get("schema_version") != CONTRACT_EVIDENCE_RECEIPT_SCHEMA:
+        raise ValueError("contract_evidence_receipt_schema_invalid")
+    if not isinstance(row.get("evidence"), dict):
+        raise ValueError("contract_evidence_receipt_content_invalid")
+    expected = build_contract_evidence_receipt(
+        kind=_text(row.get("kind")),
+        experiment_id=_text(row.get("experiment_id")),
+        obligation_id=_text(row.get("obligation_id")),
+        campaign_id=_text(row.get("campaign_id")),
+        execution_id=_text(row.get("execution_id")),
+        subject_id=_text(row.get("subject_id")),
+        status=_text(row.get("status")),
+        evidence=dict(row["evidence"]),
+    )
+    if row != expected:
+        raise ValueError("contract_evidence_receipt_fingerprint_invalid")
+    return dict(expected)
+
+
+def _plan_subjects(experiment: dict[str, Any], key: str, prefix: str) -> list[str]:
+    subjects: list[str] = []
+    for index, raw in enumerate(_list(experiment.get(key))):
+        step = _dict(raw)
+        subject = _text(step.get("step_id") or step.get("id"))
+        if not subject:
+            operation = _text(step.get("operation_ref")) or "operation"
+            subject = f"{prefix}:{operation}:{index + 1}"
+        subjects.append(subject)
+    return list(dict.fromkeys(subjects))
+
+
+def contract_activation_requirements(
+    experiment: dict[str, Any],
+) -> dict[str, list[str]]:
+    exp = _dict(experiment)
+    controls = _plan_subjects(exp, "control_plan", "control")
+    treatments = _plan_subjects(exp, "treatment_plan", "treatment")
+    actors = sorted({
+        _text(_dict(step).get("actor_ref"))
+        for step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan"))
+        if _text(_dict(step).get("actor_ref"))
+    })
+    dag = _dict(exp.get("fixture_dag"))
+    nodes = {
+        _text(_dict(node).get("node_id")): _dict(node)
+        for node in _list(dag.get("nodes"))
+        if _text(_dict(node).get("node_id"))
+    }
+    setup_order = [
+        _text(item) for item in _list(dag.get("setup_order")) if _text(item)
+    ]
+    fixtures = list(dict.fromkeys(setup_order or sorted(nodes)))
+    actors = sorted(set(actors).union({
+        _text(node.get("actor_ref"))
+        for node in nodes.values()
+        if _text(node.get("actor_ref"))
+    }))
+    observers = list(dict.fromkeys(
+        _text(_dict(observer).get("observer_id"))
+        for observer in _list(exp.get("observers"))
+        if _text(_dict(observer).get("observer_id"))
+    ))
+    cleanup = _plan_subjects(exp, "cleanup_plan", "cleanup")
+    for binding in _list(exp.get("binding_plan")):
+        row = _dict(binding)
+        fixture_setup = _dict(row.get("fixture_setup"))
+        if (
+            row.get("force_fixture_setup") is True
+            and _list(fixture_setup.get("cleanup_operations"))
+        ):
+            target = _text(row.get("target"))
+            if target:
+                cleanup.append(f"fixture_cleanup:{target}")
+    return {
+        "control": controls,
+        "treatment": treatments,
+        "actor": actors,
+        "fixture": fixtures,
+        "observer": observers,
+        "cleanup": list(dict.fromkeys(cleanup)),
+    }
+
+
+def build_contract_oracle_activation_receipt(
+    *,
+    experiment: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
     exp = _dict(experiment)
     ev = _dict(evidence)
-    if _list(exp.get("control_plan")) and not ev.get("control_succeeded") and not ev.get("control_observation"):
-        missing.append("control_evidence")
-    if _list(exp.get("treatment_plan")) and not ev.get("treatment_observation") and not ev.get("treatment_result"):
-        missing.append("treatment_evidence")
-    for observer in _list(exp.get("observers")):
-        oid = _text(_dict(observer).get("observer_id"))
-        if oid and oid not in set(_text(x) for x in _list(ev.get("observer_ids"))) and oid not in ev:
-            missing.append(f"observer:{oid}")
+    experiment_id = _text(exp.get("experiment_id"))
+    obligation_id = _text(exp.get("obligation_id"))
+    campaign_id = _text(exp.get("campaign_id"))
+    execution_id = _text(exp.get("execution_id"))
+    if not experiment_id or not obligation_id or not campaign_id or not execution_id:
+        raise ValueError("contract_activation_identity_missing")
+    required = contract_activation_requirements(exp)
+    blockers: list[str] = []
+    harness_failures: list[str] = []
+    source_refs = [
+        dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
+    ]
+    if not source_refs:
+        blockers.append("SOURCE_REFS_MISSING")
+    if not required["control"]:
+        blockers.append("CONTROL_PLAN_MISSING")
+    if not required["treatment"]:
+        blockers.append("TREATMENT_PLAN_MISSING")
+    if not any(isinstance(item, dict) for item in _list(exp.get("assertions"))):
+        blockers.append("TYPED_ASSERTION_MISSING")
     if ev.get("harness_error"):
-        missing.append("harness_error_present")
-    return (not missing), missing
+        harness_failures.append("HARNESS_ERROR_PRESENT")
+
+    raw_contract_receipts = ev.get("contract_evidence_receipts", [])
+    contract_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    if not isinstance(raw_contract_receipts, list):
+        harness_failures.append("CONTRACT_EVIDENCE_RECEIPTS_NOT_LIST")
+        raw_contract_receipts = []
+    for index, raw in enumerate(raw_contract_receipts):
+        try:
+            validated = validate_contract_evidence_receipt(raw)
+        except Exception as exc:
+            harness_failures.append(
+                f"CONTRACT_EVIDENCE_RECEIPT_INVALID:{index}:{type(exc).__name__}:{exc}"
+            )
+            continue
+        if (
+            _text(validated.get("experiment_id")) != experiment_id
+            or _text(validated.get("obligation_id")) != obligation_id
+            or _text(validated.get("campaign_id")) != campaign_id
+            or _text(validated.get("execution_id")) != execution_id
+        ):
+            harness_failures.append(
+                f"CONTRACT_EVIDENCE_LINEAGE_MISMATCH:{index}"
+            )
+            continue
+        key = (_text(validated.get("kind")), _text(validated.get("subject_id")))
+        if key in contract_by_key:
+            harness_failures.append(
+                f"CONTRACT_EVIDENCE_IDENTITY_DUPLICATE:{key[0]}:{key[1]}"
+            )
+            continue
+        contract_by_key[key] = validated
+        status = _text(validated.get("status")).upper()
+        if status == "FAILED":
+            harness_failures.append(
+                f"{key[0].upper()}_RECEIPT_FAILED:{key[1]}"
+            )
+        elif status == "BLOCKED":
+            blockers.append(f"{key[0].upper()}_RECEIPT_BLOCKED:{key[1]}")
+
+    verified: dict[str, list[str]] = {
+        "control": [],
+        "treatment": [],
+        "actor": [],
+        "fixture": [],
+        "observer": [],
+        "cleanup": [],
+    }
+    for kind in ("control", "treatment", "actor", "fixture", "cleanup"):
+        for subject in required[kind]:
+            receipt = contract_by_key.get((kind, subject))
+            if receipt is None:
+                blockers.append(f"MISSING_{kind.upper()}_RECEIPT:{subject}")
+                continue
+            receipt_status = _text(receipt.get("status")).upper()
+            receipt_evidence = _dict(receipt.get("evidence"))
+            if kind == "cleanup":
+                audit_receipt_ids = [
+                    _text(item)
+                    for item in _list(receipt_evidence.get("audit_receipt_ids"))
+                    if _text(item)
+                ]
+                completed_with_proof = (
+                    receipt_status == "COMPLETED"
+                    and receipt_evidence.get("restoration_verified") is True
+                    and receipt_evidence.get("state_unchanged") is True
+                    and int(receipt_evidence.get("accepted_write_count") or 0) > 0
+                    and int(receipt_evidence.get("cleanup_write_count") or 0) > 0
+                    and bool(audit_receipt_ids)
+                )
+                not_required_with_proof = (
+                    receipt_status == "NOT_REQUIRED"
+                    and int(receipt_evidence.get("accepted_write_count") or 0) == 0
+                    and int(receipt_evidence.get("cleanup_write_count") or 0) == 0
+                    and receipt_evidence.get("state_unchanged") is True
+                    and bool(audit_receipt_ids)
+                )
+                if completed_with_proof or not_required_with_proof:
+                    verified[kind].append(_text(receipt.get("receipt_id")))
+                    continue
+                if receipt_status not in {"FAILED", "BLOCKED"}:
+                    blockers.append(
+                        f"CLEANUP_RESTORATION_NOT_PROVEN:{subject}"
+                    )
+                continue
+            if receipt_status != "OBSERVED":
+                if receipt_status not in {"FAILED", "BLOCKED"}:
+                    blockers.append(
+                        f"{kind.upper()}_RECEIPT_NOT_SATISFIED:{subject}"
+                    )
+                continue
+            if kind == "control" and not (
+                receipt_evidence.get("response_observed") is True
+                and receipt_evidence.get("control_succeeded") is True
+                and 200 <= int(receipt_evidence.get("status_code") or 0) < 300
+            ):
+                blockers.append(f"CONTROL_SUCCESS_NOT_PROVEN:{subject}")
+                continue
+            if kind == "treatment" and not (
+                receipt_evidence.get("response_observed") is True
+                and int(receipt_evidence.get("status_code") or 0) > 0
+            ):
+                blockers.append(f"TREATMENT_OBSERVATION_NOT_PROVEN:{subject}")
+                continue
+            verified[kind].append(_text(receipt.get("receipt_id")))
+
+    raw_observers = ev.get("observer_receipts", [])
+    observer_by_id: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw_observers, list):
+        harness_failures.append("OBSERVER_RECEIPTS_NOT_LIST")
+        raw_observers = []
+    for index, raw in enumerate(raw_observers):
+        try:
+            observer = validate_observer_receipt(raw)
+        except Exception as exc:
+            harness_failures.append(
+                f"OBSERVER_RECEIPT_INVALID:{index}:{type(exc).__name__}:{exc}"
+            )
+            continue
+        observer_id = _text(observer.get("observer_id"))
+        if (
+            _text(observer.get("campaign_id")) != campaign_id
+            or _text(observer.get("execution_id")) != execution_id
+        ):
+            harness_failures.append(
+                f"OBSERVER_RECEIPT_LINEAGE_MISMATCH:{observer_id or index}"
+            )
+            continue
+        if observer_id in observer_by_id:
+            harness_failures.append(f"OBSERVER_RECEIPT_DUPLICATE:{observer_id}")
+            continue
+        observer_by_id[observer_id] = observer
+        observer_status = _text(observer.get("status")).upper()
+        if observer_status in {"FAILED", "UNSUPPORTED"}:
+            harness_failures.append(
+                f"OBSERVER_RECEIPT_{observer_status}:{observer_id}"
+            )
+    for observer_id in required["observer"]:
+        observer = observer_by_id.get(observer_id)
+        if observer is None:
+            blockers.append(f"MISSING_OBSERVER_RECEIPT:{observer_id}")
+            continue
+        if _text(observer.get("status")).upper() != "OBSERVED":
+            if _text(observer.get("status")).upper() == "INDETERMINATE":
+                blockers.append(f"OBSERVER_RECEIPT_INDETERMINATE:{observer_id}")
+            continue
+        verified["observer"].append(_text(observer.get("receipt_id")))
+
+    reason_codes = sorted(set([*harness_failures, *blockers]))
+    status = (
+        "HARNESS_FAILED"
+        if harness_failures
+        else "BLOCKED"
+        if blockers
+        else "ACTIVE"
+    )
+    payload = {
+        "schema_version": ACTIVATION_RECEIPT_SCHEMA,
+        "experiment_id": experiment_id,
+        "obligation_id": obligation_id,
+        "campaign_id": campaign_id,
+        "execution_id": execution_id,
+        "status": status,
+        "reason_codes": reason_codes,
+        "required": {key: list(value) for key, value in required.items()},
+        "verified_receipt_ids": {
+            key: sorted(set(value)) for key, value in verified.items()
+        },
+        "source_refs": source_refs,
+    }
+    return _content_receipt("activation_", payload)
+
+
+def validate_contract_oracle_activation_receipt(
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    row = _dict(receipt)
+    required_fields = {
+        "schema_version",
+        "receipt_id",
+        "experiment_id",
+        "obligation_id",
+        "campaign_id",
+        "execution_id",
+        "status",
+        "reason_codes",
+        "required",
+        "verified_receipt_ids",
+        "source_refs",
+    }
+    if set(row) != required_fields:
+        raise ValueError("activation_receipt_fields_invalid")
+    if row.get("schema_version") != ACTIVATION_RECEIPT_SCHEMA:
+        raise ValueError("activation_receipt_schema_invalid")
+    if _text(row.get("status")) not in {"ACTIVE", "BLOCKED", "HARNESS_FAILED"}:
+        raise ValueError("activation_receipt_status_invalid")
+    if not all(
+        isinstance(row.get(field), expected_type)
+        for field, expected_type in (
+            ("reason_codes", list),
+            ("required", dict),
+            ("verified_receipt_ids", dict),
+            ("source_refs", list),
+        )
+    ):
+        raise ValueError("activation_receipt_content_invalid")
+    if not all(
+        _text(row.get(field))
+        for field in (
+            "experiment_id",
+            "obligation_id",
+            "campaign_id",
+            "execution_id",
+        )
+    ):
+        raise ValueError("activation_receipt_identity_missing")
+    requirement_keys = {
+        "control",
+        "treatment",
+        "actor",
+        "fixture",
+        "observer",
+        "cleanup",
+    }
+    required = _dict(row.get("required"))
+    verified = _dict(row.get("verified_receipt_ids"))
+    if set(required) != requirement_keys or set(verified) != requirement_keys:
+        raise ValueError("activation_receipt_requirement_keys_invalid")
+    if not all(
+        isinstance(required[key], list) and isinstance(verified[key], list)
+        for key in requirement_keys
+    ):
+        raise ValueError("activation_receipt_requirement_content_invalid")
+    status = _text(row.get("status"))
+    reason_codes = [_text(item) for item in _list(row.get("reason_codes"))]
+    if (
+        (status == "ACTIVE" and reason_codes)
+        or (status != "ACTIVE" and not reason_codes)
+        or (
+            status == "ACTIVE"
+            and (
+                not required["control"]
+                or not required["treatment"]
+                or not row.get("source_refs")
+                or any(
+                    len(verified[key]) != len(required[key])
+                    for key in requirement_keys
+                )
+            )
+        )
+    ):
+        raise ValueError("activation_receipt_semantics_invalid")
+    payload = {key: value for key, value in row.items() if key != "receipt_id"}
+    expected = _content_receipt("activation_", payload)
+    if row != expected:
+        raise ValueError("activation_receipt_fingerprint_invalid")
+    return dict(expected)
+
+
+def activation_requirements_met(
+    experiment: dict[str, Any],
+    evidence: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    activation = build_contract_oracle_activation_receipt(
+        experiment=experiment,
+        evidence=evidence,
+    )
+    return activation["status"] == "ACTIVE", list(activation["reason_codes"])
 
 
 def mark_as_internal_clue(finding: dict[str, Any], *, reason: str) -> dict[str, Any]:
@@ -50,73 +517,284 @@ def mark_as_internal_clue(finding: dict[str, Any], *, reason: str) -> dict[str, 
     return row
 
 
+def _contract_oracle_receipt(
+    *,
+    experiment: dict[str, Any],
+    status: str,
+    verdict: str,
+    activation: dict[str, Any],
+    assertions: list[dict[str, Any]],
+    missing_requirements: list[str],
+    demotion_reason: str = "",
+) -> dict[str, Any]:
+    violations = [item for item in assertions if item.get("status") == "VIOLATION"]
+    indeterminate = [
+        item for item in assertions if item.get("status") == "INDETERMINATE"
+    ]
+    payload = {
+        "schema_version": CONTRACT_ORACLE_RECEIPT_SCHEMA,
+        "experiment_id": _text(experiment.get("experiment_id")),
+        "obligation_id": _text(experiment.get("obligation_id")),
+        "campaign_id": _text(experiment.get("campaign_id")),
+        "execution_id": _text(experiment.get("execution_id")),
+        "status": _text(status).upper(),
+        "verdict": _text(verdict),
+        "customer_deliverable": False,
+        "customer_deliverable_candidate": _text(status).upper() == "VIOLATION",
+        "activation_receipt_id": _text(activation.get("receipt_id")),
+        "activation_receipt": dict(activation),
+        "assertion_receipt_ids": [
+            _text(item.get("receipt_id")) for item in assertions
+        ],
+        "violation_assertion_receipt_ids": [
+            _text(item.get("receipt_id")) for item in violations
+        ],
+        "indeterminate_assertion_receipt_ids": [
+            _text(item.get("receipt_id")) for item in indeterminate
+        ],
+        "assertions": [dict(item) for item in assertions],
+        "failed_assertions": [dict(item) for item in violations],
+        "missing_requirements": sorted(
+            set(_text(item) for item in missing_requirements if _text(item))
+        ),
+        "demotion_reason": _text(demotion_reason),
+    }
+    return _content_receipt("oracle_", payload)
+
+
+def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    row = _dict(receipt)
+    required_fields = {
+        "schema_version",
+        "receipt_id",
+        "experiment_id",
+        "obligation_id",
+        "campaign_id",
+        "execution_id",
+        "status",
+        "verdict",
+        "customer_deliverable",
+        "customer_deliverable_candidate",
+        "activation_receipt_id",
+        "activation_receipt",
+        "assertion_receipt_ids",
+        "violation_assertion_receipt_ids",
+        "indeterminate_assertion_receipt_ids",
+        "assertions",
+        "failed_assertions",
+        "missing_requirements",
+        "demotion_reason",
+    }
+    if set(row) != required_fields:
+        raise ValueError("contract_oracle_receipt_fields_invalid")
+    if row.get("schema_version") != CONTRACT_ORACLE_RECEIPT_SCHEMA:
+        raise ValueError("contract_oracle_receipt_schema_invalid")
+    activation = validate_contract_oracle_activation_receipt(
+        _dict(row.get("activation_receipt"))
+    )
+    if _text(row.get("activation_receipt_id")) != _text(activation.get("receipt_id")):
+        raise ValueError("contract_oracle_activation_identity_mismatch")
+    for field in (
+        "experiment_id",
+        "obligation_id",
+        "campaign_id",
+        "execution_id",
+    ):
+        if not _text(row.get(field)) or _text(row.get(field)) != _text(
+            activation.get(field)
+        ):
+            raise ValueError("contract_oracle_lineage_mismatch")
+    assertions = [
+        validate_assertion_receipt(_dict(item))
+        for item in _list(row.get("assertions"))
+    ]
+    if any(
+        _text(item.get("campaign_id")) != _text(row.get("campaign_id"))
+        or _text(item.get("execution_id")) != _text(row.get("execution_id"))
+        for item in assertions
+    ):
+        raise ValueError("contract_oracle_assertion_lineage_mismatch")
+    if [_text(item.get("receipt_id")) for item in assertions] != list(
+        row.get("assertion_receipt_ids") or []
+    ):
+        raise ValueError("contract_oracle_assertion_identity_mismatch")
+    violations = [item for item in assertions if item.get("status") == "VIOLATION"]
+    indeterminate = [
+        item for item in assertions if item.get("status") == "INDETERMINATE"
+    ]
+    assertion_harness = [
+        item for item in assertions if item.get("harness_error") is True
+    ]
+    activation_status = _text(activation.get("status"))
+    if activation_status == "HARNESS_FAILED":
+        expected_status = "HARNESS_FAILED"
+        expected_verdict = "harness_failure"
+        expected_missing = list(activation.get("reason_codes") or [])
+        expected_demotion = ""
+    elif activation_status != "ACTIVE":
+        expected_status = "BLOCKED"
+        expected_verdict = "blocked_experiment"
+        expected_missing = list(activation.get("reason_codes") or [])
+        expected_demotion = ""
+    elif assertion_harness:
+        expected_status = "HARNESS_FAILED"
+        expected_verdict = "harness_failure"
+        expected_missing = [
+            _text(item.get("reason_code")) for item in assertion_harness
+        ]
+        expected_demotion = ""
+    elif indeterminate:
+        expected_status = "INDETERMINATE"
+        expected_verdict = "indeterminate"
+        expected_missing = [
+            _text(item.get("reason_code")) for item in indeterminate
+        ]
+        expected_demotion = "assertion_evidence_indeterminate"
+    elif violations:
+        expected_status = "VIOLATION"
+        expected_verdict = "customer_deliverable_defect_candidate"
+        expected_missing = []
+        expected_demotion = ""
+    else:
+        expected_status = "PROPERTY_HELD"
+        expected_verdict = "property_held"
+        expected_missing = []
+        expected_demotion = ""
+    expected_violation_ids = [
+        _text(item.get("receipt_id")) for item in violations
+    ]
+    expected_indeterminate_ids = [
+        _text(item.get("receipt_id")) for item in indeterminate
+    ]
+    if any((
+        _text(row.get("status")) != expected_status,
+        _text(row.get("verdict")) != expected_verdict,
+        row.get("customer_deliverable") is not False,
+        row.get("customer_deliverable_candidate")
+        is not (expected_status == "VIOLATION"),
+        list(row.get("violation_assertion_receipt_ids") or [])
+        != expected_violation_ids,
+        list(row.get("indeterminate_assertion_receipt_ids") or [])
+        != expected_indeterminate_ids,
+        list(row.get("failed_assertions") or []) != violations,
+        list(row.get("missing_requirements") or [])
+        != sorted(set(expected_missing)),
+        _text(row.get("demotion_reason")) != expected_demotion,
+    )):
+        raise ValueError("contract_oracle_semantics_invalid")
+    payload = {key: value for key, value in row.items() if key != "receipt_id"}
+    expected = _content_receipt("oracle_", payload)
+    if row != expected:
+        raise ValueError("contract_oracle_receipt_fingerprint_invalid")
+    return dict(expected)
+
+
 def evaluate_contract_oracle(
     *,
     experiment: dict[str, Any],
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
-    """Evaluate contract assertions; harness errors never become defects."""
-    ok, missing = activation_requirements_met(experiment, evidence)
-    if _dict(evidence).get("harness_error"):
-        return {
-            "verdict": "harness_failure",
-            "customer_deliverable": False,
-            "missing_requirements": missing or ["harness_error"],
-            "assertions": [],
-        }
-    if not ok:
-        return {
-            "verdict": "blocked_experiment",
-            "customer_deliverable": False,
-            "missing_requirements": missing,
-            "assertions": [],
-        }
+    """Resolve only fully activated typed assertions; gaps never become defects."""
+    exp = _dict(experiment)
+    ev = _dict(evidence)
+    activation = build_contract_oracle_activation_receipt(
+        experiment=exp,
+        evidence=ev,
+    )
+    activation_status = _text(activation.get("status"))
+    if activation_status == "HARNESS_FAILED":
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="HARNESS_FAILED",
+            verdict="harness_failure",
+            activation=activation,
+            assertions=[],
+            missing_requirements=list(activation.get("reason_codes") or []),
+        )
+    if activation_status != "ACTIVE":
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="BLOCKED",
+            verdict="blocked_experiment",
+            activation=activation,
+            assertions=[],
+            missing_requirements=list(activation.get("reason_codes") or []),
+        )
 
-    assertion_results = []
-    for assertion in _list(experiment.get("assertions")):
-        if not isinstance(assertion, dict):
-            continue
-        result = evaluate_assertion(assertion, observations=evidence, source_refs=list(experiment.get("source_refs") or []))
-        assertion_results.append(result)
+    assertion_results: list[dict[str, Any]] = []
+    try:
+        for assertion in _list(exp.get("assertions")):
+            if not isinstance(assertion, dict):
+                continue
+            result = evaluate_assertion(
+                assertion,
+                observations=ev,
+                source_refs=list(exp.get("source_refs") or []),
+                campaign_id=_text(exp.get("campaign_id")),
+                execution_id=_text(exp.get("execution_id")),
+            )
+            assertion_results.append(validate_assertion_receipt(result))
+    except Exception as exc:
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="HARNESS_FAILED",
+            verdict="harness_failure",
+            activation=activation,
+            assertions=assertion_results,
+            missing_requirements=[
+                f"ASSERTION_RECEIPT_INVALID:{type(exc).__name__}:{exc}"
+            ],
+        )
 
-    # Heuristic dual-2xx concurrency/idempotency without business effect → clue only
-    family = ""
-    for assertion in _list(experiment.get("assertions")):
-        family = _text(_dict(assertion).get("kind"))
-        if family:
-            break
-    if family in {"concurrency", "idempotency"}:
-        if evidence.get("dual_2xx") and evidence.get("effect_count") is None and evidence.get("invariant_held") is None:
-            return {
-                "verdict": "executed_clue",
-                "customer_deliverable": False,
-                "missing_requirements": ["business_effect_or_final_invariant"],
-                "assertions": assertion_results,
-                "demotion_reason": "http_status_heuristic_insufficient",
-            }
-
-    failed = [item for item in assertion_results if not item.get("passed")]
-    if not assertion_results:
-        return {
-            "verdict": "executed_clue",
-            "customer_deliverable": False,
-            "missing_requirements": ["typed_assertion"],
-            "assertions": [],
-        }
-    if failed:
-        return {
-            "verdict": "customer_deliverable_defect_candidate",
-            "customer_deliverable": True,
-            "missing_requirements": [],
-            "assertions": assertion_results,
-            "failed_assertions": failed,
-        }
-    return {
-        "verdict": "property_held",
-        "customer_deliverable": False,
-        "missing_requirements": [],
-        "assertions": assertion_results,
-    }
+    assertion_harness = [
+        item for item in assertion_results if item.get("harness_error") is True
+    ]
+    indeterminate = [
+        item for item in assertion_results if item.get("status") == "INDETERMINATE"
+    ]
+    violations = [
+        item for item in assertion_results if item.get("status") == "VIOLATION"
+    ]
+    if assertion_harness:
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="HARNESS_FAILED",
+            verdict="harness_failure",
+            activation=activation,
+            assertions=assertion_results,
+            missing_requirements=[
+                _text(item.get("reason_code")) for item in assertion_harness
+            ],
+        )
+    if indeterminate:
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="INDETERMINATE",
+            verdict="indeterminate",
+            activation=activation,
+            assertions=assertion_results,
+            missing_requirements=[
+                _text(item.get("reason_code")) for item in indeterminate
+            ],
+            demotion_reason="assertion_evidence_indeterminate",
+        )
+    if violations:
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="VIOLATION",
+            verdict="customer_deliverable_defect_candidate",
+            activation=activation,
+            assertions=assertion_results,
+            missing_requirements=[],
+        )
+    return _contract_oracle_receipt(
+        experiment=exp,
+        status="PROPERTY_HELD",
+        verdict="property_held",
+        activation=activation,
+        assertions=assertion_results,
+        missing_requirements=[],
+    )
 
 
 HEURISTIC_BUSINESS_ORACLE_NAMES = frozenset({
@@ -161,14 +839,26 @@ def heuristic_status_only_signal(evidence: dict[str, Any]) -> bool:
 def scenario_has_contract_activation(scenario: dict[str, Any]) -> bool:
     """Scenario may produce customer-deliverable business-oracle defects only with contract."""
     sc = _dict(scenario)
-    if sc.get("contract_oracle_enabled") is True:
-        return True
+    embedded = _dict(
+        sc.get("contract_oracle_activation_receipt")
+        or sc.get("activation_receipt")
+    )
     exp = _dict(sc.get("experiment_contract") or sc.get("experiment"))
-    if _list(exp.get("assertions")) and (_list(exp.get("control_plan")) or _list(exp.get("treatment_plan"))):
-        return True
     evidence = _dict(sc.get("contract_evidence") or sc.get("evidence"))
-    has_control = bool(evidence.get("control_succeeded") or evidence.get("authorized_control") or evidence.get("control_observation"))
-    return has_control and contract_effect_evidence_present(evidence)
+    if not exp or not isinstance(evidence.get("contract_evidence_receipts"), list):
+        return False
+    try:
+        recomputed = build_contract_oracle_activation_receipt(
+            experiment=exp,
+            evidence=evidence,
+        )
+        if embedded:
+            validated = validate_contract_oracle_activation_receipt(embedded)
+            if validated != recomputed:
+                return False
+    except ValueError:
+        return False
+    return recomputed.get("status") == "ACTIVE"
 
 
 def _source_grounded_permission_bypass(finding: dict[str, Any]) -> bool:

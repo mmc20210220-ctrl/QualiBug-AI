@@ -57,6 +57,11 @@ def _idempotency_ir() -> dict:
 def _idempotency_obligation() -> dict:
     return {
         "obligation_id": "obl-idempotency",
+        "source_refs": [{
+            "kind": "api_contract",
+            "source_id": "resource-api",
+            "locator": "POST /resources",
+        }],
         "risk_family": "idempotency",
         "property": {
             "operation_ref": "op-create",
@@ -83,14 +88,14 @@ def test_idempotency_compiles_repeated_identical_write_protocol() -> None:
     )
 
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
-    assert experiment["control_plan"] == []
-    assert [step["protocol_step"] for step in experiment["treatment_plan"]] == [
+    assert [step["protocol_step"] for step in experiment["control_plan"]] == [
         "initial_write",
+    ]
+    assert [step["protocol_step"] for step in experiment["treatment_plan"]] == [
         "repeat_write",
     ]
-    assert len(experiment["treatment_plan"]) == 2
-    assert experiment["treatment_plan"][0]["body"] == experiment["treatment_plan"][1]["body"]
-    assert experiment["treatment_plan"][0]["body"] is not experiment["treatment_plan"][1]["body"]
+    assert experiment["control_plan"][0]["body"] == experiment["treatment_plan"][0]["body"]
+    assert experiment["control_plan"][0]["body"] is not experiment["treatment_plan"][0]["body"]
     assert {row["observer_id"] for row in experiment["observers"]} == {
         "business_effect",
         "http_response",
@@ -313,7 +318,10 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
 
     def governed_write(**kwargs):
         nonlocal write_index
-        if kwargs["operation_phase"] == "experiment_treatment":
+        if kwargs["operation_phase"] in {
+            "experiment_control",
+            "experiment_treatment",
+        }:
             write_index += 1
             write_id = f"r-{write_index}"
             before = [{"id": f"r-{index}"} for index in range(1, write_index)]
@@ -321,18 +329,29 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
             return {
                 "accepted": True,
                 "status": "executed",
+                "method": kwargs["method"],
+                "path": kwargs["path"],
                 "before": {"status": 200, "body": before},
                 "write": {"status": 201, "body": {"id": write_id}},
                 "after": {"status": 200, "body": after},
+                "audit_path": "sandbox_write_audit.jsonl",
+                "audit_record": {
+                    "phase": kwargs["operation_phase"],
+                    "id": write_id,
+                },
             }
         assert kwargs["operation_phase"] == "experiment_cleanup"
         cleanup_paths.append(kwargs["path"])
         return {
             "accepted": True,
             "status": "executed",
+            "method": kwargs["method"],
+            "path": kwargs["path"],
             "before": {"status": 200, "body": {"id": kwargs["path"].rsplit("/", 1)[-1]}},
             "write": {"status": 204, "body": {}},
             "after": {"status": 404, "body": {}},
+            "audit_path": "sandbox_write_audit.jsonl",
+            "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
         }
 
     monkeypatch.setattr(
@@ -352,6 +371,7 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
         base_url="http://target.invalid",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign",
+        execution_id="execution-idempotency",
         actor_tokens={},
     )
 
@@ -425,6 +445,11 @@ def _isolation_ir() -> dict:
 def _isolation_obligation() -> dict:
     return {
         "obligation_id": "obl-isolation",
+        "source_refs": [{
+            "kind": "permission_matrix",
+            "source_id": "resource-roles",
+            "locator": "owner->viewer:resource.read:DENY",
+        }],
         "risk_family": "isolation",
         "property": {
             "operation_ref": "op-read",
@@ -504,21 +529,29 @@ def test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt(
             return {
                 "accepted": True,
                 "status": "executed",
+                "method": kwargs["method"],
+                "path": kwargs["path"],
                 "before": {"status": 200, "body": [{"id": "existing"}]},
                 "write": {"status": 201, "body": {"id": "r-owned"}},
                 "after": {
                     "status": 200,
                     "body": [{"id": "existing"}, {"id": "r-owned"}],
                 },
+                "audit_path": "sandbox_write_audit.jsonl",
+                "audit_record": {"phase": "fixture_setup", "path": kwargs["path"]},
             }
         assert kwargs["operation_phase"] == "experiment_fixture_cleanup"
         assert kwargs["path"] == "/resources/r-owned"
         return {
             "accepted": True,
             "status": "executed",
+            "method": kwargs["method"],
+            "path": kwargs["path"],
             "before": {"status": 200, "body": {"id": "r-owned"}},
             "write": {"status": 204, "body": {}},
             "after": {"status": 404, "body": {}},
+            "audit_path": "sandbox_write_audit.jsonl",
+            "audit_record": {"phase": "fixture_cleanup", "path": kwargs["path"]},
         }
 
     monkeypatch.setattr(
@@ -538,6 +571,7 @@ def test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt(
         base_url="http://target.invalid",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign",
+        execution_id="execution-isolation",
         actor_tokens={},
     )
 
@@ -594,6 +628,7 @@ def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
         base_url="http://target.invalid",
         runtime_contract={"environment_type": "test"},
         campaign_id="campaign",
+        execution_id="execution-fixture-failure",
         actor_tokens={},
     )
 
