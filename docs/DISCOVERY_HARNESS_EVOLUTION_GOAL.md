@@ -16,6 +16,32 @@ subordinate to these gates and must not weaken them.
 It must be regenerated from the repository documentation and is not an
 independently editable source of truth.
 
+## Phase 1 single-mainline checkpoint (2026-07-12)
+
+The approved first architecture-simplification phase is defined in
+`docs/superpowers/specs/2026-07-12-discovery-single-mainline-phase1-design.md`.
+It converges runtime on one pre-selected authoritative path:
+
+```text
+Behavior IR -> Test Obligations -> Executable Experiments
+  -> Governed Execution -> Typed Observers/Assertions
+  -> Delivery Gate -> Quality Projection -> External Evaluator
+```
+
+This checkpoint does not change Gate D, controlled-pilot, or GA thresholds.
+It requires one authoritative scheduler and formal path per run, immutable
+pre-run authority with no exception fallback, one terminal attempt receipt per
+selected obligation, obligation-keyed traceability, healthy execution and
+cleanup, exact formal-ID/count consistency, and no external TP/Recall/
+Precision/F1 regression from the eligible clean champion. Legacy and LLM
+inputs may remain only as source-grounded Obligation adapters after cutover.
+
+Stage-local single-variable verification p50 wall time must improve by at least
+60% from a frozen measured engineering baseline. This is an engineering-cycle
+checkpoint, not a substitute for externally measured quality. The existing
+P1 compile-rate, execution, engine, evidence, write-audit, and cleanup gates
+remain in force and are not lowered when incomplete.
+
 ## Gate D implementation checkpoint (2026-07-10)
 
 The repository now exposes the following contracts without changing the Gate D
