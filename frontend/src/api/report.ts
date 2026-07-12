@@ -1,5 +1,6 @@
 import type { Finding } from '../types';
 import { formatBeijingDateTime } from '../lib/time';
+import { renderBehaviorFieldSvg } from '../brand/renderBehaviorFieldSvg';
 
 interface ReportData {
   projectName: string;
@@ -166,32 +167,14 @@ export function renderReportHTML(d: ReportData): string {
   <!-- Cover -->
   <div class="cover">
     <div class="logo">
-      <svg width="40" height="40" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="report-brand-outer" x1="16" y1="96" x2="100" y2="24" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#1D4ED8"/>
-            <stop offset="0.55" stop-color="#2563EB"/>
-            <stop offset="1" stop-color="#22D3EE"/>
-          </linearGradient>
-          <linearGradient id="report-brand-accent" x1="38" y1="88" x2="96" y2="42" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#2563EB"/>
-            <stop offset="1" stop-color="#2DD4BF"/>
-          </linearGradient>
-        </defs>
-        <path d="M85 29C77 21 66 17 54 17c-24.85 0-45 20.15-45 45s20.15 45 45 45c11.34 0 21.71-4.2 29.63-11.14" stroke="url(#report-brand-outer)" stroke-width="12" stroke-linecap="round"/>
-        <path d="M53 36c16.42 0 31.07 7.57 40.67 19.42L72 66.67" stroke="url(#report-brand-accent)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M72 66.67 94 91" stroke="url(#report-brand-accent)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="54" cy="60" r="22" stroke="#60A5FA" stroke-width="2.5" opacity="0.85"/>
-        <path d="M32 54c7-10 18.64-16 31-16 9.04 0 17.69 3.22 24.46 9.1" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" opacity="0.92"/>
-        <path d="M34 74c8 5.68 17.57 8.72 27.38 8.72 4.66 0 9.27-.69 13.68-2.07" stroke="#2563EB" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
-        <circle cx="34" cy="54" r="5.5" fill="#3B82F6"/>
-        <circle cx="48" cy="36" r="5.5" fill="#14B8A6"/>
-        <circle cx="85" cy="47" r="5.5" fill="#38BDF8"/>
-        <path d="M60 50c5.52 0 10 4.48 10 10v6c0 5.52-4.48 10-10 10s-10-4.48-10-10v-6c0-5.52 4.48-10 10-10Z" stroke="#1D4ED8" stroke-width="2.8"/>
-        <path d="M56 46.5 60 50l4-3.5" stroke="#1D4ED8" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M50 59h-6m6 8h-6m32-8h-6m6 8h-6M55 54l-4-4m18 4 4-4" stroke="#1D4ED8" stroke-width="2.6" stroke-linecap="round"/>
-        <path d="M54 56v14m12-14v14" stroke="#1D4ED8" stroke-width="2.2" stroke-linecap="round" opacity="0.6"/>
-      </svg>
+      ${renderBehaviorFieldSvg({
+        detail: 'compact',
+        tone: 'light',
+        width: 40,
+        height: 40,
+        idPrefix: 'report-brand',
+        ariaHidden: true,
+      })}
       <div><strong>QualiBug <span class="ai">AI</span></strong><span>风险决策台</span></div>
     </div>
     <h1>${d.projectName} · 风险评级报告</h1>

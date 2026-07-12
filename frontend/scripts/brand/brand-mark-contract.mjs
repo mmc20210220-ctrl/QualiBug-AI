@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -17,6 +17,7 @@ const mark = read('src/brand/BehaviorFieldMark.tsx');
 const logo = read('src/components/BrandLogo.tsx');
 const login = read('src/pages/Login.tsx');
 const sidebar = read('src/components/Sidebar.tsx');
+const report = read('src/api/report.ts');
 
 for (const detail of ["'master'", "'compact'", "'micro'"]) {
   requireText(mark, detail, 'brand detail');
@@ -31,10 +32,22 @@ requireText(login, 'detail="compact"', 'login mark detail');
 requireText(login, 'tone="dark"', 'login mark tone');
 requireText(sidebar, 'detail="compact"', 'sidebar mark detail');
 requireText(sidebar, 'tone="dark"', 'sidebar mark tone');
+requireText(report, 'renderBehaviorFieldSvg', 'report brand source');
 
-for (const forbidden of ['M60 50c5.52', 'm43 30-5-6', 'antenna', 'insect']) {
-  if (mark.includes(forbidden) || logo.includes(forbidden)) {
-    throw new Error(`Literal-insect brand geometry remains: ${forbidden}`);
+function productionSources(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) return productionSources(path);
+    return /\.(ts|tsx)$/.test(entry.name) ? [path] : [];
+  });
+}
+
+for (const path of productionSources(resolve(root, 'src'))) {
+  const source = readFileSync(path, 'utf8');
+  for (const forbidden of ['M60 50c5.52', 'm43 30-5-6', 'antenna', 'insect']) {
+    if (source.includes(forbidden)) {
+      throw new Error(`Literal-insect brand geometry remains in ${path}: ${forbidden}`);
+    }
   }
 }
 
