@@ -1,0 +1,246 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+import pytest
+
+from ai_test_asset_center.enterprise_campaign import EnterpriseCampaign
+from ai_test_asset_center.obligation_attempt_ledger import (
+    ObligationAttemptLedgerError,
+    build_obligation_attempt_ledger,
+    derive_campaign_terminal_status,
+)
+
+
+def _mainline_run() -> dict[str, str]:
+    return {"run_id": "RUN-1", "campaign_id": "CMP-1"}
+
+
+def test_every_selected_obligation_has_one_terminal_attempt() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[
+            {"obligation_id": "obl-1", "candidate_id": "cand-1"},
+            {"obligation_id": "obl-2", "candidate_id": "cand-2"},
+        ],
+        compile_results={
+            "obl-1": {"status": "COMPILED", "experiment_id": "exp-1"},
+            "obl-2": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "receipt_id": "compile-receipt-2",
+            },
+        },
+        execution_results={
+            "obl-1": {
+                "status": "EXECUTED",
+                "execution_id": "exec-1",
+                "observation_receipt_ids": ["obs-1"],
+                "oracle_receipt_id": "oracle-1",
+                "elapsed_ms": 12,
+            },
+        },
+        gate_results={
+            "obl-1": {
+                "status": "REJECTED",
+                "reason_code": "ORACLE_NOT_VIOLATED",
+                "gate_receipt_id": "gate-1",
+            },
+        },
+    )
+
+    assert ledger["schema_version"] == "qualibug.obligation-attempt-ledger.v1"
+    assert ledger["selected_count"] == 2
+    assert ledger["terminal_count"] == 2
+    assert ledger["complete"] is True
+    assert [row["obligation_id"] for row in ledger["attempts"]] == ["obl-1", "obl-2"]
+    first = ledger["attempts"][0]
+    assert first["experiment_id"] == "exp-1"
+    assert first["execution_id"] == "exec-1"
+    assert first["observation_receipt_ids"] == ["obs-1"]
+    assert first["oracle_receipt_id"] == "oracle-1"
+    assert first["gate_receipt_id"] == "gate-1"
+    assert first["terminal_status"] == "REJECTED"
+    assert first["cost_coverage_status"] == "UNKNOWN"
+    assert ledger["ledger_fingerprint"]
+
+
+def test_duplicate_or_missing_terminal_receipt_fails_fast() -> None:
+    with pytest.raises(ObligationAttemptLedgerError, match="duplicate_terminal_receipt:obl-1"):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}],
+            compile_results={
+                "obl-1": {"status": "BLOCKED", "reason_code": "BLOCKED_MISSING_BINDING"}
+            },
+            execution_results={},
+            gate_results={
+                "obl-1": {"status": "REJECTED", "reason_code": "ORACLE_NOT_VIOLATED"}
+            },
+        )
+
+    with pytest.raises(ObligationAttemptLedgerError, match="terminal_receipt_missing:obl-1"):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}],
+            compile_results={"obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}},
+            execution_results={"obl-1": {"status": "EXECUTED", "execution_id": "exec-1"}},
+            gate_results={},
+        )
+
+
+def test_stage_receipts_must_follow_compile_execution_gate_order() -> None:
+    with pytest.raises(
+        ObligationAttemptLedgerError,
+        match="execution_without_compiled_obligation:obl-1",
+    ):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}],
+            compile_results={},
+            execution_results={
+                "obl-1": {"status": "EXECUTED", "execution_id": "exec-1"}
+            },
+            gate_results={
+                "obl-1": {"status": "REJECTED", "reason_code": "ORACLE_NOT_VIOLATED"}
+            },
+        )
+
+    with pytest.raises(
+        ObligationAttemptLedgerError,
+        match="gate_without_executed_obligation:obl-1",
+    ):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}],
+            compile_results={"obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}},
+            execution_results={},
+            gate_results={
+                "obl-1": {"status": "REJECTED", "reason_code": "ORACLE_NOT_VIOLATED"}
+            },
+        )
+
+
+def test_selected_identity_and_foreign_receipts_fail_fast() -> None:
+    with pytest.raises(ObligationAttemptLedgerError, match="selected_obligation_identity_invalid"):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}, {"obligation_id": "obl-1"}],
+            compile_results={},
+            execution_results={},
+            gate_results={},
+        )
+
+    with pytest.raises(ObligationAttemptLedgerError, match="foreign_obligation_receipt:obl-other"):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}],
+            compile_results={
+                "obl-1": {"status": "BLOCKED", "reason_code": "BLOCKED_MISSING_BINDING"},
+                "obl-other": {"status": "BLOCKED", "reason_code": "BLOCKED_MISSING_BINDING"},
+            },
+            execution_results={},
+            gate_results={},
+        )
+
+
+def test_deliverable_requires_finding_identity_and_nonterminal_does_not_keep_one() -> None:
+    with pytest.raises(ObligationAttemptLedgerError, match="deliverable_finding_id_missing:obl-1"):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}],
+            compile_results={"obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}},
+            execution_results={"obl-1": {"status": "EXECUTED", "execution_id": "exec-1"}},
+            gate_results={"obl-1": {"status": "DELIVERABLE", "gate_receipt_id": "gate-1"}},
+        )
+
+    with pytest.raises(ObligationAttemptLedgerError, match="nondeliverable_finding_id_present:obl-1"):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-1"}],
+            compile_results={"obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}},
+            execution_results={"obl-1": {"status": "EXECUTED", "execution_id": "exec-1"}},
+            gate_results={
+                "obl-1": {
+                    "status": "REJECTED",
+                    "reason_code": "ORACLE_NOT_VIOLATED",
+                    "finding_id": "finding-should-not-survive",
+                }
+            },
+        )
+
+
+def test_ledger_join_does_not_mutate_stage_receipts() -> None:
+    compile_results = {"obl-1": {"status": "BLOCKED", "reason_code": "BLOCKED_POLICY"}}
+    before = deepcopy(compile_results)
+
+    build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results=compile_results,
+        execution_results={},
+        gate_results={},
+    )
+
+    assert compile_results == before
+
+
+def test_campaign_completion_is_derived_from_attempt_ledger_and_cannot_be_overwritten_by_slice_cycle() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={"obl-1": {"status": "BLOCKED", "reason_code": "BLOCKED_POLICY"}},
+        execution_results={},
+        gate_results={},
+    )
+    assert derive_campaign_terminal_status(ledger) == "completed"
+
+    campaign = EnterpriseCampaign.create(
+        project_id="PROJECT-1",
+        scope_id="scope-1",
+        environment_ref="ENV-1",
+        snapshot="snapshot-1",
+    )
+    campaign.campaign_id = "CMP-1"
+    campaign.record_obligation_attempt_ledger(ledger)
+    assert campaign.status == "completed"
+    assert campaign.public_contract()["completion_authority"] == "obligation_attempt_ledger"
+    assert campaign.public_contract()["completion_is_formal"] is True
+
+    campaign.record_cycle(
+        round_number=1,
+        selection={
+            "selected_slice_ids": ["legacy-slice"],
+            "remaining_slice_count": 1,
+            "stop_reason": "configured_round_limit_reached",
+            "next_round": None,
+        },
+        findings=[],
+        coverage_gap_count=1,
+        execution_status="completed",
+        attempted_slice_ids=["legacy-slice"],
+    )
+    assert campaign.status == "completed"
+    assert campaign.audit_events[-1]["event"] == "legacy_cycle_projection"
+
+    tampered = deepcopy(ledger)
+    tampered["attempts"][0]["reason_code"] = "TAMPERED"
+    with pytest.raises(
+        ObligationAttemptLedgerError,
+        match="obligation_attempt_ledger_fingerprint_mismatch",
+    ):
+        campaign.record_obligation_attempt_ledger(tampered)
+
+
+def test_harness_failure_degrades_campaign_status() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={"obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}},
+        execution_results={
+            "obl-1": {"status": "HARNESS_FAILED", "reason_code": "ORACLE_EXCEPTION"}
+        },
+        gate_results={},
+    )
+
+    assert derive_campaign_terminal_status(ledger) == "degraded"

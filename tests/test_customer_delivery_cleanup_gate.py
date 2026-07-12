@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from ai_test_asset_center.customer_delivery_gate import (
     apply_governed_campaign_cleanup,
+    build_customer_delivery_gate_receipt,
     customer_delivery_rejection_reasons,
     is_customer_deliverable_defect,
 )
@@ -50,6 +51,44 @@ def _valid_finding() -> dict:
             "has_real_evidence": True,
         },
     }
+
+
+def test_delivery_gate_emits_terminal_receipt_for_deliverable_finding() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {
+        "cleanup": {"status": "completed", "receipt_ref": "cleanup-receipt-1"}
+    }
+
+    receipt = build_customer_delivery_gate_receipt(
+        finding,
+        obligation_id="obligation-1",
+        execution_id="execution-1",
+    )
+
+    assert receipt["status"] == "DELIVERABLE"
+    assert receipt["execution_id"] == "execution-1"
+    assert receipt["finding_id"] == "finding-1"
+    assert receipt["reason_code"] == ""
+    assert receipt["gate_receipt_id"]
+
+
+def test_delivery_gate_rejects_executed_obligation_without_oracle_violation() -> None:
+    receipt = build_customer_delivery_gate_receipt(
+        None,
+        obligation_id="obligation-1",
+        execution_id="execution-1",
+    )
+
+    assert receipt["status"] == "REJECTED"
+    assert receipt["reason_code"] == "ORACLE_NOT_VIOLATED"
+    assert receipt["finding_id"] == ""
+    assert receipt["gate_receipt_id"]
+    next_execution = build_customer_delivery_gate_receipt(
+        None,
+        obligation_id="obligation-1",
+        execution_id="execution-2",
+    )
+    assert next_execution["gate_receipt_id"] != receipt["gate_receipt_id"]
 
 
 def test_failed_governed_cleanup_blocks_customer_delivery() -> None:

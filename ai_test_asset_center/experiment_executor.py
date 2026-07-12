@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from .assertion_dsl import evaluate_assertion, materialize_assertion
 from .contract_oracles import evaluate_contract_oracle, mark_as_internal_clue
+from .customer_delivery_gate import build_customer_delivery_gate_receipt
 from .real_id_resolver import path_has_placeholders
 from .sandbox_write_executor import (
     _http_request,
@@ -742,6 +743,9 @@ def execute_selected_experiments(
     campaign_id: str = "",
 ) -> dict[str, Any]:
     """Execute every selected experiment; each yields EXECUTED or BLOCKED receipt."""
+    selected_ids = [_text(_dict(item).get("obligation_id")) for item in selected]
+    if not all(selected_ids) or len(selected_ids) != len(set(selected_ids)):
+        raise ValueError("selected_obligation_identity_invalid")
     tokens = load_actor_tokens(root, project)
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -749,6 +753,9 @@ def execute_selected_experiments(
     executed = 0
     harness = 0
     cleanup_failures = 0
+    compile_results: dict[str, dict[str, Any]] = {}
+    execution_results: dict[str, dict[str, Any]] = {}
+    gate_results: dict[str, dict[str, Any]] = {}
     batch_nonce = str(time.time_ns())
     for index, item in enumerate(selected):
         row = _dict(item)
@@ -761,6 +768,12 @@ def execute_selected_experiments(
         exp = experiments_by_obligation.get(oid)
         if not isinstance(exp, dict):
             blocked += 1
+            compile_results[oid] = {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OPERATION",
+                "experiment_id": eid,
+                "receipt_id": _stable_id("compile", project, campaign_id, oid, batch_nonce),
+            }
             missing_outcome = {
                 "schema_version": "qualibug.experiment-execution.v1",
                 "candidate_id": candidate_id,
@@ -787,6 +800,60 @@ def execute_selected_experiments(
             }
             results.append(missing_outcome)
             continue
+        compile_receipt = _dict(exp.get("compile_receipt"))
+        compile_status = _text(compile_receipt.get("status")).upper()
+        if compile_status != "COMPILED":
+            terminal_status = (
+                compile_status
+                if compile_status in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}
+                else "HARNESS_FAILED"
+            )
+            reason_code = _text(compile_receipt.get("reason_code")) or (
+                "COMPILE_RECEIPT_MISSING"
+                if not compile_status
+                else f"COMPILE_STATUS_INVALID:{compile_status}"
+            )
+            compile_results[oid] = {
+                "status": terminal_status,
+                "reason_code": reason_code,
+                "experiment_id": _text(exp.get("experiment_id") or eid),
+                "receipt_id": _text(compile_receipt.get("receipt_id"))
+                or _stable_id("compile", project, campaign_id, oid, batch_nonce),
+            }
+            results.append({
+                "schema_version": "qualibug.experiment-execution.v1",
+                "candidate_id": candidate_id,
+                "slice_id": slice_id,
+                "obligation_id": oid,
+                "experiment_id": _text(exp.get("experiment_id") or eid),
+                "execution_id": execution_id,
+                "evidence_id": evidence_id,
+                "campaign_id": campaign_id,
+                "status": terminal_status,
+                "reason_code": reason_code,
+                "detail": "experiment_compile_receipt_not_executable",
+                "finding": None,
+                "execution_receipt": {
+                    "status": terminal_status,
+                    "reason_code": reason_code,
+                    "obligation_id": oid,
+                    "experiment_id": _text(exp.get("experiment_id") or eid),
+                    "campaign_id": campaign_id,
+                },
+            })
+            if terminal_status == "BLOCKED":
+                blocked += 1
+            else:
+                harness += 1
+            continue
+        compile_results[oid] = {
+            "status": "COMPILED",
+            "reason_code": "",
+            "experiment_id": _text(exp.get("experiment_id") or eid),
+            "receipt_id": _text(compile_receipt.get("receipt_id"))
+            or _stable_id("compile", project, campaign_id, oid, batch_nonce),
+            "input_fingerprint": _text(compile_receipt.get("input_fingerprint")),
+        }
         outcome = execute_one_experiment(
             exp,
             behavior_ir=behavior_ir,
@@ -837,16 +904,95 @@ def execute_selected_experiments(
             finding_evidence["evidence_id"] = evidence_id
             finding_evidence["execution_id"] = execution_id
             finding["evidence"] = finding_evidence
-        results.append(outcome)
+        observation_receipt_ids: list[str] = []
+        for step_index, step in enumerate(_list(outcome.get("steps"))):
+            if not isinstance(step, dict):
+                continue
+            observation_receipt_id = _stable_id(
+                "observation",
+                execution_id,
+                step_index,
+                step.get("phase"),
+                step.get("method"),
+                step.get("path"),
+            )
+            step["observation_receipt_id"] = observation_receipt_id
+            observation_receipt_ids.append(observation_receipt_id)
+        oracle_verdict = _dict(outcome.get("oracle_verdict"))
+        oracle_receipt_id = ""
+        if oracle_verdict:
+            oracle_receipt_id = _stable_id(
+                "oracle",
+                execution_id,
+                json.dumps(
+                    oracle_verdict,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+            oracle_verdict["receipt_id"] = oracle_receipt_id
+            outcome["oracle_verdict"] = oracle_verdict
         status = _text(outcome.get("status")).upper()
+        if status not in {"EXECUTED", "BLOCKED", "HARNESS_FAILURE", "HARNESS_FAILED"}:
+            raise ValueError(f"experiment_execution_status_invalid:{status or 'MISSING'}")
+        outcome_cleanup_failures = int(outcome.get("cleanup_failures") or 0)
+        if outcome_cleanup_failures:
+            status = "HARNESS_FAILURE"
+            outcome["status"] = status
+            outcome["reason_code"] = "CLEANUP_COMPENSATION_FAILED"
+            execution_receipt = _dict(outcome.get("execution_receipt"))
+            execution_receipt["status"] = status
+            execution_receipt["reason_code"] = "CLEANUP_COMPENSATION_FAILED"
+            execution_receipt["cleanup_failures"] = outcome_cleanup_failures
+            outcome["execution_receipt"] = execution_receipt
+        elif status == "HARNESS_FAILED":
+            status = "HARNESS_FAILURE"
+            outcome["status"] = status
+        results.append(outcome)
         if status == "BLOCKED":
             blocked += 1
+            execution_results[oid] = {
+                "status": "BLOCKED",
+                "reason_code": _text(outcome.get("reason_code"))
+                or "BLOCKED_EXECUTION",
+                "experiment_id": eid,
+                "execution_id": execution_id,
+                "receipt_id": execution_id,
+                "elapsed_ms": outcome.get("elapsed_ms"),
+            }
         elif status == "HARNESS_FAILURE":
             harness += 1
+            execution_results[oid] = {
+                "status": "HARNESS_FAILED",
+                "reason_code": _text(outcome.get("reason_code"))
+                or "HARNESS_FAILURE",
+                "experiment_id": eid,
+                "execution_id": execution_id,
+                "receipt_id": execution_id,
+                "elapsed_ms": outcome.get("elapsed_ms"),
+            }
         else:
             executed += 1
-        cleanup_failures += int(outcome.get("cleanup_failures") or 0)
-        if isinstance(outcome.get("finding"), dict):
+            execution_results[oid] = {
+                "status": "EXECUTED",
+                "reason_code": "",
+                "experiment_id": eid,
+                "execution_id": execution_id,
+                "receipt_id": execution_id,
+                "observation_receipt_ids": observation_receipt_ids,
+                "oracle_receipt_id": oracle_receipt_id,
+                "elapsed_ms": outcome.get("elapsed_ms"),
+                "cost_coverage_status": "UNKNOWN",
+            }
+            gate_results[oid] = build_customer_delivery_gate_receipt(
+                outcome.get("finding") if isinstance(outcome.get("finding"), dict) else None,
+                obligation_id=oid,
+                execution_id=execution_id,
+            )
+        cleanup_failures += outcome_cleanup_failures
+        if status == "EXECUTED" and isinstance(outcome.get("finding"), dict):
             findings.append(outcome["finding"])
     return {
         "schema_version": "qualibug.experiment-execution-batch.v1",
@@ -857,6 +1003,9 @@ def execute_selected_experiments(
         "cleanup_failures": cleanup_failures,
         "findings": findings,
         "results": results,
+        "compile_results": compile_results,
+        "execution_results": execution_results,
+        "gate_results": gate_results,
         "every_experiment_has_receipt": all(
             isinstance(item.get("execution_receipt"), dict) for item in results
         ),

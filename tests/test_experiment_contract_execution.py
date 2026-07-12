@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_test_asset_center.assertion_dsl import evaluate_assertion, materialize_assertion
 from ai_test_asset_center.discovery_funnel import reconcile_pipeline_health_after_campaign_cleanup
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
@@ -11,6 +13,7 @@ from ai_test_asset_center.experiment_executor import (
     execute_selected_experiments,
     preflight_experiment_executable,
 )
+from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
 from ai_test_asset_center.observed_product_scan_executor import ObservedProductScanExecutor
 
 
@@ -201,6 +204,199 @@ def test_selected_experiments_always_emit_receipts() -> None:
     assert batch["blocked_count"] == 1
     assert batch["every_experiment_has_receipt"] is True
     assert batch["results"][0]["status"] == "BLOCKED"
+    compile_receipt = batch["compile_results"]["missing"]
+    assert compile_receipt["status"] == "BLOCKED"
+    assert compile_receipt["reason_code"] == "BLOCKED_MISSING_OPERATION"
+    assert compile_receipt["experiment_id"] == ""
+    assert compile_receipt["receipt_id"]
+    assert batch["execution_results"] == {}
+    assert batch["gate_results"] == {}
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "RUN-1", "campaign_id": "CMP-1"},
+        selected=[{"obligation_id": "missing"}],
+        compile_results=batch["compile_results"],
+        execution_results=batch["execution_results"],
+        gate_results=batch["gate_results"],
+    )
+    assert ledger["complete"] is True
+    assert ledger["attempts"][0]["terminal_status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize(
+    "selected",
+    [
+        [{}],
+        [{"obligation_id": "obl-1"}, {"obligation_id": "obl-1"}],
+    ],
+)
+def test_executor_rejects_missing_or_duplicate_selected_obligation_identity(
+    selected,
+) -> None:
+    with pytest.raises(ValueError, match="selected_obligation_identity_invalid"):
+        execute_selected_experiments(
+            selected,
+            experiments_by_obligation={},
+            behavior_ir={"operations": [], "actors": []},
+            root=Path("."),
+            project="generic-project",
+            base_url="http://127.0.0.1:8080",
+            runtime_contract={"environment_type": "test"},
+            campaign_id="CMP-1",
+        )
+
+
+def test_executed_experiment_emits_joinable_observation_oracle_and_gate_receipts(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.load_actor_tokens",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_one_experiment",
+        lambda *_args, **_kwargs: {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": "exp-1",
+            "obligation_id": "obl-1",
+            "status": "EXECUTED",
+            "reason_code": "",
+            "elapsed_ms": 7,
+            "steps": [
+                {
+                    "phase": "treatment",
+                    "method": "GET",
+                    "path": "/api/resources",
+                    "status_code": 200,
+                }
+            ],
+            "oracle_verdict": {"verdict": "executed_clue"},
+            "finding": None,
+            "cleanup_failures": 0,
+            "execution_receipt": {"status": "EXECUTED"},
+        },
+    )
+
+    selected = [{"obligation_id": "obl-1", "experiment_id": "exp-1"}]
+    batch = execute_selected_experiments(
+        selected,
+        experiments_by_obligation={
+            "obl-1": {
+                "obligation_id": "obl-1",
+                "experiment_id": "exp-1",
+                "compile_receipt": {"status": "COMPILED"},
+            }
+        },
+        behavior_ir={"operations": [], "actors": []},
+        root=Path("."),
+        project="generic-project",
+        base_url="http://127.0.0.1:8080",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="CMP-1",
+    )
+
+    execution = batch["execution_results"]["obl-1"]
+    assert execution["observation_receipt_ids"]
+    assert execution["oracle_receipt_id"]
+    assert batch["gate_results"]["obl-1"]["status"] == "REJECTED"
+    assert batch["gate_results"]["obl-1"]["reason_code"] == "ORACLE_NOT_VIOLATED"
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "RUN-1", "campaign_id": "CMP-1"},
+        selected=selected,
+        compile_results=batch["compile_results"],
+        execution_results=batch["execution_results"],
+        gate_results=batch["gate_results"],
+    )
+    assert ledger["complete"] is True
+    assert ledger["attempts"][0]["terminal_status"] == "REJECTED"
+
+
+def test_cleanup_failure_is_terminal_harness_failure_not_rejected_finding(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.load_actor_tokens",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_one_experiment",
+        lambda *_args, **_kwargs: {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": "exp-1",
+            "obligation_id": "obl-1",
+            "status": "EXECUTED",
+            "reason_code": "",
+            "elapsed_ms": 7,
+            "steps": [],
+            "oracle_verdict": {"verdict": "executed_clue"},
+            "finding": None,
+            "cleanup_failures": 1,
+            "execution_receipt": {"status": "EXECUTED", "cleanup_failures": 1},
+        },
+    )
+
+    batch = execute_selected_experiments(
+        [{"obligation_id": "obl-1", "experiment_id": "exp-1"}],
+        experiments_by_obligation={
+            "obl-1": {
+                "obligation_id": "obl-1",
+                "experiment_id": "exp-1",
+                "compile_receipt": {"status": "COMPILED"},
+            }
+        },
+        behavior_ir={"operations": [], "actors": []},
+        root=Path("."),
+        project="generic-project",
+        base_url="http://127.0.0.1:8080",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="CMP-1",
+    )
+
+    assert batch["executed_count"] == 0
+    assert batch["harness_failure_count"] == 1
+    assert batch["execution_results"]["obl-1"]["status"] == "HARNESS_FAILED"
+    assert (
+        batch["execution_results"]["obl-1"]["reason_code"]
+        == "CLEANUP_COMPENSATION_FAILED"
+    )
+    assert batch["gate_results"] == {}
+
+
+def test_unknown_execution_status_fails_fast(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.load_actor_tokens",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_one_experiment",
+        lambda *_args, **_kwargs: {
+            "experiment_id": "exp-1",
+            "obligation_id": "obl-1",
+            "status": "MYSTERY",
+            "finding": None,
+            "cleanup_failures": 0,
+            "execution_receipt": {"status": "MYSTERY"},
+        },
+    )
+
+    with pytest.raises(ValueError, match="experiment_execution_status_invalid:MYSTERY"):
+        execute_selected_experiments(
+            [{"obligation_id": "obl-1", "experiment_id": "exp-1"}],
+            experiments_by_obligation={
+                "obl-1": {
+                    "obligation_id": "obl-1",
+                    "experiment_id": "exp-1",
+                    "compile_receipt": {"status": "COMPILED"},
+                }
+            },
+            behavior_ir={"operations": [], "actors": []},
+            root=Path("."),
+            project="generic-project",
+            base_url="http://127.0.0.1:8080",
+            runtime_contract={"environment_type": "test"},
+            campaign_id="CMP-1",
+        )
 
 
 def test_preflight_blocks_unresolved_actor_token() -> None:

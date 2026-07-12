@@ -8,8 +8,10 @@ contract is explicit, replayable, and free of missing requirements. Everything
 else remains an internal clue until more evidence is collected.
 """
 
-from typing import Any
 import copy
+import hashlib
+import json
+from typing import Any
 
 CUSTOMER_READY_MIN_EVIDENCE_SCORE = 90
 _ALLOWED_FINAL_REVIEW_STATUSES = {"PENDING_REVIEW", "VALIDATED_CANDIDATE", "CUSTOMER_READY"}
@@ -446,6 +448,75 @@ def customer_delivery_rejection_reasons(item: dict[str, Any]) -> list[str]:
         reasons.append("MISSING_CUSTOMER_FACING_HARD_EVIDENCE")
     reasons.extend(governed_cleanup_rejection_reasons(item))
     return reasons
+
+
+def build_customer_delivery_gate_receipt(
+    item: dict[str, Any] | None,
+    *,
+    obligation_id: str,
+    execution_id: str,
+) -> dict[str, Any]:
+    """Return the Delivery Gate terminal receipt without copying evidence payloads."""
+
+    resolved_obligation_id = _text(obligation_id)
+    if not resolved_obligation_id:
+        raise ValueError("delivery gate obligation_id is required")
+    resolved_execution_id = _text(execution_id)
+    if not resolved_execution_id:
+        raise ValueError("delivery gate execution_id is required")
+    if item is None:
+        reasons = ["ORACLE_NOT_VIOLATED"]
+        finding_id = ""
+        oracle_receipt_id = ""
+        evidence_id = ""
+        cost_coverage_status = "UNKNOWN"
+    elif not isinstance(item, dict):
+        raise ValueError("delivery gate finding must be an object or None")
+    else:
+        item_obligation_id = _text(item.get("obligation_id"))
+        if item_obligation_id and item_obligation_id != resolved_obligation_id:
+            raise ValueError("delivery gate obligation identity mismatch")
+        item_execution_id = _text(item.get("execution_id"))
+        if item_execution_id and item_execution_id != resolved_execution_id:
+            raise ValueError("delivery gate execution identity mismatch")
+        reasons = customer_delivery_rejection_reasons(item)
+        finding_id = _text(item.get("finding_id") or item.get("id")) if not reasons else ""
+        if not reasons and not finding_id:
+            raise ValueError("deliverable finding_id is required")
+        oracle_receipt_id = _text(
+            item.get("oracle_receipt_id")
+            or _dict(item.get("oracle")).get("receipt_id")
+        )
+        evidence_id = _text(item.get("evidence_id"))
+        cost_coverage_status = _text(item.get("cost_coverage_status") or "UNKNOWN").upper()
+    if cost_coverage_status not in {"MEASURED", "PARTIAL", "UNKNOWN"}:
+        raise ValueError("delivery gate cost coverage status is invalid")
+    status = "REJECTED" if reasons else "DELIVERABLE"
+    payload: dict[str, Any] = {
+        "schema_version": "qualibug.customer-delivery-gate-receipt.v1",
+        "obligation_id": resolved_obligation_id,
+        "execution_id": resolved_execution_id,
+        "status": status,
+        "reason_code": reasons[0] if reasons else "",
+        "reason_codes": list(reasons),
+        "finding_id": finding_id,
+        "oracle_receipt_id": oracle_receipt_id,
+        "evidence_id": evidence_id,
+        "cost_coverage_status": cost_coverage_status,
+    }
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    payload["gate_receipt_id"] = "gate_" + hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()[:32]
+    payload["output_fingerprint"] = hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
+    return payload
 
 
 def explain_rejection_reason(reason: str) -> dict[str, str]:

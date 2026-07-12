@@ -21,6 +21,7 @@ MAX_AUTOMATIC_ROUNDS = 12
 ABS_MAX_SLICES_PER_ROUND = 150
 ABS_MAX_AUTOMATIC_ROUNDS = 24
 LEGACY_COMPLETION_AUTHORITY = "legacy_behavior_slice_compatibility"
+OBLIGATION_ATTEMPT_COMPLETION_AUTHORITY = "obligation_attempt_ledger"
 
 
 def _slice_budget_ceiling() -> int:
@@ -195,6 +196,9 @@ class EnterpriseCampaign:
     automatic_round_limit: int = 3
     attempted_slice_ids: list[str] = field(default_factory=list)
     confirmation_receipts: dict[str, str] = field(default_factory=dict)
+    obligation_attempt_ledger_fingerprint: str = ""
+    obligation_attempt_selected_count: int = 0
+    obligation_attempt_terminal_count: int = 0
     coverage_deferred_reason: str = ""
     next_campaign_reason: str = ""
     audit_events: list[dict[str, Any]] = field(default_factory=list)
@@ -261,6 +265,11 @@ class EnterpriseCampaign:
         }
 
     def record_cycle(self, *, round_number: int, selection: dict[str, Any], findings: Iterable[Any], coverage_gap_count: int, execution_status: str, attempted_slice_ids: Iterable[str] | None = None) -> None:
+        authoritative_projection = (
+            self.status,
+            self.coverage_deferred_reason,
+            self.next_campaign_reason,
+        ) if self.obligation_attempt_ledger_fingerprint else None
         selected = [_text(value) for value in selection.get("selected_slice_ids", []) if _text(value)]
         if attempted_slice_ids is None:
             realized_attempts = selected if _text(execution_status, 80).lower() == "completed" else []
@@ -317,9 +326,20 @@ class EnterpriseCampaign:
             self.next_campaign_reason = "selected_slice_execution_incomplete"
         else:
             self.status = "active"
+        legacy_projected_status = self.status
+        if authoritative_projection is not None:
+            (
+                self.status,
+                self.coverage_deferred_reason,
+                self.next_campaign_reason,
+            ) = authoritative_projection
         self.audit_events.append({
             "at_utc": _now(),
-            "event": "cycle",
+            "event": (
+                "legacy_cycle_projection"
+                if authoritative_projection is not None
+                else "cycle"
+            ),
             "round": self.round_count,
             "selected": len(selected),
             "confirmed": len(self.confirmation_receipts),
@@ -327,12 +347,48 @@ class EnterpriseCampaign:
             "execution_status": _text(execution_status, 80),
             "reason": reason,
             "status": self.status,
+            "legacy_projected_status": legacy_projected_status,
             "selected_unattempted": len(selected_unattempted),
         })
         self.audit_events = self.audit_events[-200:]
         self.updated_at_utc = _now()
 
+    def record_obligation_attempt_ledger(self, ledger: dict[str, Any]) -> None:
+        """Make terminal obligation coverage the campaign completion authority."""
+
+        from .obligation_attempt_ledger import derive_campaign_terminal_status
+
+        if not isinstance(ledger, dict):
+            raise ValueError("obligation attempt ledger must be an object")
+        if _text(ledger.get("campaign_id")) != self.campaign_id:
+            raise ValueError("obligation attempt ledger campaign identity mismatch")
+        fingerprint = _text(ledger.get("ledger_fingerprint"), 128)
+        if not fingerprint:
+            raise ValueError("obligation attempt ledger fingerprint is required")
+        status = derive_campaign_terminal_status(ledger)
+        self.obligation_attempt_ledger_fingerprint = fingerprint
+        self.obligation_attempt_selected_count = max(
+            0, int(ledger.get("selected_count") or 0)
+        )
+        self.obligation_attempt_terminal_count = max(
+            0, int(ledger.get("terminal_count") or 0)
+        )
+        self.status = status
+        self.coverage_deferred_reason = ""
+        self.next_campaign_reason = ""
+        self.audit_events.append({
+            "at_utc": _now(),
+            "event": "obligation_attempt_ledger",
+            "status": status,
+            "selected": self.obligation_attempt_selected_count,
+            "terminal": self.obligation_attempt_terminal_count,
+            "ledger_fingerprint": fingerprint,
+        })
+        self.audit_events = self.audit_events[-200:]
+        self.updated_at_utc = _now()
+
     def public_contract(self) -> dict[str, Any]:
+        attempt_authoritative = bool(self.obligation_attempt_ledger_fingerprint)
         return {
             "campaign_id": self.campaign_id,
             "campaign_status": self.status,
@@ -352,10 +408,17 @@ class EnterpriseCampaign:
             "automatic_round_limit": self.automatic_round_limit,
             "attempted_slice_count": len(self.attempted_slice_ids),
             "confirmed_slice_count": len(self.confirmation_receipts),
+            "obligation_attempt_selected_count": self.obligation_attempt_selected_count,
+            "obligation_attempt_terminal_count": self.obligation_attempt_terminal_count,
+            "obligation_attempt_ledger_fingerprint": self.obligation_attempt_ledger_fingerprint,
             "coverage_deferred_reason": self.coverage_deferred_reason,
             "next_campaign_reason": self.next_campaign_reason,
-            "completion_authority": LEGACY_COMPLETION_AUTHORITY,
-            "completion_is_formal": False,
+            "completion_authority": (
+                OBLIGATION_ATTEMPT_COMPLETION_AUTHORITY
+                if attempt_authoritative
+                else LEGACY_COMPLETION_AUTHORITY
+            ),
+            "completion_is_formal": attempt_authoritative,
         }
 
     def identity_contract(self) -> dict[str, Any]:
@@ -409,6 +472,15 @@ class EnterpriseCampaign:
             automatic_round_limit=max(1, min(int(value.get("automatic_round_limit") or 3), _round_limit_ceiling())),
             attempted_slice_ids=[_text(item) for item in value.get("attempted_slice_ids", []) if _text(item)],
             confirmation_receipts={_text(key): _text(item, 80) for key, item in _as_dict(value.get("confirmation_receipts")).items() if _text(key)},
+            obligation_attempt_ledger_fingerprint=_text(
+                value.get("obligation_attempt_ledger_fingerprint"), 128
+            ),
+            obligation_attempt_selected_count=max(
+                0, int(value.get("obligation_attempt_selected_count") or 0)
+            ),
+            obligation_attempt_terminal_count=max(
+                0, int(value.get("obligation_attempt_terminal_count") or 0)
+            ),
             coverage_deferred_reason=_text(value.get("coverage_deferred_reason"), 240),
             next_campaign_reason=_text(value.get("next_campaign_reason"), 240),
             audit_events=[_as_dict(item) for item in value.get("audit_events", []) if isinstance(item, dict)][-200:],
