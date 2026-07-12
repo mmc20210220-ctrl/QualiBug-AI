@@ -56,6 +56,18 @@ async function assertCurrentCopy(page, context) {
     1,
     context,
   );
+  await expectCount(page.locator('[data-login-visual="radar"]'), 1, context);
+  const scanLayer = page.locator('[data-login-visual-layer="scan"]');
+  await expectCount(scanLayer, 1, context);
+  const scanStyle = await scanLayer.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { display: style.display, animationName: style.animationName };
+  });
+  if (context.viewport.width <= 900) {
+    if (scanStyle.display !== 'none') fail('Mobile scan-light layer must be hidden', { ...context, scanStyle });
+  } else if (scanStyle.animationName !== 'scan-sweep') {
+    fail('Desktop scan-light animation is missing', { ...context, scanStyle });
+  }
   const visual = page.locator('[data-brand-visual-state]');
   await expectCount(visual, 1, context);
   await page.waitForFunction(() => {
@@ -151,6 +163,15 @@ try {
     1,
     { mode: 'reduced-motion' },
   );
+  const reducedScanAnimation = await reducedPage
+    .locator('[data-login-visual-layer="scan"]')
+    .evaluate((element) => getComputedStyle(element).animationName);
+  if (reducedScanAnimation !== 'none') {
+    fail('Reduced-motion scan-light animation must be disabled', {
+      mode: 'reduced-motion',
+      reducedScanAnimation,
+    });
+  }
   await reducedContext.close();
 
   const failedContext = await browser.newContext();
