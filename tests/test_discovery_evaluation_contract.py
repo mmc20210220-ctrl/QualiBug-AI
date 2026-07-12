@@ -388,6 +388,46 @@ def test_receipts_are_immutable(tmp_path: Path) -> None:
         persist_evaluation_receipt(changed, output_root)
 
 
+def test_receipt_atomic_temp_name_does_not_exceed_windows_path_limit(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    receipt = _receipt(manifest, "held-in", [_matched_finding("held-in")])
+    monkeypatch.setattr(
+        "ai_test_asset_center.discovery_evaluation_contract.os.getpid",
+        lambda: 12345,
+    )
+    probe_root = tmp_path / "x"
+    probe_path = (
+        probe_root
+        / receipt["dataset_id"]
+        / receipt["dataset_version"]
+        / receipt["policy_id"]
+        / f"{receipt['target_id']}_{receipt['run_id']}.json"
+    )
+    legacy_temporary = probe_path.with_suffix(
+        probe_path.suffix + ".12345.tmp"
+    )
+    padding = 1 + (260 - len(str(legacy_temporary)))
+    assert padding > 0
+    output_root = tmp_path / ("x" * padding)
+    expected_path = (
+        output_root
+        / receipt["dataset_id"]
+        / receipt["dataset_version"]
+        / receipt["policy_id"]
+        / f"{receipt['target_id']}_{receipt['run_id']}.json"
+    )
+    assert len(str(expected_path)) < 260
+    assert len(str(expected_path.with_suffix(".json.12345.tmp"))) == 260
+
+    path = persist_evaluation_receipt(receipt, output_root)
+
+    assert path == expected_path
+    assert path.exists()
+
+
 def _policy_report(manifest, policy_id: str, evaluation_mode: str) -> dict:
     receipts = []
     for target in manifest.targets:

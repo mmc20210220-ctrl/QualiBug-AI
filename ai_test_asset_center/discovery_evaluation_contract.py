@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -1077,6 +1078,32 @@ def policy_metrics_from_evaluation_reports(
     }
 
 
+def _atomic_write_json(destination: Path, payload: dict[str, Any]) -> None:
+    """Atomically write JSON without extending the final Windows path name."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=".q-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if temporary is None:
+            raise RuntimeError("atomic JSON temporary path was not created")
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
 def persist_evaluation_receipt(receipt: dict[str, Any], output_root: Path | str) -> Path:
     """Persist an immutable receipt using an atomic replace."""
 
@@ -1095,9 +1122,7 @@ def persist_evaluation_receipt(receipt: dict[str, Any], output_root: Path | str)
         if _canonical_json(existing) != _canonical_json(receipt):
             raise EvaluationContractError(f"immutable evaluation receipt already exists with different content: {path}")
         return path
-    temporary = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    _atomic_write_json(path, receipt)
     return path
 
 
@@ -1115,9 +1140,7 @@ def persist_evaluation_report(report: dict[str, Any], path: Path | str) -> Path:
                 f"immutable evaluation report already exists with different content: {destination}"
             )
         return destination
-    temporary = destination.with_suffix(destination.suffix + f".{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, destination)
+    _atomic_write_json(destination, report)
     return destination
 
 
