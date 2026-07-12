@@ -20,6 +20,7 @@ MAX_AUTOMATIC_ROUNDS = 12
 # bounded. They are NOT the reasoner MAX_HYPOTHESES / max_workers floors.
 ABS_MAX_SLICES_PER_ROUND = 150
 ABS_MAX_AUTOMATIC_ROUNDS = 24
+LEGACY_COMPLETION_AUTHORITY = "legacy_behavior_slice_compatibility"
 
 
 def _slice_budget_ceiling() -> int:
@@ -265,6 +266,10 @@ class EnterpriseCampaign:
             realized_attempts = selected if _text(execution_status, 80).lower() == "completed" else []
         else:
             realized_attempts = [_text(value) for value in attempted_slice_ids if _text(value)]
+        selected_unattempted = [
+            value for value in selected
+            if value and value not in set(realized_attempts)
+        ]
         self.attempted_slice_ids = list(dict.fromkeys(self.attempted_slice_ids + realized_attempts))
         if realized_attempts or _text(execution_status, 80).lower() == "completed":
             self.round_count = max(self.round_count, int(round_number or 0))
@@ -285,7 +290,12 @@ class EnterpriseCampaign:
             self.status = "completed"
             self.coverage_deferred_reason = ""
             self.next_campaign_reason = ""
-        elif remaining == 0 and not selection.get("next_round") and _text(execution_status, 80).lower() == "completed":
+        elif (
+            remaining == 0
+            and not selection.get("next_round")
+            and _text(execution_status, 80).lower() == "completed"
+            and not selected_unattempted
+        ):
             self.status = "completed"
             self.coverage_deferred_reason = ""
             self.next_campaign_reason = ""
@@ -301,6 +311,10 @@ class EnterpriseCampaign:
             self.status = "blocked"
             self.coverage_deferred_reason = reason
             self.next_campaign_reason = "source_assets_or_runtime_observation_required"
+        elif selected_unattempted and _text(execution_status, 80).lower() == "completed":
+            self.status = "active"
+            self.coverage_deferred_reason = ""
+            self.next_campaign_reason = "selected_slice_execution_incomplete"
         else:
             self.status = "active"
         self.audit_events.append({
@@ -313,6 +327,7 @@ class EnterpriseCampaign:
             "execution_status": _text(execution_status, 80),
             "reason": reason,
             "status": self.status,
+            "selected_unattempted": len(selected_unattempted),
         })
         self.audit_events = self.audit_events[-200:]
         self.updated_at_utc = _now()
@@ -339,6 +354,25 @@ class EnterpriseCampaign:
             "confirmed_slice_count": len(self.confirmation_receipts),
             "coverage_deferred_reason": self.coverage_deferred_reason,
             "next_campaign_reason": self.next_campaign_reason,
+            "completion_authority": LEGACY_COMPLETION_AUTHORITY,
+            "completion_is_formal": False,
+        }
+
+    def identity_contract(self) -> dict[str, Any]:
+        """Return immutable campaign identity without completion projection state."""
+
+        return {
+            "campaign_id": self.campaign_id,
+            "project_id": self.project_id,
+            "scope_id": self.scope_id,
+            "environment_ref": self.environment_ref,
+            "source_id": self.source_id,
+            "source_hash": self.source_hash,
+            "source_snapshot_hash": self.source_snapshot_hash,
+            "policy_version": self.policy_version,
+            "lineage_campaign_id": self.lineage_campaign_id or self.campaign_id,
+            "rerun_key": self.rerun_key,
+            "rerun_reason": self.rerun_reason,
         }
 
     def to_dict(self) -> dict[str, Any]:

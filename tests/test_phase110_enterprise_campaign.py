@@ -127,6 +127,20 @@ def test_campaign_defaults_source_identity_to_snapshot_when_single_asset_is_not_
     assert restored.source_id == f"source_snapshot:{snapshot[:24]}"
 
 
+def test_campaign_identity_contract_is_separate_from_legacy_completion_projection() -> None:
+    campaign = _campaign()
+
+    identity = campaign.identity_contract()
+    public = campaign.public_contract()
+
+    assert identity["campaign_id"] == campaign.campaign_id
+    assert identity["source_snapshot_hash"] == campaign.source_snapshot_hash
+    assert "status" not in identity
+    assert "attempted_slice_count" not in identity
+    assert public["completion_authority"] == "legacy_behavior_slice_compatibility"
+    assert public["completion_is_formal"] is False
+
+
 def test_campaign_store_projects_safe_governance_to_command_center_snapshot(tmp_path):
     campaign = _campaign()
     campaign.record_cycle(
@@ -238,6 +252,28 @@ def test_terminal_campaign_stays_deferred_when_observed_again():
     )
     assert campaign.status == "coverage_deferred"
     assert campaign.coverage_deferred_reason == "configured_round_limit_reached"
+
+
+def test_campaign_does_not_complete_when_selected_slices_were_not_all_attempted() -> None:
+    campaign = _campaign()
+
+    campaign.record_cycle(
+        round_number=1,
+        selection={
+            "stop_reason": "selected_final_unattempted_slice_batch",
+            "selected_slice_ids": ["BHV_attempted", "BHV_not_attempted"],
+            "remaining_slice_count": 0,
+            "next_round": None,
+        },
+        findings=[],
+        coverage_gap_count=0,
+        execution_status="completed",
+        attempted_slice_ids=["BHV_attempted"],
+    )
+
+    assert campaign.status == "active"
+    assert campaign.public_contract()["attempted_slice_count"] == 1
+    assert campaign.audit_events[-1]["selected_unattempted"] == 1
 
 
 def test_campaign_completes_when_no_slices_remain_even_without_full_confirmation():

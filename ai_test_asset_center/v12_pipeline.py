@@ -2478,6 +2478,18 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
     try:
         graph_started = time.time()
         from .business_state_graph import BusinessStateGraphBuilder
+        settings = _behavior_slice_settings()
+        campaign, campaign_store, campaign_mode = _campaign_context(
+            project,
+            campaign_prd_text,
+            api_spec_text,
+            db_schema_text,
+            approved_base_url,
+            settings,
+            context,
+            root,
+            submitted_api_spec_text,
+        )
         # 主链 2: fold the structured enterprise knowledge asset (parsed from the
         # customer's uploaded docs) into the planning text so business rules,
         # permission boundaries and historical-bug patterns drive the live test
@@ -2488,6 +2500,8 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         _experiment_compile: dict[str, Any] = {}
         _obligation_plan: dict[str, Any] = {}
         _adapter_matrix: dict[str, Any] = {}
+        _experiment_execution: dict[str, Any] = {}
+        _exp_by_obl: dict[str, dict[str, Any]] = {}
         try:
             from .enterprise_knowledge_center import (
                 build_enterprise_business_knowledge_asset,
@@ -2590,18 +2604,6 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                     )
                     # Selected experiment → fixture → governed HTTP → observers →
                     # typed assertions → contract oracle (every item gets a receipt).
-                    from .experiment_executor import execute_selected_experiments
-
-                    _experiment_execution = execute_selected_experiments(
-                        list(_obligation_plan.get("selected") or []),
-                        experiments_by_obligation=_exp_by_obl,
-                        behavior_ir=_behavior_ir,
-                        root=root,
-                        project=project,
-                        base_url=approved_base_url,
-                        runtime_contract=runtime_contract,
-                        campaign_id=str(_dict(context).get("campaign_id") or ""),
-                    )
                     for _finding in list(_experiment_execution.get("findings") or []):
                         if isinstance(_finding, dict):
                             result["findings"].append(_finding)
@@ -2667,8 +2669,6 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
         graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
         graphs = builder.build(prd_text, graph_api_doc, db_schema_text)
         behavior_contract = builder.behavior_contract()
-        settings = _behavior_slice_settings()
-        campaign, campaign_store, campaign_mode = _campaign_context(project, campaign_prd_text, api_spec_text, db_schema_text, approved_base_url, settings, context, root, submitted_api_spec_text)
         campaign, campaign_store, campaign_mode = _maybe_start_behavior_contract_rerun(
             project,
             campaign_prd_text,
@@ -2711,6 +2711,57 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
                 ).strip(),
             }
         result["runtime_contract"] = runtime_contract
+        if _behavior_ir and _obligation_plan:
+            try:
+                from .experiment_executor import execute_selected_experiments
+
+                _experiment_execution = execute_selected_experiments(
+                    list(_obligation_plan.get("selected") or []),
+                    experiments_by_obligation=_exp_by_obl,
+                    behavior_ir=_behavior_ir,
+                    root=root,
+                    project=project,
+                    base_url=approved_base_url,
+                    runtime_contract=runtime_contract,
+                    campaign_id=campaign.campaign_id,
+                )
+                for _finding in list(_experiment_execution.get("findings") or []):
+                    if isinstance(_finding, dict):
+                        result["findings"].append(_finding)
+                result["experiment_execution"] = {
+                    "selected_count": int(_experiment_execution.get("selected_count") or 0),
+                    "executed_count": int(_experiment_execution.get("executed_count") or 0),
+                    "blocked_count": int(_experiment_execution.get("blocked_count") or 0),
+                    "harness_failure_count": int(
+                        _experiment_execution.get("harness_failure_count") or 0
+                    ),
+                    "cleanup_failures": int(_experiment_execution.get("cleanup_failures") or 0),
+                    "every_experiment_has_receipt": bool(
+                        _experiment_execution.get("every_experiment_has_receipt")
+                    ),
+                    "results": list(_experiment_execution.get("results") or [])[:100],
+                }
+                result["phases"]["behavior_ir"] = {
+                    **_dict(result["phases"].get("behavior_ir")),
+                    "status": "completed",
+                    "experiment_executed": int(
+                        _experiment_execution.get("executed_count") or 0
+                    ),
+                    "experiment_blocked": int(
+                        _experiment_execution.get("blocked_count") or 0
+                    ),
+                    "campaign_id": campaign.campaign_id,
+                }
+            except Exception as _ir_execution_exc:
+                result["phases"]["behavior_ir"] = {
+                    **_dict(result["phases"].get("behavior_ir")),
+                    "status": "FAILED_SAFE",
+                    "campaign_id": campaign.campaign_id,
+                    "error": (
+                        f"{type(_ir_execution_exc).__name__}: "
+                        f"{str(_ir_execution_exc)[:200]}"
+                    ),
+                }
         ranked_behavior_slices = list(behavior_contract["slices"])
         # ── Supplementary coverage: inject actor-aware / data-isolation /
         # concurrency / financial-integrity slices that the state-machine builder
@@ -2908,25 +2959,6 @@ def run_v12_pipeline(project: str, root: Path, prd_text: str = "", api_spec_text
             selection = _schedule_behavior_slices(ranked_behavior_slices, settings, history)
         selected_ids = set(selection["selected_slice_ids"])
         result["campaign"] = {**campaign.public_contract(), "campaign_mode": campaign_mode}
-        # Behavior-IR experiments are compiled before campaign scheduling, so
-        # bind the final campaign identity onto every execution/evidence/finding
-        # receipt once the authoritative campaign exists. No selected item may
-        # disappear from the continuity ledger with an empty campaign_id.
-        _experiment_results = _dict(result.get("experiment_execution")).get("results")
-        if isinstance(_experiment_results, list):
-            for _execution_row in _experiment_results:
-                if not isinstance(_execution_row, dict):
-                    continue
-                _execution_row["campaign_id"] = campaign.campaign_id
-                _execution_receipt = _execution_row.get("execution_receipt")
-                if isinstance(_execution_receipt, dict):
-                    _execution_receipt["campaign_id"] = campaign.campaign_id
-                _execution_finding = _execution_row.get("finding")
-                if isinstance(_execution_finding, dict):
-                    _execution_finding["campaign_id"] = campaign.campaign_id
-        for _result_finding in result.get("findings") or []:
-            if isinstance(_result_finding, dict) and _result_finding.get("execution_id"):
-                _result_finding["campaign_id"] = campaign.campaign_id
         result["behavior_slice_ledger"] = {
             "campaign_id": campaign.campaign_id,
             "campaign_status": campaign.status,
