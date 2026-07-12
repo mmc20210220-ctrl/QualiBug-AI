@@ -58,4 +58,13 @@ if (existsSync(oldRendererPath)) {
   throw new Error('Obsolete perspective-plane renderer still exists');
 }
 
+const agents = read('../AGENTS.md');
+for (const token of [
+  'login radar is an approved decorative metaphor for enterprise-system behavior observation',
+  'insect, crawler, spider-web, and scraping semantics remain prohibited',
+  'Decorative brand motion must never represent actual system health',
+]) {
+  if (!agents.includes(token)) throw new Error(`Living radar brand contract missing: ${token}`);
+}
+
 console.log('PASS login-radar-canvas-contract');
