@@ -2458,10 +2458,15 @@ def _require_mainline_identity(context: dict[str, Any]) -> None:
 
 def _build_mainline_campaign(inputs: Any) -> dict[str, Any]:
     settings = _behavior_slice_settings()
+    campaign_api_spec_text = str(
+        inputs.campaign_context.get("_campaign_api_spec_text")
+        or inputs.api_spec_text
+        or ""
+    )
     campaign, store, mode = _campaign_context(
         inputs.project,
         inputs.prd_text,
-        inputs.api_spec_text,
+        campaign_api_spec_text,
         inputs.db_schema_text,
         inputs.approved_base_url,
         settings,
@@ -2500,6 +2505,7 @@ def _run_legacy_champion(
         base_url=inputs.approved_base_url,
         existing_findings=list(inputs.existing_findings),
         campaign_context=dict(inputs.campaign_context),
+        campaign_handle=campaign_handle,
     )
     return adapt_legacy_champion_result(
         inputs,
@@ -2538,11 +2544,20 @@ def run_v12_pipeline(
     normalized_api_spec_text, normalization = _normalize_executable_api_document(
         submitted_api_spec_text
     )
-    if str(normalization.get("status") or "").upper() == "FAILED_SAFE":
-        raise MainlineContractError(
-            "api_document_normalization_failed:"
-            f"{normalization.get('error_type') or normalization.get('reason') or 'UNKNOWN'}"
-        )
+    normalization_failed = (
+        str(normalization.get("status") or "").upper() == "FAILED_SAFE"
+    )
+    context["_campaign_api_spec_text"] = (
+        submitted_api_spec_text if normalization_failed else normalized_api_spec_text
+    )
+    if str(context.get("mainline_authority") or "") == "legacy_champion":
+        normalized_api_spec_text = submitted_api_spec_text
+    else:
+        if normalization_failed:
+            raise MainlineContractError(
+                "api_document_normalization_failed:"
+                f"{normalization.get('error_type') or normalization.get('reason') or 'UNKNOWN'}"
+            )
     runtime_contract = _runtime_contract(context, base_url, submitted_api_spec_text)
     context["_runtime_contract"] = runtime_contract
     inputs = DiscoveryMainlineInputs(
@@ -2564,7 +2579,7 @@ def run_v12_pipeline(
     )
 
 
-def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None) -> dict[str, Any]:
+def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "", base_url: str = "", existing_findings: list[dict] | None = None, campaign_context: dict[str, Any] | None = None, campaign_handle: dict[str, Any] | None = None) -> dict[str, Any]:
     global _v12_har_entries
     _v12_har_entries = []
     started = time.time()
@@ -2605,17 +2620,24 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
         graph_started = time.time()
         from .business_state_graph import BusinessStateGraphBuilder
         settings = _behavior_slice_settings()
-        campaign, campaign_store, campaign_mode = _campaign_context(
-            project,
-            campaign_prd_text,
-            api_spec_text,
-            db_schema_text,
-            approved_base_url,
-            settings,
-            context,
-            root,
-            submitted_api_spec_text,
-        )
+        if campaign_handle is not None:
+            campaign = campaign_handle.get("campaign")
+            campaign_store = campaign_handle.get("store")
+            campaign_mode = str(campaign_handle.get("mode") or "")
+            if campaign is None or campaign_store is None:
+                raise RuntimeError("legacy_champion_campaign_handle_invalid")
+        else:
+            campaign, campaign_store, campaign_mode = _campaign_context(
+                project,
+                campaign_prd_text,
+                api_spec_text,
+                db_schema_text,
+                approved_base_url,
+                settings,
+                context,
+                root,
+                submitted_api_spec_text,
+            )
         # 主链 2: fold the structured enterprise knowledge asset (parsed from the
         # customer's uploaded docs) into the planning text so business rules,
         # permission boundaries and historical-bug patterns drive the live test
@@ -2795,21 +2817,22 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
         graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
         graphs = builder.build(prd_text, graph_api_doc, db_schema_text)
         behavior_contract = builder.behavior_contract()
-        campaign, campaign_store, campaign_mode = _maybe_start_behavior_contract_rerun(
-            project,
-            campaign_prd_text,
-            api_spec_text,
-            db_schema_text,
-            approved_base_url,
-            settings,
-            context,
-            root,
-            submitted_api_spec_text,
-            behavior_contract,
-            campaign,
-            campaign_store,
-            campaign_mode,
-        )
+        if campaign_handle is None:
+            campaign, campaign_store, campaign_mode = _maybe_start_behavior_contract_rerun(
+                project,
+                campaign_prd_text,
+                api_spec_text,
+                db_schema_text,
+                approved_base_url,
+                settings,
+                context,
+                root,
+                submitted_api_spec_text,
+                behavior_contract,
+                campaign,
+                campaign_store,
+                campaign_mode,
+            )
         recovered_stale_campaign = _recover_stale_campaign_state(campaign, behavior_contract["slices"])
         approval = _execution_approval_contract(context, campaign, approved_base_url, root)
         if approved_base_url and approval.get("status") != "approved":
@@ -3048,6 +3071,24 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 behavior_contract,
                 ranked_behavior_slices,
             )
+        if (
+            runtime_contract.get("status") == "approved"
+            and campaign.status in {"completed", "blocked"}
+        ):
+            remaining_retry_ids = {
+                str(item.get("slice_id") or "")
+                for item in ranked_behavior_slices
+                if isinstance(item, dict) and str(item.get("slice_id") or "")
+            }.difference(campaign.confirmation_receipts)
+            if remaining_retry_ids and campaign.reopen_for_unexecuted_attempt_retry(
+                reason="runtime_contract_now_approved"
+            ):
+                campaign_store.save(campaign)
+                result["campaign_retry"] = {
+                    "status": "reopened",
+                    "reason": "prior_attempts_terminal_before_any_target_request",
+                    "remaining_slice_count": len(remaining_retry_ids),
+                }
         if campaign.status in {"coverage_deferred", "completed", "blocked"}:
             selection = _selection_result(status="stopped", stop_reason=f"campaign_{campaign.status}", selected=[], pending=ranked_behavior_slices, attempted=set(campaign.attempted_slice_ids), confirmed=set(campaign.confirmation_receipts), next_round=None, selection_mode="campaign_terminal")
         else:

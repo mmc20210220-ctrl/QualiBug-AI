@@ -256,3 +256,90 @@ def test_zero_selected_obligations_block_campaign_completion() -> None:
     )
 
     assert derive_campaign_terminal_status(ledger) == "blocked"
+
+
+def test_campaign_can_retry_only_when_prior_attempts_never_executed() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={
+            "obl-1": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_RUNTIME_TARGET",
+            }
+        },
+        execution_results={},
+        gate_results={},
+    )
+    campaign = EnterpriseCampaign.create(
+        project_id="PROJECT-1",
+        scope_id="scope-1",
+        environment_ref="ENV-1",
+        snapshot="snapshot-1",
+    )
+    campaign.campaign_id = "CMP-1"
+    campaign.record_obligation_attempt_ledger(ledger)
+
+    assert campaign.reopen_for_unexecuted_attempt_retry(
+        reason="runtime_contract_now_approved"
+    ) is True
+    assert campaign.status == "active"
+    assert campaign.obligation_attempt_ledger_fingerprint == ""
+    assert campaign.audit_events[-1]["event"] == "obligation_attempt_retry"
+
+
+def test_campaign_never_retries_after_an_execution_receipt() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={"obl-1": {"status": "COMPILED"}},
+        execution_results={"obl-1": {"status": "EXECUTED"}},
+        gate_results={
+            "obl-1": {
+                "status": "REJECTED",
+                "reason_code": "ORACLE_NOT_VIOLATED",
+            }
+        },
+    )
+    campaign = EnterpriseCampaign.create(
+        project_id="PROJECT-1",
+        scope_id="scope-1",
+        environment_ref="ENV-1",
+        snapshot="snapshot-1",
+    )
+    campaign.campaign_id = "CMP-1"
+    campaign.record_obligation_attempt_ledger(ledger)
+
+    assert campaign.reopen_for_unexecuted_attempt_retry(
+        reason="runtime_contract_now_approved"
+    ) is False
+    assert campaign.obligation_attempt_ledger_fingerprint
+
+
+def test_campaign_never_retries_after_an_observation_receipt() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={"obl-1": {"status": "COMPILED"}},
+        execution_results={
+            "obl-1": {
+                "status": "BLOCKED",
+                "reason_code": "POST_REQUEST_PRECONDITION_FAILED",
+                "observation_receipt_ids": ["observation-1"],
+            }
+        },
+        gate_results={},
+    )
+    campaign = EnterpriseCampaign.create(
+        project_id="PROJECT-1",
+        scope_id="scope-1",
+        environment_ref="ENV-1",
+        snapshot="snapshot-1",
+    )
+    campaign.campaign_id = "CMP-1"
+    campaign.record_obligation_attempt_ledger(ledger)
+
+    assert campaign.reopen_for_unexecuted_attempt_retry(
+        reason="runtime_contract_now_approved"
+    ) is False
+    assert campaign.obligation_attempt_ledger_fingerprint

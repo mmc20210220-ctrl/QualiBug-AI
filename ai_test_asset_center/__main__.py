@@ -180,19 +180,54 @@ def _bind_discovery_mainline_identity(
     normalized.setdefault("target_id", target_id)
     normalized.setdefault("environment_id", environment_id)
     normalized.setdefault("policy_version", policy_version)
-    normalized.setdefault(
-        "mainline_authority",
-        str(
-            get_policy_value(
-                "discovery",
-                "mainline_authority",
-                "experiment_candidate",
-            )
-            or ""
-        ).strip(),
-    )
+    policy_authority = str(
+        get_policy_value(
+            "execution",
+            "mainline_authority",
+            "legacy_champion",
+        )
+        or ""
+    ).strip()
+    if policy_authority not in {"legacy_champion", "experiment_candidate"}:
+        raise RuntimeError("discovery_mainline_policy_authority_invalid")
+    context_authority = str(normalized.get("mainline_authority") or "").strip()
+    if context_authority and context_authority != policy_authority:
+        raise RuntimeError("mainline_authority_policy_mismatch")
+    normalized["mainline_authority"] = policy_authority
     normalized.setdefault("evaluation_mode", "operational")
     return normalized
+
+
+def _bind_scan_rows_to_mainline(
+    rows: list[dict[str, Any]],
+    v12_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Join post-V12 external/UI rows to the immutable scan authority."""
+
+    if not rows:
+        return []
+    from .discovery_mainline_contract import (
+        MainlineContractError,
+        validate_mainline_run_contract,
+    )
+
+    contract = validate_mainline_run_contract(
+        _as_dict(v12_result).get("mainline_run")
+    )
+    fingerprint = contract["contract_fingerprint"]
+    bound: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        observed = str(
+            _as_dict(item.get("mainline_run")).get("contract_fingerprint")
+            or item.get("mainline_contract_fingerprint")
+            or ""
+        ).strip()
+        if observed and observed != fingerprint:
+            raise MainlineContractError("post_v12_finding_authority_mismatch")
+        item["mainline_run"] = {"contract_fingerprint": fingerprint}
+        bound.append(item)
+    return bound
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -4218,6 +4253,10 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     # preserved as coverage on the survivor.
     confirmed, dedupe_report = _dedupe_findings(confirmed)
     external_findings = v12.get("external_findings") if isinstance(v12.get("external_findings"), list) else []
+    external_findings = _bind_scan_rows_to_mainline(
+        [dict(item) for item in external_findings if isinstance(item, dict)],
+        v12,
+    )
     if external_findings:
         external_findings = _adjudicate_external_evidence_backed_candidates(external_findings)
         external_findings = _attach_external_evidence_packages(external_findings)
@@ -4402,6 +4441,10 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     ui_candidate_findings = _ui_candidate_gate(ui_findings)
     ui_candidate_findings = _verify_ui_candidate_findings(ui_candidate_findings, root=root, runtime_contract=runtime_contract)
     ui_candidate_findings = _mark_high_confidence_ui_candidates(ui_candidate_findings)
+    ui_candidate_findings = _bind_scan_rows_to_mainline(
+        [dict(item) for item in ui_candidate_findings if isinstance(item, dict)],
+        v12,
+    )
     if ui_candidate_findings:
         candidates.extend(ui_candidate_findings)
     ui_execution = _as_dict(v12.get("ui_execution"))

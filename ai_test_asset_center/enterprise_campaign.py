@@ -356,22 +356,49 @@ class EnterpriseCampaign:
     def record_obligation_attempt_ledger(self, ledger: dict[str, Any]) -> None:
         """Make terminal obligation coverage the campaign completion authority."""
 
-        from .obligation_attempt_ledger import derive_campaign_terminal_status
+        from .obligation_attempt_ledger import (
+            derive_campaign_terminal_status,
+            validate_obligation_attempt_ledger,
+        )
 
         if not isinstance(ledger, dict):
             raise ValueError("obligation attempt ledger must be an object")
         if _text(ledger.get("campaign_id")) != self.campaign_id:
             raise ValueError("obligation attempt ledger campaign identity mismatch")
-        fingerprint = _text(ledger.get("ledger_fingerprint"), 128)
+        validated_ledger = validate_obligation_attempt_ledger(ledger)
+        fingerprint = _text(validated_ledger.get("ledger_fingerprint"), 128)
         if not fingerprint:
             raise ValueError("obligation attempt ledger fingerprint is required")
-        status = derive_campaign_terminal_status(ledger)
+        status = derive_campaign_terminal_status(validated_ledger)
+        attempts = [
+            item
+            for item in validated_ledger.get("attempts", [])
+            if isinstance(item, dict)
+        ]
+        executed_attempt_count = sum(
+            1
+            for attempt in attempts
+            if any(
+                isinstance(stage, dict)
+                and _text(stage.get("stage")) == "execution"
+                and _text(stage.get("status")).upper() == "EXECUTED"
+                for stage in attempt.get("stages", [])
+            )
+        )
+        observed_attempt_count = sum(
+            1
+            for attempt in attempts
+            if any(
+                _text(receipt_id)
+                for receipt_id in attempt.get("observation_receipt_ids", [])
+            )
+        )
         self.obligation_attempt_ledger_fingerprint = fingerprint
         self.obligation_attempt_selected_count = max(
-            0, int(ledger.get("selected_count") or 0)
+            0, int(validated_ledger.get("selected_count") or 0)
         )
         self.obligation_attempt_terminal_count = max(
-            0, int(ledger.get("terminal_count") or 0)
+            0, int(validated_ledger.get("terminal_count") or 0)
         )
         self.status = status
         self.coverage_deferred_reason = ""
@@ -383,9 +410,69 @@ class EnterpriseCampaign:
             "selected": self.obligation_attempt_selected_count,
             "terminal": self.obligation_attempt_terminal_count,
             "ledger_fingerprint": fingerprint,
+            "terminal_status_counts": dict(
+                validated_ledger.get("terminal_status_counts") or {}
+            ),
+            "executed_attempt_count": executed_attempt_count,
+            "observed_attempt_count": observed_attempt_count,
         })
         self.audit_events = self.audit_events[-200:]
         self.updated_at_utc = _now()
+
+    def reopen_for_unexecuted_attempt_retry(self, *, reason: str) -> bool:
+        """Reopen only a terminal run proven to have sent no target request."""
+
+        if not self.obligation_attempt_ledger_fingerprint:
+            return False
+        prior = next(
+            (
+                item
+                for item in reversed(self.audit_events)
+                if isinstance(item, dict)
+                and item.get("event") == "obligation_attempt_ledger"
+                and item.get("ledger_fingerprint")
+            ),
+            None,
+        )
+        if not isinstance(prior, dict):
+            return False
+        terminal_counts = {
+            _text(key): max(0, int(value or 0))
+            for key, value in _as_dict(
+                prior.get("terminal_status_counts")
+            ).items()
+            if _text(key)
+        }
+        if (
+            int(prior.get("selected") or 0) <= 0
+            or int(prior.get("executed_attempt_count") or 0) != 0
+            or "observed_attempt_count" not in prior
+            or int(prior.get("observed_attempt_count") or 0) != 0
+            or bool(self.attempted_slice_ids)
+            or not terminal_counts
+            or not set(terminal_counts).issubset({"BLOCKED", "DEFERRED"})
+        ):
+            return False
+        previous_fingerprint = self.obligation_attempt_ledger_fingerprint
+        self.status = "active"
+        self.coverage_deferred_reason = ""
+        self.next_campaign_reason = ""
+        self.obligation_attempt_ledger_fingerprint = ""
+        self.obligation_attempt_selected_count = 0
+        self.obligation_attempt_terminal_count = 0
+        self.audit_events.append({
+            "at_utc": _now(),
+            "event": "obligation_attempt_retry",
+            "status": "active",
+            "reason": _text(reason, 240),
+            "previous_ledger_fingerprint": previous_fingerprint,
+            "previous_terminal_status_counts": terminal_counts,
+            "previous_executed_attempt_count": 0,
+            "previous_observed_attempt_count": 0,
+        })
+        self.audit_events = self.audit_events[-200:]
+        self.updated_at_utc = _now()
+        return True
 
     def public_contract(self) -> dict[str, Any]:
         attempt_authoritative = bool(self.obligation_attempt_ledger_fingerprint)

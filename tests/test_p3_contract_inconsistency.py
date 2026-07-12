@@ -49,7 +49,7 @@ def test_schema_oracle_detects_missing_fields(_r):
     """Verify SchemaOracle can flag response body fields missing per contract."""
     fnd=_r.get("findings",[])or[]
     # If scan is blocked/stuck, still validate oracle logic directly
-    if _r.get("execution_status") in ("blocked","stopped"):
+    if _r.get("execution_status") in ("blocked","stopped","not_executed"):
         from ai_test_asset_center.oracle_engine import SchemaOracle
         scenario={"expected_fields":["order_id","status","message"]}
         trace={"steps":[{"response":{"status_code":201,"body":{"status":"ok"}}}]}

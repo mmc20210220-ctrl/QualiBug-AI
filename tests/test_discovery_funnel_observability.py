@@ -225,6 +225,23 @@ def test_all_terminal_obligations_blocked_reports_blocked_execution() -> None:
     assert effective_execution_status({"obligation_attempt_ledger": ledger}) == "blocked"
 
 
+def test_terminal_harness_failure_without_http_receipt_is_not_completed() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run={"run_id": "RUN-FAILED", "campaign_id": "CMP-FAILED"},
+        selected=[{"obligation_id": "obl-failed"}],
+        compile_results={"obl-failed": {"status": "COMPILED"}},
+        execution_results={
+            "obl-failed": {
+                "status": "HARNESS_FAILED",
+                "reason_code": "LEGACY_EXECUTION_ERROR",
+            }
+        },
+        gate_results={},
+    )
+
+    assert effective_execution_status({"obligation_attempt_ledger": ledger}) == "blocked"
+
+
 def test_funnel_exposes_required_stage_receipt_metrics_and_does_not_mutate_formal_count() -> None:
     result = _result()
     before = deepcopy(result["formal_count_projection"])

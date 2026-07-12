@@ -383,6 +383,139 @@ def test_runner_failure_never_falls_back_to_other_authority() -> None:
     assert calls == {"legacy": 0, "experiment": 1}
 
 
+def test_operational_legacy_champion_is_adapted_to_attempt_authority() -> None:
+    from ai_test_asset_center.discovery_mainline import DiscoveryPlanningBundle
+    from ai_test_asset_center.discovery_runtime import adapt_legacy_champion_result
+
+    contract = build_mainline_run_contract(
+        mainline_authority="legacy_champion",
+        run_id="RUN-LEGACY-OPERATIONAL",
+        campaign_id="CMP-LEGACY-OPERATIONAL",
+        target_id="TARGET-LEGACY-OPERATIONAL",
+        environment_id="ENV-LEGACY-OPERATIONAL",
+        policy_version="policy-legacy-operational",
+        evaluation_mode="operational",
+    )
+
+    class Campaign:
+        campaign_id = "CMP-LEGACY-OPERATIONAL"
+
+        def record_obligation_attempt_ledger(self, ledger):
+            self.ledger = ledger
+
+        def public_contract(self):
+            return {
+                "campaign_id": self.campaign_id,
+                "campaign_status": "completed",
+            }
+
+    class Store:
+        def save(self, campaign):
+            self.saved = campaign
+
+    finding = {
+        "title": "Observed declared response-contract violation",
+        "behavior_slice_id": "BHV-LEGACY-1",
+        "gate_passed": True,
+        "execution_status": "executed",
+        "confirmation_status": "confirmed",
+        "customer_delivery_status": "defect",
+        "bug_status": "reproduced",
+        "expected": "HTTP 403",
+        "actual": "HTTP 200",
+        "timestamp": "2026-07-12T00:00:00Z",
+        "evidence_quality": {
+            "level": "validated",
+            "score": 95,
+            "can_reproduce": True,
+        },
+        "evidence_status": {
+            "semantic_verdict": "SEMANTIC_CONFIRMED",
+            "business_evidence_status": "VALIDATED",
+            "final_review_status": "CUSTOMER_READY",
+            "missing_requirements": [],
+        },
+        "raw_evidence": {
+            "has_real_evidence": True,
+            "timestamp": "2026-07-12T00:00:00Z",
+            "request_raw": {"method": "GET", "path": "/resources/1"},
+            "response_raw": {"status_code": 200, "body": {"visible": True}},
+        },
+        "reproduction": {
+            "method": "GET",
+            "path": "/resources/1",
+            "is_synthetic": False,
+            "har_evidence": {"status_code": 200},
+        },
+    }
+    legacy_result = {
+        "campaign": {"campaign_id": "CMP-LEGACY-OPERATIONAL"},
+        "behavior_slices": [
+            {
+                "slice_id": "BHV-LEGACY-1",
+                "kind": "authorization",
+                "source_refs": [
+                    {
+                        "source_id": "api-contract",
+                        "locator": "GET /resources/{id}",
+                    }
+                ],
+            }
+        ],
+        "behavior_slice_ledger": {
+            "selected_slice_ids": ["BHV-LEGACY-1"],
+        },
+        "execution_trace_summaries": [
+            {
+                "scenario": {
+                    "id": "SCN-LEGACY-1",
+                    "behavior_slice_id": "BHV-LEGACY-1",
+                    "discovery_round": 1,
+                },
+                "execution_trace": {
+                    "steps": [
+                        {
+                            "method": "GET",
+                            "path": "/resources/1",
+                            "status": 200,
+                            "skipped_reason": "",
+                        }
+                    ],
+                    "errors": [],
+                    "sandbox_write": {
+                        "status": "not_executed",
+                        "cleanup": {"status": "not_applicable"},
+                        "audit_record_count": 0,
+                    },
+                },
+                "oracle_results": [
+                    {"oracle_name": "PermissionOracle", "passed": False}
+                ],
+            }
+        ],
+        "findings": [finding],
+    }
+    plan = DiscoveryPlanningBundle(
+        mainline_run=contract,
+        behavior_ir={},
+        obligations={"obligations": []},
+        experiments={},
+    )
+
+    result = adapt_legacy_champion_result(
+        _inputs("legacy_champion"),
+        {"campaign": Campaign(), "store": Store(), "mode": "created"},
+        plan,
+        legacy_result,
+    )
+
+    assert result["formal_count_projection"]["formal_customer_deliverable_count"] == 1
+    assert result["obligation_attempt_ledger"]["complete"] is True
+    assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "DELIVERABLE"
+    assert result["findings"][0]["mainline_run"]["contract_fingerprint"] == contract["contract_fingerprint"]
+    assert result["discovery_funnel"]["validated_bug_count"] == 1
+
+
 def test_coordinator_rejects_campaign_or_result_identity_mismatch() -> None:
     from ai_test_asset_center.discovery_mainline import run_discovery_mainline
 

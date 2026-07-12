@@ -6056,9 +6056,26 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     _external,
                 )
         except Exception as _quality_exc:
+            _quality_failure = (
+                f"quality_projection_failed:{type(_quality_exc).__name__}:"
+                f"{str(_quality_exc)[:240]}"
+            )
+            _quarantined = [
+                {
+                    **dict(item),
+                    "finding_class": "candidate",
+                    "gate_passed": False,
+                    "customer_delivery_status": "candidate",
+                    "customer_delivery_gate_reasons": [
+                        "QUALITY_PROJECTION_UNAVAILABLE"
+                    ],
+                }
+                for item in delivery_defects
+                if isinstance(item, dict)
+            ]
             data["external_evaluation"] = {
                 "measurement_status": "NOT_MEASURED",
-                "reason": f"quality_projection_failed:{type(_quality_exc).__name__}",
+                "reason": _quality_failure,
                 "display": {
                     "quality_label": "尚未完成外部质量评测",
                     "suppress_quality_score": True,
@@ -6067,6 +6084,126 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             }
             data["quality_claim_status"] = "NOT_MEASURED"
             data["commercial_quality_score"] = None
+            data["quality_projection_failure"] = {
+                "status": "FAILED_SAFE",
+                "reason": _quality_failure,
+                "quarantined_finding_count": len(_quarantined),
+            }
+            _failed_safe_candidates = [
+                *list(internal_clues or []),
+                *_quarantined,
+            ]
+            data["formal_count_projection"] = {
+                "schema_version": "qualibug.discovery-quality-projection.v1",
+                "projection_status": "FAILED_SAFE",
+                "formal_customer_deliverable_count": 0,
+                "formal_finding_ids": [],
+                "executed_clue_count": len(_failed_safe_candidates),
+                "confirmation_receipt_count": 0,
+                "candidate_count": len(_failed_safe_candidates),
+                "funnel_validated_bug_count": 0,
+                "count_consistency": {
+                    "formal_equals_funnel_validated": None,
+                    "note": (
+                        "Current-run formal counts are quarantined because "
+                        "the quality projection failed."
+                    ),
+                },
+            }
+            data["finding_classification"] = {
+                "schema_version": "qualibug.discovery-quality-projection.v1",
+                "projection_status": "FAILED_SAFE",
+                "deliverable": [],
+                "candidate": _failed_safe_candidates,
+                "rejected": [],
+                "shadow": [],
+                "counts": {
+                    "deliverable": 0,
+                    "candidate": len(_failed_safe_candidates),
+                    "rejected": 0,
+                    "shadow": 0,
+                },
+            }
+            data["scope_counts"] = {
+                "projection_status": "FAILED_SAFE",
+                "current_run_formal_deliverable": 0,
+                "current_campaign_formal_deliverable": 0,
+                "project_open_formal_deliverable": None,
+                "project_open_measurement_status": "NOT_MEASURED",
+            }
+            data["obligation_execution_projection"] = {
+                "projection_status": "FAILED_SAFE",
+                "measurement_status": "NOT_MEASURED",
+                "reason": _quality_failure,
+            }
+            data["deliverable_findings"] = []
+            data["candidate_findings"] = _failed_safe_candidates
+            data["rejected_findings"] = []
+            data["defects"] = []
+            data["risks"] = []
+            data["clues"] = data["candidate_findings"]
+            data["project_history"] = {
+                "measurement_status": "NOT_MEASURED",
+                "formal_customer_deliverable_count": len(delivery_defects or []),
+                "deliverable_findings": list(delivery_defects or []),
+                "note": (
+                    "Historical shelf is separate; current-run delivery is "
+                    "blocked because its quality projection failed."
+                ),
+            }
+            for _surface in (
+                data["scan_meta"],
+                data["executive_summary"],
+                data["value_metrics"],
+            ):
+                _surface["formal_customer_deliverable_count"] = 0
+                _surface["current_report_customer_ready_defect_count"] = 0
+                _surface["customer_ready_defects"] = 0
+                _surface["current_campaign_customer_ready_defect_count"] = 0
+            data["executive_summary"]["total_bugs_found"] = 0
+            data["executive_summary"]["ready_bugs"] = 0
+            data["executive_summary"]["critical_bugs"] = 0
+            data["executive_summary"]["high_priority_bugs"] = 0
+            data["value_metrics"]["defect_count"] = 0
+            data["value_metrics"]["ready_bug_count"] = 0
+            data["value_metrics"]["p0_count"] = 0
+            data["value_metrics"]["p1_count"] = 0
+            data["value_metrics"]["p2_count"] = 0
+            data["value_metrics"]["ready_p0_count"] = 0
+            data["value_metrics"]["ready_p1_count"] = 0
+            data["value_metrics"]["customer_defect_intake_total"] = 0
+            data["value_metrics"]["defect_intake_recommended_total"] = 0
+            data["scan_meta"]["ready_bug_count"] = 0
+            _empty_grouped = _build_defect_grouped_summary([])
+            _empty_priority = _build_defect_priority_summary([])
+            _empty_repro = _build_defect_repro_summary([])
+            _empty_cards = _build_defect_delivery_cards([])
+            data["defect_grouped_summary"] = _empty_grouped
+            data["defect_priority_summary"] = _empty_priority
+            data["defect_repro_summary"] = _empty_repro
+            data["defect_delivery_cards"] = _empty_cards
+            data["value_metrics"]["defect_grouped_summary"] = _empty_grouped
+            data["value_metrics"]["defect_priority_summary"] = _empty_priority
+            data["value_metrics"]["defect_repro_summary"] = _empty_repro
+            data["value_metrics"]["defect_delivery_cards"] = _empty_cards
+            data["executive_summary"]["defect_grouped_summary"] = _empty_grouped
+            data["executive_summary"]["defect_priority_summary"] = _empty_priority
+            data["executive_summary"]["defect_repro_summary"] = _empty_repro
+            data["executive_summary"]["defect_delivery_cards"] = _empty_cards
+            data["data_contract"]["defect_grouped_summary"] = _empty_grouped
+            data["data_contract"]["defect_priority_summary"] = _empty_priority
+            data["data_contract"]["defect_repro_summary"] = _empty_repro
+            data["data_contract"]["defect_delivery_cards"] = _empty_cards
+            _empty_display_contract = _rebuild_customer_display_contract(
+                overall_display_contract,
+                [],
+            )
+            data["data_contract"].update(_empty_display_contract)
+            data["delivery_tracks"]["defects"] = {
+                **_empty_display_contract,
+                "display_key": "defects",
+                "compatibility_alias": "risks",
+            }
             data["executive_summary"]["overall_score"] = None
             data["executive_summary"]["quality_label"] = "尚未完成外部质量评测"
         return {

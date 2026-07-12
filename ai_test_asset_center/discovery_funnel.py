@@ -71,11 +71,13 @@ def effective_execution_status(v12_result: dict[str, Any] | None) -> str:
     if selected == 0:
         return "not_executed"
     if bool(ledger.get("complete")) and selected == terminal:
-        terminal_statuses = {
-            _text(_dict(attempt).get("terminal_status")).upper()
-            for attempt in _list(ledger.get("attempts"))
-        }
-        if terminal_statuses and terminal_statuses <= {"BLOCKED", "DEFERRED"}:
+        attempts = [
+            _dict(attempt) for attempt in _list(ledger.get("attempts"))
+        ]
+        observed_attempt_count = sum(
+            1 for attempt in attempts if _list(attempt.get("observation_receipt_ids"))
+        )
+        if observed_attempt_count == 0:
             return "blocked"
         return "completed"
     if terminal > 0:
@@ -358,6 +360,21 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     }
     formal_consistency = _dict(result.get("formal_id_consistency"))
     formal_mismatch = bool(formal_consistency and formal_consistency.get("consistent") is False)
+    nested_result = _dict(result.get("v12"))
+    execution_observability = [
+        dict(row)
+        for row in _list(
+            result.get("execution_observability")
+            or nested_result.get("execution_observability")
+        )
+        if isinstance(row, dict)
+    ]
+    observability_gaps = [
+        row
+        for row in execution_observability
+        if _text(row.get("status")).lower()
+        not in {"ok", "healthy", "completed", "success", "succeeded"}
+    ]
     cleanup_failures = sum(
         1
         for attempt in attempts
@@ -382,6 +399,7 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         or reasoner_failure_count
         or reasoner_status in {"degraded", "failed", "provider_unavailable"}
         or formal_mismatch
+        or observability_gaps
         or cost_unknown
     ):
         status = "DEGRADED"
@@ -415,6 +433,7 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
                 (cost_unknown, "usage/cost_coverage_unknown"),
                 (reasoner_failure_count > 0, "reasoner_failures"),
                 (formal_mismatch, "formal_id_mismatch"),
+                (bool(observability_gaps), "execution_observability_gaps"),
                 (cleanup_failures > 0, "cleanup_failures"),
                 (blocked > 0, "blocked_or_deferred_obligations"),
                 (selected == 0, "no_obligations_selected"),
@@ -444,6 +463,8 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         "reasoner_error_class_counts": reasoner_error_class_counts,
         "secret_scan_failed": secret_scan_failed,
         "formal_id_mismatch": formal_mismatch,
+        "observability_gap_count": len(observability_gaps),
+        "observability_gaps": observability_gaps,
         "terminal_reason_counts": dict(sorted(reasons.items())),
         "formal_customer_deliverable_count": formal["formal_customer_deliverable_count"],
         "formal_finding_ids": list(formal["formal_finding_ids"]),

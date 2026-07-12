@@ -50,6 +50,11 @@ authority is frozen before planning in
 `qualibug.discovery-mainline-run.v1`; one run may select either
 `legacy_champion` or `experiment_candidate`, and an exception may never switch
 that selection. Replay and shadow runs set `customer_outputs_published=false`.
+Until paired external non-regression evidence promotes the candidate, the
+execution-policy default remains `legacy_champion`. The selected champion is
+adapted into the same attempt/formal contracts from actual redacted traces and
+runtime findings; this is pre-run authority selection, not an exception-time
+fallback.
 
 Completion and product health are derived only from
 `qualibug.obligation-attempt-ledger.v1` plus the formal quality projection.
@@ -57,6 +62,9 @@ Zero selected obligations and runs whose obligations are all blocked remain
 visibly `BLOCKED`; empty findings from those runs never mean that the target is
 defect-free. Trace and weakness diagnostics consume
 `qualibug.discovery-trace-ledger.v2`, keyed by obligation attempt identity.
+An approved follow-up may reopen a terminal campaign only when the prior ledger
+proves zero executed target-request receipts and only `BLOCKED`/`DEFERRED`
+terminals. Any observed request or write forbids whole-run retry.
 
 Stage-local timing evidence uses immutable
 `qualibug.discovery-phase1-timing.v1` receipts produced by

@@ -222,7 +222,8 @@ def test_p2_read_only_runtime_contract_executes_against_local_api(tmp_path: Path
     assert result["success"] is True
     assert result["runtime_contract"]["status"] == "approved"
     assert result["execution_status"] == "completed"
-    assert result["auto_har"]["status"] == "captured"
+    assert result["auto_har"]["status"] == "receipt_backed"
+    assert result["auto_har"]["entry_count"] > 0
     assert any(call["method"] == "GET" and call["path"].startswith("/api/orders") for call in _RuntimeApiHandler.calls)
 
 
@@ -279,5 +280,6 @@ def test_p2_approved_sandbox_write_runtime_contract_executes_post(tmp_path: Path
     assert result["runtime_contract"]["status"] == "approved"
     assert result["runtime_contract"]["execution_approval"]["execution_mode"] == "approved_sandbox_write"
     assert result["execution_status"] == "completed"
-    assert result["auto_har"]["status"] == "captured"
+    assert result["auto_har"]["status"] == "receipt_backed"
+    assert result["auto_har"]["entry_count"] > 0
     assert any(call["method"] == "POST" and call["path"].startswith("/api/orders") for call in _RuntimeApiHandler.calls)

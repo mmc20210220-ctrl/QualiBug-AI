@@ -186,8 +186,25 @@ def test_build_command_center_exposes_regression_summary_and_finding_status(monk
     payload = handler._build_command_center("enterprise-project", tmp_path)
     data = payload["data"]
     regression_summary = data["regression_summary"]
-    defects = data["defects"]
+    defects = data["project_history"]["deliverable_findings"]
 
+    assert data["defects"] == []
+    assert data["risks"] == []
+    assert data["formal_count_projection"]["formal_customer_deliverable_count"] == 0
+    assert data["finding_classification"]["deliverable"] == []
+    assert data["scope_counts"]["current_run_formal_deliverable"] == 0
+    assert data["value_metrics"]["defect_count"] == 0
+    assert data["value_metrics"]["p0_count"] == 0
+    assert data["value_metrics"]["p1_count"] == 0
+    assert data["executive_summary"]["critical_bugs"] == 0
+    assert data["executive_summary"]["high_priority_bugs"] == 0
+    assert data["defect_grouped_summary"]["total_defects"] == 0
+    assert data["defect_priority_summary"]["total_defects"] == 0
+    assert data["defect_repro_summary"]["total_defects"] == 0
+    assert data["defect_delivery_cards"]["total_cards"] == 0
+    assert data["data_contract"]["materialized_risk_count"] == 0
+    assert data["data_contract"]["ready_bug_count"] == 0
+    assert data["delivery_tracks"]["defects"]["ready_bug_count"] == 0
     assert regression_summary["covered_defect_count"] == 2
     assert regression_summary["failed_defect_count"] == 1
     assert regression_summary["pending_defect_count"] == 1

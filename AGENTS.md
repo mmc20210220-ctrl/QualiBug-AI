@@ -79,8 +79,11 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   `discovery_runtime.py`; selected experiments execute only through
   `experiment_executor.execute_selected_experiments`. The legacy domain may
   run only when `legacy_champion` was explicitly selected before the run. Its
-  adapter is diagnostic and cannot acquire candidate execution or formal-count
-  authority.
+  adapter derives the common attempt ledger only from selected behavior slices,
+  redacted execution traces, and runtime-backed findings; operational output
+  still must pass the same customer-delivery gate. The execution-policy default
+  remains `legacy_champion` until external paired evidence promotes the
+  experiment candidate.
 - `qualibug.obligation-attempt-ledger.v1` is the completion and funnel SSOT.
   Every selected, blocked, or deferred obligation must have exactly one
   terminal attempt with a reason code. Zero selected obligations and all-
@@ -93,6 +96,11 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 - Runtime rollback is a next-run policy decision only. Select
   `legacy_champion` before creating a new immutable run contract; never roll
   back inside an active campaign or after either runner has started.
+- A campaign may reopen a terminal attempt only when its prior immutable ledger
+  proves that every terminal was `BLOCKED`/`DEFERRED`, zero executed
+  target-request receipts exist, and no behavior slice was attempted. The retry
+  must emit an audit event; any observed target request permanently forbids
+  whole-run retry.
 - Phase-1 cycle-time claims require immutable
   `qualibug.discovery-phase1-timing.v1` receipts from
   `tools/discovery_phase1_timing.py`: five warm runs for baseline and candidate,

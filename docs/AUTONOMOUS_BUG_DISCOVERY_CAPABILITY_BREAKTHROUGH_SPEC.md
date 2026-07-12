@@ -47,9 +47,13 @@ The experiment candidate compiles source-grounded Behavior IR into Test
 Obligations and Executable Experiments, selects through the adaptive planner,
 and executes only through `experiment_executor.execute_selected_experiments`.
 Legacy hypotheses, slices, scenarios, and findings have no candidate execution
-or formal-count authority; when `legacy_champion` is deliberately selected,
-the adapter creates diagnostic obligation lineage and keeps replay/shadow
-outputs outside the operational customer scope.
+authority. When `legacy_champion` is deliberately selected, its adapter maps
+only actual behavior-slice selections, redacted execution traces, and
+runtime-backed findings into the common attempt ledger. Operational findings
+must pass the same customer-delivery gate before entering the formal scope;
+replay/shadow findings remain outside customer output. The execution-policy
+default stays on `legacy_champion` until paired external evidence promotes the
+experiment candidate.
 
 `qualibug.obligation-attempt-ledger.v1` is the completion SSOT. Every selected,
 compile-blocked, runtime-blocked, or budget-deferred obligation must have one
@@ -69,6 +73,12 @@ new run and create a new immutable run contract. Rollback may not occur inside
 an active campaign, on exception, or after either runner has started. Replay
 and shadow contracts always set `customer_outputs_published=false`; only an
 operational contract may feed customer-visible formal outputs.
+
+A terminal campaign may be reopened for an approved follow-up only when the
+previous immutable attempt ledger records exclusively `BLOCKED`/`DEFERRED`
+terminals, zero executed target-request receipts, and no attempted behavior
+slice. The prior fingerprint and retry reason remain in the campaign audit log.
+Once any target request is observed, whole-run retry is forbidden.
 
 Engineering cycle-time evidence is emitted by
 `tools/discovery_phase1_timing.py` as immutable

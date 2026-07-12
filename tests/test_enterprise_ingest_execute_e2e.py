@@ -148,12 +148,14 @@ def test_ingest_registers_source_and_local_readonly_execution_persists_evidence(
         thread.join(timeout=5)
 
     assert executed["execution_status"] == "completed"
-    assert executed["auto_har"]["status"] == "captured"
+    assert executed["auto_har"]["status"] == "receipt_backed"
+    assert executed["auto_har"]["entry_count"] > 0
     assert executed["auto_har"]["entries"][0]["request"]["method"] == "GET"
     assert executed["total_findings"] == 0
     assert all(item.get("confirmation_status") != "confirmed" for item in executed["candidate_findings"])
     assert verify_evidence_bundle(project, executed["evidence_bundle"]["bundle_id"], root=tmp_path)["valid"] is True
-    assert executed["scan_preflight_guide"]["healthy_claim_allowed"] is True
+    assert executed["scan_preflight_guide"]["healthy_claim_allowed"] is False
+    assert executed["pipeline_health"]["status"] != "OK"
 
     package = create_delivery_package(project, root=tmp_path, scan_result=executed)
     assert package["status"] == "created"

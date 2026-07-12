@@ -9,6 +9,7 @@ from ai_test_asset_center.auto_test_data_factory import build_auto_fixture_for_p
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
 from ai_test_asset_center.enterprise_test_data_receipts import issue_test_data_receipt, verify_test_data_receipt
 from ai_test_asset_center.test_data_receipt_bootstrap import bootstrap_test_data_receipts_for_campaign
+from tests.mainline_test_support import authoritative_v12_double
 
 
 API_SPEC = json.dumps(
@@ -683,7 +684,10 @@ def test_scan_promotes_bootstrapped_contract_into_ready_test_data_plan(tmp_path,
             },
         }
 
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
     monkeypatch.setattr("ai_test_asset_center.__main__.bootstrap_test_data_receipts_for_campaign", fake_bootstrap)
 
     result = scan(
@@ -775,7 +779,10 @@ def test_scan_infers_create_disposable_contract_before_bootstrap(tmp_path, monke
             },
         }
 
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
     monkeypatch.setattr("ai_test_asset_center.__main__.bootstrap_test_data_receipts_for_campaign", fake_bootstrap)
 
     result = scan(

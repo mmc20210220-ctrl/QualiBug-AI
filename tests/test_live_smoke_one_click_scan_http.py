@@ -7,7 +7,7 @@ HTTP server, and drives an actual `POST /api/v1/scan` over the wire.
 
 It asserts the exact things the completion verifier flagged as unproven:
   * the endpoint really executes (execution_status == "completed"),
-  * it captures REAL runtime evidence (auto_har.status == "captured" with entries),
+* it captures REAL runtime evidence through receipt-backed observations,
   * real HTTP traffic actually reached the SUT,
   * the downstream command-center projection (the data source Dashboard / Findings
     refresh from after `emitScanCompleted`) reflects the completed run,
@@ -179,7 +179,8 @@ def test_one_click_scan_http_endpoint_executes_real_traffic(tmp_path: Path) -> N
             # 3) Real execution + real captured runtime evidence (not plan_only/blocked/mock).
             assert result.get("execution_status") == "completed", result
             auto_har = result.get("auto_har") or {}
-            assert auto_har.get("status") == "captured", auto_har
+            assert auto_har.get("status") == "receipt_backed", auto_har
+            assert int(auto_har.get("entry_count") or 0) > 0, auto_har
             entries = auto_har.get("entries") or []
             assert len(entries) >= 1, auto_har
 

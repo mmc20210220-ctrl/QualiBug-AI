@@ -57,7 +57,7 @@ def test_enterprise_api_registers_source_plans_scan_and_verifies_evidence(monkey
     )
     assert scan_response.status_code == 200
     scan = scan_response.json()
-    assert scan["grade"] == "inconclusive"
+    assert scan["grade"] == "blocked"
     assert scan["runtime_contract"]["source_manifest"]["source_id"] == "api-contract"
     assert scan["evidence_bundle"]["status"] == "persisted"
     assert scan["release_gate"]["verdict"] == "not_ready"
@@ -143,7 +143,8 @@ def test_enterprise_api_enforces_allowlist_and_campaign_approval_workflow(monkey
     assert body["grade"] == "blocked"
     assert body["runtime_contract"]["status"] == "approved"
     assert body["runtime_contract"]["execution_approval"]["execution_mode"] == "approved_sandbox_write"
-    assert body["auto_har"]["status"] == "no_traffic"
+    assert body["auto_har"]["status"] == "receipt_backed"
+    assert body["auto_har"]["entry_count"] == 0
 
 
 def test_enterprise_api_issues_metadata_only_test_data_receipts(monkeypatch, tmp_path):

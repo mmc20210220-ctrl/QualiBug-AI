@@ -169,6 +169,10 @@ def test_e2e_scan_produces_findings(tmp_path: Path) -> None:
     result = scan(
         project=project,
         root=tmp_path,
+        campaign_context={
+            "scope_id": f"{project}-scope",
+            "environment_ref": "plan-only",
+        },
         prd_text="订单只能查看本人数据，支付金额必须等于订单金额，优惠券过期后不可使用",
         multi_layer=False,
         save_report=False,
@@ -223,6 +227,10 @@ def test_e2e_command_center_reflects_scan_meta(tmp_path: Path) -> None:
     result = scan(
         project=project,
         root=tmp_path,
+        campaign_context={
+            "scope_id": f"{project}-scope",
+            "environment_ref": "plan-only",
+        },
         prd_text="订单只能查看本人数据",
         multi_layer=False,
         save_report=True,
@@ -258,6 +266,10 @@ def test_e2e_no_fabricated_data(tmp_path: Path) -> None:
     result = scan(
         project=project,
         root=tmp_path,
+        campaign_context={
+            "scope_id": f"{project}-scope",
+            "environment_ref": "plan-only",
+        },
         prd_text="订单只能查看本人数据",
         multi_layer=False,
         save_report=False,

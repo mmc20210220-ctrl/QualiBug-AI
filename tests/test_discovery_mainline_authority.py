@@ -70,6 +70,50 @@ def test_mainline_contract_fingerprint_detects_tampering() -> None:
         module.validate_mainline_run_contract(contract)
 
 
+def test_product_run_authority_comes_from_execution_policy() -> None:
+    from ai_test_asset_center.__main__ import _bind_discovery_mainline_identity
+    from ai_test_asset_center.policy_registry import ExecutionPolicy, StrategyBundle
+    from ai_test_asset_center.policy_wiring import policy_strategy_override
+
+    strategy = StrategyBundle(
+        execution=ExecutionPolicy(mainline_authority="legacy_champion")
+    )
+    with policy_strategy_override(strategy):
+        context = _bind_discovery_mainline_identity(
+            project="PROJECT-1",
+            context={
+                "scope_id": "SCOPE-1",
+                "environment_ref": "ENV-1",
+                "source_manifest": {"source_hash": "a" * 64},
+            },
+            started=1.0,
+        )
+
+    assert context["mainline_authority"] == "legacy_champion"
+
+
+def test_product_run_rejects_context_authority_that_bypasses_policy() -> None:
+    from ai_test_asset_center.__main__ import _bind_discovery_mainline_identity
+    from ai_test_asset_center.policy_registry import ExecutionPolicy, StrategyBundle
+    from ai_test_asset_center.policy_wiring import policy_strategy_override
+
+    strategy = StrategyBundle(
+        execution=ExecutionPolicy(mainline_authority="legacy_champion")
+    )
+    with policy_strategy_override(strategy):
+        with pytest.raises(RuntimeError, match="mainline_authority_policy_mismatch"):
+            _bind_discovery_mainline_identity(
+                project="PROJECT-1",
+                context={
+                    "scope_id": "SCOPE-1",
+                    "environment_ref": "ENV-1",
+                    "source_manifest": {"source_hash": "a" * 64},
+                    "mainline_authority": "experiment_candidate",
+                },
+                started=1.0,
+            )
+
+
 def _deliverable_finding(contract: dict) -> dict:
     return {
         "id": "FINDING-1",

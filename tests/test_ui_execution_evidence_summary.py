@@ -4,6 +4,7 @@ import json
 
 from ai_test_asset_center.__main__ import scan
 from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from tests.mainline_test_support import authoritative_v12_double
 
 
 API_SPEC = json.dumps(
@@ -88,7 +89,10 @@ def test_scan_emits_ui_execution_evidence_summary(monkeypatch, tmp_path):
     monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
     monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
     monkeypatch.setattr("ai_test_asset_center.__main__._persist_execution_evidence", fake_persist_execution_evidence)
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
 
     result = scan(
         project="enterprise-project",

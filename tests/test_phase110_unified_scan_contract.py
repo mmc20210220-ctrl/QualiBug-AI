@@ -10,6 +10,7 @@ from ai_test_asset_center.enterprise_source_registry import register_source_asse
 from ai_test_asset_center.enterprise_test_data_receipts import issue_test_data_receipt
 from ai_test_asset_center.evidence_artifact_store import load_evidence_bundle, verify_evidence_bundle
 from ai_test_asset_center.enterprise_test_data_plan import validate_test_data_contract
+from tests.mainline_test_support import authoritative_v12_double
 
 
 API_SPEC = json.dumps({
@@ -112,7 +113,7 @@ def test_external_api_doc_path_is_allowed_with_complete_explicit_manifest(tmp_pa
     external_path = tmp_path / "supplier_export.json"
     external_path.write_text(API_SPEC, encoding="utf-8")
     result = scan(project="enterprise-project", root=tmp_path, api_doc_path=str(external_path), campaign_context={"scope_id": "service-a", "environment_ref": "test-a", "source_manifest": SOURCE_MANIFEST})
-    assert result["grade"] == "inconclusive"
+    assert result["grade"] == "blocked"
     assert result["runtime_contract"]["source_manifest"]["source_id"] == "api-spec-v1"
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "declared_manifest"
     assert result["evidence_bundle"]["status"] == "persisted"
@@ -136,7 +137,7 @@ def test_registered_source_registry_asset_is_preferred_and_keeps_version_identit
     registered = register_source_asset("enterprise-project", "api-contract", API_SPEC, source_type="openapi", root=tmp_path)
     result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
     manifest = result["runtime_contract"]["source_manifest"]
-    assert result["grade"] == "inconclusive"
+    assert result["grade"] == "blocked"
     assert manifest["source_id"] == "api-contract"
     assert manifest["source_hash"] == registered["source_hash"]
     assert manifest["source_version_id"] == registered["source_version_id"]
@@ -154,7 +155,7 @@ def test_scan_can_fallback_to_latest_registered_source_when_api_doc_is_omitted(t
     )
 
     assert result["success"] is True
-    assert result["grade"] == "inconclusive"
+    assert result["grade"] == "blocked"
     assert result["runtime_contract"]["source_manifest"]["source_id"] == "api-contract"
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "registered_source_registry"
 
@@ -225,7 +226,7 @@ def test_registered_project_asset_supplies_provenance_without_client_supplied_ma
     input_dir.mkdir(parents=True)
     (input_dir / "api_spec.json").write_text(API_SPEC, encoding="utf-8")
     result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
-    assert result["grade"] == "inconclusive"
+    assert result["grade"] == "blocked"
     assert result["runtime_contract"]["source_manifest"]["source_id"].startswith("project_asset:")
     assert result["runtime_contract"]["source_manifest"]["source_origin"] == "registered_project_asset"
     assert result["campaign"]["confirmed_slice_count"] == 0
@@ -237,14 +238,14 @@ def test_registered_project_api_doc_path_is_identified_by_its_content_hash(tmp_p
     asset_path = input_dir / "api_spec.json"
     asset_path.write_text(API_SPEC, encoding="utf-8")
     result = scan(project="enterprise-project", root=tmp_path, api_doc_path=str(asset_path), campaign_context={"scope_id": "service-a", "environment_ref": "test-a"})
-    assert result["grade"] == "inconclusive"
+    assert result["grade"] == "blocked"
     assert result["runtime_contract"]["source_manifest"]["source_id"].endswith("platform_workspace/enterprise-project/input/api_spec.json")
 
 
 def test_unified_scan_reports_gaps_instead_of_running_fixed_domain_checks(tmp_path):
     result = scan(project="enterprise-project", root=tmp_path, api_doc_text=API_SPEC, campaign_context={"scope_id": "service-a", "environment_ref": "test-a", "source_manifest": SOURCE_MANIFEST})
     assert result["success"] is True
-    assert result["grade"] == "inconclusive"
+    assert result["grade"] == "blocked"
     assert result["total_findings"] == 0
     assert result["db_findings"] == []
     assert result["e2e_findings"] == []
@@ -372,7 +373,10 @@ def test_scan_promotes_external_evidence_backed_finding_to_validated_candidate(m
     monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
     monkeypatch.setattr("ai_test_asset_center.__main__._persist_execution_evidence", fake_persist)
     monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
 
     result = scan(
         project="enterprise-project",
@@ -443,7 +447,10 @@ def test_scan_keeps_external_finding_as_candidate_when_hard_evidence_is_incomple
     monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
     monkeypatch.setattr("ai_test_asset_center.__main__._persist_execution_evidence", fake_persist)
     monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
 
     result = scan(
         project="enterprise-project",
@@ -538,7 +545,10 @@ def test_scan_persists_external_validated_candidate_evidence_package_into_bundle
 
     monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
     monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
 
     result = scan(
         project="enterprise-project",
@@ -630,7 +640,10 @@ def test_scan_materializes_external_reproduction_assets_and_links(monkeypatch, t
 
     monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
     monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
 
     result = scan(
         project="enterprise-project",
@@ -726,7 +739,10 @@ def test_scan_materializes_external_commercial_assets_with_conservative_tracker_
 
     monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
     monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
 
     result = scan(
         project="enterprise-project",
@@ -840,7 +856,10 @@ def test_scan_preserves_existing_ui_followup_assets_when_current_run_has_no_high
     monkeypatch.setattr("ai_test_asset_center.scan_diagnostics.run_preflight", fake_run_preflight)
     monkeypatch.setattr("ai_test_asset_center.__main__._evaluate_release_gate", fake_release_gate)
     monkeypatch.setattr("ai_test_asset_center.__main__._persist_execution_evidence", fake_persist_execution_evidence)
-    monkeypatch.setattr("ai_test_asset_center.v12_pipeline.run_v12_pipeline", fake_v12_pipeline)
+    monkeypatch.setattr(
+        "ai_test_asset_center.v12_pipeline.run_v12_pipeline",
+        authoritative_v12_double(fake_v12_pipeline),
+    )
 
     result = scan(
         project="enterprise-project",

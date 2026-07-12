@@ -1,6 +1,7 @@
 """Single-authority discovery planning and experiment-candidate runtime."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -9,6 +10,10 @@ from typing import Any
 
 from .adaptive_discovery_planner import plan_obligation_round
 from .behavior_ir import build_behavior_ir_from_knowledge_asset
+from .customer_delivery_gate import (
+    build_customer_delivery_gate_receipt,
+    customer_delivery_rejection_reasons,
+)
 from .discovery_funnel import build_funnel
 from .discovery_mainline import (
     DiscoveryMainlineInputs,
@@ -213,6 +218,17 @@ def build_discovery_plan(
     """Compile one immutable Behavior IR -> Obligation -> Experiment plan."""
 
     campaign = _campaign_object(campaign_handle)
+    contract = _contract(inputs, _text(campaign.campaign_id))
+    if contract["mainline_authority"] == "legacy_champion":
+        # The frozen champion has its own behavior-slice planner. Requiring the
+        # unpromoted candidate compiler here would let candidate parse/compile
+        # failures block the selected champion before its runner starts.
+        return DiscoveryPlanningBundle(
+            mainline_run=contract,
+            behavior_ir={},
+            obligations={"obligations": []},
+            experiments={},
+        )
     from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset
 
     asset = build_enterprise_business_knowledge_asset(inputs.project, inputs.root)
@@ -277,7 +293,7 @@ def build_discovery_plan(
         budget=budget,
     )
     return DiscoveryPlanningBundle(
-        mainline_run=_contract(inputs, _text(campaign.campaign_id)),
+        mainline_run=contract,
         behavior_ir=behavior_ir,
         obligations={**obligation_pack, "obligations": obligations},
         experiments={
@@ -615,60 +631,660 @@ def adapt_legacy_champion_result(
     plan: DiscoveryPlanningBundle,
     legacy_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Expose a frozen legacy comparison without granting product authority."""
+    """Project the selected legacy champion into the common attempt authority.
 
-    if plan.mainline_run["customer_outputs_published"]:
-        raise MainlineContractError("legacy_champion_operational_forbidden")
+    This is an adapter for an explicitly selected authority, not an error-time
+    fallback.  It derives terminal receipts only from legacy behavior-slice
+    selections, redacted execution traces, and runtime-backed findings.
+    """
+
     if not isinstance(legacy_result, dict):
         raise MainlineContractError("legacy_champion_result_invalid")
     if _text(legacy_result.get("error")):
         raise RuntimeError(f"legacy_champion_failed:{_text(legacy_result.get('error'))}")
-    selected_rows = _selected_rows(plan)
-    compile_results = {
-        _text(row.get("obligation_id")): {
-            "status": "DEFERRED",
-            "reason_code": "LEGACY_CHAMPION_NON_OBLIGATION_TRACE",
-            "experiment_id": _text(row.get("experiment_id")),
-            "cost_coverage_status": "UNKNOWN",
-        }
-        for row in selected_rows
-    }
-    ledger = build_obligation_attempt_ledger(
-        mainline_run=plan.mainline_run,
-        selected=selected_rows,
-        compile_results=compile_results,
-        execution_results={},
-        gate_results={},
+
+    contract = plan.mainline_run
+    campaign_id = _text(_dict(legacy_result.get("campaign")).get("campaign_id"))
+    ledger_campaign_id = _text(
+        _dict(legacy_result.get("behavior_slice_ledger")).get("campaign_id")
     )
-    shadow = [
-        {
-            **dict(row),
-            "finding_class": "shadow",
-            "shadow_origin": "legacy_champion",
-            "mainline_run": {
-                "contract_fingerprint": plan.mainline_run["contract_fingerprint"],
-            },
-        }
+    observed_campaign_ids = {
+        value for value in (campaign_id, ledger_campaign_id) if value
+    }
+    if not observed_campaign_ids:
+        raise MainlineContractError("legacy_champion_campaign_identity_missing")
+    if observed_campaign_ids != {contract["campaign_id"]}:
+        raise MainlineContractError("legacy_champion_campaign_identity_mismatch")
+
+    behavior_slices = {
+        _text(row.get("slice_id") or row.get("behavior_slice_id")): dict(row)
+        for row in _list(legacy_result.get("behavior_slices"))
+        if isinstance(row, dict)
+        and _text(row.get("slice_id") or row.get("behavior_slice_id"))
+    }
+    traces = [
+        dict(row)
+        for row in _list(legacy_result.get("execution_trace_summaries"))
+        if isinstance(row, dict)
+    ]
+    raw_findings = [
+        dict(row)
         for row in _list(legacy_result.get("findings"))
         if isinstance(row, dict)
     ]
-    formal = build_formal_count_projection(findings=[], candidate_findings=[])
+    selected_slice_ids = [
+        _text(value)
+        for value in _list(
+            _dict(legacy_result.get("behavior_slice_ledger")).get(
+                "selected_slice_ids"
+            )
+        )
+        if _text(value)
+    ]
+    if len(selected_slice_ids) != len(set(selected_slice_ids)):
+        raise MainlineContractError("legacy_selected_slice_identity_duplicate")
+
+    def stable_id(prefix: str, *parts: Any) -> str:
+        canonical = json.dumps(
+            parts,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+        return f"{prefix}_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:32]}"
+
+    def fingerprint(value: Any) -> str:
+        canonical = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def trace_view(trace: dict[str, Any]) -> dict[str, Any]:
+        scenario = _dict(trace.get("scenario"))
+        execution = _dict(trace.get("execution_trace"))
+        return {
+            "scenario_id": _text(scenario.get("id") or execution.get("scenario_id")),
+            "behavior_slice_id": _text(scenario.get("behavior_slice_id")),
+            "discovery_round": int(scenario.get("discovery_round") or 0),
+            "actor_role": _text(execution.get("actor_role")),
+            "steps": [
+                {
+                    "method": _text(step.get("method")).upper(),
+                    "path": _text(step.get("path")),
+                    "status": step.get("status"),
+                    "skipped_reason": _text(step.get("skipped_reason")),
+                }
+                for step in _list(execution.get("steps"))
+                if isinstance(step, dict)
+            ],
+            "errors": [_text(value) for value in _list(execution.get("errors")) if _text(value)],
+            "precondition_not_met_count": len(
+                _list(execution.get("precondition_not_met"))
+            ),
+            "sandbox_write": {
+                "status": _text(_dict(execution.get("sandbox_write")).get("status")),
+                "cleanup_status": _text(
+                    _dict(_dict(execution.get("sandbox_write")).get("cleanup")).get(
+                        "status"
+                    )
+                ),
+                "audit_record_count": int(
+                    _dict(execution.get("sandbox_write")).get("audit_record_count")
+                    or 0
+                ),
+            },
+            "oracle_results": [
+                {
+                    "oracle_name": _text(row.get("oracle_name") or row.get("name")),
+                    "passed": row.get("passed"),
+                    "verdict": _text(row.get("verdict")),
+                }
+                for row in _list(trace.get("oracle_results"))
+                if isinstance(row, dict)
+            ],
+        }
+
+    def finding_view(finding: dict[str, Any]) -> dict[str, Any]:
+        raw = _dict(finding.get("raw_evidence"))
+        request = _dict(raw.get("request_raw"))
+        response = _dict(raw.get("response_raw"))
+        replay = _dict(finding.get("reproduction"))
+        har = _dict(replay.get("har_evidence"))
+        return {
+            "title": _text(finding.get("title")),
+            "category": _text(finding.get("category")),
+            "severity": _text(finding.get("severity")),
+            "behavior_slice_id": _text(
+                finding.get("behavior_slice_id") or finding.get("slice_id")
+            ),
+            "expected": _text(finding.get("expected")),
+            "actual": _text(finding.get("actual")),
+            "timestamp": _text(finding.get("timestamp") or raw.get("timestamp")),
+            "method": _text(replay.get("method") or request.get("method")).upper(),
+            "path": _text(replay.get("path") or request.get("path")),
+            "status_code": response.get("status_code") or har.get("status_code"),
+            "has_real_evidence": bool(raw.get("has_real_evidence") or har),
+            "execution_status": _text(finding.get("execution_status")),
+            "confirmation_status": _text(finding.get("confirmation_status")),
+            "bug_status": _text(finding.get("bug_status")),
+            "gate_passed": bool(finding.get("gate_passed")),
+        }
+
+    trace_views = [trace_view(row) for row in traces]
+    used_trace_indexes: set[int] = set()
+
+    def matching_trace_index(finding: dict[str, Any]) -> int | None:
+        raw_trace = _dict(_dict(finding.get("raw_evidence")).get("execution_trace"))
+        scenario_id = _text(finding.get("scenario_id") or raw_trace.get("scenario_id"))
+        slice_id = _text(finding.get("behavior_slice_id") or finding.get("slice_id"))
+        preferred = [
+            index
+            for index, row in enumerate(trace_views)
+            if scenario_id and row["scenario_id"] == scenario_id
+        ]
+        if not preferred:
+            preferred = [
+                index
+                for index, row in enumerate(trace_views)
+                if slice_id and row["behavior_slice_id"] == slice_id
+            ]
+        if not preferred:
+            return None
+        return next(
+            (index for index in preferred if index not in used_trace_indexes),
+            preferred[0],
+        )
+
+    units: list[dict[str, Any]] = []
+    represented_slices: set[str] = set()
+    for finding_index, finding in enumerate(raw_findings):
+        trace_index = matching_trace_index(finding)
+        if trace_index is not None:
+            used_trace_indexes.add(trace_index)
+        slice_id = _text(finding.get("behavior_slice_id") or finding.get("slice_id"))
+        if not slice_id and trace_index is not None:
+            slice_id = trace_views[trace_index]["behavior_slice_id"]
+        if not slice_id:
+            slice_id = stable_id(
+                "legacy_slice",
+                contract["campaign_id"],
+                "finding",
+                finding_index,
+                finding_view(finding),
+            )
+        represented_slices.add(slice_id)
+        units.append({
+            "kind": "finding",
+            "index": finding_index,
+            "slice_id": slice_id,
+            "finding": finding,
+            "trace_index": trace_index,
+        })
+    for trace_index, trace in enumerate(traces):
+        if trace_index in used_trace_indexes:
+            continue
+        view = trace_views[trace_index]
+        slice_id = view["behavior_slice_id"] or stable_id(
+            "legacy_slice",
+            contract["campaign_id"],
+            "trace",
+            trace_index,
+            view["scenario_id"],
+        )
+        represented_slices.add(slice_id)
+        units.append({
+            "kind": "trace",
+            "index": trace_index,
+            "slice_id": slice_id,
+            "finding": None,
+            "trace_index": trace_index,
+        })
+    for slice_index, slice_id in enumerate(selected_slice_ids):
+        if slice_id in represented_slices:
+            continue
+        units.append({
+            "kind": "selected_slice",
+            "index": slice_index,
+            "slice_id": slice_id,
+            "finding": None,
+            "trace_index": None,
+        })
+
+    selected_rows: list[dict[str, Any]] = []
+    compile_results: dict[str, dict[str, Any]] = {}
+    execution_results: dict[str, dict[str, Any]] = {}
+    gate_results: dict[str, dict[str, Any]] = {}
+    normalized_findings: list[dict[str, Any]] = []
+    finding_terminal: dict[str, tuple[str, list[str]]] = {}
+
+    for unit_index, unit in enumerate(units):
+        raw_finding = unit["finding"]
+        trace_index = unit["trace_index"]
+        trace = traces[trace_index] if trace_index is not None else None
+        view = trace_views[trace_index] if trace_index is not None else {}
+        slice_id = unit["slice_id"]
+        finding_receipt_view = finding_view(raw_finding) if raw_finding else {}
+        unit_material = {
+            "kind": unit["kind"],
+            "index": unit["index"],
+            "slice_id": slice_id,
+            "trace": view,
+            "finding": finding_receipt_view,
+        }
+        candidate_id = stable_id(
+            "candidate", contract["campaign_id"], unit_material
+        )
+        obligation_id = stable_id(
+            "obligation", contract["campaign_id"], unit_material
+        )
+        experiment_id = stable_id("experiment", obligation_id)
+        scenario_id = _text(_dict(view).get("scenario_id"))
+        execution_id = stable_id(
+            "execution",
+            contract["campaign_id"],
+            scenario_id or obligation_id,
+        )
+        input_fingerprint = fingerprint({
+            "campaign_id": contract["campaign_id"],
+            "slice_id": slice_id,
+            "scenario_id": scenario_id,
+            "kind": unit["kind"],
+        })
+
+        slice_row = _dict(behavior_slices.get(slice_id))
+        source_refs = [
+            dict(row)
+            for row in (
+                _list(raw_finding.get("source_refs")) if raw_finding else []
+            )
+            if isinstance(row, dict)
+        ] or [
+            dict(row)
+            for row in _list(slice_row.get("source_refs"))
+            if isinstance(row, dict)
+        ]
+        steps = _list(_dict(view).get("steps"))
+        operation_refs = [
+            _text(value)
+            for value in _list(slice_row.get("endpoints"))
+            if _text(value)
+        ]
+        operation_refs.extend(
+            f"{_text(step.get('method')).upper()} {_text(step.get('path'))}".strip()
+            for step in steps
+            if isinstance(step, dict)
+            and (_text(step.get("method")) or _text(step.get("path")))
+        )
+        actor_refs = [
+            value
+            for value in (
+                _text(_dict(view).get("actor_role")),
+                _text(_dict(_dict(raw_finding or {}).get("evidence")).get("actor")),
+            )
+            if value
+        ]
+        selected_rows.append({
+            "candidate_id": candidate_id,
+            "source_refs": source_refs,
+            "risk_family": _text(
+                _dict(raw_finding or {}).get("category") or slice_row.get("kind")
+            ),
+            "operation_refs": list(dict.fromkeys(operation_refs)),
+            "actor_refs": list(dict.fromkeys(actor_refs)),
+            "adapter": "legacy_champion_receipt_adapter",
+            "planning_round": int(_dict(view).get("discovery_round") or 1),
+            "behavior_slice_id": slice_id,
+            "behavior_ir_refs": [],
+            "obligation_id": obligation_id,
+            "experiment_id": experiment_id,
+            "input_fingerprint": input_fingerprint,
+        })
+
+        has_materialized_scenario = trace is not None or raw_finding is not None
+        if not has_materialized_scenario:
+            compile_results[obligation_id] = {
+                "status": "BLOCKED",
+                "reason_code": "LEGACY_SCENARIO_RECEIPT_MISSING",
+                "experiment_id": experiment_id,
+                "receipt_id": stable_id("compile", obligation_id, "blocked"),
+                "input_fingerprint": input_fingerprint,
+                "cost_coverage_status": "UNKNOWN",
+            }
+            continue
+        compile_results[obligation_id] = {
+            "status": "COMPILED",
+            "reason_code": "",
+            "experiment_id": experiment_id,
+            "receipt_id": stable_id("compile", obligation_id),
+            "input_fingerprint": input_fingerprint,
+            "cost_coverage_status": "UNKNOWN",
+        }
+
+        observation_receipt_ids: list[str] = []
+        for step_index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            try:
+                status_code = int(step.get("status") or 0)
+            except (TypeError, ValueError):
+                status_code = 0
+            if status_code <= 0:
+                continue
+            observation_receipt_ids.append(
+                stable_id(
+                    "observation",
+                    execution_id,
+                    step_index,
+                    _text(step.get("method")).upper(),
+                    _text(step.get("path")),
+                    status_code,
+                )
+            )
+        if raw_finding and not observation_receipt_ids:
+            raw = _dict(raw_finding.get("raw_evidence"))
+            request = _dict(raw.get("request_raw"))
+            response = _dict(raw.get("response_raw"))
+            replay = _dict(raw_finding.get("reproduction"))
+            har = _dict(replay.get("har_evidence"))
+            method = _text(replay.get("method") or request.get("method")).upper()
+            path = _text(replay.get("path") or request.get("path"))
+            has_response = bool(
+                response.get("status_code")
+                or response.get("body")
+                or har.get("status_code")
+                or har.get("response_body")
+                or _dict(raw.get("db_snapshot")).get("status") == "captured"
+            )
+            if method and path and has_response and bool(raw.get("has_real_evidence") or har):
+                observation_receipt_ids.append(
+                    stable_id(
+                        "observation",
+                        execution_id,
+                        method,
+                        path,
+                        response.get("status_code") or har.get("status_code"),
+                    )
+                )
+
+        sandbox = _dict(_dict(view).get("sandbox_write"))
+        cleanup_status = _text(sandbox.get("cleanup_status")).upper()
+        cleanup_failed = cleanup_status in {
+            "FAILED",
+            "INCOMPLETE",
+            "CLEANUP_INCOMPLETE",
+            "CLEANUP_NOT_SUCCEEDED",
+            "NOT_REVERSIBLE",
+        }
+        trace_errors = _list(_dict(view).get("errors"))
+        skipped = any(
+            _text(step.get("skipped_reason"))
+            for step in steps
+            if isinstance(step, dict)
+        ) or int(_dict(view).get("precondition_not_met_count") or 0) > 0
+        if cleanup_failed:
+            execution_status = "HARNESS_FAILED"
+            execution_reason = "CLEANUP_COMPENSATION_FAILED"
+        elif observation_receipt_ids:
+            execution_status = "EXECUTED"
+            execution_reason = ""
+        elif trace_errors:
+            execution_status = "HARNESS_FAILED"
+            execution_reason = "LEGACY_EXECUTION_ERROR"
+        elif skipped or trace is not None:
+            execution_status = "BLOCKED"
+            execution_reason = "LEGACY_EXECUTION_BLOCKED"
+        else:
+            execution_status = "BLOCKED"
+            execution_reason = "LEGACY_EXECUTION_RECEIPT_MISSING"
+
+        oracle_rows = _list(_dict(view).get("oracle_results"))
+        oracle_receipt_id = (
+            stable_id("oracle", execution_id, oracle_rows or finding_receipt_view)
+            if oracle_rows or raw_finding
+            else ""
+        )
+        execution_results[obligation_id] = {
+            "status": execution_status,
+            "reason_code": execution_reason,
+            "experiment_id": experiment_id,
+            "execution_id": execution_id,
+            "receipt_id": execution_id,
+            "observation_receipt_ids": observation_receipt_ids,
+            "oracle_receipt_id": oracle_receipt_id,
+            "output_fingerprint": fingerprint({
+                "trace": view,
+                "finding": finding_receipt_view,
+            }),
+            "cost_coverage_status": "UNKNOWN",
+        }
+
+        normalized_finding: dict[str, Any] | None = None
+        if raw_finding is not None:
+            existing_finding_id = _text(
+                raw_finding.get("finding_id")
+                or raw_finding.get("id")
+                or raw_finding.get("bug_id")
+            )
+            finding_id = existing_finding_id or stable_id(
+                "finding",
+                contract["campaign_id"],
+                _text(raw_finding.get("evidence_id")),
+                unit_material,
+            )
+            evidence_id = _text(raw_finding.get("evidence_id")) or stable_id(
+                "evidence", execution_id, finding_id
+            )
+            normalized_finding = {
+                **raw_finding,
+                "id": finding_id,
+                "finding_id": finding_id,
+                "candidate_id": candidate_id,
+                "behavior_slice_id": slice_id,
+                "slice_id": slice_id,
+                "obligation_id": obligation_id,
+                "experiment_id": experiment_id,
+                "execution_id": execution_id,
+                "evidence_id": evidence_id,
+                "campaign_id": contract["campaign_id"],
+                "mainline_run": {
+                    "contract_fingerprint": contract["contract_fingerprint"],
+                },
+            }
+            evidence = dict(_dict(normalized_finding.get("evidence")))
+            evidence["evidence_id"] = evidence_id
+            evidence["execution_id"] = execution_id
+            normalized_finding["evidence"] = evidence
+            normalized_findings.append(normalized_finding)
+
+        if execution_status != "EXECUTED":
+            if normalized_finding is not None:
+                rejection_reasons = customer_delivery_rejection_reasons(
+                    normalized_finding
+                )
+                finding_terminal[normalized_finding["finding_id"]] = (
+                    execution_status,
+                    list(
+                        dict.fromkeys(
+                            [execution_reason, *rejection_reasons]
+                        )
+                    ),
+                )
+            continue
+
+        if normalized_finding is not None:
+            gate = build_customer_delivery_gate_receipt(
+                normalized_finding,
+                obligation_id=obligation_id,
+                execution_id=execution_id,
+            )
+        else:
+            if not oracle_rows:
+                gate_reason = "LEGACY_ORACLE_RECEIPT_MISSING"
+            elif any(
+                row.get("passed") is False
+                or _text(row.get("verdict")).upper()
+                in {"FAILED", "VIOLATED", "DEFECT"}
+                for row in oracle_rows
+                if isinstance(row, dict)
+            ):
+                gate_reason = "LEGACY_ORACLE_VIOLATION_WITHOUT_FINDING"
+            else:
+                gate_reason = "ORACLE_NOT_VIOLATED"
+            gate = {
+                "status": "REJECTED",
+                "reason_code": gate_reason,
+                "reason_codes": [gate_reason],
+                "finding_id": "",
+                "oracle_receipt_id": oracle_receipt_id,
+                "cost_coverage_status": "UNKNOWN",
+            }
+            gate["gate_receipt_id"] = stable_id(
+                "gate", obligation_id, execution_id, gate_reason
+            )
+            gate["output_fingerprint"] = fingerprint(gate)
+        gate_results[obligation_id] = gate
+        if normalized_finding is not None:
+            finding_terminal[normalized_finding["finding_id"]] = (
+                _text(gate.get("status")).upper(),
+                [
+                    _text(reason)
+                    for reason in _list(gate.get("reason_codes"))
+                    if _text(reason)
+                ],
+            )
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=contract,
+        selected=selected_rows,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results=gate_results,
+    )
+    deliverable: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    shadow: list[dict[str, Any]] = []
+    for finding in normalized_findings:
+        status, reasons = finding_terminal.get(
+            finding["finding_id"],
+            ("BLOCKED", ["LEGACY_TERMINAL_RECEIPT_MISSING"]),
+        )
+        if not contract["customer_outputs_published"]:
+            shadow.append({
+                **finding,
+                "finding_class": "shadow",
+                "shadow_origin": "legacy_champion",
+                "delivery_gate_status": status,
+                "delivery_gate_reasons": reasons,
+            })
+        elif status == "DELIVERABLE":
+            deliverable.append(finding)
+        else:
+            candidates.append({
+                **finding,
+                "finding_class": "candidate",
+                "gate_passed": False,
+                "customer_delivery_status": "candidate",
+                "customer_delivery_gate_reasons": reasons,
+            })
+    formal = build_formal_count_projection(
+        findings=deliverable,
+        candidate_findings=candidates,
+    )
+    formal_ids = list(formal["formal_finding_ids"])
+    terminal_counts = _dict(ledger.get("terminal_status_counts"))
+    auto_har_entries: list[dict[str, Any]] = []
+    emitted_trace_indexes: set[int] = set()
+    for unit in units:
+        trace_index = unit.get("trace_index")
+        if isinstance(trace_index, int) and trace_index not in emitted_trace_indexes:
+            emitted_trace_indexes.add(trace_index)
+            for step in _list(trace_views[trace_index].get("steps")):
+                if not isinstance(step, dict):
+                    continue
+                try:
+                    status_code = int(step.get("status") or 0)
+                except (TypeError, ValueError):
+                    status_code = 0
+                if status_code <= 0:
+                    continue
+                auto_har_entries.append({
+                    "request": {
+                        "method": _text(step.get("method")).upper(),
+                        "path": _text(step.get("path")),
+                    },
+                    "response": {"status_code": status_code},
+                })
+        elif trace_index is None and isinstance(unit.get("finding"), dict):
+            view = finding_view(unit["finding"])
+            try:
+                status_code = int(view.get("status_code") or 0)
+            except (TypeError, ValueError):
+                status_code = 0
+            if view["method"] and view["path"] and status_code > 0:
+                auto_har_entries.append({
+                    "request": {
+                        "method": view["method"],
+                        "path": view["path"],
+                    },
+                    "response": {"status_code": status_code},
+                })
     result = {
         **legacy_result,
         "schema_version": RUNTIME_SCHEMA,
-        "v12_version": "3.0-mainline-legacy-comparison",
-        "mainline_run": dict(plan.mainline_run),
+        "v12_version": "3.0-mainline-legacy-adapter",
+        "mainline_run": dict(contract),
         "campaign": _finalize_campaign(campaign_handle, ledger),
         "obligation_attempt_ledger": ledger,
         "formal_count_projection": formal,
         "formal_id_consistency": build_formal_id_consistency(
-            delivery_gate_ids=[],
-            formal_projection_ids=[],
-            product_projection_ids=[],
+            delivery_gate_ids=formal_ids,
+            formal_projection_ids=formal_ids,
+            product_projection_ids=formal_ids,
         ),
-        "findings": [],
-        "candidate_findings": [],
+        "findings": deliverable,
+        "candidate_findings": candidates,
         "shadow_findings": shadow,
+        "auto_har": {
+            "status": "receipt_backed",
+            "entry_count": len(auto_har_entries),
+            "entries": auto_har_entries,
+            "redaction_contract": "method_path_status_only",
+        },
+        "execution_observability": [
+            dict(row)
+            for row in _list(
+                _dict(_dict(legacy_result.get("phases")).get("execution")).get(
+                    "observability"
+                )
+            )
+            if isinstance(row, dict)
+        ],
+        "legacy_champion_adapter": {
+            "status": "completed",
+            "selected_attempt_count": len(selected_rows),
+            "executed_attempt_count": sum(
+                1
+                for row in ledger["attempts"]
+                if any(
+                    stage.get("stage") == "execution"
+                    and stage.get("status") == "EXECUTED"
+                    for stage in _list(row.get("stages"))
+                    if isinstance(stage, dict)
+                )
+            ),
+            "blocked_attempt_count": int(terminal_counts.get("BLOCKED") or 0),
+            "harness_failure_count": int(
+                terminal_counts.get("HARNESS_FAILED") or 0
+            ),
+            "receipt_source": (
+                "behavior_slice_selection+redacted_execution_trace+runtime_finding"
+            ),
+        },
     }
     result["discovery_funnel"] = build_funnel(result)
     return result
