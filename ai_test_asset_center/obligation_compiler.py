@@ -322,42 +322,15 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 relation_types={"transitions"},
             ))
 
-    # Idempotency / concurrency for write ops
-    for op in write_ops[:20]:
-        obligations.append(make_obligation(
-            risk_family="idempotency",
-            subject_refs=[_text(op.get("id"))],
-            property_spec={
-                "template": "idempotent_effect_cardinality",
-                "operation_ref": _text(op.get("id")),
-                "compare": "business_effect_not_http_status",
-            },
-            required_operations=[_text(op.get("id"))],
-            required_observers=["business_effect", "http_response"],
-            cleanup_requirement=_cleanup_requirement(op, operations, relations, required=True),
-            source_refs=list(op.get("source_refs") or [])[:2],
-            confidence=0.55,
-        ))
-        obligations.append(make_obligation(
-            risk_family="concurrency",
-            subject_refs=[_text(op.get("id"))],
-            property_spec={
-                "template": "concurrent_final_invariant",
-                "operation_ref": _text(op.get("id")),
-                "insufficient_signal": "dual_2xx_alone",
-            },
-            required_operations=[_text(op.get("id"))],
-            required_observers=["final_state", "barrier_timeline"],
-            cleanup_requirement=_cleanup_requirement(op, operations, relations, required=True),
-            source_refs=list(op.get("source_refs") or [])[:2],
-            confidence=0.55,
-        ))
-
     # Conservation / privacy / validation from invariants
     for inv in invariants[:30]:
         expr = _dict(inv.get("expression"))
         kind = _text(expr.get("kind") or "business_rule").lower()
         family = "validation"
+        if any(token in kind for token in ("idempot", "exactly_once", "deduplic")):
+            family = "idempotency"
+        if any(token in kind for token in ("concurr", "race", "atomic")):
+            family = "concurrency"
         if any(token in kind for token in ("conserv", "balance", "amount", "quantity", "库存", "金额")):
             family = "conservation"
         elif any(token in kind for token in ("privacy", "pii", "mask", "隐私")):
@@ -367,6 +340,8 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         elif any(token in kind for token in ("visib", "scope", "可见")):
             family = "visibility"
         relation_types = {
+            "idempotency": {"observes", "produces", "consumes", "transitions"},
+            "concurrency": {"observes", "produces", "consumes", "transitions"},
             "conservation": {"conserves"},
             "privacy": {"observes", "scopes"},
             "temporal": {"transitions", "observes"},
@@ -395,17 +370,36 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
         for operation_ref, operation_relations in relations_by_operation.items():
             op = operations_by_id[operation_ref]
+            template_by_family = {
+                "idempotency": "idempotent_effect_cardinality",
+                "concurrency": "concurrent_final_invariant",
+            }
+            observers_by_family = {
+                "idempotency": ["business_effect", "http_response"],
+                "concurrency": ["final_state", "barrier_timeline"],
+            }
+            property_spec = {
+                "template": template_by_family.get(family, f"invariant_{family}"),
+                "invariant_ref": invariant_ref,
+                "expression": expr,
+                "operation_ref": operation_ref,
+            }
+            if family == "idempotency":
+                property_spec.update({
+                    "compare": "business_effect_not_http_status",
+                    "expected_effect_count": 1,
+                })
+            elif family == "concurrency":
+                property_spec["insufficient_signal"] = "dual_2xx_alone"
             obligations.append(make_obligation(
                 risk_family=family if family in RISK_FAMILIES else "validation",
                 subject_refs=[invariant_ref, operation_ref],
-                property_spec={
-                    "template": f"invariant_{family}",
-                    "invariant_ref": invariant_ref,
-                    "expression": expr,
-                    "operation_ref": operation_ref,
-                },
+                property_spec=property_spec,
                 required_operations=[operation_ref],
-                required_observers=["typed_assertion", "source_invariant"],
+                required_observers=observers_by_family.get(
+                    family,
+                    ["typed_assertion", "source_invariant"],
+                ),
                 cleanup_requirement=_cleanup_requirement(op, operations, relations),
                 source_refs=_combined_source_refs(inv, op, *operation_relations),
                 relation_refs=sorted({

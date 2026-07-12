@@ -475,13 +475,49 @@ def test_obligation_compiler_uses_unique_documented_create_compensation() -> Non
 
     assert auth_obligation["cleanup_requirement"]["operation_ref"] == "delete_resource"
     assert auth_obligation["required_actors"] == ["resource_operator", "resource_viewer"]
-    assert write_effect_obligations
-    assert all(
-        item["cleanup_requirement"].get("operation_ref") == "delete_resource"
-        for item in write_effect_obligations
-    )
-    assert all(not item.get("required_actors") for item in write_effect_obligations)
-    assert all("treatment_actor_ref" not in item["property"] for item in write_effect_obligations)
+    assert write_effect_obligations == []
+
+
+def test_obligation_compiler_requires_source_invariant_for_write_effect_family() -> None:
+    ir = empty_behavior_ir(project_id="grounded-write-effect-test")
+    ir.update({
+        "model_id": "bir-grounded-write-effect",
+        "operations": [
+            {"id": "create_resource", "method": "POST", "path": "/api/resources", "read_write": "write"},
+            {"id": "delete_resource", "method": "DELETE", "path": "/api/resources/:id", "read_write": "write"},
+        ],
+        "invariants": [{
+            "id": "inv_create_once",
+            "expression": {"kind": "idempotency", "operator": "must_hold"},
+            "source_refs": [{"source_id": "prd", "kind": "business_rule"}],
+            "confidence": 0.9,
+            "status": "accepted",
+        }],
+        "relations": [
+            _relation(
+                "observe-create-once",
+                "observes",
+                "create_resource",
+                "inv_create_once",
+                operation_ref="create_resource",
+            ),
+            _relation(
+                "compensate-create",
+                "compensates",
+                "delete_resource",
+                "create_resource",
+                operation_ref="delete_resource",
+            ),
+        ],
+    })
+
+    obligations = compile_obligations_from_behavior_ir(ir)["obligations"]
+    grounded = [item for item in obligations if item["risk_family"] == "idempotency"]
+
+    assert len(grounded) == 1
+    assert grounded[0]["property"]["operation_ref"] == "create_resource"
+    assert grounded[0]["required_observers"] == ["business_effect", "http_response"]
+    assert grounded[0]["cleanup_requirement"]["operation_ref"] == "delete_resource"
 
 
 def test_obligation_compiler_does_not_guess_ambiguous_compensation() -> None:

@@ -128,6 +128,7 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 - Gate metrics and promotion thresholds have one SSOT: `docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md`. Architecture lives in `docs/AUTONOMOUS_BUG_DISCOVERY_CAPABILITY_BREAKTHROUGH_SPEC.md`; DOCX files are release exports and must not become independently editable specifications.
 - Target authorization has one SSOT: `ai_test_asset_center/target_policy.py`. Environment identity and environment type are separate required facts; localhost or an environment name must never imply write safety. Project preflight, V12 runtime, API/DB/UI adapters, and sandbox writes must consume the same `TargetPolicyDecision`.
 - Product defect truth has one SSOT: `ai_test_asset_center/discovery_quality_projection.py`. Current-run `deliverable|candidate|rejected`, current campaign, and historical shelf are separate scopes; legacy readiness counters are diagnostic only and cannot replace `formal_customer_deliverable_count`.
+- Idempotency and concurrency obligations must come from an explicit source invariant joined to an exact Behavior IR operation. A write method alone is not evidence that an idempotency or concurrency contract exists; blanket write-effect obligations are forbidden.
 - Project campaign contracts live in `ai_test_asset_center/campaign_api_contract.py` and are exposed only under `/api/v1`. Evaluation submissions must be Ground-Truth-free, pass `artifact_redactor.py`, and stay `NOT_MEASURED` until an external evaluator receipt is verified.
 
 ## Brand Direction Contract
