@@ -8,6 +8,7 @@ os.environ.setdefault("QUALIBUG_JWT_SECRET", "dev-mode-only")
 import ai_test_asset_center.__main__ as main_module
 import ai_test_asset_center.display_ready_formatter as display_ready_formatter
 import ai_test_asset_center.private_pilot_service as private_pilot_service
+from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
 from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
 from ai_test_asset_center.private_pilot_service import PrivatePilotHandler
 
@@ -28,8 +29,17 @@ def test_build_command_center_exposes_grouped_defect_summary_with_normalized_pat
     install_customer_delivery_gate_patch()
     handler = PrivatePilotHandler.__new__(PrivatePilotHandler)
     handler.headers = {}
+    mainline_run = build_mainline_run_contract(
+        mainline_authority="legacy_champion",
+        run_id="RUN-GROUPED-SUMMARY",
+        campaign_id="CMP-GROUPED-SUMMARY",
+        target_id="TARGET-GROUPED-SUMMARY",
+        environment_id="ENV-GROUPED-SUMMARY",
+        policy_version="policy-grouped-summary",
+        evaluation_mode="operational",
+    )
 
-    monkeypatch.setattr(handler, "_load_v12_report", lambda project_id, root: {"project_name": project_id, "generated_at_utc": "2026-07-07T18:20:00Z"})
+    monkeypatch.setattr(handler, "_load_v12_report", lambda project_id, root: {"project_name": project_id, "generated_at_utc": "2026-07-07T18:20:00Z", "mainline_run": mainline_run})
     monkeypatch.setattr(handler, "_load_enterprise_docs", lambda project_id, root: [])
     monkeypatch.setattr(handler, "_load_knowledge_summary", lambda project_id, root: {})
     monkeypatch.setattr(handler, "_auto_discovery_payload", lambda project_id, root, report: {})
@@ -38,6 +48,7 @@ def test_build_command_center_exposes_grouped_defect_summary_with_normalized_pat
     monkeypatch.setattr(handler, "_v12_findings", lambda report, enterprise_docs=None: [
         {
             **_identity("BUG-1"),
+            "mainline_run": {"contract_fingerprint": mainline_run["contract_fingerprint"]},
             "risk_id": "BUG-1",
             "risk_type": "state_machine",
             "bug_status": "reproduced",
@@ -52,6 +63,7 @@ def test_build_command_center_exposes_grouped_defect_summary_with_normalized_pat
         },
         {
             **_identity("BUG-2"),
+            "mainline_run": {"contract_fingerprint": mainline_run["contract_fingerprint"]},
             "risk_id": "BUG-2",
             "risk_type": "state_machine",
             "bug_status": "reproduced",
@@ -66,6 +78,7 @@ def test_build_command_center_exposes_grouped_defect_summary_with_normalized_pat
         },
         {
             **_identity("BUG-3"),
+            "mainline_run": {"contract_fingerprint": mainline_run["contract_fingerprint"]},
             "risk_id": "BUG-3",
             "risk_type": "concurrency",
             "bug_status": "reproduced",
