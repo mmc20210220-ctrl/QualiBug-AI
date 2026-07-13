@@ -1,241 +1,212 @@
-"""Validate and materialize runtime bindings from source-declared operations."""
+"""Effect-aware runtime binding facade.
+
+The stable binding implementation remains unchanged. This layer strengthens
+cleanup target resolution so an HTTP-rejected write that demonstrably changed
+business state is cleaned with the same source-declared compensation route as a
+2xx write.
+"""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
-from .real_id_resolver import (
-    bind_entity_fields,
-    infer_path_params,
-    normalize_path_placeholders,
-    param_field_candidates,
-    path_has_placeholders,
-)
+from . import runtime_binding_materializer_base as _base
+from .runtime_binding_materializer_base import *  # noqa: F401,F403
+
+
+_PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-_PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
-_BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
-_STATE_TARGET_PATH_RE = re.compile(r"^@state=([a-z0-9]+)@(.*)$")
+def _http_status(value: Any) -> int:
+    row = _dict(value)
+    try:
+        return int(row.get("status") or row.get("status_code") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _field_key(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]", "", _text(value).lower())
-
-
-def _state_token(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _text(value).casefold())
-
-
-def _response_scalar_fields(value: Any) -> dict[str, list[Any]]:
-    fields: dict[str, list[Any]] = {}
-
-    def visit(node: Any) -> None:
-        if isinstance(node, dict):
-            for key, child in node.items():
-                if isinstance(child, (str, int)) and not isinstance(child, bool):
-                    fields.setdefault(_field_key(key), []).append(child)
-                elif isinstance(child, (dict, list)):
-                    visit(child)
-        elif isinstance(node, list):
-            for child in node:
-                visit(child)
-
-    visit(value)
-    return fields
-
-
-def _entity_rows(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, list):
-        return [dict(item) for item in value if isinstance(item, dict)]
-    if not isinstance(value, dict):
-        return []
-    for key in ("records", "data", "items", "results", "rows", "content"):
-        nested = value.get(key)
-        if isinstance(nested, list):
-            return [dict(item) for item in nested if isinstance(item, dict)]
-        if isinstance(nested, dict):
-            nested_rows = _entity_rows(nested)
-            if nested_rows:
-                return nested_rows
-    return [dict(value)]
-
-
-def _entity_state_values(entity: dict[str, Any]) -> list[Any]:
-    exact_fields = {
-        "state",
-        "status",
-        "stage",
-        "lifecycle",
-        "lifecyclestatus",
-        "orderstatus",
-        "paymentstatus",
-        "refundstatus",
-        "shipmentstatus",
-        "fulfillmentstatus",
+def _server_managed_field(value: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "", _text(value).lower())
+    return normalized in {
+        "createdat",
+        "updatedat",
+        "createdtime",
+        "updatedtime",
+        "modifiedat",
+        "modifiedtime",
+        "timestamp",
     }
-    values: list[Any] = []
-    for key, value in entity.items():
-        normalized = _field_key(key)
-        if isinstance(value, (dict, list, bool)) or value in (None, ""):
-            continue
-        if (
-            normalized in exact_fields
-            or normalized.endswith("status")
-            or normalized.endswith("state")
-            or normalized.endswith("stage")
-        ):
-            values.append(value)
-    return values
 
 
-def _entity_identity_sort_key(entity: dict[str, Any]) -> tuple[str, str]:
-    identities = [
-        _text(value)
-        for key, value in entity.items()
-        if not isinstance(value, (dict, list))
-        and (
-            _field_key(key) in {"id", "uuid", "key"}
-            or _field_key(key).endswith("id")
+def _without_server_managed_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_server_managed_fields(child)
+            for key, child in sorted(value.items())
+            if not _server_managed_field(key)
+        }
+    if isinstance(value, list):
+        return sorted(
+            (_without_server_managed_fields(child) for child in value),
+            key=lambda child: json.dumps(
+                child,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
         )
-        and _text(value)
-    ]
-    return (identities[0] if identities else "", repr(sorted(entity.items())))
+    return value
 
 
-def _state_selected_entity(body: Any, required_state_token: str) -> dict[str, Any]:
-    matches = [
-        row
-        for row in _entity_rows(body)
-        if any(
-            _state_token(value) == required_state_token
-            for value in _entity_state_values(row)
-        )
-    ]
-    if not matches:
-        return {}
-    return dict(sorted(matches, key=_entity_identity_sort_key)[0])
+def _snapshot_state_changed(step: dict[str, Any]) -> bool:
+    governance = _dict(step.get("governance_receipt"))
+    before = _dict(governance.get("before"))
+    after = _dict(governance.get("after"))
+    if not (
+        200 <= _http_status(before) < 300
+        and 200 <= _http_status(after) < 300
+    ):
+        return False
+    before_body = before.get("body")
+    after_body = after.get("body")
+    if not isinstance(before_body, (dict, list)) or not isinstance(
+        after_body,
+        (dict, list),
+    ):
+        return False
+    return _without_server_managed_fields(
+        before_body
+    ) != _without_server_managed_fields(after_body)
 
 
-def runtime_cleanup_bindings(
+def _cleanup_candidate(step: Any) -> bool:
+    if not isinstance(step, dict):
+        return False
+    if _text(step.get("phase")) not in {"control", "treatment"}:
+        return False
+    if _text(step.get("method")).upper() not in _WRITE_METHODS:
+        return False
+    status = _http_status(step)
+    return 200 <= status < 300 or _snapshot_state_changed(step)
+
+
+def _path_bindings_from_concrete(
     path_template: str,
-    steps: list[dict[str, Any]],
-) -> tuple[str, dict[str, Any], list[str]]:
-    placeholders = _PATH_PARAMETER_RE.findall(_text(path_template))
-    if not placeholders:
-        return _text(path_template), {}, []
-    fields: dict[str, list[Any]] = {}
-    for step in steps:
-        if (
-            not isinstance(step, dict)
-            or _text(step.get("phase")) not in {"control", "treatment"}
-        ):
-            continue
-        if not (200 <= int(step.get("status_code") or 0) < 300):
-            continue
-        for key, values in _response_scalar_fields(step.get("body")).items():
-            fields.setdefault(key, []).extend(values)
-    bindings: dict[str, Any] = {}
-    missing: list[str] = []
-    for name in placeholders:
-        normalized = _field_key(name)
-        candidates = list(dict.fromkeys(fields.get(normalized) or []))
-        if not candidates and normalized == "id":
-            id_values = [
-                value
-                for key, values in fields.items()
-                if key.endswith("id")
-                for value in values
-            ]
-            candidates = list(dict.fromkeys(id_values))
-        if len(candidates) != 1:
-            missing.append(name)
-            continue
-        bindings[name] = candidates[0]
-    materialized = _text(path_template)
-    for name, value in bindings.items():
-        materialized = materialized.replace(
-            "{" + name + "}",
-            quote(str(value), safe=""),
-        )
-    return materialized, bindings, missing
+    concrete_path: str,
+) -> dict[str, str]:
+    template = _base.normalize_path_placeholders(
+        _text(path_template)
+    ).split("?", 1)[0]
+    concrete = _text(concrete_path).split("?", 1)[0]
+    names = _PATH_PARAMETER_RE.findall(template)
+    if not names or not concrete.startswith("/"):
+        return {}
+    pattern_parts: list[str] = []
+    cursor = 0
+    for match in _PATH_PARAMETER_RE.finditer(template):
+        pattern_parts.append(re.escape(template[cursor:match.start()]))
+        pattern_parts.append("([^/]+)")
+        cursor = match.end()
+    pattern_parts.append(re.escape(template[cursor:]))
+    matched = re.fullmatch("".join(pattern_parts), concrete)
+    if not matched:
+        return {}
+    return {
+        name: unquote(value)
+        for name, value in zip(names, matched.groups())
+        if _text(value)
+    }
 
 
 def runtime_cleanup_paths(
     path_template: str,
     steps: list[dict[str, Any]],
 ) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
-    """Resolve one compensation target per accepted write response."""
+    """Resolve one compensation target per proven effectful write.
+
+    A candidate is either HTTP-accepted or has auditable before/after snapshots
+    proving business-state change. This prevents a 4xx response with a real
+    write side effect from escaping cleanup.
+    """
 
     template = _text(path_template)
     placeholders = _PATH_PARAMETER_RE.findall(template)
-    accepted_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict)
-        and _text(step.get("phase")) in {"control", "treatment"}
-        and _text(step.get("method")).upper()
-        in {"POST", "PUT", "PATCH", "DELETE"}
-        and 200 <= int(step.get("status_code") or 0) < 300
+    effectful_steps = [
+        step for step in steps if _cleanup_candidate(step)
     ]
     if not placeholders:
-        return ([(template, {})] if accepted_steps else []), []
-    if not accepted_steps:
-        return [], ["accepted_write_receipt"]
+        return ([(template, {})] if effectful_steps else []), []
+    if not effectful_steps:
+        return [], ["effectful_write_receipt"]
 
     paths: list[tuple[str, dict[str, Any]]] = []
     missing: list[str] = []
     seen_paths: set[str] = set()
-    for index, step in enumerate(accepted_steps):
-        fields = _response_scalar_fields(step.get("body"))
+    for index, step in enumerate(effectful_steps):
+        fields = _base._response_scalar_fields(step.get("body"))
         governance = _dict(step.get("governance_receipt"))
-        before_fields = _response_scalar_fields(
+        before_fields = _base._response_scalar_fields(
             _dict(governance.get("before")).get("body")
         )
-        after_fields = _response_scalar_fields(
+        after_fields = _base._response_scalar_fields(
             _dict(governance.get("after")).get("body")
+        )
+        concrete_path_bindings = _path_bindings_from_concrete(
+            template,
+            _text(step.get("path")),
         )
         bindings: dict[str, Any] = {}
         step_missing: list[str] = []
         for name in placeholders:
-            normalized = _field_key(name)
-            candidates = list(dict.fromkeys(fields.get(normalized) or []))
+            normalized = _base._field_key(name)
+            direct = concrete_path_bindings.get(name)
+            candidates = [direct] if direct not in (None, "") else []
+            if not candidates:
+                candidates = list(
+                    dict.fromkeys(fields.get(normalized) or [])
+                )
             if not candidates and normalized == "id":
-                candidates = list(dict.fromkeys(
-                    value
-                    for key, values in fields.items()
-                    if key.endswith("id")
-                    for value in values
-                ))
+                candidates = list(
+                    dict.fromkeys(
+                        value
+                        for key, values in fields.items()
+                        if key.endswith("id")
+                        for value in values
+                    )
+                )
             if not candidates:
                 observed_after = list(
                     dict.fromkeys(after_fields.get(normalized) or [])
                 )
-                observed_before = set(before_fields.get(normalized) or [])
+                observed_before = set(
+                    before_fields.get(normalized) or []
+                )
                 candidates = [
                     value
                     for value in observed_after
                     if value not in observed_before
                 ]
             if not candidates and normalized == "id":
-                observed_after = list(dict.fromkeys(
-                    value
-                    for key, values in after_fields.items()
-                    if key.endswith("id")
-                    for value in values
-                ))
+                observed_after = list(
+                    dict.fromkeys(
+                        value
+                        for key, values in after_fields.items()
+                        if key.endswith("id")
+                        for value in values
+                    )
+                )
                 observed_before = {
                     value
                     for key, values in before_fields.items()
@@ -247,6 +218,30 @@ def runtime_cleanup_paths(
                     for value in observed_after
                     if value not in observed_before
                 ]
+            if not candidates:
+                stable_after = list(
+                    dict.fromkeys(after_fields.get(normalized) or [])
+                )
+                if len(stable_after) == 1:
+                    candidates = stable_after
+            if not candidates and normalized == "id":
+                stable_ids = list(
+                    dict.fromkeys(
+                        value
+                        for key, values in after_fields.items()
+                        if key.endswith("id")
+                        for value in values
+                    )
+                )
+                if len(stable_ids) == 1:
+                    candidates = stable_ids
+            candidates = list(
+                dict.fromkeys(
+                    value
+                    for value in candidates
+                    if value not in (None, "")
+                )
+            )
             if len(candidates) != 1:
                 step_missing.append(name)
                 continue
@@ -268,247 +263,3 @@ def runtime_cleanup_paths(
         seen_paths.add(materialized)
         paths.append((materialized, bindings))
     return paths, missing
-
-
-def validated_runtime_resolvers(
-    binding: dict[str, Any],
-    operations: dict[str, dict[str, Any]],
-) -> list[dict[str, str]]:
-    resolvers: list[dict[str, str]] = []
-    if _text(binding.get("status")) != "runtime_resolvable":
-        return resolvers
-    for raw in _list(binding.get("resolver_operations")):
-        if not isinstance(raw, dict):
-            continue
-        operation_ref = _text(raw.get("operation_ref"))
-        declared = operations.get(operation_ref) or {}
-        method = _text(raw.get("method")).upper()
-        path = normalize_path_placeholders(_text(raw.get("path")))
-        declared_method = _text(declared.get("method")).upper()
-        declared_path = normalize_path_placeholders(
-            _text(declared.get("path") or declared.get("raw_path"))
-        )
-        if (
-            not operation_ref
-            or method not in {"GET", "HEAD"}
-            or method != declared_method
-            or path != declared_path
-            or not path.startswith("/")
-            or path_has_placeholders(path)
-        ):
-            continue
-        resolvers.append({
-            "operation_ref": operation_ref,
-            "method": method,
-            "path": path,
-        })
-    return resolvers
-
-
-def runtime_binding_contract_ready(
-    path: str,
-    *,
-    binding_plan: list[Any],
-    fixture_dag: dict[str, Any],
-    operations: dict[str, dict[str, Any]],
-) -> bool:
-    targets = infer_path_params(normalize_path_placeholders(path))
-    if not targets:
-        return True
-    bindings = {
-        _text(item.get("target")): item
-        for item in binding_plan
-        if isinstance(item, dict) and _text(item.get("target"))
-    }
-    dag_targets = {
-        _text(node.get("target"))
-        for node in _list(fixture_dag.get("nodes"))
-        if isinstance(node, dict)
-        and _text(node.get("kind")) == "runtime_read_binding"
-        and node.get("constructible") is not False
-    }
-    return all(
-        target in dag_targets
-        and bool(
-            validated_runtime_resolvers(
-                bindings.get(target) or {},
-                operations,
-            )
-        )
-        for target in targets
-    )
-
-
-def materialize_path(path: str, bindings: dict[str, Any]) -> str:
-    materialized = normalize_path_placeholders(path)
-    for name in infer_path_params(materialized):
-        value = bindings.get(name)
-        if value in (None, "", [], {}):
-            continue
-        materialized = materialized.replace(
-            "{" + name + "}",
-            quote(str(value), safe=""),
-        )
-    return materialized
-
-
-def materialize_body_template(
-    value: Any,
-    token_values: dict[str, Any],
-) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: materialize_body_template(child, token_values)
-            for key, child in value.items()
-        }
-    if isinstance(value, list):
-        return [
-            materialize_body_template(child, token_values)
-            for child in value
-        ]
-    if isinstance(value, str):
-        match = _BODY_PLACEHOLDER_RE.match(value)
-        if match:
-            token = _text(match.group(1))
-            if token in token_values:
-                return token_values[token]
-    return value
-
-
-def runtime_value_from_response(
-    body: Any,
-    target: str,
-    target_path: str,
-) -> Any:
-    resolved_body = body
-    resolved_target_path = _text(target_path)
-    state_match = _STATE_TARGET_PATH_RE.match(resolved_target_path)
-    if state_match:
-        required_state_token = _text(state_match.group(1))
-        resolved_target_path = _text(state_match.group(2))
-        selected = _state_selected_entity(body, required_state_token)
-        if not selected:
-            return None
-        resolved_body = selected
-
-    bindings = bind_entity_fields(
-        resolved_body,
-        resolved_target_path or f"/{{{target}}}",
-    )
-    value = bindings.get(target)
-    if value not in (None, "", [], {}):
-        return value
-    normalized = _field_key(target)
-    fields = _response_scalar_fields(resolved_body)
-    candidates = list(dict.fromkeys(fields.get(normalized) or []))
-    if not candidates and normalized.endswith("id"):
-        candidates = list(dict.fromkeys(fields.get("id") or []))
-    return candidates[0] if len(candidates) == 1 else None
-
-
-def runtime_setup_value_from_response(body: Any, target: str) -> Any:
-    """Capture the created resource identity without descending into child items."""
-
-    candidates = param_field_candidates(target)
-    sources = [body] if isinstance(body, dict) else []
-    if isinstance(body, dict):
-        for wrapper in ("data", "result", "resource", "item"):
-            nested = body.get(wrapper)
-            if isinstance(nested, dict):
-                sources.append(nested)
-    for source in sources:
-        for field in candidates:
-            value = source.get(field)
-            if value not in (None, "", [], {}):
-                return value
-    return None
-
-
-def validated_fixture_setup(
-    binding: dict[str, Any],
-    operations: dict[str, dict[str, Any]],
-    actors: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    setup = _dict(binding.get("fixture_setup"))
-    operation_ref = _text(setup.get("operation_ref"))
-    operation = operations.get(operation_ref) or {}
-    method = _text(setup.get("method")).upper()
-    path = normalize_path_placeholders(_text(setup.get("path")))
-    if (
-        not operation_ref
-        or method != "POST"
-        or _text(operation.get("method")).upper() != method
-        or normalize_path_placeholders(
-            _text(operation.get("path") or operation.get("raw_path"))
-        )
-        != path
-        or not path.startswith("/")
-        or path_has_placeholders(path)
-        or not isinstance(setup.get("body_template"), dict)
-        or not setup.get("body_template")
-    ):
-        return {}
-    body_bindings: list[dict[str, Any]] = []
-    for raw in _list(setup.get("body_bindings")):
-        if not isinstance(raw, dict):
-            return {}
-        resolvers = validated_runtime_resolvers(
-            {
-                "status": "runtime_resolvable",
-                "resolver_operations": raw.get("resolver_operations"),
-            },
-            operations,
-        )
-        if (
-            not _text(raw.get("target"))
-            or not _text(raw.get("template_token"))
-            or not resolvers
-        ):
-            return {}
-        body_bindings.append({
-            "target": _text(raw.get("target")),
-            "template_token": _text(raw.get("template_token")),
-            "resolver_operations": resolvers,
-        })
-    cleanup_operations: list[dict[str, str]] = []
-    for raw in _list(setup.get("cleanup_operations")):
-        if not isinstance(raw, dict):
-            continue
-        cleanup_ref = _text(raw.get("operation_ref"))
-        cleanup = operations.get(cleanup_ref) or {}
-        cleanup_method = _text(raw.get("method")).upper()
-        cleanup_path = normalize_path_placeholders(_text(raw.get("path")))
-        if (
-            cleanup_ref
-            and cleanup_method in {"DELETE", "POST", "PATCH", "PUT"}
-            and _text(cleanup.get("method")).upper() == cleanup_method
-            and normalize_path_placeholders(
-                _text(cleanup.get("path") or cleanup.get("raw_path"))
-            )
-            == cleanup_path
-            and cleanup_path.startswith("/")
-            and path_has_placeholders(cleanup_path)
-        ):
-            cleanup_operations.append({
-                "operation_ref": cleanup_ref,
-                "method": cleanup_method,
-                "path": cleanup_path,
-            })
-    if not cleanup_operations:
-        return {}
-    actor_refs = [
-        _text(actor_ref)
-        for actor_ref in _list(setup.get("actor_refs"))
-        if _text(actor_ref) in actors
-    ]
-    if not actor_refs:
-        return {}
-    return {
-        "operation_ref": operation_ref,
-        "method": method,
-        "path": path,
-        "actor_refs": list(dict.fromkeys(actor_refs)),
-        "body_template": dict(setup["body_template"]),
-        "body_bindings": body_bindings,
-        "cleanup_operations": cleanup_operations,
-    }
