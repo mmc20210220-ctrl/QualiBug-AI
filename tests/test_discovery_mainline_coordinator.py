@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 import inspect
@@ -10,6 +11,9 @@ import pytest
 from ai_test_asset_center.discovery_mainline_contract import (
     MainlineContractError,
     build_mainline_run_contract,
+)
+from ai_test_asset_center.operational_receipts import (
+    build_execution_operational_receipt,
 )
 
 
@@ -46,6 +50,30 @@ def _contract(authority: str, *, campaign_id: str = "CMP-1") -> dict:
         environment_id="ENV-1",
         policy_version="v1" if authority == "legacy_champion" else "v2",
         evaluation_mode="replay",
+    )
+
+
+def _write_runtime_test_accounts(root: Path, project: str) -> None:
+    account_dir = root / "platform_inputs" / project
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "test_accounts.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "role": "reader",
+                        "account_ref": "reader_a",
+                        "token": "reader-token",
+                    },
+                    {
+                        "role": "restricted",
+                        "account_ref": "restricted_a",
+                        "token": "restricted-token",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
     )
 
 
@@ -113,7 +141,7 @@ def test_experiment_candidate_returns_attempt_authoritative_result(tmp_path: Pat
     assert result["mainline_run"]["mainline_authority"] == "experiment_candidate"
     assert result["obligation_attempt_ledger"]["complete"] is True
     assert result["discovery_funnel"]["receipt_authority"] == "obligation_attempt_ledger"
-    assert result["formal_count_projection"]["formal_finding_ids"] == []
+    assert result["formal_count_projection"]["canonical_defect_ids"] == []
 
 
 def test_v12_validates_primary_source_before_using_enriched_api_document(
@@ -160,6 +188,86 @@ def test_v12_validates_primary_source_before_using_enriched_api_document(
     assert result["mainline_run"]["run_id"] == "RUN-ENRICHED-SOURCE"
 
 
+def test_candidate_operation_catalog_preserves_primary_request_evidence() -> None:
+    from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
+    from ai_test_asset_center.discovery_runtime import _api_operations
+
+    primary = """# API
+
+### POST /resources
+
+Request:
+
+```json
+{"name":"source-declared","count":2,"enabled":true,"labels":["a"]}
+```
+"""
+    enriched = """# Merged API catalog
+
+### POST /resources
+"""
+
+    operations = _api_operations(
+        enriched,
+        submitted_source_text=primary,
+    )
+    behavior_ir = build_behavior_ir_from_knowledge_asset(
+        {},
+        project_id="primary-request-evidence",
+        api_operations=operations,
+    )
+
+    assert len(behavior_ir["operations"]) == 1
+    request_schema = behavior_ir["operations"][0]["request_schema"]
+    media = request_schema["content"]["application/json"]
+    assert media["example"] == {
+        "name": "source-declared",
+        "count": 2,
+        "enabled": True,
+        "labels": ["a"],
+    }
+    properties = media["schema"]["properties"]
+    assert properties["name"]["type"] == "string"
+    assert properties["count"]["type"] == "integer"
+    assert properties["enabled"]["type"] == "boolean"
+    assert properties["labels"]["type"] == "array"
+
+
+def test_manual_candidate_terminal_receipt_preserves_compile_detail() -> None:
+    from ai_test_asset_center.discovery_mainline import DiscoveryPlanningBundle
+    from ai_test_asset_center.discovery_runtime import _manual_terminal_receipts
+
+    plan = DiscoveryPlanningBundle(
+        mainline_run={},
+        behavior_ir={},
+        obligations={},
+        experiments={
+            "by_obligation": {
+                "obl-1": {
+                    "experiment_id": "exp-1",
+                    "compile_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_MISSING_OBSERVER",
+                        "detail": "write_observer",
+                    },
+                }
+            },
+            "obligation_plan": {"selected": [], "pending_next_round": []},
+        },
+    )
+    compile_results: dict[str, dict] = {}
+
+    _manual_terminal_receipts(
+        selected_rows=[{"obligation_id": "obl-1"}],
+        plan=plan,
+        runtime_contract={},
+        compile_results=compile_results,
+        execution_results={},
+    )
+
+    assert compile_results["obl-1"]["detail"] == "write_observer"
+
+
 def test_candidate_accounts_for_compiled_obligation_when_runtime_is_plan_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -174,6 +282,7 @@ def test_candidate_accounts_for_compiled_obligation_when_runtime_is_plan_only(
         source_type="openapi",
         root=tmp_path,
     )
+    _write_runtime_test_accounts(tmp_path, "project-plan-only")
     monkeypatch.setattr(
         "ai_test_asset_center.enterprise_knowledge_center.build_enterprise_business_knowledge_asset",
         lambda *_args, **_kwargs: {
@@ -243,6 +352,7 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
         source_type="openapi",
         root=tmp_path,
     )
+    _write_runtime_test_accounts(tmp_path, "project-execution")
     monkeypatch.setattr(
         "ai_test_asset_center.enterprise_knowledge_center.build_enterprise_business_knowledge_asset",
         lambda *_args, **_kwargs: {
@@ -298,23 +408,16 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
                     "observation_receipt_ids": ["obs-approved"],
                     "oracle_receipt_id": "oracle-approved",
                     "cost_coverage_status": "MEASURED",
-                    "operational_receipt": {
-                        "schema_version": "qualibug.execution-operational-receipt.v1",
-                        "receipt_id": "operational-approved",
-                        "execution_status": "EXECUTED",
-                        "scenario_attempt_count": 1,
-                        "http_request_attempt_count": 3,
-                        "production_http_request_count": 0,
-                        "accepted_write_count": 1,
-                        "accepted_non_cleanup_write_count": 1,
-                        "accepted_cleanup_write_count": 0,
-                        "cleanup_outcome": {
-                            "status": "COMPLETED",
-                            "attempted_count": 1,
-                            "completed_count": 1,
-                            "failure_count": 0,
-                        },
-                    },
+                        "operational_receipt": build_execution_operational_receipt(
+                            receipt_id="operational-approved",
+                            execution_status="EXECUTED",
+                            steps=[{
+                                "method": "GET",
+                                "path": "/resources",
+                                "status_code": 200,
+                            }],
+                            cleanup_failures=0,
+                        ),
                 }
             },
             "gate_results": {
@@ -354,14 +457,14 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
 
     assert calls == ["experiment"]
     assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "REJECTED"
-    assert result["phases"]["execution"]["observed_http_request_count"] == 3
+    assert result["phases"]["execution"]["observed_http_request_count"] == 1
     assert result["phases"]["execution"]["production_http_requests"] == 0
     assert result["phases"]["execution"]["scenario_attempts"] == 1
-    assert result["phases"]["execution"]["accepted_write_count"] == 1
+    assert result["phases"]["execution"]["accepted_write_count"] == 0
     assert result["discovery_funnel"]["pipeline_health"]["status"] == "OK"
 
 
-def test_candidate_authority_projects_semantic_deliverable_to_shadow_terminal() -> None:
+def test_shadow_projection_never_mutates_semantic_gate_receipt() -> None:
     from ai_test_asset_center.discovery_runtime import _project_gate_results_for_authority
 
     projected = _project_gate_results_for_authority(
@@ -375,10 +478,11 @@ def test_candidate_authority_projects_semantic_deliverable_to_shadow_terminal() 
         contract=_contract("experiment_candidate"),
     )
 
-    assert projected["obl-1"]["status"] == "REJECTED"
-    assert projected["obl-1"]["reason_code"] == "SHADOW_AUTHORITY_NOT_PUBLISHED"
-    assert projected["obl-1"]["semantic_status"] == "DELIVERABLE"
-    assert "finding_id" not in projected["obl-1"]
+    assert projected["obl-1"] == {
+        "status": "DELIVERABLE",
+        "finding_id": "finding-1",
+        "gate_receipt_id": "gate-1",
+    }
 
 
 def test_shadow_finding_retains_semantic_gate_status_for_private_evaluator() -> None:
@@ -468,7 +572,14 @@ def test_runner_failure_never_falls_back_to_other_authority() -> None:
     assert calls == {"legacy": 0, "experiment": 1}
 
 
-def test_operational_legacy_champion_is_adapted_to_attempt_authority() -> None:
+@pytest.mark.parametrize(
+    "trace_actor_roles",
+    [("buyer",), ("buyer", "admin")],
+    ids=["unmatched_finding_does_not_reuse_trace", "actor_specific_attempts"],
+)
+def test_operational_legacy_champion_is_adapted_to_attempt_authority(
+    trace_actor_roles: tuple[str, ...],
+) -> None:
     from ai_test_asset_center.discovery_mainline import DiscoveryPlanningBundle
     from ai_test_asset_center.discovery_runtime import adapt_legacy_champion_result
 
@@ -533,6 +644,10 @@ def test_operational_legacy_champion_is_adapted_to_attempt_authority() -> None:
             "har_evidence": {"status_code": 200},
         },
     }
+    second_finding = deepcopy(finding)
+    second_finding["title"] = "Second observed response-contract violation"
+    second_finding["raw_evidence"]["request_raw"]["path"] = "/resources/2"
+    second_finding["reproduction"]["path"] = "/resources/2"
     legacy_result = {
         "campaign": {"campaign_id": "CMP-LEGACY-OPERATIONAL"},
         "behavior_slices": [
@@ -578,8 +693,14 @@ def test_operational_legacy_champion_is_adapted_to_attempt_authority() -> None:
                 ],
             }
         ],
-        "findings": [finding],
+        "findings": [finding, second_finding],
     }
+    trace_template = legacy_result["execution_trace_summaries"][0]
+    legacy_result["execution_trace_summaries"] = []
+    for actor_role in trace_actor_roles:
+        actor_trace = deepcopy(trace_template)
+        actor_trace["execution_trace"]["actor_role"] = actor_role
+        legacy_result["execution_trace_summaries"].append(actor_trace)
     plan = DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir={},
@@ -594,14 +715,35 @@ def test_operational_legacy_champion_is_adapted_to_attempt_authority() -> None:
         legacy_result,
     )
 
-    assert result["formal_count_projection"]["formal_customer_deliverable_count"] == 1
+    assert result["formal_count_projection"]["formal_customer_deliverable_count"] == 0
     assert result["obligation_attempt_ledger"]["complete"] is True
-    assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "DELIVERABLE"
-    assert result["phases"]["execution"]["observed_http_request_count"] == 1
-    assert result["phases"]["execution"]["scenario_attempts"] == 1
+    assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "REJECTED"
+    assert result["phases"]["execution"]["observed_http_request_count"] == 2
+    assert result["phases"]["execution"]["scenario_attempts"] == 2
     assert result["phases"]["execution"]["accepted_write_count"] == 0
-    assert result["findings"][0]["mainline_run"]["contract_fingerprint"] == contract["contract_fingerprint"]
-    assert result["discovery_funnel"]["validated_bug_count"] == 1
+    assert result["findings"] == []
+    assert result["candidate_findings"][0]["mainline_run"]["contract_fingerprint"] == contract["contract_fingerprint"]
+    assert result["candidate_findings"][0]["customer_delivery_gate_reasons"] == [
+        "LEGACY_RECEIPT_CHAIN_UNVERIFIABLE"
+    ]
+    assert result["discovery_funnel"]["validated_bug_count"] == 0
+    receipt_ids = result["operational_receipt_summary"]["receipt_ids"]
+    assert len(receipt_ids) == len(set(receipt_ids)) == 2
+
+
+def test_legacy_policy_block_is_not_misclassified_as_harness_failure() -> None:
+    from ai_test_asset_center.discovery_runtime import _legacy_execution_terminal
+
+    status, reason = _legacy_execution_terminal(
+        cleanup_failed=False,
+        observation_receipt_ids=[],
+        trace_errors=["write_cleanup_operation_not_declared"],
+        skipped_reasons=["write_cleanup_operation_not_declared"],
+        trace_present=True,
+    )
+
+    assert status == "BLOCKED"
+    assert reason == "BLOCKED_WRITE_CLEANUP_OPERATION_NOT_DECLARED"
 
 
 def test_coordinator_rejects_campaign_or_result_identity_mismatch() -> None:

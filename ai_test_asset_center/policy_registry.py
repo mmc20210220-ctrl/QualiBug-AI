@@ -14,9 +14,21 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from .discovery_evaluation_contract import (
+    EvaluationContractError,
+    POLICY_COMPARISON_AUTHENTICATION_FIELD,
+    POLICY_COMPARISON_FINGERPRINT_FIELD,
+    POLICY_COMPARISON_SCHEMA,
+    validate_authenticated_policy_comparison,
+)
+
 
 POLICY_REGISTRY_SCHEMA = "qualibug.policy-registry.v2"
-OBSERVED_COMPARISON_SCHEMA = "qualibug.discovery-policy-comparison.v1"
+OBSERVED_COMPARISON_SCHEMA = POLICY_COMPARISON_SCHEMA
+OBSERVED_COMPARISON_FINGERPRINT_FIELD = POLICY_COMPARISON_FINGERPRINT_FIELD
+OBSERVED_COMPARISON_AUTHENTICATION_FIELD = (
+    POLICY_COMPARISON_AUTHENTICATION_FIELD
+)
 
 
 class PolicyRegistryError(RuntimeError):
@@ -395,7 +407,7 @@ class PolicyRegistry:
         reason = str(reason or "").strip()
         if not reason:
             raise PolicyRegistryError("policy promotion requires a non-empty reason")
-        evaluation = self._validate_observed_evaluation(policy)
+        self._validate_observed_evaluation(policy)
         parent = self._resolve_policy(policy.parent_policy_version)
         if parent is None:
             raise PolicyRegistryError("candidate parent policy is missing during promotion")
@@ -422,8 +434,9 @@ class PolicyRegistry:
         self._save()
         return policy
 
-    @staticmethod
-    def _validate_observed_evaluation(policy: PolicyRecord) -> dict[str, Any]:
+    def _validate_observed_evaluation(
+        self, policy: PolicyRecord
+    ) -> dict[str, Any]:
         evaluation = policy.evaluation_summary if isinstance(policy.evaluation_summary, dict) else {}
         if evaluation.get("schema_version") != OBSERVED_COMPARISON_SCHEMA:
             raise PolicyRegistryError("candidate evaluation summary does not use the observed comparison schema")
@@ -447,14 +460,42 @@ class PolicyRegistry:
             raise PolicyRegistryError("candidate comparison artifact schema is invalid")
         challenger = comparison.get("challenger") if isinstance(comparison.get("challenger"), dict) else {}
         current_strategy_fingerprint = _full_strategy_signature(policy.strategy)
-        if challenger.get("policy_id") != policy.policy_id:
-            raise PolicyRegistryError("candidate comparison artifact policy identity mismatch")
-        if challenger.get("policy_version") != policy.policy_version:
-            raise PolicyRegistryError("candidate comparison artifact policy version mismatch")
         if challenger.get("strategy_fingerprint") != current_strategy_fingerprint:
             raise PolicyRegistryError("candidate strategy changed after observed evaluation")
         if evaluation.get("strategy_fingerprint") != current_strategy_fingerprint:
             raise PolicyRegistryError("candidate evaluation summary strategy fingerprint mismatch")
+        parent = self._resolve_policy(policy.parent_policy_version)
+        if parent is None:
+            raise PolicyRegistryError(
+                "candidate parent policy is missing during evaluation validation"
+            )
+        expected_champion_identity = {
+            "policy_id": parent.policy_id,
+            "policy_version": parent.policy_version,
+            "parent_policy_version": parent.parent_policy_version,
+            "strategy_fingerprint": _full_strategy_signature(parent.strategy),
+        }
+        expected_challenger_identity = {
+            "policy_id": policy.policy_id,
+            "policy_version": policy.policy_version,
+            "parent_policy_version": policy.parent_policy_version,
+            "strategy_fingerprint": _full_strategy_signature(policy.strategy),
+        }
+        try:
+            comparison = validate_authenticated_policy_comparison(
+                comparison,
+                expected_champion_identity=expected_champion_identity,
+                expected_challenger_identity=expected_challenger_identity,
+            )
+        except EvaluationContractError as exc:
+            raise PolicyRegistryError(
+                f"candidate comparison strict validation failed: {exc}"
+            ) from exc
+        challenger = comparison.get("challenger") if isinstance(comparison.get("challenger"), dict) else {}
+        if challenger.get("policy_id") != policy.policy_id:
+            raise PolicyRegistryError("candidate comparison artifact policy identity mismatch")
+        if challenger.get("policy_version") != policy.policy_version:
+            raise PolicyRegistryError("candidate comparison artifact policy version mismatch")
         if comparison.get("observed_execution") is not True or comparison.get("estimated_metrics_used") is not False:
             raise PolicyRegistryError("candidate comparison artifact is not observed execution evidence")
         decision = comparison.get("promotion_decision") if isinstance(comparison.get("promotion_decision"), dict) else {}

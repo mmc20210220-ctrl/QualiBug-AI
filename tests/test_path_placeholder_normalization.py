@@ -222,6 +222,93 @@ def test_orderid_path_prefers_orders_collection() -> None:
     assert steps[0].api_path.startswith("/api/orders")
 
 
+def test_graph_invariant_with_placeholder_observation_keeps_runtime_resolver() -> None:
+    from ai_test_asset_center.business_state_graph import BusinessStateGraph, behavior_slice_id
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    invariant = "The bound transaction remains observable."
+    graph = BusinessStateGraph("transaction")
+    graph.add_state("INIT", invariants=[invariant], source_refs=[])
+    slice_id = behavior_slice_id("invariant", "transaction", "INIT", invariant)
+    active_slice = {
+        "slice_id": slice_id,
+        "entity": "transaction",
+        "kind": "invariant",
+        "states": ["INIT"],
+        "endpoints": ["/api/transactions/order/:orderId"],
+        "priority": 0.6,
+        "source_refs": [],
+        "evidence_gaps": [],
+    }
+    api_doc = """
+### GET /api/orders
+### GET /api/transactions/order/:orderId
+"""
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {"transaction": graph},
+        api_doc=api_doc,
+        active_slice_ids={slice_id},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+    )
+
+    assert len(scenarios) == 1
+    scenario = scenarios[0]
+    assert [step.action for step in scenario.steps] == ["resolve_entity_id", "observe_bound_entity"]
+    assert scenario.steps[0].api_path == "/api/orders"
+    assert scenario.steps[0].extract_from_response is not None
+    assert "orderId" in scenario.steps[0].extract_from_response
+    assert scenario.steps[1].api_path == "/api/transactions/order/{orderId}"
+
+
+def test_graph_invariant_never_observes_post_only_route_as_get() -> None:
+    from ai_test_asset_center.business_state_graph import BusinessStateGraph, behavior_slice_id
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    invariant = "The settlement record remains consistent."
+    graph = BusinessStateGraph("settlement")
+    graph.add_state("ACTIVE", invariants=[invariant], source_refs=[])
+    slice_id = behavior_slice_id("invariant", "settlement", "ACTIVE", invariant)
+    active_slice = {
+        "slice_id": slice_id,
+        "entity": "settlement",
+        "kind": "invariant",
+        "states": ["ACTIVE"],
+        "endpoints": ["/api/settlements"],
+        "_bound_method": "POST",
+        "_bound_path": "/api/settlements",
+        "_hypothesis_family": "consistency",
+        "source_refs": [{"source_type": "api", "quote": "POST /api/settlements"}],
+    }
+    api_doc = """
+### GET /api/references
+### POST /api/settlements
+
+Request body:
+```json
+{"referenceId":"<reference_id>","amount":10}
+```
+"""
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {"settlement": graph},
+        api_doc=api_doc,
+        active_slice_ids={slice_id},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+    )
+
+    assert len(scenarios) == 1
+    scenario = scenarios[0]
+    assert any(step.action == "execute_bound_write" for step in scenario.steps)
+    assert all(
+        not (step.api_method == "GET" and step.api_path == "/api/settlements")
+        for step in scenario.steps
+    )
+    assert all(step.action != "verify_bound_entity_after_write" for step in scenario.steps)
+
+
 def test_address_body_binding_uses_users_addresses() -> None:
     from ai_test_asset_center.real_id_resolver import body_field_collection_paths
     from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
@@ -295,6 +382,853 @@ def test_bootstrap_create_drops_optional_promotional_demo_strings() -> None:
     assert "couponCode" not in body
     assert body["items"] == [{"sku": "SKU-PHONE-001", "qty": 1}]
     assert body["addressId"] == "{addressId}"
+
+
+def test_transition_create_uses_rich_project_source_when_runtime_catalog_has_no_body(tmp_path) -> None:
+    from ai_test_asset_center.business_state_graph import StateTransition
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_shop"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+## Order
+
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"couponCode":"PROMO-ONCE","addressId":"<address_id>"}
+```
+
+### GET /api/orders
+### GET /api/orders/{id}
+### POST /api/orders/{id}/ship
+
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/orders
+### GET /api/orders
+### GET /api/orders/{id}
+### POST /api/orders/{id}/ship
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+
+    scenario = SemanticScenarioGenerator()._transition(
+        "order",
+        StateTransition(
+            from_state="PAID",
+            to_state="SHIPPED",
+            action="ship",
+            api_endpoint="/api/orders/{id}/ship",
+        ),
+        graph=None,
+        discovery_round=1,
+        api_doc=compact_runtime_catalog,
+        root=tmp_path,
+        project=project,
+    )
+
+    create_step = next(step for step in scenario.steps if step.action == "create_entity")
+    assert create_step.body_provenance == "documented_example"
+    assert create_step.body_template["items"] == [{"sku": "SKU-001", "qty": 1}]
+    assert create_step.body_template["addressId"] == "{addressId}"
+    assert "couponCode" not in create_step.body_template
+    assert any(step.action == "bootstrap_create_addressId" for step in scenario.steps)
+
+
+def test_transition_action_uses_rich_project_source_when_runtime_catalog_has_no_body(tmp_path) -> None:
+    from ai_test_asset_center.business_state_graph import StateTransition
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_workflow"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+### POST /api/orders
+
+Request body:
+```json
+{"name":"source order"}
+```
+
+### GET /api/orders
+
+### POST /api/transactions/settle
+
+Request body:
+```json
+{"orderId":"<order_id>","channel":"documented-channel"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/orders
+### GET /api/orders
+### POST /api/transactions/settle
+"""
+
+    scenario = SemanticScenarioGenerator()._transition(
+        "order",
+        StateTransition(
+            from_state="PENDING",
+            to_state="SETTLED",
+            action="settle",
+            api_endpoint="/api/transactions/settle",
+        ),
+        graph=None,
+        discovery_round=1,
+        api_doc=compact_runtime_catalog,
+        root=tmp_path,
+        project=project,
+    )
+
+    action_step = next(step for step in scenario.steps if step.action == "transition_settle")
+    assert action_step.body_template == {
+        "orderId": "{orderId}",
+        "channel": "documented-channel",
+    }
+
+
+def test_bound_write_fallback_uses_rich_project_source_body(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_shop"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+## Order
+
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"couponCode":"PROMO-ONCE","addressId":"<address_id>"}
+```
+
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/orders
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+    active_slices = [
+        {
+            "slice_id": "slice-idempotency",
+            "kind": "invariant",
+            "entity": "order",
+            "states": ["active"],
+            "endpoints": ["/api/orders"],
+            "_bound_method": "POST",
+            "_bound_path": "/api/orders",
+            "_hypothesis_family": "idempotency",
+            "source_refs": [{"source_type": "api", "quote": "POST /api/orders"}],
+        },
+        {
+            "slice_id": "slice-bound-write",
+            "kind": "invariant",
+            "entity": "order",
+            "states": ["active"],
+            "endpoints": ["/api/orders"],
+            "_bound_method": "POST",
+            "_bound_path": "/api/orders",
+            "_hypothesis_family": "consistency",
+            "source_refs": [{"source_type": "api", "quote": "POST /api/orders"}],
+        },
+    ]
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=compact_runtime_catalog,
+        active_slice_ids={item["slice_id"] for item in active_slices},
+        active_slices=active_slices,
+        allow_source_runtime=True,
+        root=tmp_path,
+        project=project,
+    )
+
+    by_id = {scenario.behavior_slice_id: scenario for scenario in scenarios}
+    idempotency_step = next(
+        step
+        for step in by_id["slice-idempotency"].steps
+        if step.action == "execute_bound_idempotency_write"
+    )
+    bound_write_step = next(
+        step
+        for step in by_id["slice-bound-write"].steps
+        if step.action == "execute_bound_write"
+    )
+    for step in (idempotency_step, bound_write_step):
+        assert step.body_provenance == "documented_example"
+        assert step.body_template["items"] == [{"sku": "SKU-001", "qty": 1}]
+        assert step.body_template["addressId"] == "{addressId}"
+        assert "couponCode" not in step.body_template
+    for scenario in by_id.values():
+        assert any(step.action == "bootstrap_create_addressId" for step in scenario.steps)
+
+
+def test_source_bound_bodyless_mutation_stays_plan_only() -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    api_doc = """
+### POST /api/resources/admin
+
+Administrative resource creation. The source does not declare a request body.
+"""
+    active_slice = {
+        "slice_id": "source-bound-body-contract-missing",
+        "kind": "invariant",
+        "entity": "resource",
+        "states": ["active"],
+        "endpoints": ["/api/resources/admin"],
+        "_bound_method": "POST",
+        "_bound_path": "/api/resources/admin",
+        "_hypothesis_family": "idempotency",
+        "source_refs": [{"source_type": "api", "quote": "POST /api/resources/admin"}],
+    }
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=api_doc,
+        active_slice_ids={active_slice["slice_id"]},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+    )
+
+    assert len(scenarios) == 1
+    assert scenarios[0].execution_policy == "plan_only_requires_fixture"
+    assert scenarios[0].steps == []
+    assert "BOUND_WRITE_PRECONDITION_CONTRACT_MISSING" in scenarios[0].evidence_gaps
+
+
+def test_bound_write_bootstraps_missing_body_identity_from_rich_project_source(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_shop"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+## Order
+
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"addressId":"<address_id>"}
+```
+
+## Address
+
+### GET /api/users/addresses
+
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/orders
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+    active_slice = {
+        "slice_id": "slice-bound-write-with-address",
+        "kind": "invariant",
+        "entity": "order",
+        "states": ["active"],
+        "endpoints": ["/api/orders"],
+        "_bound_method": "POST",
+        "_bound_path": "/api/orders",
+        "_hypothesis_family": "consistency",
+        "source_refs": [{"source_type": "api", "quote": "POST /api/orders"}],
+    }
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=compact_runtime_catalog,
+        active_slice_ids={active_slice["slice_id"]},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+        root=tmp_path,
+        project=project,
+    )
+
+    scenario = next(item for item in scenarios if item.behavior_slice_id == active_slice["slice_id"])
+    bootstrap = next(step for step in scenario.steps if step.action == "bootstrap_create_addressId")
+    write = next(step for step in scenario.steps if step.action == "execute_bound_write")
+
+    assert bootstrap.api_method == "POST"
+    assert bootstrap.api_path == "/api/users/addresses"
+    assert bootstrap.body_template == {
+        "receiver": "A User",
+        "phone": "10000000000",
+        "city": "Example City",
+        "detail": "Example Street",
+    }
+    assert bootstrap.order < write.order
+
+
+def test_bound_action_bootstraps_missing_path_identity_from_rich_project_source(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_shop"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+## Order
+
+### GET /api/orders
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"addressId":"<address_id>"}
+```
+
+### POST /api/orders/{id}/cancel
+
+## Address
+
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### GET /api/orders
+### POST /api/orders
+### POST /api/orders/{id}/cancel
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+    active_slice = {
+        "slice_id": "slice-bound-order-cancel",
+        "kind": "invariant",
+        "entity": "order",
+        "states": ["active"],
+        "endpoints": ["/api/orders/{id}/cancel"],
+        "_bound_method": "POST",
+        "_bound_path": "/api/orders/{id}/cancel",
+        "_hypothesis_family": "consistency",
+        "source_refs": [{"source_type": "api", "quote": "POST /api/orders/{id}/cancel"}],
+    }
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=compact_runtime_catalog,
+        active_slice_ids={active_slice["slice_id"]},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+        root=tmp_path,
+        project=project,
+    )
+
+    scenario = next(item for item in scenarios if item.behavior_slice_id == active_slice["slice_id"])
+    actions = [step.action for step in scenario.steps]
+
+    assert "bootstrap_create_addressId" in actions
+    assert "bootstrap_create_id" in actions
+    assert actions.index("bootstrap_create_addressId") < actions.index("bootstrap_create_id")
+    assert actions.index("bootstrap_create_id") < actions.index("execute_bound_write")
+
+
+def test_permission_action_bootstraps_target_from_rich_project_source(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_shop"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+### POST /api/auth/login
+
+Request body:
+```json
+{"email":"user@example.test","password":"secret"}
+```
+
+### GET /api/orders
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"addressId":"<address_id>"}
+```
+
+### POST /api/orders/{id}/cancel
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/auth/login
+### GET /api/orders
+### POST /api/orders
+### POST /api/orders/{id}/cancel
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+    active_slice = {
+        "slice_id": "permission-order-cancel",
+        "kind": "permission",
+        "entity": "order",
+        "_permission_actor": "buyer",
+        "_permission_email": "user@example.test",
+        "_permission_password": "secret",
+        "_permission_method": "POST",
+        "_permission_path": "/api/orders/{id}/cancel",
+        "_permission_expected_permitted": [],
+        "_login_path": "/api/auth/login",
+        "_login_body": {"email": "", "password": ""},
+        "source_refs": [{"source_type": "permission", "quote": "buyer cannot cancel other orders"}],
+    }
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=compact_runtime_catalog,
+        active_slice_ids={active_slice["slice_id"]},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+        root=tmp_path,
+        project=project,
+    )
+
+    scenario = next(item for item in scenarios if item.behavior_slice_id == active_slice["slice_id"])
+    actions = [step.action for step in scenario.steps]
+
+    assert "bootstrap_create_addressId" in actions
+    assert "bootstrap_create_id" in actions
+    assert any(action.startswith("permission_probe_") for action in actions)
+
+
+def test_actorless_permission_slice_still_materializes_source_bound_probe(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    api_doc = """
+### GET /api/admin/reports
+### POST /api/admin/reports
+
+Request body:
+```json
+{"name":"quarterly","scope":"tenant"}
+```
+"""
+    active_slice = {
+        "slice_id": "permission-admin-report",
+        "kind": "permission",
+        "entity": "report",
+        "_permission_method": "POST",
+        "_permission_path": "/api/admin/reports",
+        "_permission_expected_permitted": [],
+        "source_refs": [{"source_type": "permission", "quote": "unapproved roles must not create reports"}],
+    }
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=api_doc,
+        active_slice_ids={active_slice["slice_id"]},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+        root=tmp_path,
+        project="generic_reporting",
+    )
+
+    scenario = next(item for item in scenarios if item.behavior_slice_id == active_slice["slice_id"])
+
+    assert scenario.category == "permission"
+    assert scenario.execution_policy == "approved_sandbox_write"
+    assert scenario.runtime_hints["permission_actor_binding"] == "runtime_role_sweep"
+    assert scenario.steps[-1].api_method == "POST"
+    assert scenario.steps[-1].api_path == "/api/admin/reports"
+
+
+def test_inventory_write_bootstraps_nested_prerequisites_from_rich_project_source(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_inventory"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+### POST /api/inventory/reserve
+
+Request body:
+```json
+{"sku":"SKU-001","qty":1,"orderId":"<order_id>"}
+```
+
+### GET /api/orders
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"addressId":"<address_id>"}
+```
+
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/inventory/reserve
+### GET /api/orders
+### POST /api/orders
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+    active_slice = {
+        "slice_id": "inventory-reserve",
+        "kind": "inventory",
+        "entity": "inventory",
+        "_inventory_method": "POST",
+        "_inventory_path": "/api/inventory/reserve",
+        "_default_actor": "warehouse",
+        "source_refs": [{"source_type": "api", "quote": "POST /api/inventory/reserve"}],
+    }
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=compact_runtime_catalog,
+        active_slice_ids={active_slice["slice_id"]},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+        root=tmp_path,
+        project=project,
+    )
+
+    scenario = next(item for item in scenarios if item.behavior_slice_id == active_slice["slice_id"])
+    actions = [step.action for step in scenario.steps]
+
+    assert "bootstrap_create_addressId" in actions
+    assert "bootstrap_create_orderId" in actions
+    assert "inventory_probe_POST" in actions
+
+
+def test_isolation_probe_bootstraps_owner_resource_from_rich_project_source(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_tenant_app"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+### POST /api/auth/login
+
+Request body:
+```json
+{"email":"user@example.test","password":"secret"}
+```
+
+### GET /api/orders
+### GET /api/orders/{id}
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"addressId":"<address_id>"}
+```
+
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/auth/login
+### GET /api/orders
+### GET /api/orders/{id}
+### POST /api/orders
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+    active_slice = {
+        "slice_id": "isolation-order-detail",
+        "kind": "isolation",
+        "entity": "order",
+        "_isolation_viewer_role": "viewer",
+        "_isolation_viewer_email": "viewer@example.test",
+        "_isolation_viewer_password": "secret",
+        "_isolation_owner_role": "owner",
+        "_isolation_owner_email": "owner@example.test",
+        "_isolation_owner_password": "secret",
+        "_isolation_path": "/api/orders/{id}",
+        "_isolation_mode": "path",
+        "_login_path": "/api/auth/login",
+        "_login_body": {"email": "", "password": ""},
+        "source_refs": [{"source_type": "api", "quote": "GET /api/orders/{id}"}],
+    }
+
+    scenarios = SemanticScenarioGenerator().generate(
+        {},
+        api_doc=compact_runtime_catalog,
+        active_slice_ids={active_slice["slice_id"]},
+        active_slices=[active_slice],
+        allow_source_runtime=True,
+        root=tmp_path,
+        project=project,
+    )
+
+    scenario = next(item for item in scenarios if item.behavior_slice_id == active_slice["slice_id"])
+    actions = [step.action for step in scenario.steps]
+    prerequisite_writes = [
+        step.api_path
+        for step in scenario.steps
+        if step.api_method == "POST" and not step.action.startswith("login")
+    ]
+
+    assert "/api/users/addresses" in prerequisite_writes
+    assert "/api/orders" in prerequisite_writes
+    assert prerequisite_writes.index("/api/users/addresses") < prerequisite_writes.index("/api/orders")
+    assert any(action.startswith("isolation_probe_") for action in actions)
+
+
+def test_invariant_runtime_upgrade_uses_rich_source_body_and_prerequisites(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_payments"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+### POST /api/payments/pay
+
+Request body:
+```json
+{"orderId":"<order_id>","amount":100,"channel":"BALANCE","idempotencyKey":"request-1"}
+```
+
+### GET /api/payments/order/{orderId}
+### GET /api/orders
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"addressId":"<address_id>"}
+```
+
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/payments/pay
+### GET /api/payments/order/{orderId}
+### GET /api/orders
+### POST /api/orders
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+
+    scenario = SemanticScenarioGenerator()._invariant_runtime_upgrade(
+        "payment",
+        "ACTIVE",
+        "Duplicate payment requests must be idempotent and succeed only once.",
+        [],
+        1,
+        slice_id="payment-idempotency",
+        observation_path="/api/payments/order/{orderId}",
+        api_doc=compact_runtime_catalog,
+        root=tmp_path,
+        project=project,
+    )
+
+    assert scenario is not None
+    actions = [step.action for step in scenario.steps]
+    write_steps = [step for step in scenario.steps if step.api_path == "/api/payments/pay"]
+
+    assert "bootstrap_create_addressId" in actions
+    assert "bootstrap_create_orderId" in actions
+    assert len(write_steps) == 2
+    assert all(step.body_template["orderId"] == "{orderId}" for step in write_steps)
+    assert all(step.body_template["amount"] == 100 for step in write_steps)
+
+
+def test_money_and_concurrency_slices_use_rich_project_source_body(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_shop"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+## Order
+
+### POST /api/orders
+
+Request body:
+```json
+{"items":[{"sku":"SKU-001","qty":1}],"couponCode":"PROMO-ONCE","addressId":"<address_id>"}
+```
+
+### GET /api/orders
+
+### GET /api/users/addresses
+### POST /api/users/addresses
+
+Request body:
+```json
+{"receiver":"A User","phone":"10000000000","city":"Example City","detail":"Example Street"}
+```
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/orders
+### GET /api/orders
+### GET /api/users/addresses
+### POST /api/users/addresses
+"""
+    base_slice = {
+        "entity": "order",
+        "priority": 0.9,
+        "source_refs": [{"source_type": "api", "quote": "POST /api/orders"}],
+        "_default_actor": "buyer",
+    }
+
+    money = SemanticScenarioGenerator._money_slice(
+        {
+            **base_slice,
+            "slice_id": "money-orders",
+            "_money_method": "POST",
+            "_money_path": "/api/orders",
+        },
+        1,
+        compact_runtime_catalog,
+        root=tmp_path,
+        project=project,
+    )
+    concurrency = SemanticScenarioGenerator._concurrency_slice(
+        {
+            **base_slice,
+            "slice_id": "concurrency-orders",
+            "_concurrency_method": "POST",
+            "_concurrency_path": "/api/orders",
+        },
+        1,
+        compact_runtime_catalog,
+        root=tmp_path,
+        project=project,
+    )
+
+    assert money is not None
+    assert concurrency is not None
+    money_step = next(step for step in money.steps if step.action == "money_probe_POST")
+    concurrency_step = next(step for step in concurrency.steps if step.action == "concurrent_POST_1")
+    for step in (money_step, concurrency_step):
+        assert step.body_provenance == "documented_example"
+        assert step.body_template["items"] == [{"sku": "SKU-001", "qty": 1}]
+        assert step.body_template["addressId"] == "{addressId}"
+        assert "couponCode" not in step.body_template
+    for scenario in (money, concurrency):
+        assert any(step.action == "bootstrap_create_addressId" for step in scenario.steps)
+
+
+def test_money_slice_bootstraps_placeholder_identity_from_rich_project_source(tmp_path) -> None:
+    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+
+    project = "generic_finance"
+    source_dir = tmp_path / "projects" / project / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "API_SPEC.md").write_text(
+        """
+### POST /api/settlements
+
+Request body:
+```json
+{"reference":"case-001","amount":10}
+```
+
+### GET /api/settlements/{id}
+### POST /api/settlements/{id}/approve
+""",
+        encoding="utf-8",
+    )
+    compact_runtime_catalog = """
+### POST /api/settlements
+### GET /api/settlements/{id}
+### POST /api/settlements/{id}/approve
+"""
+
+    scenario = SemanticScenarioGenerator._money_slice(
+        {
+            "slice_id": "money-settlement-approval",
+            "entity": "settlement",
+            "priority": 0.9,
+            "source_refs": [{"source_type": "api", "quote": "POST /api/settlements/{id}/approve"}],
+            "_default_actor": "operator",
+            "_money_method": "POST",
+            "_money_path": "/api/settlements/{id}/approve",
+        },
+        1,
+        compact_runtime_catalog,
+        root=tmp_path,
+        project=project,
+    )
+
+    assert scenario is not None
+    actions = [step.action for step in scenario.steps]
+    assert "bootstrap_create_id" in actions
+    bootstrap = next(step for step in scenario.steps if step.action == "bootstrap_create_id")
+    assert bootstrap.api_path == "/api/settlements"
+    assert bootstrap.body_template == {"reference": "case-001", "amount": 10}
+    assert actions.index("bootstrap_create_id") < actions.index("observe_money_endpoint")
 
 
 def test_resolve_entity_bootstraps_generic_id_from_collection_path() -> None:

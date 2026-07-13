@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """UX-oriented discovery probes for enterprise frontend flows."""
 
@@ -11,6 +11,7 @@ try:
 except ImportError:
     run_frontend_interaction_acceptance = None
 from .real_project_onboarding import ROOT, config_paths
+from .target_endpoint import resolve_target_base_url
 
 
 def generate_frontend_ux_probes(
@@ -54,6 +55,7 @@ def collect_frontend_ux_issues(
     cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     cfg = cfg if isinstance(cfg, dict) else {}
+    target_base_url = resolve_target_base_url(cfg.get("base_url"))
     root = root or ROOT
     paths = config_paths(project_id, root)
     project_output_root = root / "platform_outputs" / project_id
@@ -69,7 +71,7 @@ def collect_frontend_ux_issues(
             output_dir=output_dir,
             build_first=True,
             scenario=scenario,
-            api_base_url=str(cfg.get("base_url") or "http://127.0.0.1:8088"),
+            api_base_url=target_base_url,
             min_score=int(cfg.get("frontend_interaction_min_score") or 90),
         )
         acceptance = result.get("acceptance") if isinstance(result, dict) else {}
@@ -120,4 +122,3 @@ def collect_frontend_ux_issues(
             )
         )
     return issues
-

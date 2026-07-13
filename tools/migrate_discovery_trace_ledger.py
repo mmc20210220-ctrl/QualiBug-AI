@@ -9,7 +9,7 @@ from typing import Any, Sequence
 
 from ai_test_asset_center.artifact_redactor import redact_and_validate
 from ai_test_asset_center.discovery_trace_ledger import (
-    migrate_trace_ledger_v1_to_v2,
+    migrate_trace_ledger_v1_to_v3,
 )
 
 
@@ -49,7 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     if len(obligation_map) != len(raw_mapping):
         raise ValueError("obligation map contains empty identities")
-    migrated = migrate_trace_ledger_v1_to_v2(
+    migrated = migrate_trace_ledger_v1_to_v3(
         v1,
         obligation_map=obligation_map,
     )

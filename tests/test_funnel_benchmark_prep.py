@@ -157,7 +157,9 @@ def test_funnel_runtime_never_loads_or_scores_evaluator_private_ground_truth() -
 
     assert "benchmark_compute" not in source
     assert "QUALIBUG_BENCHMARK_GROUND_TRUTH" not in source
-    assert "discovery_evaluation_submission.v1" in source
+    assert "discovery_evaluation_submission.v1" not in source
+    assert "build_evaluation_submission" in source
+    assert "normalize_envelope" in source
     assert (
         '"measurement_status": "NOT_MEASURED"' in source
         or 'measurement_status="NOT_MEASURED"' in source

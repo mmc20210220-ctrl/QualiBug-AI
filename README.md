@@ -115,12 +115,14 @@ docker-compose up -d
 # 查看日志
 docker-compose logs -f qualibug
 
-# 访问服务（宿主机端口 5000 → 容器端口 8088）
-# http://localhost:5000
-# http://localhost:5000/api/health
+# 访问服务（宿主机与容器统一使用 8088）
+# http://localhost:8088
+# http://localhost:8088/api/health
 ```
 
-Docker 容器内统一监听 `8088`，`docker-compose.yml` 默认映射为 `5000:8088`，因此本机演示仍访问 `http://localhost:5000`。
+Docker 容器内统一监听 `8088`，`docker-compose.yml` 默认仅发布到宿主机
+`127.0.0.1:8088`。容器内使用 `0.0.0.0` 只是为了通过 Docker 网络暴露；宿主机默认仍
+限制为本机访问。
 
 ---
 

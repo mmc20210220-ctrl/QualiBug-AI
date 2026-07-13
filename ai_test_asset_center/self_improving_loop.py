@@ -10,15 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
-from .scenario_runner import ScenarioRunner
 from .loop_runtime import LoopBusyError, LoopRuntimeError, LoopRuntimeSession
 from .console_output import safe_print
+from .target_endpoint import resolve_target_base_url
 
 
 HEARTBEAT_FILE_TEMPLATE = "platform_outputs/{project_id}/.loop_heartbeat.json"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROJECT_ID = os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project")
-DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8088")
 _ACTIVE_RUNTIME: LoopRuntimeSession | None = None
 
 
@@ -117,7 +116,7 @@ class SelfImprovingSweep:
     MAX_ROUNDS = 5
     CONVERGED_THRESHOLD = 0.30
 
-    def __init__(self, prd_path=None, api_path=None, base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
+    def __init__(self, prd_path=None, api_path=None, base_url: str | None = None, *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
         if prd_path is None:
             prd_path = _resolve_default_project_doc_path(
                 project_id,
@@ -131,7 +130,7 @@ class SelfImprovingSweep:
 
         self.prd = _read_optional_text(prd_path)
         self.api = _read_optional_text(api_path)
-        self.base_url = str(base_url or DEFAULT_BASE_URL)
+        self.base_url = resolve_target_base_url(base_url)
         self.project_id = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
         self.output_dir = Path(output_dir or Path("platform_outputs") / self.project_id)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -307,16 +306,8 @@ class SelfImprovingSweep:
         if side_effect_count > len(inconclusives) * 0.2:
             actions.append(ImprovementAction("scenario",
                 f"{side_effect_count} need state orchestration",
-                "Auto-attach scenario_runner after Verifier",
+                "Compile source-grounded executable experiments with governed fixtures and observers",
                 f"Confirm ~{side_effect_count} orchestration-needed hypotheses"))
-
-        fake_terms = ["租户", "tenant", "金额字段", "用户列表与用户详情"]
-        fake_count = sum(1 for f in inconclusives if any(t in f.title.lower() for t in fake_terms))
-        if fake_count > 0:
-            actions.append(ImprovementAction("prompt",
-                f"{fake_count} hallucinated (multi-tenant / financial on single-tenant MES)",
-                "Inject MES context: 'single-tenant, no financial fields, no payment'",
-                f"Reduce ~{fake_count} hallucinations"))
 
         if len(inconclusives) > len(findings) * 0.5:
             actions.append(ImprovementAction("evidence_plan",
@@ -671,7 +662,7 @@ def _save_to_memory(result: dict, actions: list, output_dir: Path | str | None =
         _console(f"  [MEM] Memory: +{new_entries} entries (total: {len(existing)})")
 
 
-def run_self_improving(prd_path=None, api_path=None, base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
+def run_self_improving(prd_path=None, api_path=None, base_url: str | None = None, *, project_id: str = DEFAULT_PROJECT_ID, output_dir: Path | str | None = None):
     sweeper = SelfImprovingSweep(prd_path, api_path, base_url, project_id=project_id, output_dir=output_dir)
     return sweeper.run()
 

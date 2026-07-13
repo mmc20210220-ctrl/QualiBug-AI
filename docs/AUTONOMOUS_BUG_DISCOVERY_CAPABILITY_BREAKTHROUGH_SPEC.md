@@ -63,10 +63,10 @@ attempts. Zero obligations and all-blocked attempts stay `BLOCKED`; neither can
 be represented as a clean no-Bug result. Delivery Gate IDs must match the
 formal projection exactly.
 
-`qualibug.discovery-trace-ledger.v2` consumes the same attempt identities and
-has an explicit offline V1-to-V2 migration. Silent mixed-schema reads are
-forbidden. Persisted artifacts pass through `artifact_redactor.py` before
-write.
+`qualibug.discovery-trace-ledger.v3` consumes the same attempt identities.
+V1/V2 artifacts require the explicit offline migration tool; silent
+mixed-schema reads are forbidden. Persisted artifacts pass through
+`artifact_redactor.py` before write.
 
 Rollback is a next-run policy action only: select `legacy_champion` before a
 new run and create a new immutable run contract. Rollback may not occur inside
@@ -689,6 +689,13 @@ version 和不可变指纹。
 - 业务结果和副作用观察；
 - verifier 先排除 harness failure；
 - 可选独立 disprover 必须引用相同 evidence contract，不能凭语言偏好推翻事实。
+
+当前工程实现使用 Customer Delivery Gate v2、obligation attempt ledger、
+`formal_delivery_authority.py` 和 `canonical_defect_registry.py` 组成正式事实链。
+`canonical_defect_count` 表示客户可见唯一缺陷；`delivery_occurrence_count` 仅表示通过
+Gate 的执行发生次数。任何 title/history/severity/confidence 去重、旧 confirmed shelf、
+legacy report 或 runtime 自报 count 都不得替代这两个显式命名空间。多 assertion
+occurrence 在无法无歧义拆分时必须阻断，不能生成多个猜测身份。
 
 ### Phase 4：Adaptive Planner 与多观察面
 

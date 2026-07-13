@@ -1,0 +1,50 @@
+{
+  "schema_version": "qualibug.spc-optimization-receipt.v1",
+  "optimization": "identity_mutation_empty_body_probe_reach",
+  "before": {
+    "true_positives": 8,
+    "matched": [
+      "AUTH-001",
+      "ORDER-006",
+      "ORDER-008",
+      "ORDER-012",
+      "ORDER-018",
+      "PRODUCT-001",
+      "REPORT-001",
+      "USER-001"
+    ]
+  },
+  "after": {
+    "true_positives": 14,
+    "recall": 0.1069,
+    "precision": 0.3256,
+    "false_positives": 29,
+    "matched": [
+      "AUTH-001",
+      "AUTH-003",
+      "AUTH-006",
+      "COUPON-011",
+      "ORDER-006",
+      "ORDER-008",
+      "ORDER-012",
+      "ORDER-018",
+      "PAY-006",
+      "PRODUCT-001",
+      "PRODUCT-006",
+      "PRODUCT-013",
+      "REPORT-001",
+      "USER-001"
+    ]
+  },
+  "added": [
+    "AUTH-003",
+    "AUTH-006",
+    "COUPON-011",
+    "PAY-006",
+    "PRODUCT-006",
+    "PRODUCT-013"
+  ],
+  "lost": [],
+  "delta_tp": 6,
+  "decision": "KEEP"
+}

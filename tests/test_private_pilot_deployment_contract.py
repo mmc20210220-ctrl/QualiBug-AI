@@ -91,17 +91,69 @@ def test_qualibug_server_script_uses_patched_entrypoint() -> None:
     assert 'qualibug-server = "ai_test_asset_center.private_pilot_entrypoint:run_server"' in pyproject
 
 
-def test_docker_compose_maps_host_5000_to_container_8088() -> None:
+def test_docker_compose_publishes_canonical_backend_port_8088() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     assert "qualibug-ai:95.0.0-private-pilot" in compose
-    assert '"5000:8088"' in compose
+    assert '"127.0.0.1:8088:8088"' in compose
+    assert '"5000:8088"' not in compose
     assert 'QUALIBUG_PORT: "8088"' in compose
+    assert 'QUALIBUG_BIND_HOST: "0.0.0.0"' in compose
+    assert 'QUALIBUG_ALLOW_PUBLIC_BIND: "1"' in compose
+    assert "QUALIBUG_JWT_SECRET: ${QUALIBUG_JWT_SECRET:?" in compose
     assert "http://localhost:8088/api/health" in compose
 
 
 def test_dockerfile_runs_patched_entrypoint_on_8088() -> None:
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
     assert "ENV QUALIBUG_PORT=8088" in dockerfile
+    assert "ENV QUALIBUG_BIND_HOST=0.0.0.0" in dockerfile
+    assert "ENV QUALIBUG_ALLOW_PUBLIC_BIND=1" in dockerfile
     assert "EXPOSE 8088" in dockerfile
     assert "http://localhost:8088/api/health" in dockerfile
     assert 'CMD ["python", "-m", "ai_test_asset_center.private_pilot_entrypoint"]' in dockerfile
+    assert "requirements.txt" not in dockerfile
+    assert "mes_target/" not in dockerfile
+    assert "pip install --no-cache-dir ." in dockerfile
+    assert dockerfile.index("COPY pyproject.toml") < dockerfile.index(
+        "pip install --no-cache-dir ."
+    )
+    assert dockerfile.index("COPY ai_test_asset_center/") < dockerfile.index(
+        "pip install --no-cache-dir ."
+    )
+    assert "chown -R qualibug:qualibug /app/platform_outputs" in dockerfile
+
+
+def test_deploy_dockerfile_uses_service_port_contract() -> None:
+    dockerfile = Path("deploy/Dockerfile").read_text(encoding="utf-8")
+    assert "QUALIBUG_PORT=8088" in dockerfile
+    assert "QUALIBUG_BIND_PORT" not in dockerfile
+    assert "QUALIBUG_BIND_HOST=0.0.0.0" in dockerfile
+    assert "QUALIBUG_ALLOW_PUBLIC_BIND=1" in dockerfile
+    assert "EXPOSE 8088" in dockerfile
+    assert 'CMD ["python", "-m", "ai_test_asset_center.private_pilot_entrypoint"]' in dockerfile
+    assert "COPY benchmark_evaluator/" not in dockerfile
+    assert "COPY tests/" not in dockerfile
+    assert "COPY platform_workspace/" not in dockerfile
+    assert "COPY platform_outputs/" not in dockerfile
+    assert "requirements-optional.txt" not in dockerfile
+    assert "pip install --no-cache-dir ." in dockerfile
+    assert dockerfile.index("COPY pyproject.toml") < dockerfile.index(
+        "pip install --no-cache-dir ."
+    )
+
+
+def test_product_distribution_and_docker_context_exclude_evaluator_private_code() -> None:
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+    dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
+
+    assert '"benchmark_evaluator*"' not in pyproject
+    assert '"enterprise_bug_factory*"' not in pyproject
+    assert '"demo_system*"' not in pyproject
+    for private_path in (
+        "benchmark_evaluator/",
+        "enterprise_bug_factory/",
+        "_private_eval/",
+        "_funnel_runs/",
+        "tests/",
+    ):
+        assert private_path in dockerignore

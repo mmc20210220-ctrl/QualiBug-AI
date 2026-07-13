@@ -11,6 +11,7 @@ from ai_test_asset_center.experiment_executor import (
     execute_selected_experiments,
     preflight_experiment_executable,
 )
+from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
 from ai_test_asset_center.observer_contracts import observe_authorization_comparison
 
 
@@ -134,6 +135,37 @@ def test_write_status_pair_requires_business_effect_evidence() -> None:
 
     assert receipt["status"] == "INDETERMINATE"
     assert receipt["reason_code"] == "WRITE_EFFECT_EVIDENCE_REQUIRED"
+
+
+def test_write_success_without_restricted_business_effect_is_observed_property_held() -> None:
+    control = _http_observation(
+        status=200,
+        body={"id": "r-1"},
+        phase="control",
+    )
+    treatment = _http_observation(
+        status=200,
+        body={"id": "r-1"},
+        phase="treatment",
+    )
+    control["method"] = "POST"
+    treatment["method"] = "POST"
+
+    receipt = observe_authorization_comparison(
+        control=control,
+        treatment=treatment,
+        require_same_resource=True,
+        business_effect={
+            "business_effect_observed": True,
+            "control_effect_count": 1,
+            "treatment_effect_count": 0,
+        },
+    )
+
+    assert receipt["status"] == "OBSERVED"
+    assert receipt["evidence"]["viewer_request_accepted"] is True
+    assert receipt["evidence"]["viewer_business_effect_observed"] is False
+    assert receipt["evidence"]["leak_detected"] is False
 
 
 def _behavior_ir() -> dict:
@@ -480,6 +512,15 @@ def test_batch_lineage_includes_typed_observer_receipt_ids(
         project="project",
         base_url="http://target.invalid",
         runtime_contract={"environment_type": "test"},
+        mainline_run=build_mainline_run_contract(
+            mainline_authority="experiment_candidate",
+            run_id="run",
+            campaign_id="campaign",
+            target_id="target",
+            environment_id="environment",
+            policy_version="policy",
+            evaluation_mode="operational",
+        ),
         campaign_id="campaign",
     )
 

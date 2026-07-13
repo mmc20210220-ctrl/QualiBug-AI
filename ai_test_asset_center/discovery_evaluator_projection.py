@@ -8,9 +8,22 @@ from __future__ import annotations
 
 from typing import Any
 
+from .canonical_defect_registry import (
+    CanonicalDefectRegistryError,
+    canonical_representative_findings,
+    validate_canonical_defect_registry,
+    validate_defect_identity_consistency,
+)
 from .discovery_mainline_contract import (
     MainlineContractError,
     validate_mainline_run_contract,
+)
+from .discovery_quality_projection import (
+    build_formal_count_projection,
+)
+from .formal_delivery_scope import formal_customer_deliverable_findings
+from .formal_delivery_authority import (
+    build_formal_delivery_authority_receipt,
 )
 
 
@@ -59,7 +72,7 @@ def _shadow_rows(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
 def build_evaluator_only_projection(
     scan_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Project explicit semantic shadow gates into evaluator-only scope."""
+    """Project only immutable Gate-v2 + attempt-ledger authority."""
 
     result = _dict(scan_result)
     v12 = _dict(result.get("v12"))
@@ -70,12 +83,120 @@ def build_evaluator_only_projection(
         raise MainlineContractError("private_evaluator_observation_not_allowed")
 
     fingerprint = contract["contract_fingerprint"]
-    deliverable: list[dict[str, Any]] = []
+    shadow_rows = _shadow_rows(result)
+    shadow_ids = [_finding_id(row) for row in shadow_rows]
+    if not all(shadow_ids):
+        raise MainlineContractError("evaluator_shadow_finding_id_missing")
+    if len(shadow_ids) != len(set(shadow_ids)):
+        raise MainlineContractError("evaluator_shadow_finding_id_duplicate")
+
+    ledger = _dict(
+        result.get("obligation_attempt_ledger")
+        or v12.get("obligation_attempt_ledger")
+    )
+    if not ledger:
+        raise MainlineContractError("evaluator_shadow_attempt_ledger_missing")
+    delivery_occurrences = (
+        result.get("delivery_occurrences")
+        if "delivery_occurrences" in result
+        else v12.get("delivery_occurrences")
+    )
+    if not isinstance(delivery_occurrences, list):
+        raise MainlineContractError(
+            "evaluator_delivery_occurrences_missing"
+        )
+    verified_deliverable = formal_customer_deliverable_findings(
+        delivery_occurrences,
+        obligation_attempt_ledger=ledger or None,
+    )
+    deliverable_ids = sorted(_finding_id(row) for row in verified_deliverable)
+    try:
+        canonical_registry = validate_canonical_defect_registry(
+            _dict(
+                result.get("canonical_defect_registry")
+                or v12.get("canonical_defect_registry")
+            ),
+            mainline_run=contract,
+            deliverable_occurrences=verified_deliverable,
+            obligation_attempt_ledger=ledger,
+        )
+        canonical_findings = canonical_representative_findings(
+            canonical_registry,
+            deliverable_occurrences=verified_deliverable,
+        )
+        submitted_canonical = (
+            result.get("evaluator_canonical_findings")
+            if "evaluator_canonical_findings" in result
+            else v12.get("evaluator_canonical_findings")
+        )
+        if not isinstance(submitted_canonical, list):
+            raise CanonicalDefectRegistryError(
+                "EVALUATOR_CANONICAL_FINDINGS_MISSING"
+            )
+        if submitted_canonical != canonical_findings:
+            raise CanonicalDefectRegistryError(
+                "EVALUATOR_CANONICAL_FINDINGS_MISMATCH"
+            )
+        defect_identity_consistency = validate_defect_identity_consistency(
+            _dict(
+                result.get("defect_identity_consistency")
+                or v12.get("defect_identity_consistency")
+            ),
+            required_occurrence_scopes={
+                "delivery_gate_ids",
+                "registry_occurrence_ids",
+                "formal_projection_occurrence_ids",
+            },
+            required_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+            },
+            allowed_occurrence_scopes={
+                "delivery_gate_ids",
+                "registry_occurrence_ids",
+                "formal_projection_occurrence_ids",
+                "product_projection_occurrence_ids",
+                "formal_authority_occurrence_ids",
+                "evaluator_submission_occurrence_ids",
+                "trace_ledger_occurrence_ids",
+            },
+            allowed_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+                "product_projection_ids",
+                "evaluator_projection_ids",
+                "evaluator_submission_ids",
+            },
+        )
+    except CanonicalDefectRegistryError as exc:
+        raise MainlineContractError(
+            f"evaluator_canonical_authority_invalid:{exc}"
+        ) from exc
+    formal_count_projection = build_formal_count_projection(
+        findings=verified_deliverable,
+        candidate_findings=[],
+        obligation_attempt_ledger=ledger or None,
+        mainline_run=contract,
+        canonical_defect_registry=canonical_registry,
+    )
+    submitted_formal = _dict(
+        result.get("formal_count_projection")
+        or v12.get("formal_count_projection")
+    )
+    if submitted_formal != formal_count_projection:
+        raise MainlineContractError(
+            "evaluator_formal_count_projection_mismatch"
+        )
+    formal_delivery_authority = build_formal_delivery_authority_receipt(
+        mainline_run=contract,
+        findings=verified_deliverable,
+        obligation_attempt_ledger=ledger,
+    )
+    deliverable_id_set = set(deliverable_ids)
+
     candidates: list[dict[str, Any]] = []
-    for row in _shadow_rows(result):
+    for row in shadow_rows:
         finding_id = _finding_id(row)
-        if not finding_id:
-            raise MainlineContractError("evaluator_shadow_finding_id_missing")
         observed_fingerprint = _text(
             _dict(row.get("mainline_run")).get("contract_fingerprint")
             or row.get("mainline_contract_fingerprint")
@@ -84,14 +205,6 @@ def build_evaluator_only_projection(
             raise MainlineContractError(
                 f"evaluator_shadow_authority_fingerprint_mismatch:{finding_id}"
             )
-        semantic_status = _text(
-            row.get("semantic_delivery_gate_status")
-            or row.get("delivery_gate_status")
-        ).upper()
-        if semantic_status not in {"DELIVERABLE", "REJECTED"}:
-            raise MainlineContractError(
-                f"evaluator_shadow_semantic_gate_missing:{finding_id}"
-            )
         projected = {
             **row,
             "finding_id": finding_id,
@@ -99,9 +212,7 @@ def build_evaluator_only_projection(
             "finding_class": "evaluator_shadow",
             "evaluator_scope": "private_evaluator",
         }
-        if semantic_status == "DELIVERABLE":
-            deliverable.append(projected)
-        else:
+        if finding_id not in deliverable_id_set:
             candidates.append(projected)
 
     return {
@@ -112,7 +223,13 @@ def build_evaluator_only_projection(
         "target_id": contract["target_id"],
         "evaluation_mode": contract["evaluation_mode"],
         "mainline_contract_fingerprint": fingerprint,
-        "source_shadow_count": len(deliverable) + len(candidates),
-        "findings": deliverable,
+        "source_shadow_count": len(shadow_rows),
+        "findings": canonical_findings,
+        "delivery_occurrences": verified_deliverable,
         "candidates": candidates,
+        "obligation_attempt_ledger": ledger,
+        "canonical_defect_registry": canonical_registry,
+        "formal_count_projection": formal_count_projection,
+        "defect_identity_consistency": defect_identity_consistency,
+        "formal_delivery_authority": formal_delivery_authority,
     }

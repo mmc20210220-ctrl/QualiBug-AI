@@ -112,14 +112,15 @@ def validate_execution_operational_receipt(
     value["cleanup_outcome"] = cleanup
 
     claimed = _text(value.get("receipt_fingerprint"))
-    if claimed:
-        unsigned = {
-            key: item
-            for key, item in value.items()
-            if key != "receipt_fingerprint"
-        }
-        if claimed != _fingerprint(unsigned):
-            raise OperationalReceiptError("operational_receipt_fingerprint_mismatch")
+    if not claimed:
+        raise OperationalReceiptError("operational_receipt_fingerprint_missing")
+    unsigned = {
+        key: item
+        for key, item in value.items()
+        if key != "receipt_fingerprint"
+    }
+    if claimed != _fingerprint(unsigned):
+        raise OperationalReceiptError("operational_receipt_fingerprint_mismatch")
     return value
 
 
@@ -188,21 +189,78 @@ def build_execution_operational_receipt(
         cleanup_status = "COMPLETED"
     else:
         cleanup_status = "NOT_REQUIRED"
+    return build_execution_operational_receipt_from_counts(
+        receipt_id=receipt_id,
+        execution_status=normalized_status,
+        scenario_attempt_count=1,
+        http_request_attempt_count=http_attempts,
+        production_http_request_count=production_requests,
+        accepted_non_cleanup_write_count=accepted_non_cleanup,
+        accepted_cleanup_write_count=accepted_cleanup,
+        cleanup_status=cleanup_status,
+        cleanup_attempted_count=cleanup_attempted,
+        cleanup_completed_count=cleanup_completed,
+        cleanup_failure_count=failure_count,
+    )
+
+
+def build_execution_operational_receipt_from_counts(
+    *,
+    receipt_id: str,
+    execution_status: str,
+    scenario_attempt_count: int,
+    http_request_attempt_count: int,
+    production_http_request_count: int,
+    accepted_non_cleanup_write_count: int,
+    accepted_cleanup_write_count: int,
+    cleanup_status: str,
+    cleanup_attempted_count: int,
+    cleanup_completed_count: int,
+    cleanup_failure_count: int,
+) -> dict[str, Any]:
+    """Seal explicit adapter counters without scanning arbitrary result JSON."""
+
+    accepted_non_cleanup = _non_negative_int(
+        accepted_non_cleanup_write_count,
+        "accepted_non_cleanup_write_count",
+    )
+    accepted_cleanup = _non_negative_int(
+        accepted_cleanup_write_count,
+        "accepted_cleanup_write_count",
+    )
     payload: dict[str, Any] = {
         "schema_version": EXECUTION_OPERATIONAL_RECEIPT_SCHEMA,
         "receipt_id": _text(receipt_id),
-        "execution_status": normalized_status,
-        "scenario_attempt_count": 1,
-        "http_request_attempt_count": http_attempts,
-        "production_http_request_count": production_requests,
+        "execution_status": _text(execution_status).upper(),
+        "scenario_attempt_count": _non_negative_int(
+            scenario_attempt_count,
+            "scenario_attempt_count",
+        ),
+        "http_request_attempt_count": _non_negative_int(
+            http_request_attempt_count,
+            "http_request_attempt_count",
+        ),
+        "production_http_request_count": _non_negative_int(
+            production_http_request_count,
+            "production_http_request_count",
+        ),
         "accepted_write_count": accepted_non_cleanup + accepted_cleanup,
         "accepted_non_cleanup_write_count": accepted_non_cleanup,
         "accepted_cleanup_write_count": accepted_cleanup,
         "cleanup_outcome": {
-            "status": cleanup_status,
-            "attempted_count": cleanup_attempted,
-            "completed_count": cleanup_completed,
-            "failure_count": failure_count,
+            "status": _text(cleanup_status).upper(),
+            "attempted_count": _non_negative_int(
+                cleanup_attempted_count,
+                "cleanup_attempted_count",
+            ),
+            "completed_count": _non_negative_int(
+                cleanup_completed_count,
+                "cleanup_completed_count",
+            ),
+            "failure_count": _non_negative_int(
+                cleanup_failure_count,
+                "cleanup_failure_count",
+            ),
         },
     }
     if not payload["receipt_id"]:

@@ -30,11 +30,17 @@ from .customer_delivery_gate import (
     customer_delivery_rejection_reasons,
     is_customer_deliverable_defect,
 )
+from .observed_product_scan_protocol import (
+    find_evaluator_private_context_paths,
+)
 
 _SOURCE_EXTENSIONS = {".json", ".yaml", ".yml", ".md", ".txt"}
 _MAX_SOURCE_BYTES = 5_000_000
 _MAX_SOURCE_FILES = 200
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+from .discovery_quality_projection import (
+    SCHEMA_VERSION as QUALITY_PROJECTION_SCHEMA,
+)
 
 
 def _configure_console_encoding() -> None:
@@ -52,6 +58,207 @@ _configure_console_encoding()
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _reject_evaluator_private_context(context: dict[str, Any]) -> None:
+    forbidden = find_evaluator_private_context_paths(context)
+    if forbidden:
+        raise ValueError(
+            "evaluator_private_context_forbidden:" + ",".join(forbidden)
+        )
+
+
+class CanonicalProductScopeError(ValueError):
+    """Runtime output cannot be projected onto the canonical customer scope."""
+
+
+def _canonical_product_scope(v12: dict[str, Any]) -> dict[str, Any]:
+    """Validate and project the only customer-visible defect scope.
+
+    Delivery occurrences remain receipt/audit evidence.  They are never counted
+    or displayed directly.  A runtime that emits any finding without the full
+    canonical authority chain fails closed instead of falling back to title,
+    path, severity, confidence, or historical-database identity.
+    """
+
+    from .canonical_defect_registry import (
+        CanonicalDefectRegistryError,
+        canonical_representative_findings,
+        validate_canonical_defect_registry,
+        validate_defect_identity_consistency,
+    )
+    from .discovery_mainline_contract import (
+        MainlineContractError,
+        validate_mainline_run_contract,
+    )
+
+    payload = _as_dict(v12)
+    declared_findings = [
+        dict(item)
+        for item in payload.get("findings", [])
+        if isinstance(item, dict)
+    ] if isinstance(payload.get("findings"), list) else []
+    candidates = [
+        dict(item)
+        for item in payload.get("candidate_findings", [])
+        if isinstance(item, dict)
+    ] if isinstance(payload.get("candidate_findings"), list) else []
+    occurrences = [
+        dict(item)
+        for item in payload.get("delivery_occurrences", [])
+        if isinstance(item, dict)
+    ] if isinstance(payload.get("delivery_occurrences"), list) else []
+    mainline = _as_dict(payload.get("mainline_run"))
+    ledger = _as_dict(payload.get("obligation_attempt_ledger"))
+    registry = _as_dict(payload.get("canonical_defect_registry"))
+    blocked_formal = {
+        "schema_version": QUALITY_PROJECTION_SCHEMA,
+        "authority_status": "BLOCKED",
+        "authority_reason": "canonical_defect_registry_required",
+        "formal_customer_deliverable_count": 0,
+        "canonical_defect_count": 0,
+        "canonical_defect_ids": [],
+        "delivery_occurrence_count": 0,
+        "delivery_occurrence_finding_ids": [],
+        "canonical_representative_findings": [],
+        "executed_clue_count": len(candidates),
+        "confirmation_receipt_count": 0,
+        "candidate_count": len(candidates),
+        "funnel_validated_bug_count": 0,
+        "count_consistency": {
+            "formal_equals_funnel_validated": None,
+            "note": "Canonical authority is absent; zero is blocked, not a clean result.",
+        },
+    }
+
+    authority_declared = bool(mainline or ledger or registry or occurrences)
+    if not authority_declared:
+        if declared_findings:
+            raise CanonicalProductScopeError(
+                "canonical_defect_registry_required_for_findings"
+            )
+        return {
+            "status": "BLOCKED",
+            "reason": "canonical_defect_registry_not_emitted",
+            "findings": [],
+            "candidates": candidates,
+            "delivery_occurrences": [],
+            "canonical_defect_registry": {},
+            "formal_count_projection": blocked_formal,
+            "defect_identity_consistency": {},
+        }
+    missing = [
+        field
+        for field, value in (
+            ("mainline_run", mainline),
+            ("obligation_attempt_ledger", ledger),
+            ("canonical_defect_registry", registry),
+        )
+        if not value
+    ]
+    if missing:
+        if (
+            not declared_findings
+            and not candidates
+            and not occurrences
+            and int(ledger.get("selected_count") or 0) == 0
+        ):
+            return {
+                "status": "BLOCKED",
+                "reason": "canonical_authority_not_emitted_for_empty_run",
+                "findings": [],
+                "candidates": [],
+                "delivery_occurrences": [],
+                "canonical_defect_registry": {},
+                "formal_count_projection": blocked_formal,
+                "defect_identity_consistency": {},
+            }
+        raise CanonicalProductScopeError(
+            "canonical_authority_incomplete:" + ",".join(missing)
+        )
+    try:
+        contract = validate_mainline_run_contract(mainline)
+        validated_registry = validate_canonical_defect_registry(
+            registry,
+            mainline_run=contract,
+            deliverable_occurrences=occurrences,
+            obligation_attempt_ledger=ledger,
+        )
+        representatives = canonical_representative_findings(
+            validated_registry,
+            deliverable_occurrences=occurrences,
+        )
+    except (CanonicalDefectRegistryError, MainlineContractError) as exc:
+        raise CanonicalProductScopeError(
+            f"canonical_authority_invalid:{type(exc).__name__}:{exc}"
+        ) from exc
+
+    expected_ids = list(validated_registry.get("canonical_defect_ids") or [])
+    representative_ids = [
+        str(item.get("canonical_defect_id") or "").strip()
+        for item in representatives
+    ]
+    if representative_ids != expected_ids:
+        raise CanonicalProductScopeError(
+            "canonical_representative_scope_mismatch"
+        )
+    declared_ids = [
+        str(item.get("canonical_defect_id") or "").strip()
+        for item in declared_findings
+    ]
+    if contract["customer_outputs_published"]:
+        if declared_ids != expected_ids:
+            raise CanonicalProductScopeError("canonical_finding_scope_mismatch")
+        customer_findings = representatives
+    else:
+        if declared_findings:
+            raise CanonicalProductScopeError(
+                "shadow_run_customer_findings_forbidden"
+            )
+        customer_findings = []
+
+    formal = _as_dict(payload.get("formal_count_projection"))
+    if (
+        formal.get("schema_version") != QUALITY_PROJECTION_SCHEMA
+        or formal.get("authority_status") != "VERIFIED"
+        or list(formal.get("canonical_defect_ids") or []) != expected_ids
+        or int(formal.get("formal_customer_deliverable_count") or 0)
+        != len(expected_ids)
+        or list(formal.get("delivery_occurrence_finding_ids") or [])
+        != list(validated_registry.get("delivery_occurrence_finding_ids") or [])
+    ):
+        raise CanonicalProductScopeError("formal_count_projection_mismatch")
+
+    consistency = _as_dict(payload.get("defect_identity_consistency"))
+    try:
+        consistency = validate_defect_identity_consistency(
+            consistency,
+            required_occurrence_scopes={
+                "delivery_gate_ids",
+                "registry_occurrence_ids",
+                "formal_projection_occurrence_ids",
+            },
+            required_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+                "product_projection_ids",
+            },
+        )
+    except CanonicalDefectRegistryError as exc:
+        raise CanonicalProductScopeError(
+            f"defect_identity_consistency_invalid:{exc}"
+        ) from exc
+
+    return {
+        "status": "VERIFIED",
+        "reason": "",
+        "findings": customer_findings,
+        "candidates": candidates,
+        "delivery_occurrences": occurrences,
+        "canonical_defect_registry": validated_registry,
+        "formal_count_projection": formal,
+        "defect_identity_consistency": consistency,
+    }
 
 
 def _first_text(*values: Any) -> str:
@@ -257,138 +464,6 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _customer_ready_static_snapshot(project: str, root: Path) -> dict[str, Any]:
-    try:
-        from .private_pilot_service import PrivatePilotHandler
-    except Exception:
-        return {}
-    try:
-        handler = PrivatePilotHandler.__new__(PrivatePilotHandler)
-        handler.headers = {}
-        envelope = handler._build_command_center(project, root)
-    except Exception:
-        return {}
-    if not isinstance(envelope, dict):
-        return {}
-    data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
-    if not isinstance(data, dict):
-        return {}
-    defects = [dict(item) for item in data.get("defects", []) if isinstance(item, dict)]
-    clues = [dict(item) for item in data.get("clues", []) if isinstance(item, dict)]
-    snapshot = {
-        "project": project,
-        "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "defects": defects,
-        "clues": clues,
-        "risks": defects,
-        "value_metrics": dict(data.get("value_metrics") or {}) if isinstance(data.get("value_metrics"), dict) else {},
-        "executive_summary": dict(data.get("executive_summary") or {}) if isinstance(data.get("executive_summary"), dict) else {},
-        "scan_meta": dict(data.get("scan_meta") or {}) if isinstance(data.get("scan_meta"), dict) else {},
-        "data_contract": dict(data.get("data_contract") or {}) if isinstance(data.get("data_contract"), dict) else {},
-    }
-    if isinstance(data.get("current_campaign_scope"), dict):
-        snapshot["current_campaign_scope"] = dict(data.get("current_campaign_scope") or {})
-    if isinstance(data.get("defect_grouped_summary"), dict):
-        snapshot["defect_grouped_summary"] = dict(data.get("defect_grouped_summary") or {})
-    if isinstance(data.get("defect_priority_summary"), dict):
-        snapshot["defect_priority_summary"] = dict(data.get("defect_priority_summary") or {})
-    if isinstance(data.get("defect_repro_summary"), dict):
-        snapshot["defect_repro_summary"] = dict(data.get("defect_repro_summary") or {})
-    if isinstance(data.get("defect_delivery_cards"), dict):
-        snapshot["defect_delivery_cards"] = dict(data.get("defect_delivery_cards") or {})
-    if isinstance(data.get("commercial_assets"), dict):
-        snapshot["commercial_assets"] = dict(data.get("commercial_assets") or {})
-    if isinstance(data.get("continuous_discovery_campaign"), dict):
-        snapshot["continuous_discovery_campaign"] = dict(data.get("continuous_discovery_campaign") or {})
-    return snapshot
-
-
-def _persist_customer_ready_static_artifacts(project: str, root: Path, result: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    snapshot = _customer_ready_static_snapshot(project, root)
-    if not snapshot:
-        return {}
-    project_key = _safe_project(project)
-    defect_count = len(snapshot.get("defects") or [])
-    clue_count = len(snapshot.get("clues") or [])
-
-    scan_result_path = root / "platform_outputs" / project_key / "scan_result.json"
-    scan_payload = _read_json(scan_result_path) or (dict(result) if isinstance(result, dict) else {})
-    scan_payload["customer_ready_snapshot"] = snapshot
-    scan_payload["customer_ready_defect_count"] = defect_count
-    scan_payload["customer_ready_clue_count"] = clue_count
-    _write_json(scan_result_path, scan_payload)
-
-    real_project_path = root / "platform_outputs" / project_key / "real_project" / "real_project_defect_data.json"
-    real_project_payload = _read_json(real_project_path)
-    if not isinstance(real_project_payload, dict):
-        real_project_payload = {}
-
-    customer_ready_family_shelf = {
-        "project": project,
-        "generated_at_utc": snapshot.get("generated_at_utc"),
-        "defects": snapshot.get("defects", []) or (
-            [dict(f, is_reproducible=True) for f in (result.get("findings") or [])
-             if isinstance(f, dict) and f.get("customer_delivery_status") == "defect"]
-            if isinstance(result, dict) else []
-        ),
-        "clues": snapshot.get("clues", []),
-        "value_metrics": snapshot.get("value_metrics", {}),
-        "executive_summary": snapshot.get("executive_summary", {}),
-        "scan_meta": snapshot.get("scan_meta", {}),
-        "data_contract": snapshot.get("data_contract", {}),
-    }
-    if isinstance(snapshot.get("current_campaign_scope"), dict):
-        customer_ready_family_shelf["current_campaign_scope"] = dict(snapshot.get("current_campaign_scope") or {})
-    if isinstance(snapshot.get("continuous_discovery_campaign"), dict):
-        customer_ready_family_shelf["continuous_discovery_campaign"] = dict(snapshot.get("continuous_discovery_campaign") or {})
-    if isinstance(snapshot.get("defect_grouped_summary"), dict):
-        customer_ready_family_shelf["defect_grouped_summary"] = dict(snapshot.get("defect_grouped_summary") or {})
-    if isinstance(snapshot.get("defect_priority_summary"), dict):
-        customer_ready_family_shelf["defect_priority_summary"] = dict(snapshot.get("defect_priority_summary") or {})
-    if isinstance(snapshot.get("defect_repro_summary"), dict):
-        customer_ready_family_shelf["defect_repro_summary"] = dict(snapshot.get("defect_repro_summary") or {})
-    if isinstance(snapshot.get("defect_delivery_cards"), dict):
-        customer_ready_family_shelf["defect_delivery_cards"] = dict(snapshot.get("defect_delivery_cards") or {})
-    if isinstance(snapshot.get("commercial_assets"), dict):
-        customer_ready_family_shelf["commercial_assets"] = dict(snapshot.get("commercial_assets") or {})
-
-    discovery_owned_markers = (
-        "metrics",
-        "summary",
-        "probes",
-        "risk_distribution",
-        "issue_count",
-        "validated_bug_count",
-        "candidate_issue_count",
-        "pending_finding_count",
-        "network_requests",
-    )
-    preserve_discovery_top_level = any(
-        key in real_project_payload and real_project_payload.get(key) not in (None, "", [], {})
-        for key in discovery_owned_markers
-    )
-
-    real_project_payload["customer_ready_snapshot"] = snapshot
-    real_project_payload["customer_ready_family_shelf"] = customer_ready_family_shelf
-    real_project_payload["customer_ready_defect_count"] = defect_count
-    real_project_payload["customer_ready_clue_count"] = clue_count
-    real_project_payload["customer_ready_projection_basis"] = "command_center_snapshot"
-    if isinstance(snapshot.get("commercial_assets"), dict):
-        real_project_payload["customer_ready_commercial_assets"] = dict(snapshot.get("commercial_assets") or {})
-    if isinstance(snapshot.get("current_campaign_scope"), dict):
-        real_project_payload["customer_ready_current_campaign_scope"] = dict(snapshot.get("current_campaign_scope") or {})
-    if isinstance(snapshot.get("continuous_discovery_campaign"), dict):
-        real_project_payload["customer_ready_continuous_discovery_campaign"] = dict(snapshot.get("continuous_discovery_campaign") or {})
-
-    if not preserve_discovery_top_level:
-        real_project_payload.update(customer_ready_family_shelf)
-    _write_json(real_project_path, real_project_payload)
-
-    if isinstance(result, dict):
-        result["customer_ready_snapshot"] = snapshot
-        result["customer_ready_defect_count"] = defect_count
-        result["customer_ready_clue_count"] = clue_count
-    return snapshot
 
 
 def _ui_candidate_target_path(item: dict[str, Any]) -> str:
@@ -3841,10 +3916,17 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
     from .evidence_artifact_store import persist_evidence_bundle
     findings = v12.get("findings") if isinstance(v12.get("findings"), list) else []
     external_findings = v12.get("external_findings") if isinstance(v12.get("external_findings"), list) else []
-    persisted_findings: list[dict[str, Any]] = []
-    for item in findings + external_findings:
-        if isinstance(item, dict):
-            persisted_findings.append(item)
+    runtime_candidates = (
+        v12.get("candidate_findings")
+        if isinstance(v12.get("candidate_findings"), list)
+        else []
+    )
+    persisted_findings = [dict(item) for item in findings if isinstance(item, dict)]
+    persisted_candidates = [
+        dict(item)
+        for item in [*runtime_candidates, *external_findings]
+        if isinstance(item, dict)
+    ]
     return persist_evidence_bundle(
         project,
         root=root,
@@ -3855,6 +3937,13 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
         auto_har=_as_dict(v12.get("auto_har")),
         evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
         findings=persisted_findings,
+        candidate_findings=persisted_candidates,
+        canonical_defect_registry=_as_dict(v12.get("canonical_defect_registry")),
+        delivery_occurrences=(
+            v12.get("delivery_occurrences")
+            if isinstance(v12.get("delivery_occurrences"), list)
+            else []
+        ),
         ui_execution=_as_dict(v12.get("ui_execution")),
     )
 
@@ -3935,7 +4024,6 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
     output_root = root / "platform_outputs" / _safe_project(project)
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
-    _persist_customer_ready_static_artifacts(project, root, result)
 
     # ── Phase 108R: Auto-generate Issue Lifecycle Center after scan ──
     # Acceptance Criterion 12: lifecycle center aggregates discovery + regression
@@ -4093,6 +4181,8 @@ def _discovery_verdict(confirmed: list[dict[str, Any]], db_verification: dict[st
 
 def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline."""
+    context = dict(campaign_context or {})
+    _reject_evaluator_private_context(context)
     root = Path(root or Path.cwd())
     project = str(project or "").strip()
     if not project:
@@ -4127,7 +4217,6 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         # the check is advisory.
         pass
 
-    context = dict(campaign_context or {})
     context_defaults = _scan_campaign_context_defaults(project, root)
     if context_defaults.get("scope_id") and not str(context.get("scope_id") or "").strip():
         context["scope_id"] = context_defaults["scope_id"]
@@ -4171,6 +4260,35 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     context["source_manifest"] = {"source_id": manifest["source_id"], "source_hash": manifest["source_hash"], "source_version_id": manifest["source_version_id"], "source_origin": manifest["source_origin"]}
     provenance_gaps = _source_contract(manifest)
     approved_base_url, runtime_gaps, initial_runtime_contract = _runtime_contract(context, base_url, manifest)
+    if base_url and context.get("runtime_scenario_contract"):
+        from .runtime_scenario_contract_gate import runtime_scenario_contract_gaps
+
+        scenario_gaps = runtime_scenario_contract_gaps(context)
+        if scenario_gaps:
+            missing_requirements = sorted(
+                {
+                    str(item.get("code") or "")
+                    for item in scenario_gaps
+                    if str(item.get("code") or "")
+                }
+            )
+            blocked_runtime_contract = {
+                **initial_runtime_contract,
+                "status": "blocked",
+                "reason": "runtime_scenario_contract_blocked",
+                "approved_base_url": "",
+                "missing_requirements": missing_requirements,
+            }
+            return _blocked_result(
+                project,
+                root,
+                started,
+                provenance_gaps + runtime_gaps + scenario_gaps,
+                blocked_runtime_contract,
+                context,
+                save_report,
+                output_dir,
+            )
     if provenance_gaps:
         return _blocked_result(project, root, started, provenance_gaps + runtime_gaps, initial_runtime_contract, context, save_report, output_dir)
 
@@ -4238,20 +4356,24 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     from .discovery_funnel import effective_execution_status
 
     execution_status = effective_execution_status(v12)
-    confirmed, candidates = _classify_findings(v12.get("findings"))
-    candidates.extend(
-        dict(item)
-        for item in (
-            v12.get("candidate_findings")
-            if isinstance(v12.get("candidate_findings"), list)
-            else []
+    canonical_scope = _canonical_product_scope(v12)
+    if canonical_scope["status"] != "VERIFIED":
+        v12["formal_count_projection"] = dict(
+            canonical_scope["formal_count_projection"]
         )
-        if isinstance(item, dict)
-    )
-    # Collapse state-graph cross-product duplicates so one real defect is not
-    # reported as N near-identical P0 rows. Collapsed lifecycle variants are
-    # preserved as coverage on the survivor.
-    confirmed, dedupe_report = _dedupe_findings(confirmed)
+    confirmed = list(canonical_scope["findings"])
+    candidates = list(canonical_scope["candidates"])
+    delivery_occurrences = list(canonical_scope["delivery_occurrences"])
+    canonical_registry = dict(canonical_scope["canonical_defect_registry"])
+    dedupe_report = {
+        "schema_version": "qualibug.canonical-dedupe-report.v1",
+        "authority": "canonical_defect_registry",
+        "status": canonical_scope["status"],
+        "unique_count": len(confirmed),
+        "delivery_occurrence_count": len(delivery_occurrences),
+        "collapsed_count": max(0, len(delivery_occurrences) - len(confirmed)),
+        "title_or_path_dedupe_used": False,
+    }
     external_findings = v12.get("external_findings") if isinstance(v12.get("external_findings"), list) else []
     external_findings = _bind_scan_rows_to_mainline(
         [dict(item) for item in external_findings if isinstance(item, dict)],
@@ -4300,16 +4422,51 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                 }
 
     except Exception as exc:
-        import sys
         print(f"[scan] Evidence persistence failed: {exc}", file=sys.stderr)
-        evidence_bundle = {"status": "persistence_failed", "reason": str(exc), "error_type": type(exc).__name__}
-        # Best-effort: do NOT downgrade confirmed findings to inconclusive.
-        # The findings are valid; only the persistence layer failed.
-        # Mark them with a warning so the customer knows the evidence file is missing.
-        for item in confirmed:
-            item["evidence_persistence_status"] = "failed"
-            item["evidence_persistence_warning"] = str(exc)[:200]
-        input_gaps.append(_gap("EVIDENCE_BUNDLE_PERSISTENCE_FAILED", f"Runtime evidence persistence failed ({type(exc).__name__}). Findings remain confirmed but evidence file may be missing. Retry the scan to regenerate."))
+        failure = {
+            "success": False,
+            "scan_id": scan_id,
+            "project": project,
+            "execution_status": "FAILED_SAFE",
+            "customer_output_status": "BLOCKED_EVIDENCE_PERSISTENCE",
+            "failure_stage": "evidence_persistence",
+            "error": "evidence_bundle_persistence_failed",
+            "error_type": type(exc).__name__,
+            "reason": str(exc)[:500],
+            "findings": [],
+            "candidate_findings": [
+                *candidates,
+                *[
+                    {
+                        **dict(item),
+                        "finding_class": "candidate",
+                        "customer_delivery_status": "blocked",
+                        "customer_delivery_gate_reasons": [
+                            "EVIDENCE_BUNDLE_PERSISTENCE_FAILED"
+                        ],
+                    }
+                    for item in confirmed
+                ],
+            ],
+            "delivery_occurrence_count": len(delivery_occurrences),
+            "canonical_defect_count_blocked": len(confirmed),
+            "canonical_registry_fingerprint": str(
+                canonical_registry.get("registry_fingerprint") or ""
+            ),
+            "pipeline_health": {
+                "status": "FAILED_SAFE",
+                "empty_findings_means_no_bugs": False,
+                "stage_failures": ["EVIDENCE_BUNDLE_PERSISTENCE_FAILED"],
+            },
+        }
+        failure_path = (
+            root
+            / "platform_outputs"
+            / _safe_project(project)
+            / "scan_result.json"
+        )
+        _write_json(failure_path, failure)
+        return failure
 
     if str(runtime_contract.get("status") or "") == "blocked":
         requirements = runtime_contract.get("missing_requirements") if isinstance(runtime_contract.get("missing_requirements"), list) else []
@@ -4419,16 +4576,27 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         db_verification = {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []}
     # ── Score/coverage wired to real findings instead of a constant 0.0 ──
     score, coverage = _compute_scan_score(confirmed, candidates, execution_status)
-    # ── Benchmark metrics against seeded ground truth (P6) ──
+    # Product runtime may expose only GT-free coverage. Hidden-ground-truth
+    # scoring belongs to the evaluator process and must never run in scan().
     benchmark_metrics: dict[str, Any] = {}
     try:
-        from .benchmark_compute import compute_benchmark, persist_benchmark_result
-        benchmark_metrics = compute_benchmark(project, confirmed, candidates=candidates, root=root)
+        from .risk_coverage_projection import (
+            compute_product_coverage_projection,
+            persist_product_coverage_projection,
+        )
+        benchmark_metrics = compute_product_coverage_projection(
+            confirmed,
+            candidates=candidates,
+        )
         if benchmark_metrics:
-            persist_benchmark_result(project, benchmark_metrics, root=root)
+            persist_product_coverage_projection(
+                project,
+                benchmark_metrics,
+                root=root,
+            )
     except Exception as benchmark_error:
-        # Never silently pretend benchmark is healthy/empty — operators must see
-        # compute failures separately from "no ground truth for this project".
+        # Coverage computation failures remain explicit, but never trigger a
+        # fallback to evaluator-private scoring.
         benchmark_metrics = {
             "benchmark_active": False,
             "ground_truth_available": False,
@@ -4499,6 +4667,15 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required" if multi_layer else "not_requested"},
         },
         "findings": confirmed, "candidate_findings": candidates, "db_findings": [], "e2e_findings": [], "ui_findings": ui_findings, "ui_candidate_findings": ui_candidate_findings, "ui_high_confidence_candidates": ui_high_confidence_candidates, "external_findings": external_findings, "deep_findings": [], "spectrum": {},
+        "mainline_run": v12.get("mainline_run"),
+        "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"),
+        "canonical_defect_registry": canonical_registry,
+        "formal_delivery_authority": v12.get("formal_delivery_authority"),
+        "formal_count_projection": canonical_scope["formal_count_projection"],
+        "defect_identity_consistency": canonical_scope[
+            "defect_identity_consistency"
+        ],
+        "delivery_occurrences": delivery_occurrences,
         "ui_followup_assets": ui_followup_assets,
         "p4_ui_evidence_bridge": p4_ui_evidence_bridge,
         "commercial_assets": commercial_assets,
@@ -4639,12 +4816,11 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "risk_clues": candidates, "campaign": campaign, "coverage_gaps": coverage_gaps, "scan_preflight_guide": preflight_guide, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "test_data_bootstrap": test_data_bootstrap, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status, "coverage_honesty": coverage_honesty, "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "ui_followup_assets": ui_followup_assets, "external_reproduction_assets": external_reproduction_assets, "external_commercial_assets": external_commercial_assets})
+        _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "findings": confirmed, "candidate_findings": candidates, "risk_clues": candidates, "mainline_run": v12.get("mainline_run"), "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"), "canonical_defect_registry": canonical_registry, "formal_delivery_authority": v12.get("formal_delivery_authority"), "formal_count_projection": result.get("formal_count_projection"), "defect_identity_consistency": result.get("defect_identity_consistency"), "delivery_occurrences": delivery_occurrences, "campaign": campaign, "coverage_gaps": coverage_gaps, "scan_preflight_guide": preflight_guide, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "test_data_bootstrap": test_data_bootstrap, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status, "coverage_honesty": coverage_honesty, "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "ui_followup_assets": ui_followup_assets, "external_reproduction_assets": external_reproduction_assets, "external_commercial_assets": external_commercial_assets})
         result["report_path"] = str(report_path)
     output_root = root / "platform_outputs" / _safe_project(project)
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
-    _persist_customer_ready_static_artifacts(project, root, result)
 
     # ── Phase 108R: Auto-generate Issue Lifecycle Center after scan ──
     # Acceptance Criterion 12: lifecycle center aggregates discovery + regression
@@ -4727,45 +4903,20 @@ def main() -> None:
     parser.add_argument("--base-url", default="")
     parser.add_argument("--scope-id", default="")
     parser.add_argument("--environment-ref", default="")
+    parser.add_argument("--environment-type", default="")
     parser.add_argument("--source-id", default="")
     parser.add_argument("--source-hash", default="")
     parser.add_argument("--source-version-id", default="")
     parser.add_argument("--execution-approval-id", default="")
-    parser.add_argument("--execution-mode", default="safe_read_only")
-    parser.add_argument("--test-data-strategy", default="blocked_with_testability_gap")
+    parser.add_argument("--execution-mode", default="")
+    parser.add_argument("--test-data-strategy", default="")
     parser.add_argument("--ci-gate", action="store_true")
     parser.add_argument("--no-multi-layer", action="store_true")
     parser.add_argument("--output-dir")
     parser.add_argument("--no-report", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    test_data_contract: dict[str, Any] = {}
-    strategy = str(args.test_data_strategy or "").strip()
-    if strategy:
-        test_data_contract["strategy"] = strategy
-        try:
-            from .private_pilot_scan_context_contract import default_scan_execution_mode
-
-            execution_mode = default_scan_execution_mode({
-                "base_url": args.base_url,
-                "scope_id": args.scope_id,
-                "environment_ref": args.environment_ref,
-                "execution_mode": args.execution_mode,
-            })
-        except Exception:
-            execution_mode = str(args.execution_mode or "").strip() or "safe_read_only"
-        if strategy in {"create_disposable", "approved_fixture_setup"} and execution_mode == "approved_sandbox_write":
-            test_data_contract["write_approved"] = True
-            if strategy == "create_disposable":
-                scope_ref = str(args.scope_id or args.environment_ref or "").strip()
-                if scope_ref:
-                    test_data_contract["disposable_scope_ref"] = scope_ref
-    context = {
-        "scope_id": args.scope_id, "environment_ref": args.environment_ref,
-        "source_manifest": {"source_id": args.source_id, "source_hash": args.source_hash, "source_version_id": args.source_version_id},
-        "execution_approval_id": args.execution_approval_id, "execution_mode": args.execution_mode,
-        "test_data_contract": test_data_contract,
-    }
+    context = _build_cli_campaign_context(args)
     result = scan(project=args.project, api_doc_path=args.api_doc or "", api_doc_text=args.api_doc_text or "", prd_text=args.prd, base_url=args.base_url, ci_gate=args.ci_gate, multi_layer=not args.no_multi_layer, output_dir=Path(args.output_dir) if args.output_dir else None, save_report=not args.no_report, campaign_context=context)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
@@ -4778,6 +4929,57 @@ def main() -> None:
     else:
         print(f"Error: {result.get('error', 'scan failed')}", file=sys.stderr)
     raise SystemExit(0 if result.get("success") else 1)
+
+
+def _build_cli_campaign_context(args: Any) -> dict[str, Any]:
+    from .private_pilot_scan_context_contract import (
+        default_scan_execution_mode,
+        default_scan_test_data_contract,
+    )
+
+    body = {
+        "base_url": getattr(args, "base_url", ""),
+        "scope_id": getattr(args, "scope_id", ""),
+        "environment_ref": getattr(args, "environment_ref", ""),
+        "environment_type": getattr(args, "environment_type", ""),
+        "execution_mode": getattr(args, "execution_mode", ""),
+    }
+    execution_mode = (
+        str(getattr(args, "execution_mode", "") or "").strip()
+        or default_scan_execution_mode(body)
+    )
+    body["execution_mode"] = execution_mode
+    test_data_contract: dict[str, Any] = {}
+    strategy = str(getattr(args, "test_data_strategy", "") or "").strip()
+    if strategy:
+        test_data_contract["strategy"] = strategy
+        if strategy in {"create_disposable", "approved_fixture_setup"} and execution_mode == "approved_sandbox_write":
+            test_data_contract["write_approved"] = True
+            if strategy == "create_disposable":
+                scope_ref = str(
+                    getattr(args, "scope_id", "")
+                    or getattr(args, "environment_ref", "")
+                    or ""
+                ).strip()
+                if scope_ref:
+                    test_data_contract["disposable_scope_ref"] = scope_ref
+    else:
+        test_data_contract = default_scan_test_data_contract(body)
+    context = {
+        "scope_id": getattr(args, "scope_id", ""),
+        "environment_ref": getattr(args, "environment_ref", ""),
+        "environment_type": getattr(args, "environment_type", ""),
+        "source_manifest": {
+            "source_id": getattr(args, "source_id", ""),
+            "source_hash": getattr(args, "source_hash", ""),
+            "source_version_id": getattr(args, "source_version_id", ""),
+        },
+        "execution_approval_id": getattr(args, "execution_approval_id", ""),
+        "execution_mode": execution_mode,
+    }
+    if test_data_contract:
+        context["test_data_contract"] = test_data_contract
+    return context
 
 
 if __name__ == "__main__":

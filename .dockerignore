@@ -1,0 +1,25 @@
+.git/
+.github/
+.pytest_cache/
+.pytest_tmp/
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
+
+# Evaluator-private and development-only code must never enter product images.
+benchmark_evaluator/
+enterprise_bug_factory/
+demo_system/
+_private_eval/
+_funnel_runs/
+_audit_packs/
+tests/
+
+# Runtime state is mounted explicitly by deployment manifests.
+platform_outputs/
+platform_workspace/
+benchmark_outputs/
+logs/
+.env
+.env.*
+!.env.local.example

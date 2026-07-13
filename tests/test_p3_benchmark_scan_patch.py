@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import json
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 
 OPENAPI_TEXT = """
 openapi: 3.0.0
 info:
-  title: P3 Patch API
+  title: Product Scan Boundary API
   version: 1.0.0
 paths:
   /api/refunds:
@@ -17,36 +20,12 @@ paths:
 """.strip()
 
 
-def _seed_defects() -> list[dict]:
-    return [
-        {
-            "id": "BUG_REFUND_UNPAID_ORDER",
-            "title": "Unpaid order can be refunded",
-            "kind": "should_reject_but_succeeded",
-            "method": "POST",
-            "path": "/api/refunds",
-            "severity": "P0",
-        }
-    ]
-
-
-def _observations() -> list[dict]:
-    return [
-        {
-            "method": "POST",
-            "path": "/api/refunds",
-            "status": 201,
-            "body": {"refund_id": "r_1", "order_id": "ord_unpaid"},
-        }
-    ]
-
-
-def _manifest(tmp_path: Path) -> dict:
+def _manifest(tmp_path: Path) -> dict[str, str]:
     from ai_test_asset_center.enterprise_source_registry import register_source_asset
 
     return register_source_asset(
-        "p3_patch_project",
-        "p3-patch-openapi",
+        "product_scan_boundary",
+        "product-scan-boundary-openapi",
         OPENAPI_TEXT,
         source_type="openapi",
         root=tmp_path,
@@ -54,67 +33,54 @@ def _manifest(tmp_path: Path) -> dict:
     )
 
 
-def test_scan_output_contains_p3_seed_bug_benchmark(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "forbidden_key",
+    [
+        "p3_seed_defects",
+        "seed_bug_defects",
+        "seed_defects",
+        "p3_http_observations",
+    ],
+)
+def test_product_scan_rejects_evaluator_private_context(
+    tmp_path: Path,
+    forbidden_key: str,
+) -> None:
     from ai_test_asset_center.__main__ import scan
 
     manifest = _manifest(tmp_path)
-    result = scan(
-        "p3_patch_project",
-        root=tmp_path,
-        api_doc_text=OPENAPI_TEXT,
-        campaign_context={
-            "source_manifest": manifest,
-            "scope_id": "refund-scope",
-            "environment_ref": "benchmark",
-            "p3_seed_defects": _seed_defects(),
-            "p3_http_observations": _observations(),
-        },
+    with pytest.raises(
+        ValueError,
+        match=f"evaluator_private_context_forbidden:{forbidden_key}",
+    ):
+        scan(
+            "product_scan_boundary",
+            root=tmp_path,
+            api_doc_text=OPENAPI_TEXT,
+            campaign_context={
+                "source_manifest": manifest,
+                "scope_id": "refund-scope",
+                "environment_ref": "staging",
+                forbidden_key: [],
+            },
+        )
+
+
+def test_package_import_is_side_effect_free() -> None:
+    script = """
+import importlib
+
+importlib.import_module('ai_test_asset_center')
+main = importlib.import_module('ai_test_asset_center.__main__')
+assert main.scan.__module__ == 'ai_test_asset_center.__main__'
+assert main.scan.__name__ == 'scan'
+assert not hasattr(main.scan, '__wrapped__')
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
     )
-
-    benchmark = result["p3_seed_bug_benchmark"]
-    assert benchmark["schema_version"] == "p3-seed-bug-benchmark-v1"
-    assert benchmark["found_count"] == 1
-    assert benchmark["missed_count"] == 0
-    assert benchmark["detection_rate"] == 1.0
-    assert benchmark["findings"][0]["seed_id"] == "BUG_REFUND_UNPAID_ORDER"
-
-
-def test_scan_result_file_contains_p3_seed_bug_benchmark(tmp_path: Path) -> None:
-    from ai_test_asset_center.__main__ import scan
-
-    manifest = _manifest(tmp_path)
-    scan(
-        "p3_patch_project",
-        root=tmp_path,
-        api_doc_text=OPENAPI_TEXT,
-        campaign_context={
-            "source_manifest": manifest,
-            "scope_id": "refund-scope",
-            "environment_ref": "benchmark",
-            "p3_seed_defects": _seed_defects(),
-            "p3_http_observations": _observations(),
-        },
-    )
-    saved = json.loads((tmp_path / "platform_outputs" / "p3_patch_project" / "scan_result.json").read_text(encoding="utf-8"))
-
-    assert saved["p3_seed_bug_benchmark"]["found_count"] == 1
-    assert saved["p3_seed_bug_benchmark"]["grade"] == "passed"
-
-
-def test_scan_without_seed_defects_does_not_add_p3_benchmark(tmp_path: Path) -> None:
-    from ai_test_asset_center.__main__ import scan
-
-    manifest = _manifest(tmp_path)
-    result = scan(
-        "p3_patch_project",
-        root=tmp_path,
-        api_doc_text=OPENAPI_TEXT,
-        campaign_context={
-            "source_manifest": manifest,
-            "scope_id": "refund-scope",
-            "environment_ref": "benchmark",
-            "p3_http_observations": _observations(),
-        },
-    )
-
-    assert "p3_seed_bug_benchmark" not in result
+    assert completed.returncode == 0, completed.stderr or completed.stdout

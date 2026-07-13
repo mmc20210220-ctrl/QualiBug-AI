@@ -220,6 +220,24 @@ def test_runtime_amount_binding_covers_state_transition_pay_step(monkeypatch) ->
     ]
 
 
+def test_runtime_amount_binding_covers_source_bound_financial_entity() -> None:
+    from ai_test_asset_center.v12_pipeline import _bind_runtime_amount_controls
+
+    scenario = SimpleNamespace(category="invariant", entity="settlement", oracle_rules=[])
+    body = _bind_runtime_amount_controls(
+        {"referenceId": "{referenceId}", "amount": 10, "channel": "documented"},
+        {"payable_amount": "25.50"},
+        scenario,
+        "execute_bound_write",
+    )
+
+    assert body == {
+        "referenceId": "{referenceId}",
+        "amount": 25.5,
+        "channel": "documented",
+    }
+
+
 def test_transition_observer_prefers_declared_collection_read() -> None:
     endpoints = [
         {"entity": "order", "method": "GET", "path": "/api/orders/{id}"},

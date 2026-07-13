@@ -16,6 +16,107 @@ ROUTE_REF_RE = re.compile(
     r"(\/[a-zA-Z][\w\-\/{}_.]*(?:\/[a-zA-Z][\w\-\/{}_.]*)*)",
     re.I,
 )
+MARKDOWN_API_ROUTE_RE = re.compile(
+    r"(?mi)^\s{0,3}(?:#{1,6}\s+|\|\s*)"
+    r"(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(?:\|\s*)?/"
+)
+PRIVATE_INPUT_PART_RE = re.compile(
+    r"(?:oracle|ground[_-]?truth|bug[_-]?matrix|answer|solution|seed)",
+    re.I,
+)
+
+
+def merge_openapi_specs(
+    primary: dict[str, Any],
+    supplement: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge complementary OpenAPI facts while preserving primary authority."""
+
+    if not isinstance(primary, dict) or not primary:
+        return dict(supplement or {}) if isinstance(supplement, dict) else {}
+    if not isinstance(supplement, dict) or not supplement:
+        return dict(primary)
+    merged: dict[str, Any] = dict(primary)
+    for key, value in supplement.items():
+        if key not in merged or merged[key] in (None, "", [], {}):
+            merged[key] = value
+        elif isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = merge_openapi_specs(merged[key], value)
+    return merged
+
+
+def _is_private_input_path(path: Path, root: Path) -> bool:
+    try:
+        relative = str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    except ValueError:
+        relative = str(path.resolve())
+    return bool(PRIVATE_INPUT_PART_RE.search(relative))
+
+
+def load_openapi_from_input(input_dir: str | Path | None) -> dict[str, Any]:
+    """Load and merge all visible API-shaped sources from a project input."""
+
+    if not input_dir:
+        return {}
+    root = Path(input_dir).resolve()
+    if not root.exists():
+        return {}
+    supported = {
+        ".json",
+        ".yaml",
+        ".yml",
+        ".md",
+        ".har",
+        ".proto",
+        ".graphql",
+        ".gql",
+    }
+    structured = {".json", ".yaml", ".yml"}
+    candidates = [
+        path
+        for path in sorted(root.iterdir(), key=lambda item: item.name.lower())
+        if path.is_file()
+        and path.suffix.lower() in supported
+        and (
+            path.suffix.lower() not in structured | {".md"}
+            or any(
+                token in path.stem.lower()
+                for token in ("openapi", "swagger", "api")
+            )
+        )
+        and not _is_private_input_path(path, root)
+    ]
+    from .universal_api_parser import parse_to_openapi
+
+    merged: dict[str, Any] = {}
+    parse_failures: list[dict[str, str]] = []
+    for source in candidates:
+        try:
+            parsed = parse_to_openapi(source)
+        except Exception as exc:
+            parse_failures.append(
+                {
+                    "source": source.name,
+                    "code": "API_SOURCE_PARSE_FAILED",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            continue
+        if not isinstance(parsed, dict):
+            parse_failures.append(
+                {
+                    "source": source.name,
+                    "code": "API_SOURCE_PARSER_RETURNED_NON_OBJECT",
+                    "error_type": type(parsed).__name__,
+                }
+            )
+            continue
+        if isinstance(parsed.get("paths"), dict) and parsed.get("paths"):
+            merged = merge_openapi_specs(merged, parsed)
+    if parse_failures:
+        diagnostics = merged.setdefault("x-qualibug-diagnostics", {})
+        diagnostics["api_source_parse_failures"] = parse_failures
+    return merged
 
 
 def _normalize_openapi_dict(payload: dict[str, Any]) -> dict[str, Any]:
@@ -76,6 +177,11 @@ def _extract_paths_from_route_refs(text: str) -> dict[str, dict[str, Any]]:
     return paths
 
 
+def _looks_like_markdown_api_document(text: str) -> bool:
+    """Identify prose/Markdown API catalogs before attempting YAML parsing."""
+    return bool(MARKDOWN_API_ROUTE_RE.search(text))
+
+
 def parse_openapi_spec(spec_input: Any) -> dict[str, Any]:
     """Parse dict/json/path/yaml-like-text OpenAPI input into a normalized dict.
 
@@ -105,6 +211,12 @@ def parse_openapi_spec(spec_input: Any) -> dict[str, Any]:
     maybe_path = Path(text)
     if "\n" not in text and maybe_path.exists() and maybe_path.is_file():
         return parse_openapi_spec(maybe_path)
+
+    # Markdown API catalogs are first-class source material, not malformed
+    # YAML. Route them by observable structure so expected Markdown never
+    # enters the YAML parser or emits a misleading fallback warning.
+    if _looks_like_markdown_api_document(text):
+        return {"openapi": "3.0.0", "paths": _extract_paths_from_route_refs(text)}
 
     # ── Strategy 1: JSON ──
     try:
@@ -141,4 +253,3 @@ def parse_openapi_spec(spec_input: Any) -> dict[str, Any]:
 
     print(f"  [ERROR] openapi_spec_utils: all parsing strategies failed; returning empty paths", flush=True, file=sys.stderr)
     return {"openapi": "3.0.0", "paths": {}}
-

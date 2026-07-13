@@ -21,7 +21,14 @@ from ai_test_asset_center.contract_oracles import (
 )
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation, compile_experiments
 from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
-from ai_test_asset_center.runtime_binding_graph import apply_binding, build_binding_plan, extract_placeholders
+from ai_test_asset_center.runtime_binding_graph import (
+    apply_binding,
+    build_binding_plan,
+    declared_action_compensators,
+    declared_effect_observers,
+    extract_placeholders,
+    unresolved_placeholders,
+)
 from ai_test_asset_center.adaptive_discovery_planner import plan_obligation_round
 
 
@@ -38,6 +45,62 @@ NEW_MODULES = [
     ROOT / "ai_test_asset_center" / "adaptive_discovery_planner.py",
     ROOT / "ai_test_asset_center" / "execution_adapter.py",
 ]
+
+
+def test_request_body_placeholder_uses_source_declared_runtime_read_binding() -> None:
+    operation = {
+        "id": "reserve_inventory",
+        "method": "POST",
+        "path": "/api/inventory/reserve",
+        "request_example": {
+            "sku": "SKU-1",
+            "qty": 1,
+            "orderId": "<order_id>",
+        },
+    }
+    behavior_ir = {
+        "operations": [
+            operation,
+            {
+                "id": "list_orders",
+                "method": "GET",
+                "path": "/api/orders",
+            },
+        ]
+    }
+
+    plan = build_binding_plan(
+        operation=operation,
+        obligation={},
+        behavior_ir=behavior_ir,
+    )
+
+    binding = next(row for row in plan if row.get("target") == "order_id")
+    assert binding["status"] == "runtime_resolvable"
+    assert binding["body_template_paths"] == ["orderId"]
+    assert binding["resolver_operations"] == [{
+        "operation_ref": "list_orders",
+        "method": "GET",
+        "path": "/api/orders",
+    }]
+    assert unresolved_placeholders(operation, plan) == []
+
+
+def test_request_body_placeholder_without_declared_resolver_stays_unresolved() -> None:
+    operation = {
+        "id": "reserve_inventory",
+        "method": "POST",
+        "path": "/api/inventory/reserve",
+        "request_example": {"orderId": "<order_id>"},
+    }
+
+    plan = build_binding_plan(
+        operation=operation,
+        obligation={},
+        behavior_ir={"operations": [operation]},
+    )
+
+    assert unresolved_placeholders(operation, plan) == ["order_id"]
 
 
 def _sample_asset() -> dict:
@@ -105,6 +168,34 @@ def _relation(
     }
 
 
+def test_behavior_ir_validation_reports_duplicate_node_ids() -> None:
+    model = empty_behavior_ir(project_id="duplicate-node-id")
+    model["operations"] = [
+        {
+            "id": "bir_duplicate_operation",
+            "operation_id": "read_resource",
+            "method": "GET",
+            "path": "/api/resources/{id}",
+            "source_refs": [],
+            "derivation": "explicit",
+            "status": "accepted",
+        },
+        {
+            "id": "bir_duplicate_operation",
+            "operation_id": "delete_resource",
+            "method": "DELETE",
+            "path": "/api/resources/{id}",
+            "source_refs": [],
+            "derivation": "explicit",
+            "status": "accepted",
+        },
+    ]
+
+    errors = validate_behavior_ir(model, require_explicit_relations=False)
+
+    assert "duplicate_node_id:operations:bir_duplicate_operation" in errors
+
+
 def test_behavior_ir_schema_and_source_refs() -> None:
     ir = build_behavior_ir_from_knowledge_asset(_sample_asset(), project_id="proj-a", source_snapshot_hash="abc")
     assert ir["schema_version"] == SCHEMA_VERSION
@@ -121,6 +212,49 @@ def test_behavior_ir_schema_and_source_refs() -> None:
         "effects",
         "source_refs",
     }.issubset(relation) for relation in ir["relations"])
+
+
+def test_obligation_compiler_accounts_for_every_source_invariant() -> None:
+    ir = empty_behavior_ir(project_id="all-invariants")
+    ir["operations"] = [{
+        "id": "op-read-resource",
+        "method": "GET",
+        "path": "/resources",
+        "read_write": "read",
+        "source_refs": [{"source_id": "api-source"}],
+    }]
+    ir["invariants"] = [
+        {
+            "id": f"invariant-{index}",
+            "description": f"source invariant {index}",
+            "expression": {
+                "kind": "business_rule",
+                "operator": "must_hold",
+                "operands": [],
+                "raw": f"source invariant {index}",
+            },
+            "source_refs": [{"source_id": f"rule-source-{index}"}],
+        }
+        for index in range(35)
+    ]
+    ir["relations"] = [
+        _relation(
+            f"relation-invariant-{index}",
+            "observes",
+            "op-read-resource",
+            f"invariant-{index}",
+            operation_ref="op-read-resource",
+        )
+        for index in range(35)
+    ]
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+
+    assert compiled["obligation_count"] == 35
+    assert {
+        row["property"]["invariant_ref"]
+        for row in compiled["obligations"]
+    } == {f"invariant-{index}" for index in range(35)}
 
 
 def test_behavior_ir_builder_emits_permission_and_compensation_relations() -> None:
@@ -162,6 +296,174 @@ def test_behavior_ir_builder_emits_permission_and_compensation_relations() -> No
         and row["operation_ref"] == operations["delete_resource"]
         for row in ir["relations"]
     )
+
+
+def test_behavior_ir_canonicalizes_duplicate_source_operation_ids() -> None:
+    asset = {
+        "operations": [
+            {"method": "POST", "path": "/orders", "operation_id": "shared_action"},
+            {"method": "POST", "path": "/refunds", "operation_id": "shared_action"},
+        ],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="duplicate-operation-id")
+
+    operations = ir["operations"]
+    assert len(operations) == 2
+    assert len({row["operation_id"] for row in operations}) == 2
+    assert all("shared_action" in row["source_operation_refs"] for row in operations)
+    assert any(
+        conflict.get("conflict_type") == "duplicate_source_operation_id"
+        for conflict in ir["conflicts"]
+    )
+
+
+def test_behavior_ir_derives_explicit_role_restriction_from_source_contract() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "permission_matrix": [
+                {
+                    "role": "admin",
+                    "resource": "*",
+                    "actions": ["*"],
+                    "source_id": "role-contract",
+                },
+                {
+                    "role": "buyer",
+                    "resource": "profile",
+                    "actions": ["read"],
+                    "source_id": "role-contract",
+                },
+            ],
+            "operations": [{
+                "operation_id": "search_users",
+                "method": "GET",
+                "path": "/admin/users",
+                "summary": "Only admin may use this operation.",
+            }],
+        },
+        project_id="explicit-role-restriction",
+    )
+    operation = ir["operations"][0]
+    actors = {row["role"]: row["id"] for row in ir["actors"]}
+    decisions = {
+        (row["relation_type"], row["actor_ref"])
+        for row in ir["relations"]
+        if row.get("operation_ref") == operation["id"]
+    }
+
+    assert ("permits", actors["admin"]) in decisions
+    assert ("denies", actors["buyer"]) in decisions
+
+
+def test_obligation_compiler_prefers_runtime_actor_over_role_placeholder() -> None:
+    ir = empty_behavior_ir(project_id="runtime-actor-preference")
+    ir.update({
+        "operations": [{
+            "id": "op-read-admin",
+            "method": "GET",
+            "path": "/admin/resources",
+            "read_write": "read",
+        }],
+        "actors": [
+            {"id": "admin-role", "role": "admin", "account_status": "active"},
+            {
+                "id": "admin-runtime",
+                "role": "admin",
+                "account_ref": "admin-1",
+                "credential_secret_ref": "secret_ref:test_accounts:admin-1",
+                "runtime_bound": True,
+                "account_status": "active",
+            },
+            {"id": "buyer-role", "role": "buyer", "account_status": "active"},
+            {
+                "id": "buyer-runtime",
+                "role": "buyer",
+                "account_ref": "buyer-1",
+                "credential_secret_ref": "secret_ref:test_accounts:buyer-1",
+                "runtime_bound": True,
+                "account_status": "active",
+            },
+        ],
+        "relations": [
+            _relation("permit-admin-role", "permits", "admin-role", "op-read-admin", operation_ref="op-read-admin", actor_ref="admin-role"),
+            _relation("permit-admin-runtime", "permits", "admin-runtime", "op-read-admin", operation_ref="op-read-admin", actor_ref="admin-runtime"),
+            _relation("deny-buyer-role", "denies", "buyer-role", "op-read-admin", operation_ref="op-read-admin", actor_ref="buyer-role"),
+            _relation("deny-buyer-runtime", "denies", "buyer-runtime", "op-read-admin", operation_ref="op-read-admin", actor_ref="buyer-runtime"),
+        ],
+    })
+
+    authorization = [
+        row
+        for row in compile_obligations_from_behavior_ir(ir)["obligations"]
+        if row["risk_family"] == "authorization"
+    ]
+
+    assert len(authorization) == 1
+    assert authorization[0]["required_actors"] == [
+        "admin-runtime",
+        "buyer-runtime",
+    ]
+
+
+def test_role_catalog_actor_without_runtime_binding_is_gap_not_executable_authorization() -> None:
+    ir = empty_behavior_ir(project_id="role-catalog-runtime-gap")
+    ir.update({
+        "operations": [{
+            "id": "op-admin-action",
+            "method": "POST",
+            "path": "/admin/actions",
+            "read_write": "write",
+        }],
+        "actors": [
+            {
+                "id": "actor-admin-role",
+                "role": "admin",
+                "account_status": "active",
+                "credential_secret_ref": "secret_ref:actor:admin",
+            },
+            {
+                "id": "actor-buyer-role",
+                "role": "buyer",
+                "account_status": "active",
+                "credential_secret_ref": "secret_ref:actor:buyer",
+            },
+        ],
+        "relations": [
+            _relation(
+                "permit-admin-role",
+                "permits",
+                "actor-admin-role",
+                "op-admin-action",
+                operation_ref="op-admin-action",
+                actor_ref="actor-admin-role",
+            ),
+            _relation(
+                "deny-buyer-role",
+                "denies",
+                "actor-buyer-role",
+                "op-admin-action",
+                operation_ref="op-admin-action",
+                actor_ref="actor-buyer-role",
+            ),
+        ],
+    })
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+
+    assert not any(
+        obligation["risk_family"] == "authorization"
+        for obligation in compiled["obligations"]
+    )
+    actor_gaps = [
+        gap
+        for gap in compiled["coverage_gaps"]
+        if gap.get("code") == "BLOCKED_MISSING_ACTOR_BINDING"
+    ]
+    assert {gap["actor_ref"] for gap in actor_gaps} == {
+        "actor-admin-role",
+        "actor-buyer-role",
+    }
 
 
 def test_runtime_behavior_ir_emits_v2_relations() -> None:
@@ -248,6 +550,28 @@ def test_state_nodes_without_transition_relation_emit_compile_gap() -> None:
     )
 
 
+def test_behavior_ir_emits_gap_for_unbound_state_transition() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [{"method": "PATCH", "path": "/orders/{id}", "operation_id": "update_order"}],
+            "state_machines": [{
+                "entity": "order",
+                "states": ["draft", "active"],
+                "transitions": [{"from": "draft", "to": "active"}],
+            }],
+        },
+        project_id="unbound-state-transition",
+    )
+
+    assert not any(row.get("relation_type") == "transitions" for row in ir["relations"])
+    assert any(
+        row.get("gap_type") == "state_transition_operation_unresolved"
+        and row.get("from_state") == "draft"
+        and row.get("to_state") == "active"
+        for row in ir["coverage_gaps"]
+    )
+
+
 def test_obligation_compiler_rejects_v1_without_explicit_migration() -> None:
     v1 = empty_behavior_ir(project_id="project-v1")
     v1["schema_version"] = "qualibug.behavior-ir.v1"
@@ -272,6 +596,277 @@ def test_behavior_ir_v1_migration_is_explicit_and_normalizes_relations() -> None
     assert migrated["relations"][0]["operation_ref"] == ""
     assert migrated["relations"][0]["preconditions"] == []
     assert validate_behavior_ir(migrated) == []
+
+
+def test_behavior_ir_merges_same_method_path_across_api_and_knowledge_sources() -> None:
+    asset = {
+        "interfaces": [{
+            "interface_id": "markdown_api:POST:/resources/:id/approve",
+            "operation_id": "approve_resource",
+            "method": "POST",
+            "path": "/resources/:id/approve",
+            "source_id": "api-document",
+            "description": "Approve one source-declared resource",
+        }],
+        "rule_library": [{
+            "rule_id": "rule-approve",
+            "statement": "Approval requires the declared request field",
+            "kind": "validation",
+            "source_id": "product-rule",
+        }],
+        "relationships": [{
+            "edge_id": "edge-rule-approve",
+            "relation": "rule_to_interface",
+            "from": "rule-approve",
+            "to": "markdown_api:POST:/resources/:id/approve",
+            "source_id": "knowledge-graph",
+        }],
+    }
+    api_operations = [{
+        "operation_id": "post_resources__id_approve",
+        "method": "POST",
+        "path": "/resources/{id}/approve",
+        "request_schema": {
+            "type": "object",
+            "required": ["reason"],
+            "properties": {"reason": {"type": "string"}},
+        },
+        "source_id": "submitted-api",
+    }]
+
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="merged-operation-test",
+        api_operations=api_operations,
+    )
+
+    assert len(ir["operations"]) == 1
+    operation = ir["operations"][0]
+    assert set(operation["source_operation_refs"]) == {
+        "approve_resource",
+        "markdown_api:POST:/resources/:id/approve",
+        "post_resources__id_approve",
+    }
+    assert operation["request_schema"]["required"] == ["reason"]
+    relation = next(
+        row for row in ir["relations"]
+        if row.get("source_relationship_ref") == "edge-rule-approve"
+    )
+    assert relation["operation_ref"] == operation["id"]
+
+
+def test_behavior_ir_operation_merge_is_order_invariant_and_keeps_markdown_example() -> None:
+    markdown_operation = {
+        "interface_id": "markdown_api:POST:/api/cart/items",
+        "operation_id": "markdown_cart_item_create",
+        "method": "POST",
+        "path": "/api/cart/items",
+        "source_id": "markdown-api",
+        "parameters": ["sku", "qty"],
+        "field_dictionary": ["sku", "qty"],
+        "source_excerpt": (
+            "### POST /api/cart/items\n\n"
+            "请求：\n\n"
+            "```json\n"
+            "{\"sku\":\"SKU-PHONE-001\",\"qty\":1}\n"
+            "```"
+        ),
+    }
+    sparse_openapi_operation = {
+        "interface_id": "api:POST:/api/cart/items",
+        "operation_id": "post_api_cart_items",
+        "method": "POST",
+        "path": "/api/cart/items",
+        "source_id": "openapi",
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "qty": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    first = build_behavior_ir_from_knowledge_asset(
+        {"interfaces": [markdown_operation, sparse_openapi_operation]},
+        project_id="operation-merge-order",
+    )
+    second = build_behavior_ir_from_knowledge_asset(
+        {"interfaces": [sparse_openapi_operation, markdown_operation]},
+        project_id="operation-merge-order",
+    )
+
+    assert first["model_id"] == second["model_id"]
+    assert len(first["operations"]) == 1
+    operation = first["operations"][0]
+    assert operation["request_example"] == {"sku": "SKU-PHONE-001", "qty": 1}
+    json_media = operation["request_schema"]["content"]["application/json"]
+    assert json_media["example"] == {"sku": "SKU-PHONE-001", "qty": 1}
+    assert set(json_media["schema"]["properties"]) >= {"sku", "qty"}
+    assert operation["field_dictionary"] == ["qty", "sku"]
+    assert operation["source_operation_refs"] == [
+        "api:POST:/api/cart/items",
+        "markdown_api:POST:/api/cart/items",
+        "markdown_cart_item_create",
+        "post_api_cart_items",
+    ]
+
+
+def test_behavior_ir_extracts_yaml_and_curl_request_examples() -> None:
+    yaml_ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [{
+                "method": "POST",
+                "path": "/orders",
+                "source_excerpt": "```yaml\nsku: SKU-1\nqty: 2\n```",
+            }],
+        },
+        project_id="yaml-request-example",
+    )
+    curl_ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [{
+                "method": "POST",
+                "path": "/orders",
+                "source_excerpt": "curl -X POST -d '{\"sku\":\"SKU-2\",\"qty\":1}' /orders",
+            }],
+        },
+        project_id="curl-request-example",
+    )
+
+    assert yaml_ir["operations"][0]["request_example"] == {"sku": "SKU-1", "qty": 2}
+    assert curl_ir["operations"][0]["request_example"] == {"sku": "SKU-2", "qty": 1}
+
+
+def test_behavior_ir_merges_structural_entity_aliases_and_binds_operation_path() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "business_objects": [{"name": "order", "kind": "business_object"}],
+            "data_tables": [{"name": "orders", "kind": "resource"}],
+        },
+        project_id="merged-entity-test",
+        api_operations=[{
+            "operation_id": "create_order",
+            "method": "POST",
+            "path": "/api/orders",
+        }],
+    )
+
+    assert len(ir["entities"]) == 1
+    entity = ir["entities"][0]
+    assert set(entity["source_entity_names"]) == {"order", "orders"}
+    operation = ir["operations"][0]
+    relation = next(
+        row for row in ir["relations"]
+        if row.get("relation_type") == "produces"
+    )
+    assert relation["operation_ref"] == operation["id"]
+    assert relation["to_ref"] == entity["id"]
+
+
+def test_operation_entity_binding_prefers_most_specific_path_entity() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "business_objects": [{"name": "cart"}],
+            "data_tables": [{"name": "cart_items"}],
+        },
+        project_id="specific-entity-test",
+        api_operations=[{
+            "operation_id": "create_cart_item",
+            "method": "POST",
+            "path": "/api/cart/items",
+        }],
+    )
+
+    entities = {row["name"]: row for row in ir["entities"]}
+    relation = next(
+        row for row in ir["relations"]
+        if row.get("relation_type") == "produces"
+    )
+    assert relation["to_ref"] == entities["cart_items"]["id"]
+
+
+def test_action_write_uses_source_declared_parent_resource_observer() -> None:
+    write = {
+        "id": "approve-resource",
+        "method": "POST",
+        "path": "/api/resources/{id}/approve",
+    }
+    observer = {
+        "id": "read-resource",
+        "method": "GET",
+        "path": "/api/resources/{id}",
+    }
+
+    assert declared_effect_observers(
+        write,
+        behavior_ir={"operations": [write, observer]},
+    ) == [{
+        "operation_ref": "read-resource",
+        "method": "GET",
+        "path": "/api/resources/{id}",
+    }]
+
+
+def test_write_effect_observer_can_bind_read_placeholder_from_request_body() -> None:
+    write = {
+        "id": "adjust-inventory",
+        "method": "POST",
+        "path": "/api/inventory/admin/adjust",
+        "request_schema": {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "sku": "SKU-PHONE-001",
+                        "delta": 10,
+                        "reason": "stock correction",
+                    },
+                },
+            },
+        },
+    }
+    observer = {
+        "id": "read-inventory-by-sku",
+        "method": "GET",
+        "path": "/api/inventory/{sku}",
+    }
+
+    assert declared_effect_observers(
+        write,
+        behavior_ir={"operations": [write, observer]},
+    ) == [{
+        "operation_ref": "read-inventory-by-sku",
+        "method": "GET",
+        "path": "/api/inventory/{sku}",
+    }]
+
+
+def test_collection_create_observer_can_bind_identity_from_write_response() -> None:
+    write = {
+        "id": "create-refund",
+        "method": "POST",
+        "path": "/api/refunds",
+        "request_example": {"orderId": "order-1", "amount": 100},
+    }
+    observer = {
+        "id": "read-refund",
+        "method": "GET",
+        "path": "/api/refunds/{id}",
+    }
+
+    assert declared_effect_observers(
+        write,
+        behavior_ir={"operations": [write, observer]},
+    ) == [{
+        "operation_ref": "read-refund",
+        "method": "GET",
+        "path": "/api/refunds/{id}",
+    }]
 
 
 def test_invariant_obligation_uses_explicit_relation_operation() -> None:
@@ -307,10 +902,62 @@ def test_invariant_obligation_uses_explicit_relation_operation() -> None:
     assert obligation["relation_refs"] == ["relation-conserves"]
 
 
+def test_validation_invariant_does_not_compile_body_mutation_against_read_operation() -> None:
+    ir = empty_behavior_ir(project_id="validation-read-operation-test")
+    ir.update({
+        "operations": [
+            {
+                "id": "op-read-inventory",
+                "method": "GET",
+                "path": "/inventory/{sku}",
+                "read_write": "read",
+            },
+        ],
+        "invariants": [{
+            "id": "invariant-positive-qty",
+            "expression": {
+                "kind": "validation",
+                "operator": "must_hold",
+                "raw": "qty must be a positive integer",
+            },
+            "confidence": 0.9,
+        }],
+        "relations": [
+            _relation(
+                "relation-token-overlap",
+                "observes",
+                "op-read-inventory",
+                "invariant-positive-qty",
+                operation_ref="op-read-inventory",
+            ),
+        ],
+    })
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+
+    assert not any(
+        item["risk_family"] == "validation"
+        and item["property"].get("operation_ref") == "op-read-inventory"
+        for item in compiled["obligations"]
+    )
+    assert any(
+        gap["subject_ref"] == "invariant-positive-qty"
+        and gap["status"] == "unsupported"
+        for gap in compiled["coverage_gaps"]
+    )
+
+
 def test_entity_validation_uses_explicit_relation_operation() -> None:
     ir = empty_behavior_ir(project_id="entity-relation-test")
     ir.update({
         "entities": [{"id": "entity-resource", "name": "resource"}],
+        "actors": [{
+            "id": "actor-writer",
+            "role": "writer",
+            "account_status": "active",
+            "credential_secret_ref": "secret_ref:test_accounts:writer",
+            "runtime_bound": True,
+        }],
         "operations": [
             {"id": "op-unrelated-write", "method": "POST", "path": "/other", "read_write": "write"},
             {"id": "op-resource-write", "method": "POST", "path": "/resources", "read_write": "write"},
@@ -322,7 +969,15 @@ def test_entity_validation_uses_explicit_relation_operation() -> None:
                 "op-resource-write",
                 "entity-resource",
                 operation_ref="op-resource-write",
-            )
+            ),
+            _relation(
+                "relation-permits-writer",
+                "permits",
+                "actor-writer",
+                "op-resource-write",
+                operation_ref="op-resource-write",
+                actor_ref="actor-writer",
+            ),
         ],
     })
 
@@ -334,7 +989,12 @@ def test_entity_validation_uses_explicit_relation_operation() -> None:
     )
 
     assert obligation["property"]["operation_ref"] == "op-resource-write"
-    assert obligation["relation_refs"] == ["relation-produces-resource"]
+    assert obligation["property"]["actor_ref"] == "actor-writer"
+    assert obligation["required_actors"] == ["actor-writer"]
+    assert obligation["relation_refs"] == [
+        "relation-permits-writer",
+        "relation-produces-resource",
+    ]
 
 
 def test_cleanup_binding_requires_explicit_compensates_relation() -> None:
@@ -345,8 +1005,22 @@ def test_cleanup_binding_requires_explicit_compensates_relation() -> None:
             {"id": "delete-resource", "method": "DELETE", "path": "/resources/{id}", "read_write": "write"},
         ],
         "actors": [
-            {"id": "actor-control", "role": "control", "account_status": "active", "allowed_resources": ["resources"], "allowed_actions": ["create"]},
-            {"id": "actor-treatment", "role": "treatment", "account_status": "active", "allowed_resources": ["other"], "allowed_actions": ["read"]},
+            {
+                "id": "actor-control",
+                "role": "control",
+                "account_status": "active",
+                "credential_secret_ref": "secret_ref:test_accounts:control",
+                "allowed_resources": ["resources"],
+                "allowed_actions": ["create"],
+            },
+            {
+                "id": "actor-treatment",
+                "role": "treatment",
+                "account_status": "active",
+                "credential_secret_ref": "secret_ref:test_accounts:treatment",
+                "allowed_resources": ["other"],
+                "allowed_actions": ["read"],
+            },
         ],
         "relations": [
             _relation("relation-permit", "permits", "actor-control", "create-resource", operation_ref="create-resource", actor_ref="actor-control"),
@@ -370,8 +1044,22 @@ def test_authorization_pair_comes_from_relations_not_actor_array_permissions() -
         "operations": [{"id": "op-create", "method": "POST", "path": "/resources", "read_write": "write"}],
         "actors": [
             {"id": "actor-order-trap", "role": "trap", "account_status": "active", "allowed_resources": ["resources"], "allowed_actions": ["create"]},
-            {"id": "actor-control", "role": "control", "account_status": "active", "allowed_resources": [], "allowed_actions": []},
-            {"id": "actor-treatment", "role": "treatment", "account_status": "active", "allowed_resources": [], "allowed_actions": []},
+            {
+                "id": "actor-control",
+                "role": "control",
+                "account_status": "active",
+                "credential_secret_ref": "secret_ref:test_accounts:control",
+                "allowed_resources": [],
+                "allowed_actions": [],
+            },
+            {
+                "id": "actor-treatment",
+                "role": "treatment",
+                "account_status": "active",
+                "credential_secret_ref": "secret_ref:test_accounts:treatment",
+                "allowed_resources": [],
+                "allowed_actions": [],
+            },
         ],
         "relations": [
             _relation("relation-control", "permits", "actor-control", "op-create", operation_ref="op-create", actor_ref="actor-control"),
@@ -421,6 +1109,7 @@ def test_obligation_compiler_generic_templates() -> None:
         runtime_actors=[
             {"role": "owner_role", "account_ref": "owner_a", "secret_ref": "secret_ref:test_accounts:owner_a"},
             {"role": "owner_role", "account_ref": "owner_b", "secret_ref": "secret_ref:test_accounts:owner_b"},
+            {"role": "viewer_role", "account_ref": "viewer_a", "secret_ref": "secret_ref:test_accounts:viewer_a"},
         ],
     )
     compiled = compile_obligations_from_behavior_ir(ir)
@@ -482,6 +1171,73 @@ def test_obligation_compiler_uses_unique_documented_create_compensation() -> Non
     assert auth_obligation["cleanup_requirement"]["operation_ref"] == "delete_resource"
     assert auth_obligation["required_actors"] == ["resource_operator", "resource_viewer"]
     assert write_effect_obligations == []
+
+
+def test_behavior_ir_derives_unique_action_compensation_for_created_resource() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "interfaces": [
+                {
+                    "interface_id": "api:POST:/orders",
+                    "operation_id": "create_order",
+                    "method": "POST",
+                    "path": "/orders",
+                    "source_id": "api-doc",
+                },
+                {
+                    "interface_id": "api:POST:/orders/:id/cancel",
+                    "operation_id": "cancel_order",
+                    "method": "POST",
+                    "path": "/orders/:id/cancel",
+                    "source_id": "api-doc",
+                },
+            ],
+            "rules": [
+                {
+                    "rule_id": "rule-order-idempotency",
+                    "kind": "idempotency",
+                    "statement": "Creating the same order request must not create duplicate business effects.",
+                    "operation_ref": "create_order",
+                }
+            ],
+            "relationships": [
+                {
+                    "edge_id": "edge-order-idempotency",
+                    "from": "rule-order-idempotency",
+                    "to": "api:POST:/orders",
+                    "relation": "rule_to_interface",
+                    "status": "accepted",
+                }
+            ],
+        },
+        project_id="action-compensation-test",
+        runtime_actors=[
+            {
+                "role": "operator",
+                "account_ref": "operator_a",
+                "secret_ref": "secret_ref:test_accounts:operator_a",
+            }
+        ],
+    )
+    operations = {operation["operation_id"]: operation for operation in ir["operations"]}
+
+    assert any(
+        relation["relation_type"] == "compensates"
+        and relation["from_ref"] == operations["cancel_order"]["id"]
+        and relation["to_ref"] == operations["create_order"]["id"]
+        and relation["operation_ref"] == operations["cancel_order"]["id"]
+        for relation in ir["relations"]
+    )
+    obligations = compile_obligations_from_behavior_ir(ir)["obligations"]
+    idempotency = next(
+        obligation
+        for obligation in obligations
+        if obligation["risk_family"] == "idempotency"
+    )
+    assert (
+        idempotency["cleanup_requirement"]["operation_ref"]
+        == operations["cancel_order"]["id"]
+    )
 
 
 def test_obligation_compiler_requires_source_invariant_for_write_effect_family() -> None:
@@ -603,10 +1359,17 @@ def test_experiment_compiler_blocks_missing_binding_without_declared_read_resolv
         for operation in asset["operations"]
         if operation["operation_id"] != "list_resources"
     ]
-    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="proj-a")
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="proj-a",
+        runtime_actors=[
+            {"role": "viewer_role", "account_ref": "viewer_a", "secret_ref": "secret_ref:test_accounts:viewer_a"},
+            {"role": "owner_role", "account_ref": "owner_a", "secret_ref": "secret_ref:test_accounts:owner_a"},
+        ],
+    )
     compiled = compile_obligations_from_behavior_ir(ir)
     write_op = next(op for op in ir["operations"] if "{id}" in str(op.get("path")))
-    actors = ir["actors"]
+    actors = [actor for actor in ir["actors"] if actor.get("account_ref")]
     write_obl = {
         "obligation_id": "obl_test_binding",
         "risk_family": "idempotency",
@@ -630,6 +1393,126 @@ def test_experiment_compiler_blocks_missing_binding_without_declared_read_resolv
     assert receipt["status"] == "BLOCKED"
     assert receipt["reason_code"] == "BLOCKED_MISSING_BINDING"
     assert compiled["obligation_count"] > 0
+
+
+def test_experiment_compiler_uses_unique_source_declared_action_compensator() -> None:
+    request_example = {"resourceId": "<resource_id>", "units": 1}
+    request_schema = {
+        "type": "object",
+        "required": ["resourceId", "units"],
+        "properties": {
+            "resourceId": {"type": "string"},
+            "units": {"type": "integer"},
+        },
+    }
+    operations = [
+        {
+            "id": "reserve_capacity",
+            "method": "POST",
+            "path": "/api/capacity/reserve",
+            "read_write": "write",
+            "summary": "Reserve capacity",
+            "request_example": request_example,
+            "request_schema": request_schema,
+            "source_refs": [{"source_id": "api", "locator": "POST /api/capacity/reserve"}],
+        },
+        {
+            "id": "release_capacity",
+            "method": "POST",
+            "path": "/api/capacity/release",
+            "read_write": "write",
+            "summary": "Release reserved capacity",
+            "request_example": request_example,
+            "request_schema": request_schema,
+            "source_refs": [{"source_id": "api", "locator": "POST /api/capacity/release"}],
+        },
+        {
+            "id": "read_capacity",
+            "method": "GET",
+            "path": "/api/capacity/{resourceId}",
+            "read_write": "read",
+            "source_refs": [{"source_id": "api", "locator": "GET /api/capacity/{resourceId}"}],
+        },
+        {
+            "id": "list_resources",
+            "method": "GET",
+            "path": "/api/resources",
+            "read_write": "read",
+            "source_refs": [{"source_id": "api", "locator": "GET /api/resources"}],
+        },
+    ]
+    obligation = {
+        "obligation_id": "obl_source_compensation",
+        "risk_family": "validation",
+        "property": {
+            "template": "schema_constraint",
+            "operation_ref": "reserve_capacity",
+            "actor_ref": "operator",
+        },
+        "required_actors": ["operator"],
+        "required_operations": ["reserve_capacity"],
+        "required_fixtures": [],
+        "required_observers": ["http_response"],
+        "cleanup_requirement": {"required": True, "mode": "reverse_order"},
+        "source_refs": [{"source_id": "rule", "locator": "capacity reservation"}],
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir={
+            "operations": operations,
+            "actors": [{"id": "operator", "role": "public"}],
+            "relations": [],
+        },
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
+    assert experiment["cleanup_plan"] == [{
+        "action": "source_declared_compensation",
+        "mode": "reverse_order",
+        "operation_ref": "release_capacity",
+        "compensates_operation_ref": "reserve_capacity",
+        "path": "/api/capacity/release",
+        "method": "POST",
+        "body_from_original_request": True,
+        "runtime_response_binding_required": False,
+    }]
+
+
+def test_action_shape_and_cleanup_name_do_not_invent_compensation_relation() -> None:
+    request_example = {"resourceId": "resource-1", "units": 1}
+    source = {
+        "id": "consume_capacity",
+        "method": "POST",
+        "path": "/api/capacity/consume",
+        "summary": "Consume capacity",
+        "request_example": request_example,
+        "source_refs": [{"source_id": "api", "locator": "POST /api/capacity/consume"}],
+    }
+    candidate = {
+        "id": "release_capacity",
+        "method": "POST",
+        "path": "/api/capacity/release",
+        "summary": "Release reserved capacity",
+        "request_example": request_example,
+        "source_refs": [{"source_id": "api", "locator": "POST /api/capacity/release"}],
+    }
+
+    assert declared_action_compensators(
+        source,
+        behavior_ir={
+            "operations": [
+                source,
+                candidate,
+                {
+                    "id": "read_capacity",
+                    "method": "GET",
+                    "path": "/api/capacity/{resourceId}",
+                },
+            ]
+        },
+    ) == []
 
 
 def test_colon_path_params_compile_with_source_declared_runtime_resolver() -> None:
@@ -657,12 +1540,17 @@ def test_colon_path_params_compile_with_source_declared_runtime_resolver() -> No
         ],
     )
     target_op = next(op for op in ir["operations"] if str(op.get("path")) == "/resources/:id")
+    runtime_actor_ids = [
+        actor["id"]
+        for actor in ir["actors"]
+        if actor.get("account_ref")
+    ]
     obligation = {
         "obligation_id": "obl_colon_path_binding",
         "risk_family": "isolation",
         "subject_refs": [target_op["id"]],
         "property": {"template": "tenant_isolation", "operation_ref": target_op["id"]},
-        "required_actors": [actor["id"] for actor in ir["actors"][:2]],
+        "required_actors": runtime_actor_ids[:2],
         "required_operations": [target_op["id"]],
         "required_fixtures": [],
         "required_observers": ["http_response"],
@@ -764,6 +1652,13 @@ def test_runtime_binding_plan_includes_governed_fixture_setup_from_declared_oper
         ],
     )
     target = next(op for op in ir["operations"] if op.get("operation_id") == "read_resource_projection")
+    runtime_actors_by_role = {
+        actor["role"]: actor
+        for actor in ir["actors"]
+        if actor.get("account_ref")
+    }
+    control_actor = runtime_actors_by_role["owner_role"]
+    treatment_actor = runtime_actors_by_role["viewer_role"]
     experiment = compile_experiment_for_obligation(
         {
             "obligation_id": "obl_fixture_backed_binding",
@@ -771,10 +1666,10 @@ def test_runtime_binding_plan_includes_governed_fixture_setup_from_declared_oper
             "property": {
                 "template": "authorization_control_treatment",
                 "operation_ref": target["id"],
-                "control_actor_ref": ir["actors"][0]["id"],
-                "treatment_actor_ref": ir["actors"][1]["id"],
+                "control_actor_ref": control_actor["id"],
+                "treatment_actor_ref": treatment_actor["id"],
             },
-            "required_actors": [ir["actors"][0]["id"], ir["actors"][1]["id"]],
+            "required_actors": [control_actor["id"], treatment_actor["id"]],
             "required_operations": [target["id"]],
             "required_fixtures": [],
             "required_observers": ["http_response"],
@@ -857,7 +1752,14 @@ def test_runtime_binding_plan_deduplicates_merged_cleanup_operations() -> None:
 
 
 def test_experiment_compiler_blocks_production_environment() -> None:
-    ir = build_behavior_ir_from_knowledge_asset(_sample_asset(), project_id="proj-a")
+    ir = build_behavior_ir_from_knowledge_asset(
+        _sample_asset(),
+        project_id="proj-a",
+        runtime_actors=[
+            {"role": "owner_role", "account_ref": "owner_a", "secret_ref": "secret_ref:test_accounts:owner_a"},
+            {"role": "viewer_role", "account_ref": "viewer_a", "secret_ref": "secret_ref:test_accounts:viewer_a"},
+        ],
+    )
     obl = compile_obligations_from_behavior_ir(ir)["obligations"][0]
     blocked = compile_experiment_for_obligation(obl, behavior_ir=ir, environment_type="production")
     assert blocked["compile_receipt"]["status"] == "BLOCKED"

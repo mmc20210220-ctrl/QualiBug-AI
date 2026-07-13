@@ -100,6 +100,95 @@ def test_no_boundary_configured_means_no_blocking(monkeypatch):
     assert trace.get("production_data_blocked") is not True
 
 
+def test_resolved_fixture_binding_skips_fallback_create(monkeypatch):
+    from ai_test_asset_center.v12_pipeline import __execute_scenario_once
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_urlopen(request, timeout=10):
+        calls.append((request.get_method(), request.full_url))
+        if request.get_method() == "GET":
+            return _FakeResp(body=b'[{"id":"address-1"}]')
+        return _FakeResp(body=b'{"id":"order-1"}', status=201)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    resolve = _FakeStep("resolve_body_addressId", "GET", "/api/users/addresses")
+    resolve.extract_from_response = ["addressId", "address_id", "id"]
+    fallback = _FakeStep(
+        "bootstrap_create_addressId",
+        "POST",
+        "/api/users/addresses",
+        body_template={"receiver": "fixture"},
+    )
+    fallback.extract_from_response = ["addressId", "address_id", "id"]
+    create = _FakeStep(
+        "create_entity",
+        "POST",
+        "/api/orders",
+        body_template={"addressId": "{addressId}"},
+    )
+    scenario = _FakeScenario([resolve, fallback, create])
+
+    trace = __execute_scenario_once(scenario, "http://target.local")
+
+    assert calls == [
+        ("GET", "http://target.local/api/users/addresses"),
+        ("POST", "http://target.local/api/orders"),
+    ]
+    assert not any(
+        step.get("action") == "bootstrap_create_addressId"
+        for step in trace["steps"]
+    )
+    assert any(
+        event.get("source") == "existing_runtime_binding"
+        and event.get("binding") == "addressId"
+        for event in trace.get("runtime_binding_events", [])
+    )
+
+
+def test_mutation_target_bootstrap_remains_disposable(monkeypatch):
+    from ai_test_asset_center.v12_pipeline import __execute_scenario_once
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_urlopen(request, timeout=10):
+        calls.append((request.get_method(), request.full_url))
+        if request.get_method() == "GET":
+            return _FakeResp(body=b'[{"id":"existing-order"}]')
+        if request.full_url.endswith("/api/orders"):
+            return _FakeResp(body=b'{"id":"disposable-order"}', status=201)
+        return _FakeResp(body=b'{"id":"disposable-order","status":"CANCELLED"}')
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    resolve = _FakeStep("resolve_entity", "GET", "/api/orders")
+    resolve.extract_from_response = ["id"]
+    bootstrap = _FakeStep(
+        "bootstrap_create_id",
+        "POST",
+        "/api/orders",
+        body_template={"fixture": True},
+    )
+    bootstrap.extract_from_response = ["id"]
+    mutate = _FakeStep(
+        "transition_cancel",
+        "POST",
+        "/api/orders/{id}/cancel",
+    )
+    scenario = _FakeScenario([resolve, bootstrap, mutate])
+
+    trace = __execute_scenario_once(scenario, "http://target.local")
+
+    assert calls == [
+        ("GET", "http://target.local/api/orders"),
+        ("POST", "http://target.local/api/orders"),
+        ("POST", "http://target.local/api/orders/disposable-order/cancel"),
+    ]
+    assert any(
+        step.get("action") == "bootstrap_create_id"
+        for step in trace["steps"]
+    )
+
+
 def test_exclusion_matches_by_risk_type(monkeypatch):
     """Exclusion can match on risk_type even when the path is generic."""
     calls: list[str] = []

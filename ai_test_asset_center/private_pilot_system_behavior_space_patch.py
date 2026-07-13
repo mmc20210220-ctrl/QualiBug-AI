@@ -1340,8 +1340,7 @@ def _install_system_behavior_finding_patch() -> None:
     if getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", False):
         return
     original_confirmed = getattr(_v12, "_confirmed_oracle_finding", None)
-    original_persist = getattr(_v12, "_persist_confirmed_findings", None)
-    if not callable(original_confirmed) or not callable(original_persist):
+    if not callable(original_confirmed):
         return
 
     def _confirmed_oracle_finding_with_system_behavior(scenario: Any, trace: dict[str, Any], oracle_result: Any, evidence: Any, *, campaign_id: str, discovery_round: int, base_url: str) -> dict[str, Any]:
@@ -1357,40 +1356,24 @@ def _install_system_behavior_finding_patch() -> None:
                 hints = {}
         return _attach_system_behavior_to_finding(finding, hints, scenario_payload)
 
-    def _persist_confirmed_findings_with_system_behavior(root: Path, project: str, findings: list[dict[str, Any]]) -> int:
-        # Base _persist_confirmed_findings now forwards system_promise_id,
-        # regression_contract and all system behavior metadata through the ledger.
-        # The fragile re-read/patch step from earlier versions is no longer needed.
-        return int(original_persist(root, project, findings) or 0)
-
     _v12._ORIGINAL_CONFIRMED_ORACLE_FINDING_SYSTEM_BEHAVIOR = original_confirmed  # type: ignore[attr-defined]
-    _v12._ORIGINAL_PERSIST_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR = original_persist  # type: ignore[attr-defined]
     _v12._confirmed_oracle_finding = _confirmed_oracle_finding_with_system_behavior  # type: ignore[assignment]
-    _v12._persist_confirmed_findings = _persist_confirmed_findings_with_system_behavior  # type: ignore[assignment]
     _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = True  # type: ignore[attr-defined]
 
 
 def _install_system_behavior_regression_patch() -> None:
     try:
         from ai_test_asset_center import regression_runner as _rr
-        from ai_test_asset_center import regression_suite_builder as _rsb
     except Exception:
         return
     if getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", False):
         return
 
-    original_load_confirmed = getattr(_rsb, "_load_confirmed_findings_regression_probes", None)
     original_judge = getattr(_rr, "_judge_probe", None)
     original_reverify = getattr(_rr, "_reverify_confirmed_findings", None)
     original_append_history = getattr(_rr, "_append_regression_history", None)
-    if not all(callable(fn) for fn in (original_load_confirmed, original_judge, original_reverify, original_append_history)):
+    if not all(callable(fn) for fn in (original_judge, original_reverify, original_append_history)):
         return
-
-    def _load_confirmed_findings_regression_probes_with_system_behavior(project: str, root: Path) -> list[dict[str, Any]]:
-        # Base _load_confirmed_findings_regression_probes now forwards
-        # system_promise_id, regression_contract and all system behavior
-        # metadata from the ledger into each probe. No re-read needed.
-        return list(original_load_confirmed(project, root) or [])
 
     def _judge_probe_with_system_behavior(probe: dict[str, Any], execution: dict[str, Any], skipped: bool = False, skip_reason: str = "") -> dict[str, Any]:
         # Base _judge_probe now forwards system_promise_id and
@@ -1431,11 +1414,9 @@ def _install_system_behavior_regression_patch() -> None:
             return history
         return history
 
-    _rsb._ORIGINAL_LOAD_CONFIRMED_FINDINGS_REGRESSION_PROBES_SYSTEM_BEHAVIOR = original_load_confirmed  # type: ignore[attr-defined]
     _rr._ORIGINAL_JUDGE_PROBE_SYSTEM_BEHAVIOR = original_judge  # type: ignore[attr-defined]
     _rr._ORIGINAL_REVERIFY_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR = original_reverify  # type: ignore[attr-defined]
     _rr._ORIGINAL_APPEND_REGRESSION_HISTORY_SYSTEM_BEHAVIOR = original_append_history  # type: ignore[attr-defined]
-    _rsb._load_confirmed_findings_regression_probes = _load_confirmed_findings_regression_probes_with_system_behavior  # type: ignore[assignment]
     _rr._judge_probe = _judge_probe_with_system_behavior  # type: ignore[assignment]
     _rr._reverify_confirmed_findings = _reverify_confirmed_findings_with_system_behavior  # type: ignore[assignment]
     _rr._append_regression_history = _append_regression_history_with_system_behavior  # type: ignore[assignment]
@@ -1565,23 +1546,16 @@ def restore_system_behavior_space_patch() -> None:
     try:
         from ai_test_asset_center import v12_pipeline as _v12
         original_confirmed = getattr(_v12, "_ORIGINAL_CONFIRMED_ORACLE_FINDING_SYSTEM_BEHAVIOR", None)
-        original_persist = getattr(_v12, "_ORIGINAL_PERSIST_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR", None)
         if callable(original_confirmed):
             _v12._confirmed_oracle_finding = original_confirmed  # type: ignore[assignment]
-        if callable(original_persist):
-            _v12._persist_confirmed_findings = original_persist  # type: ignore[assignment]
         _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = False  # type: ignore[attr-defined]
     except Exception:
         pass
     try:
         from ai_test_asset_center import regression_runner as _rr
-        from ai_test_asset_center import regression_suite_builder as _rsb
-        original_load_confirmed = getattr(_rsb, "_ORIGINAL_LOAD_CONFIRMED_FINDINGS_REGRESSION_PROBES_SYSTEM_BEHAVIOR", None)
         original_judge = getattr(_rr, "_ORIGINAL_JUDGE_PROBE_SYSTEM_BEHAVIOR", None)
         original_reverify = getattr(_rr, "_ORIGINAL_REVERIFY_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR", None)
         original_append_history = getattr(_rr, "_ORIGINAL_APPEND_REGRESSION_HISTORY_SYSTEM_BEHAVIOR", None)
-        if callable(original_load_confirmed):
-            _rsb._load_confirmed_findings_regression_probes = original_load_confirmed  # type: ignore[assignment]
         if callable(original_judge):
             _rr._judge_probe = original_judge  # type: ignore[assignment]
         if callable(original_reverify):

@@ -160,15 +160,36 @@ def test_shadow_findings_cannot_enter_formal_projection() -> None:
     from ai_test_asset_center.discovery_quality_projection import (
         attach_quality_projection_to_scan_result,
     )
+    from tests.phase3_gate_support import (
+        build_formal_evaluation_scope,
+        build_formal_scope_contract,
+    )
 
     contract = _contract(evaluation_mode="shadow")
+    occurrences, ledger = build_formal_evaluation_scope(
+        [_deliverable_finding(contract)],
+        run_id=contract["run_id"],
+        campaign_id=contract["campaign_id"],
+        target_id=contract["target_id"],
+        environment_id=contract["environment_id"],
+        policy_version=contract["policy_version"],
+        evaluation_mode=contract["evaluation_mode"],
+    )
+    formal_scope = build_formal_scope_contract(
+        mainline_run=contract,
+        findings=occurrences,
+        obligation_attempt_ledger=ledger,
+    )
     projected = attach_quality_projection_to_scan_result({
         "mainline_run": contract,
-        "findings": [_deliverable_finding(contract)],
+        "findings": [],
+        "shadow_findings": occurrences,
+        "obligation_attempt_ledger": ledger,
+        **formal_scope,
     })
 
-    assert projected["formal_count_projection"]["formal_customer_deliverable_count"] == 0
-    assert projected["formal_count_projection"]["formal_finding_ids"] == []
+    assert projected["formal_count_projection"]["canonical_defect_count"] == 1
+    assert projected["findings"] == []
     assert [row["finding_id"] for row in projected["finding_classification"]["shadow"]] == [
         "FINDING-1"
     ]
@@ -205,26 +226,36 @@ def test_authoritative_finding_requires_matching_run_fingerprint() -> None:
 
 
 def test_formal_ids_match_gate_submission_trace_and_api() -> None:
-    from ai_test_asset_center.discovery_quality_projection import (
-        build_formal_id_consistency,
+    from ai_test_asset_center.canonical_defect_registry import (
+        build_defect_identity_consistency,
     )
 
-    receipt = build_formal_id_consistency(
-        delivery_gate_ids=["FINDING-1"],
-        formal_projection_ids=["FINDING-1"],
-        evaluator_submission_ids=["FINDING-1"],
-        trace_ledger_ids=["FINDING-1"],
-        product_projection_ids=["FINDING-1"],
+    receipt = build_defect_identity_consistency(
+        occurrence_scopes={
+            "delivery_gate_ids": ["FINDING-1"],
+            "evaluator_submission_occurrence_ids": ["FINDING-1"],
+            "trace_ledger_occurrence_ids": ["FINDING-1"],
+        },
+        canonical_scopes={
+            "formal_projection_ids": ["cdef-1"],
+            "evaluator_submission_ids": ["cdef-1"],
+            "product_projection_ids": ["cdef-1"],
+        },
     )
     assert receipt["consistent"] is True
     assert receipt["status"] == "OK"
 
-    mismatch = build_formal_id_consistency(
-        delivery_gate_ids=["FINDING-1"],
-        formal_projection_ids=["FINDING-1"],
-        evaluator_submission_ids=[],
-        trace_ledger_ids=["FINDING-1"],
-        product_projection_ids=["FINDING-1"],
+    mismatch = build_defect_identity_consistency(
+        occurrence_scopes={
+            "delivery_gate_ids": ["FINDING-1"],
+            "evaluator_submission_occurrence_ids": [],
+            "trace_ledger_occurrence_ids": ["FINDING-1"],
+        },
+        canonical_scopes={
+            "formal_projection_ids": ["cdef-1"],
+            "evaluator_submission_ids": ["cdef-1"],
+            "product_projection_ids": ["cdef-1"],
+        },
     )
     assert mismatch["consistent"] is False
-    assert mismatch["status"] == "PIPELINE_DEGRADED_COUNT_MISMATCH"
+    assert mismatch["status"] == "PIPELINE_DEGRADED_IDENTITY_MISMATCH"

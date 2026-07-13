@@ -138,8 +138,34 @@ def declared_effect_observers(
     collection = normalize_path_placeholders(collection_path(target_path))
     if collection.startswith("/") and collection not in candidate_paths:
         candidate_paths.append(collection)
+    for alternate in alternate_collection_paths(target_path):
+        normalized_alternate = normalize_path_placeholders(alternate)
+        if normalized_alternate.startswith("/") and normalized_alternate not in candidate_paths:
+            candidate_paths.append(normalized_alternate)
+    segments = [segment for segment in target_path.strip("/").split("/") if segment]
+    for index in range(2, len(segments)):
+        prefix = "/" + "/".join(segments[:index])
+        if (
+            prefix.startswith("/")
+            and not path_has_placeholders(prefix)
+            and prefix not in candidate_paths
+        ):
+            candidate_paths.append(prefix)
+    placeholder_positions = [
+        index
+        for index, segment in enumerate(segments)
+        if _PLACEHOLDER_RE.fullmatch(segment)
+    ]
+    if placeholder_positions and placeholder_positions[-1] < len(segments) - 1:
+        parent_resource = "/" + "/".join(
+            segments[:placeholder_positions[-1] + 1]
+        )
+        if parent_resource not in candidate_paths:
+            candidate_paths.append(parent_resource)
     limit = max(1, min(int(max_candidates or 1), 5))
     resolvers: list[dict[str, str]] = []
+    seen_resolvers: set[tuple[str, str, str]] = set()
+    request_fields = set(_request_example(operation))
     for wanted in candidate_paths:
         for candidate in _list(_dict(behavior_ir).get("operations")):
             if not isinstance(candidate, dict):
@@ -148,12 +174,43 @@ def declared_effect_observers(
             path = normalize_path_placeholders(
                 _text(candidate.get("path") or candidate.get("raw_path"))
             )
+            candidate_placeholders = extract_placeholders(path)
+            candidate_collection = normalize_path_placeholders(collection_path(path))
+            exact_match = path == wanted
+            body_bound_collection_match = (
+                bool(candidate_placeholders)
+                and candidate_collection == wanted
+                and all(name in request_fields for name in candidate_placeholders)
+            )
+            body_bound_domain_lookup_match = (
+                bool(candidate_placeholders)
+                and _body_bound_observer_match(
+                    target_path=target_path,
+                    observer_path=path,
+                    request_fields=request_fields,
+                )
+            )
+            response_bound_create_match = (
+                _text(operation.get("method")).upper() == "POST"
+                and not path_has_placeholders(target_path)
+                and len(candidate_placeholders) == 1
+                and candidate_collection == target_path
+            )
             if (
                 method not in {"GET", "HEAD"}
-                or path != wanted
+                or not (
+                    exact_match
+                    or body_bound_collection_match
+                    or body_bound_domain_lookup_match
+                    or response_bound_create_match
+                )
                 or not _text(candidate.get("id"))
             ):
                 continue
+            resolver_key = (_text(candidate.get("id")), method, path)
+            if resolver_key in seen_resolvers:
+                continue
+            seen_resolvers.add(resolver_key)
             resolvers.append({
                 "operation_ref": _text(candidate.get("id")),
                 "method": method,
@@ -206,6 +263,51 @@ def _body_placeholder_rows(value: Any, path: str = "") -> list[dict[str, str]]:
 def _api_prefix(path: str) -> str:
     parts = [part for part in normalize_path_placeholders(path).split("/") if part]
     return f"/{parts[0]}" if parts else "/api"
+
+
+def _field_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _text(value).lower())
+
+
+def _static_domain_segments(path: str) -> list[str]:
+    segments = [
+        segment
+        for segment in normalize_path_placeholders(path).strip("/").split("/")
+        if segment and not _PLACEHOLDER_RE.fullmatch(segment)
+    ]
+    while segments and (
+        segments[0].lower() == "api"
+        or re.fullmatch(r"v\d+(?:\.\d+)?", segments[0].lower())
+    ):
+        segments.pop(0)
+    return [segment.lower() for segment in segments]
+
+
+def _shares_source_domain(target_path: str, observer_path: str) -> bool:
+    target_segments = _static_domain_segments(target_path)
+    observer_segments = _static_domain_segments(observer_path)
+    return bool(
+        target_segments
+        and observer_segments
+        and target_segments[0] == observer_segments[0]
+    )
+
+
+def _body_bound_observer_match(
+    *,
+    target_path: str,
+    observer_path: str,
+    request_fields: set[str],
+) -> bool:
+    placeholders = extract_placeholders(observer_path)
+    if not placeholders:
+        return False
+    normalized_fields = {_field_token(field) for field in request_fields if _field_token(field)}
+    if not normalized_fields:
+        return False
+    if not all(_field_token(name) in normalized_fields for name in placeholders):
+        return False
+    return _shares_source_domain(target_path, observer_path)
 
 
 def _declared_reads_for_paths(
@@ -292,6 +394,117 @@ def _declared_cleanup_operations(
         seen.add(key)
         unique.append(row)
     return unique
+
+
+def _request_contract_shape(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple(sorted(
+            (_text(key), _request_contract_shape(child))
+            for key, child in value.items()
+        ))
+    if isinstance(value, list):
+        return ("list", tuple(_request_contract_shape(child) for child in value))
+    if isinstance(value, str):
+        placeholder = _BODY_PLACEHOLDER_RE.match(value)
+        return ("placeholder", _text(placeholder.group(1))) if placeholder else "string"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+def _source_text_references_action(
+    source_operation: dict[str, Any],
+    candidate_operation: dict[str, Any],
+) -> bool:
+    source_path = normalize_path_placeholders(
+        _text(source_operation.get("path") or source_operation.get("raw_path"))
+    ).rstrip("/")
+    source_action = source_path.rsplit("/", 1)[-1].lower()
+    source_text = re.sub(
+        r"[\W_]+",
+        "",
+        " ".join([
+            _text(source_operation.get("summary")),
+            _text(source_operation.get("description")),
+        ]).lower(),
+    )
+    candidate_text = re.sub(
+        r"[\W_]+",
+        "",
+        " ".join([
+            _text(candidate_operation.get("summary")),
+            _text(candidate_operation.get("description")),
+        ]).lower(),
+    )
+    return bool(
+        candidate_text
+        and (
+            (len(source_text) >= 4 and source_text in candidate_text)
+            or (len(source_action) >= 4 and source_action in candidate_text)
+        )
+    )
+
+
+def declared_action_compensators(
+    operation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Return unique source-declared action endpoints that can compensate a write.
+
+    Structural compatibility alone is insufficient. A candidate must share the
+    same action parent and request contract, be explicitly documented, expose a
+    real effect observer, and its own source text must reference the original
+    action. Ambiguous candidates are returned to the compiler, which fails
+    closed unless exactly one remains.
+    """
+    source = _dict(operation)
+    source_id = _text(source.get("id"))
+    source_path = normalize_path_placeholders(
+        _text(source.get("path") or source.get("raw_path"))
+    ).rstrip("/")
+    source_body = _request_example(source)
+    if (
+        not source_id
+        or _text(source.get("method")).upper() not in {"POST", "PUT", "PATCH"}
+        or "/" not in source_path
+        or not source_body
+        or not _list(source.get("source_refs"))
+    ):
+        return []
+    parent_path = source_path.rsplit("/", 1)[0]
+    source_shape = _request_contract_shape(source_body)
+    candidates: list[dict[str, str]] = []
+    for candidate in _list(_dict(behavior_ir).get("operations")):
+        if not isinstance(candidate, dict) or _text(candidate.get("id")) == source_id:
+            continue
+        method = _text(candidate.get("method")).upper()
+        path = normalize_path_placeholders(
+            _text(candidate.get("path") or candidate.get("raw_path"))
+        ).rstrip("/")
+        terminal = path.rsplit("/", 1)[-1]
+        if (
+            method not in {"POST", "PUT", "PATCH"}
+            or path.rsplit("/", 1)[0] != parent_path
+            or not _CLEANUP_ACTION_RE.search(terminal)
+            or not _list(candidate.get("source_refs"))
+            or _request_contract_shape(_request_example(candidate)) != source_shape
+            or not _source_text_references_action(source, candidate)
+            or not declared_effect_observers(candidate, behavior_ir=behavior_ir)
+        ):
+            continue
+        candidates.append({
+            "operation_ref": _text(candidate.get("id")),
+            "method": method,
+            "path": path,
+        })
+    return candidates
 
 
 def _declared_fixture_actor_refs(
@@ -436,6 +649,12 @@ def build_binding_plan(
     op = _dict(operation)
     obl = _dict(obligation)
     values = dict(available_values or {})
+    body_placeholder_paths: dict[str, list[str]] = {}
+    for row in _body_placeholder_rows(_request_example(op)):
+        token = _text(row.get("template_token"))
+        body_path = _text(row.get("target"))
+        if token and body_path:
+            body_placeholder_paths.setdefault(token, []).append(body_path)
     placeholders = extract_placeholders(
         op.get("path"),
         op.get("operation_id"),
@@ -447,6 +666,7 @@ def build_binding_plan(
             placeholders.extend(extract_placeholders(example.get("value"), example.get("body")))
         else:
             placeholders.extend(extract_placeholders(example))
+    placeholders.extend(body_placeholder_paths)
     # Dedupe preserve order
     ordered: list[str] = []
     seen: set[str] = set()
@@ -470,19 +690,47 @@ def build_binding_plan(
                 "previous_fingerprint": _text(existing.get("previous_fingerprint")),
             })
         else:
-            resolvers = declared_runtime_read_resolvers(
+            path_resolvers = declared_runtime_read_resolvers(
                 op,
                 behavior_ir=_dict(behavior_ir),
             )
+            body_resolvers: list[dict[str, str]] = []
+            for body_path in body_placeholder_paths.get(name, []):
+                field = body_path.split(".")[-1].split("[")[0]
+                body_resolvers.extend(_declared_reads_for_paths(
+                    body_field_collection_paths(field or name, api_prefix=_api_prefix(_text(op.get("path"))))
+                    or body_field_collection_paths(name, api_prefix=_api_prefix(_text(op.get("path")))),
+                    behavior_ir=_dict(behavior_ir),
+                ))
+            resolvers: list[dict[str, str]] = []
+            seen_resolvers: set[tuple[str, str, str]] = set()
+            for resolver in [*path_resolvers, *body_resolvers]:
+                key = (
+                    _text(resolver.get("operation_ref")),
+                    _text(resolver.get("method")).upper(),
+                    _text(resolver.get("path")),
+                )
+                if key in seen_resolvers:
+                    continue
+                seen_resolvers.add(key)
+                resolvers.append(dict(resolver))
             if resolvers:
                 binding = {
                     "target": name,
-                    "target_path": normalize_path_placeholders(_text(op.get("path"))),
+                    "target_path": (
+                        normalize_path_placeholders(_text(op.get("path")))
+                        if name in extract_placeholders(op.get("path"))
+                        else f"/{{{name}}}"
+                    ),
                     "status": "runtime_resolvable",
                     "source_priority": "same_actor_list_read",
                     "resolver_operations": resolvers,
                     "value_fingerprint": "",
                 }
+                if body_placeholder_paths.get(name):
+                    binding["body_template_paths"] = list(dict.fromkeys(
+                        body_placeholder_paths[name]
+                    ))
                 fixture_setup = _declared_fixture_setup(
                     op,
                     target=name,
@@ -606,7 +854,14 @@ def apply_binding(
 
 
 def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]]) -> list[str]:
-    needed = extract_placeholders(_dict(operation).get("path"))
+    op = _dict(operation)
+    needed = extract_placeholders(op.get("path"))
+    needed.extend(
+        _text(row.get("template_token"))
+        for row in _body_placeholder_rows(_request_example(op))
+        if _text(row.get("template_token"))
+    )
+    needed = list(dict.fromkeys(needed))
     bound = {
         _text(item.get("target"))
         for item in plan

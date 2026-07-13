@@ -28,36 +28,13 @@ import re
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .defect_signal_schema import SpectrumFinding, SpectrumResult
+
 
 # ── Data structures ──────────────────────────────────────────────────────
-
-@dataclass
-class SpectrumFinding:
-    capability: str          # see table above
-    bug_id: str
-    title: str
-    severity: str            # P0/P1/P2
-    confidence: float
-    endpoint: str = ""
-    method: str = ""
-    expected: str = ""
-    actual: str = ""
-    evidence: dict[str, Any] = field(default_factory=dict)
-    reproduction: list[str] = field(default_factory=list)
-
-@dataclass
-class SpectrumResult:
-    capability: str
-    status: str              # ok / issues_found / skipped / error
-    findings: list[SpectrumFinding]
-    duration_ms: int
-    checks_run: int
-    summary: str
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # 1. API Contract Validation

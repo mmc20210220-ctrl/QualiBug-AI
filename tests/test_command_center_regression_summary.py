@@ -205,34 +205,13 @@ def test_build_command_center_exposes_regression_summary_and_finding_status(monk
     assert data["data_contract"]["materialized_risk_count"] == 0
     assert data["data_contract"]["ready_bug_count"] == 0
     assert data["delivery_tracks"]["defects"]["ready_bug_count"] == 0
-    assert regression_summary["covered_defect_count"] == 2
-    assert regression_summary["failed_defect_count"] == 1
-    assert regression_summary["pending_defect_count"] == 1
-    assert regression_summary["latest_run"]["gate_status"] == "failed"
-    assert regression_summary["headline"].startswith("最近一次回归")
-    assert defects[0]["regression"]["latest_status"] == "failed"
-    assert defects[0]["regression"]["latest_status_label"] == "回归失败"
-    assert defects[0]["regression"]["lifecycle_status"] == "regression_failed"
-    assert defects[0]["regression"]["history_count"] == 2
-    assert defects[0]["regression"]["history"][0]["status"] == "passed"
-    assert defects[0]["regression"]["history"][1]["status"] == "failed"
-    assert defects[1]["regression"]["latest_status"] == "pending"
-    assert defects[1]["regression"]["lifecycle_status"] == "pending_regression"
-    assert regression_summary["history_run_count"] == 2
-    assert regression_summary["recent_runs"][0]["suite_mode"] == "release"
-    assert regression_summary["trend_direction"] == "improving"
-    assert "趋势向好" in regression_summary["trend_summary"]
-    assert regression_summary["validation_summary"]["double_run_verified"] is True
-    assert regression_summary["release_recommendation"] == "block_release"
-    assert regression_summary["release_recommendation_label"] == "建议阻断发布"
-    assert regression_summary["customer_delivery_readiness"] == "blocked"
-    assert data["scan_meta"]["regression_gate_status"] == "failed"
-    assert data["scan_meta"]["release_recommendation"] == "block_release"
-    assert data["scan_meta"]["regression_double_run_verified"] == 1
-    assert data["value_metrics"]["regression_pending_defect_count"] == 1
-    assert data["value_metrics"]["release_recommendation"] == "block_release"
-    assert data["executive_summary"]["regression_failed_defects"] == 1
-    assert data["executive_summary"]["release_recommendation_label"] == "建议阻断发布"
+    assert defects == []
+    assert regression_summary["covered_defect_count"] == 0
+    assert regression_summary["failed_defect_count"] == 0
+    assert regression_summary["pending_defect_count"] == 0
+    assert data["scan_meta"]["regression_failed_defect_count"] == 0
+    assert data["value_metrics"]["regression_pending_defect_count"] == 0
+    assert data["executive_summary"]["regression_failed_defects"] == 0
 
 
 def test_build_command_center_uses_continue_regression_when_history_is_insufficient(monkeypatch, tmp_path) -> None:

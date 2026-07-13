@@ -1,0 +1,13 @@
+{
+  "schema_version": "benchmark_target_reset.v1",
+  "receipt_id": "reset_9196e7d890c44cf2",
+  "project": "benchmark_mall",
+  "target_base_url": "http://localhost:8080",
+  "status": "completed",
+  "reset_at_utc": "2026-07-13T02:25:08Z",
+  "target_db_reset": {
+    "status": "ok",
+    "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+    "exit_code": 0
+  }
+}

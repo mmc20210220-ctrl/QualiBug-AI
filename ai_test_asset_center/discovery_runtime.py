@@ -10,8 +10,13 @@ from typing import Any
 
 from .adaptive_discovery_planner import plan_obligation_round
 from .behavior_ir import build_behavior_ir_from_knowledge_asset
+from .canonical_defect_registry import (
+    CanonicalDefectRegistryError,
+    build_canonical_defect_registry,
+    build_defect_identity_consistency,
+    canonical_representative_findings,
+)
 from .customer_delivery_gate import (
-    build_customer_delivery_gate_receipt,
     customer_delivery_rejection_reasons,
 )
 from .discovery_funnel import build_funnel
@@ -26,17 +31,18 @@ from .discovery_mainline_contract import (
 )
 from .discovery_quality_projection import (
     build_formal_count_projection,
-    build_formal_id_consistency,
+    validated_delivery_gate_finding_ids,
 )
 from .experiment_compiler import compile_experiments
 from .experiment_executor import execute_selected_experiments
 from .fixture_dag import attach_fixture_dag_to_experiments
+from .formal_delivery_scope import formal_customer_deliverable_findings
+from .formal_delivery_authority import build_formal_delivery_authority_receipt
 from .obligation_attempt_ledger import build_obligation_attempt_ledger
 from .obligation_compiler import compile_obligations_from_behavior_ir
 from .operational_receipts import (
-    EXECUTION_OPERATIONAL_RECEIPT_SCHEMA,
     aggregate_execution_operational_receipts,
-    validate_execution_operational_receipt,
+    build_execution_operational_receipt_from_counts,
 )
 
 
@@ -53,6 +59,35 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _legacy_execution_terminal(
+    *,
+    cleanup_failed: bool,
+    observation_receipt_ids: list[str],
+    trace_errors: list[Any],
+    skipped_reasons: list[str],
+    trace_present: bool,
+) -> tuple[str, str]:
+    """Classify a legacy attempt without hiding policy blocks as failures."""
+    if cleanup_failed:
+        return "HARNESS_FAILED", "CLEANUP_COMPENSATION_FAILED"
+    if skipped_reasons:
+        for raw_reason in skipped_reasons:
+            reason = re.sub(r"[^A-Za-z0-9]+", "_", _text(raw_reason)).strip("_").upper()
+            if reason:
+                return (
+                    "BLOCKED",
+                    reason if reason.startswith("BLOCKED_") else f"BLOCKED_{reason}",
+                )
+        return "BLOCKED", "LEGACY_EXECUTION_BLOCKED"
+    if trace_errors:
+        return "HARNESS_FAILED", "LEGACY_EXECUTION_ERROR"
+    if observation_receipt_ids:
+        return "EXECUTED", ""
+    if trace_present:
+        return "BLOCKED", "LEGACY_EXECUTION_BLOCKED"
+    return "BLOCKED", "LEGACY_EXECUTION_RECEIPT_MISSING"
 
 
 def _operational_summary_from_attempt_ledger(
@@ -114,43 +149,57 @@ def _api_operations(
         raise MainlineContractError("api_spec_text_missing")
     from .universal_api_parser import parse_to_openapi
 
-    spec = parse_to_openapi(text)
-    if not isinstance(spec, dict):
-        raise MainlineContractError("api_spec_parse_result_invalid")
-    paths = spec.get("paths")
-    if not isinstance(paths, dict):
-        raise MainlineContractError("api_spec_paths_missing")
     operations: list[dict[str, Any]] = []
-    for path, methods in paths.items():
-        if not isinstance(methods, dict):
-            continue
-        for method, raw_operation in methods.items():
-            normalized_method = _text(method).upper()
-            if normalized_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+    source_documents = [("api_spec", text)]
+    submitted = _text(submitted_source_text)
+    if submitted and submitted != text:
+        source_documents.append(("submitted_api_spec", submitted))
+
+    for source_id, source_text in source_documents:
+        spec = parse_to_openapi(source_text)
+        if not isinstance(spec, dict):
+            raise MainlineContractError(
+                f"api_spec_parse_result_invalid:{source_id}"
+            )
+        paths = spec.get("paths")
+        if not isinstance(paths, dict):
+            raise MainlineContractError(f"api_spec_paths_missing:{source_id}")
+        for path, methods in paths.items():
+            if not isinstance(methods, dict):
                 continue
-            operation = _dict(raw_operation)
-            operations.append({
-                "method": normalized_method,
-                "path": _text(path),
-                "operation_id": _text(operation.get("operationId"))
-                or f"{normalized_method.lower()}:{_text(path)}",
-                "source_id": "api_spec",
-                "summary": _text(operation.get("summary")),
-                "description": _text(operation.get("description")),
-                "tags": list(operation.get("tags") or []),
-                "side_effect_class": (
-                    "write"
-                    if normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
-                    else "read"
-                ),
-                "parameters": list(operation.get("parameters") or []),
-                "request_schema": _dict(operation.get("requestBody")),
-                "response_schema": _dict(operation.get("responses")),
-            })
+            for method, raw_operation in methods.items():
+                normalized_method = _text(method).upper()
+                if normalized_method not in {
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                }:
+                    continue
+                operation = _dict(raw_operation)
+                operations.append({
+                    "method": normalized_method,
+                    "path": _text(path),
+                    "operation_id": _text(operation.get("operationId"))
+                    or f"{normalized_method.lower()}:{_text(path)}",
+                    "source_id": source_id,
+                    "summary": _text(operation.get("summary")),
+                    "description": _text(operation.get("description")),
+                    "tags": list(operation.get("tags") or []),
+                    "side_effect_class": (
+                        "write"
+                        if normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
+                        else "read"
+                    ),
+                    "parameters": list(operation.get("parameters") or []),
+                    "request_schema": _dict(operation.get("requestBody")),
+                    "response_schema": _dict(operation.get("responses")),
+                })
     if not operations:
         for match in re.finditer(
             r"(?im)^(?:\s*#{1,6}\s*)?(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)",
-            str(submitted_source_text or ""),
+            submitted or text,
         ):
             method = match.group(1).upper()
             path = match.group(2).strip().rstrip("`").rstrip(",").rstrip(")")
@@ -406,6 +455,10 @@ def _manual_terminal_receipts(
                 "status": "BLOCKED",
                 "reason_code": _text(compile_receipt.get("reason_code"))
                 or "BLOCKED_COMPILE",
+                "detail": _text(
+                    compile_receipt.get("detail")
+                    or compile_receipt.get("reason_detail")
+                ),
                 "experiment_id": _text(experiment.get("experiment_id")),
                 "cost_coverage_status": "UNKNOWN",
             }
@@ -488,7 +541,10 @@ def _authority_findings(
     for gate in gate_results.values():
         if _text(gate.get("status")).upper() != "DELIVERABLE":
             continue
-        finding_id = _text(gate.get("finding_id"))
+        finding_id = _text(
+            _dict(gate.get("identity")).get("finding_id")
+            or gate.get("finding_id")
+        )
         if finding_id not in findings_by_id:
             raise MainlineContractError(
                 f"deliverable_gate_finding_missing:{finding_id or 'MISSING'}"
@@ -507,21 +563,8 @@ def _project_gate_results_for_authority(
         for obligation_id, receipt in gate_results.items()
         if _text(obligation_id) and isinstance(receipt, dict)
     }
-    if contract["customer_outputs_published"]:
-        return projected
-    for obligation_id, receipt in projected.items():
-        if _text(receipt.get("status")).upper() != "DELIVERABLE":
-            continue
-        semantic_finding_id = _text(receipt.pop("finding_id", ""))
-        receipt.update({
-            "status": "REJECTED",
-            "reason_code": "SHADOW_AUTHORITY_NOT_PUBLISHED",
-            "semantic_status": "DELIVERABLE",
-        })
-        if semantic_finding_id:
-            receipt["shadow_finding_fingerprint"] = hashlib.sha256(
-                semantic_finding_id.encode("utf-8")
-            ).hexdigest()[:16]
+    # Semantic Gate receipts are immutable. Shadow publication is projected by
+    # `_authority_findings`; it must never rewrite a Gate status or fingerprint.
     return projected
 
 
@@ -565,6 +608,7 @@ def run_experiment_candidate(
             project=inputs.project,
             base_url=_text(runtime_contract.get("approved_base_url")),
             runtime_contract=runtime_contract,
+            mainline_run=plan.mainline_run,
             campaign_id=plan.mainline_run["campaign_id"],
         )
     else:
@@ -625,11 +669,57 @@ def run_experiment_candidate(
         gate_results=gate_results,
         contract=plan.mainline_run,
     )
-    formal = build_formal_count_projection(
-        findings=deliverable,
-        candidate_findings=candidates,
+    authority_occurrences = (
+        deliverable
+        if plan.mainline_run["customer_outputs_published"]
+        else formal_customer_deliverable_findings(
+            shadow,
+            obligation_attempt_ledger=ledger,
+        )
     )
-    formal_ids = list(formal["formal_finding_ids"])
+    canonical_registry = build_canonical_defect_registry(
+        mainline_run=plan.mainline_run,
+        deliverable_occurrences=authority_occurrences,
+        obligation_attempt_ledger=ledger,
+    )
+    canonical_findings = canonical_representative_findings(
+        canonical_registry,
+        deliverable_occurrences=authority_occurrences,
+    )
+    formal_delivery_authority = build_formal_delivery_authority_receipt(
+        mainline_run=plan.mainline_run,
+        findings=authority_occurrences,
+        obligation_attempt_ledger=ledger,
+    )
+    formal = build_formal_count_projection(
+        findings=authority_occurrences,
+        candidate_findings=candidates,
+        obligation_attempt_ledger=ledger,
+        mainline_run=plan.mainline_run,
+        canonical_defect_registry=canonical_registry,
+    )
+    occurrence_ids = list(formal["delivery_occurrence_finding_ids"])
+    canonical_ids = list(formal["canonical_defect_ids"])
+    defect_identity_consistency = build_defect_identity_consistency(
+        occurrence_scopes={
+            "delivery_gate_ids": validated_delivery_gate_finding_ids(ledger),
+            "registry_occurrence_ids": list(
+                canonical_registry["delivery_occurrence_finding_ids"]
+            ),
+            "formal_projection_occurrence_ids": occurrence_ids,
+        },
+        canonical_scopes={
+            "canonical_registry_ids": list(
+                canonical_registry["canonical_defect_ids"]
+            ),
+            "formal_projection_ids": canonical_ids,
+            "product_projection_ids": sorted(
+                _text(item.get("canonical_defect_id"))
+                for item in canonical_findings
+                if _text(item.get("canonical_defect_id"))
+            ),
+        },
+    )
     result: dict[str, Any] = {
         "schema_version": RUNTIME_SCHEMA,
         "v12_version": "3.0-mainline",
@@ -658,13 +748,21 @@ def run_experiment_candidate(
         },
         "operational_receipt_summary": operational_summary,
         "obligation_attempt_ledger": ledger,
+        "canonical_defect_registry": canonical_registry,
+        "formal_delivery_authority": formal_delivery_authority,
         "formal_count_projection": formal,
-        "formal_id_consistency": build_formal_id_consistency(
-            delivery_gate_ids=formal_ids,
-            formal_projection_ids=formal_ids,
-            product_projection_ids=formal_ids,
+        "defect_identity_consistency": defect_identity_consistency,
+        "delivery_occurrences": authority_occurrences,
+        "findings": (
+            canonical_findings
+            if plan.mainline_run["customer_outputs_published"]
+            else []
         ),
-        "findings": deliverable,
+        "evaluator_canonical_findings": (
+            canonical_findings
+            if plan.mainline_run["private_evaluator_observation_allowed"]
+            else []
+        ),
         "candidate_findings": candidates,
         "shadow_findings": shadow,
         "external_findings": [],
@@ -914,7 +1012,7 @@ def adapt_legacy_champion_result(
             return None
         return next(
             (index for index in preferred if index not in used_trace_indexes),
-            preferred[0],
+            None,
         )
 
     units: list[dict[str, Any]] = []
@@ -1001,15 +1099,25 @@ def adapt_legacy_champion_result(
         )
         experiment_id = stable_id("experiment", obligation_id)
         scenario_id = _text(_dict(view).get("scenario_id"))
+        actor_role = _text(_dict(view).get("actor_role"))
+        discovery_round = int(_dict(view).get("discovery_round") or 0)
         execution_id = stable_id(
             "execution",
             contract["campaign_id"],
-            scenario_id or obligation_id,
+            {
+                "scenario_id": scenario_id,
+                "actor_role": actor_role,
+                "discovery_round": discovery_round,
+            }
+            if scenario_id
+            else obligation_id,
         )
         input_fingerprint = fingerprint({
             "campaign_id": contract["campaign_id"],
             "slice_id": slice_id,
             "scenario_id": scenario_id,
+            "actor_role": actor_role,
+            "discovery_round": discovery_round,
             "kind": unit["kind"],
         })
 
@@ -1040,7 +1148,7 @@ def adapt_legacy_champion_result(
         actor_refs = [
             value
             for value in (
-                _text(_dict(view).get("actor_role")),
+                actor_role,
                 _text(_dict(_dict(raw_finding or {}).get("evidence")).get("actor")),
             )
             if value
@@ -1054,7 +1162,7 @@ def adapt_legacy_champion_result(
             "operation_refs": list(dict.fromkeys(operation_refs)),
             "actor_refs": list(dict.fromkeys(actor_refs)),
             "adapter": "legacy_champion_receipt_adapter",
-            "planning_round": int(_dict(view).get("discovery_round") or 1),
+            "planning_round": discovery_round or 1,
             "behavior_slice_id": slice_id,
             "behavior_ir_refs": [],
             "obligation_id": obligation_id,
@@ -1138,26 +1246,21 @@ def adapt_legacy_champion_result(
             "NOT_REVERSIBLE",
         }
         trace_errors = _list(_dict(view).get("errors"))
-        skipped = any(
+        skipped_reasons = [
             _text(step.get("skipped_reason"))
             for step in steps
             if isinstance(step, dict)
-        ) or int(_dict(view).get("precondition_not_met_count") or 0) > 0
-        if cleanup_failed:
-            execution_status = "HARNESS_FAILED"
-            execution_reason = "CLEANUP_COMPENSATION_FAILED"
-        elif observation_receipt_ids:
-            execution_status = "EXECUTED"
-            execution_reason = ""
-        elif trace_errors:
-            execution_status = "HARNESS_FAILED"
-            execution_reason = "LEGACY_EXECUTION_ERROR"
-        elif skipped or trace is not None:
-            execution_status = "BLOCKED"
-            execution_reason = "LEGACY_EXECUTION_BLOCKED"
-        else:
-            execution_status = "BLOCKED"
-            execution_reason = "LEGACY_EXECUTION_RECEIPT_MISSING"
+            and _text(step.get("skipped_reason"))
+        ]
+        if int(_dict(view).get("precondition_not_met_count") or 0) > 0:
+            skipped_reasons.append("PRECONDITION_NOT_MET")
+        execution_status, execution_reason = _legacy_execution_terminal(
+            cleanup_failed=cleanup_failed,
+            observation_receipt_ids=observation_receipt_ids,
+            trace_errors=trace_errors,
+            skipped_reasons=skipped_reasons,
+            trace_present=trace is not None,
+        )
 
         source_operational = _dict(_dict(view).get("operational_receipt"))
         if trace is not None and not source_operational:
@@ -1185,41 +1288,35 @@ def adapt_legacy_champion_result(
         cleanup_completed_count = int(
             source_operational.get("cleanup_completed_count") or 0
         )
-        operational_receipt = validate_execution_operational_receipt({
-            "schema_version": EXECUTION_OPERATIONAL_RECEIPT_SCHEMA,
-            "receipt_id": stable_id("operational", execution_id),
-            "execution_status": execution_status,
-            "scenario_attempt_count": int(
+        operational_receipt = build_execution_operational_receipt_from_counts(
+            receipt_id=stable_id("operational", execution_id),
+            execution_status=execution_status,
+            scenario_attempt_count=int(
                 source_operational.get("scenario_attempt_count") or 1
             ),
-            "http_request_attempt_count": int(
+            http_request_attempt_count=int(
                 source_operational.get("http_request_attempt_count") or 0
             ),
-            "production_http_request_count": int(
+            production_http_request_count=int(
                 source_operational.get("production_http_request_count") or 0
             ),
-            "accepted_write_count": int(
-                source_operational.get("accepted_write_count") or 0
-            ),
-            "accepted_non_cleanup_write_count": int(
+            accepted_non_cleanup_write_count=int(
                 source_operational.get("accepted_non_cleanup_write_count") or 0
             ),
-            "accepted_cleanup_write_count": int(
+            accepted_cleanup_write_count=int(
                 source_operational.get("accepted_cleanup_write_count") or 0
             ),
-            "cleanup_outcome": {
-                "status": (
-                    "FAILED"
-                    if cleanup_failure_count
-                    else "COMPLETED"
-                    if cleanup_attempted_count
-                    else "NOT_REQUIRED"
-                ),
-                "attempted_count": cleanup_attempted_count,
-                "completed_count": cleanup_completed_count,
-                "failure_count": cleanup_failure_count,
-            },
-        })
+            cleanup_status=(
+                "FAILED"
+                if cleanup_failure_count
+                else "COMPLETED"
+                if cleanup_attempted_count
+                else "NOT_REQUIRED"
+            ),
+            cleanup_attempted_count=cleanup_attempted_count,
+            cleanup_completed_count=cleanup_completed_count,
+            cleanup_failure_count=cleanup_failure_count,
+        )
 
         oracle_rows = _list(_dict(view).get("oracle_results"))
         oracle_receipt_id = (
@@ -1296,37 +1393,21 @@ def adapt_legacy_champion_result(
                 )
             continue
 
-        if normalized_finding is not None:
-            gate = build_customer_delivery_gate_receipt(
-                normalized_finding,
-                obligation_id=obligation_id,
-                execution_id=execution_id,
-            )
-        else:
-            if not oracle_rows:
-                gate_reason = "LEGACY_ORACLE_RECEIPT_MISSING"
-            elif any(
-                row.get("passed") is False
-                or _text(row.get("verdict")).upper()
-                in {"FAILED", "VIOLATED", "DEFECT"}
-                for row in oracle_rows
-                if isinstance(row, dict)
-            ):
-                gate_reason = "LEGACY_ORACLE_VIOLATION_WITHOUT_FINDING"
-            else:
-                gate_reason = "ORACLE_NOT_VIOLATED"
-            gate = {
-                "status": "REJECTED",
-                "reason_code": gate_reason,
-                "reason_codes": [gate_reason],
-                "finding_id": "",
-                "oracle_receipt_id": oracle_receipt_id,
-                "cost_coverage_status": "UNKNOWN",
-            }
-            gate["gate_receipt_id"] = stable_id(
-                "gate", obligation_id, execution_id, gate_reason
-            )
-            gate["output_fingerprint"] = fingerprint(gate)
+        # The legacy adapter cannot reconstruct the typed v2 evidence bundle.
+        # Preserve the executed clue, but never synthesize formal delivery.
+        gate_reason = "LEGACY_RECEIPT_CHAIN_UNVERIFIABLE"
+        gate = {
+            "status": "REJECTED",
+            "reason_code": gate_reason,
+            "reason_codes": [gate_reason],
+            "finding_id": "",
+            "oracle_receipt_id": oracle_receipt_id,
+            "cost_coverage_status": "UNKNOWN",
+        }
+        gate["gate_receipt_id"] = stable_id(
+            "gate", obligation_id, execution_id, gate_reason
+        )
+        gate["output_fingerprint"] = fingerprint(gate)
         gate_results[obligation_id] = gate
         if normalized_finding is not None:
             finding_terminal[normalized_finding["finding_id"]] = (
@@ -1372,11 +1453,78 @@ def adapt_legacy_champion_result(
                 "customer_delivery_status": "candidate",
                 "customer_delivery_gate_reasons": reasons,
             })
-    formal = build_formal_count_projection(
-        findings=deliverable,
-        candidate_findings=candidates,
+    authority_occurrences = (
+        deliverable
+        if contract["customer_outputs_published"]
+        else formal_customer_deliverable_findings(
+            shadow,
+            obligation_attempt_ledger=ledger,
+        )
     )
-    formal_ids = list(formal["formal_finding_ids"])
+    canonical_registry: dict[str, Any] | None = None
+    canonical_findings: list[dict[str, Any]] = []
+    canonical_error = ""
+    try:
+        canonical_registry = build_canonical_defect_registry(
+            mainline_run=contract,
+            deliverable_occurrences=authority_occurrences,
+            obligation_attempt_ledger=ledger,
+        )
+        canonical_findings = canonical_representative_findings(
+            canonical_registry,
+            deliverable_occurrences=authority_occurrences,
+        )
+    except CanonicalDefectRegistryError as exc:
+        canonical_error = str(exc)
+        candidates.extend({
+            **finding,
+            "finding_class": "candidate",
+            "customer_delivery_status": "candidate",
+            "canonical_identity_status": "LEGACY_IDENTITY_UNRESOLVED",
+            "canonical_identity_error": canonical_error,
+        } for finding in authority_occurrences)
+    formal = build_formal_count_projection(
+        findings=authority_occurrences,
+        candidate_findings=candidates,
+        obligation_attempt_ledger=ledger,
+        mainline_run=contract,
+        canonical_defect_registry=canonical_registry,
+    )
+    formal_delivery_authority = build_formal_delivery_authority_receipt(
+        mainline_run=contract,
+        findings=authority_occurrences,
+        obligation_attempt_ledger=ledger,
+    )
+    if canonical_registry is not None:
+        defect_identity_consistency = build_defect_identity_consistency(
+            occurrence_scopes={
+                "delivery_gate_ids": validated_delivery_gate_finding_ids(ledger),
+                "registry_occurrence_ids": list(
+                    canonical_registry["delivery_occurrence_finding_ids"]
+                ),
+                "formal_projection_occurrence_ids": list(
+                    formal["delivery_occurrence_finding_ids"]
+                ),
+            },
+            canonical_scopes={
+                "canonical_registry_ids": list(
+                    canonical_registry["canonical_defect_ids"]
+                ),
+                "formal_projection_ids": list(formal["canonical_defect_ids"]),
+                "product_projection_ids": sorted(
+                    _text(item.get("canonical_defect_id"))
+                    for item in canonical_findings
+                    if _text(item.get("canonical_defect_id"))
+                ),
+            },
+        )
+    else:
+        defect_identity_consistency = {
+            "schema_version": "qualibug.defect-identity-consistency.v1",
+            "consistent": False,
+            "status": "BLOCKED_CANONICAL_IDENTITY",
+            "reason": canonical_error or "canonical_registry_missing",
+        }
     terminal_counts = _dict(ledger.get("terminal_status_counts"))
     auto_har_entries: list[dict[str, Any]] = []
     emitted_trace_indexes: set[int] = set()
@@ -1421,6 +1569,8 @@ def adapt_legacy_champion_result(
         "mainline_run": dict(contract),
         "campaign": _finalize_campaign(campaign_handle, ledger),
         "obligation_attempt_ledger": ledger,
+        "canonical_defect_registry": canonical_registry,
+        "formal_delivery_authority": formal_delivery_authority,
         "operational_receipt_summary": operational_summary,
         "phases": {
             **_dict(legacy_result.get("phases")),
@@ -1444,12 +1594,16 @@ def adapt_legacy_champion_result(
             },
         },
         "formal_count_projection": formal,
-        "formal_id_consistency": build_formal_id_consistency(
-            delivery_gate_ids=formal_ids,
-            formal_projection_ids=formal_ids,
-            product_projection_ids=formal_ids,
+        "defect_identity_consistency": defect_identity_consistency,
+        "delivery_occurrences": authority_occurrences,
+        "findings": (
+            canonical_findings if contract["customer_outputs_published"] else []
         ),
-        "findings": deliverable,
+        "evaluator_canonical_findings": (
+            canonical_findings
+            if contract["private_evaluator_observation_allowed"]
+            else []
+        ),
         "candidate_findings": candidates,
         "shadow_findings": shadow,
         "auto_har": {

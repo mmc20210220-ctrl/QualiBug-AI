@@ -10,6 +10,9 @@ from ai_test_asset_center.obligation_attempt_ledger import (
     build_obligation_attempt_ledger,
     derive_campaign_terminal_status,
 )
+from ai_test_asset_center.operational_receipts import (
+    build_execution_operational_receipt,
+)
 
 
 def _mainline_run() -> dict[str, str]:
@@ -66,23 +69,12 @@ def test_every_selected_obligation_has_one_terminal_attempt() -> None:
 
 
 def test_attempt_ledger_preserves_validated_operational_terminal_receipt() -> None:
-    operational_receipt = {
-        "schema_version": "qualibug.execution-operational-receipt.v1",
-        "receipt_id": "operational-exec-1",
-        "execution_status": "EXECUTED",
-        "scenario_attempt_count": 1,
-        "http_request_attempt_count": 3,
-        "production_http_request_count": 0,
-        "accepted_write_count": 1,
-        "accepted_non_cleanup_write_count": 1,
-        "accepted_cleanup_write_count": 0,
-        "cleanup_outcome": {
-            "status": "COMPLETED",
-            "attempted_count": 1,
-            "completed_count": 1,
-            "failure_count": 0,
-        },
-    }
+    operational_receipt = build_execution_operational_receipt(
+        receipt_id="operational-exec-1",
+        execution_status="EXECUTED",
+        steps=[{"method": "GET", "path": "/resources", "status_code": 200}],
+        cleanup_failures=0,
+    )
 
     ledger = build_obligation_attempt_ledger(
         mainline_run=_mainline_run(),
@@ -103,6 +95,27 @@ def test_attempt_ledger_preserves_validated_operational_terminal_receipt() -> No
     )
 
     assert ledger["attempts"][0]["operational_receipt"] == operational_receipt
+
+
+def test_attempt_ledger_preserves_terminal_reason_detail_for_blockers() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1", "operation_refs": ["op-pay"]}],
+        compile_results={
+            "obl-1": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OBSERVER",
+                "detail": "GET /payments/order/{orderId}",
+            }
+        },
+        execution_results={},
+        gate_results={},
+    )
+
+    attempt = ledger["attempts"][0]
+    assert attempt["reason_code"] == "BLOCKED_MISSING_OBSERVER"
+    assert attempt["reason_detail"] == "GET /payments/order/{orderId}"
+    assert attempt["stages"][0]["reason_detail"] == "GET /payments/order/{orderId}"
 
 
 def test_duplicate_or_missing_terminal_receipt_fails_fast() -> None:
@@ -185,7 +198,7 @@ def test_selected_identity_and_foreign_receipts_fail_fast() -> None:
 
 
 def test_deliverable_requires_finding_identity_and_nonterminal_does_not_keep_one() -> None:
-    with pytest.raises(ObligationAttemptLedgerError, match="deliverable_finding_id_missing:obl-1"):
+    with pytest.raises(ObligationAttemptLedgerError, match="formal_gate_v2_required:obl-1"):
         build_obligation_attempt_ledger(
             mainline_run=_mainline_run(),
             selected=[{"obligation_id": "obl-1"}],

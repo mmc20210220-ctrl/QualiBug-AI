@@ -290,9 +290,16 @@ from ai_test_asset_center.customer_delivery_gate import (
 from ai_test_asset_center.artifact_redactor import write_json_redacted
 from ai_test_asset_center.discovery_quality_projection import (
     attach_quality_projection_to_scan_result,
-    build_formal_count_projection,
     build_external_evaluation_projection,
 )
+
+
+def _projected_formal_count_projection(scan_result: dict) -> dict:
+    counts = scan_result.get("formal_count_projection") if isinstance(scan_result, dict) else None
+    if not isinstance(counts, dict) or counts.get("schema_version") != "qualibug.discovery-quality-projection.v2":
+        raise RuntimeError("formal_count_projection_missing_after_attach")
+    return counts
+
 
 # Runtime discovery must never load evaluator-private ground truth.  Persist a
 # completed-run envelope for the separate evaluator and remain NOT_MEASURED
@@ -342,16 +349,7 @@ if isinstance(result, dict):
             "after_cleanup_observation_ref": _cleanup_observation_ref,
         }
 result = attach_quality_projection_to_scan_result(result if isinstance(result, dict) else {})
-_formal_findings = [
-    finding
-    for finding in (result.get("findings") or [])
-    if isinstance(finding, dict) and is_customer_deliverable_defect(finding)
-]
-_counts = build_formal_count_projection(
-    findings=result.get("findings"),
-    candidate_findings=result.get("candidate_findings"),
-    discovery_funnel=result.get("discovery_funnel") if isinstance(result.get("discovery_funnel"), dict) else {},
-)
+_counts = _projected_formal_count_projection(result)
 _campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
 _pipeline_health = (
     result.get("pipeline_health") if isinstance(result.get("pipeline_health"), dict) else {}
@@ -409,23 +407,28 @@ except Exception as _ops_exc:  # OperationalMetricsNotMeasured or missing fields
         1 if int(_ops_metrics.get("cleanup_failures") or 0) > 0 else 0
     )
 
-evaluation_submission = {
-    "schema_version": "discovery_evaluation_submission.v1",
-    "run_id": str(result.get("scan_id") or _campaign.get("campaign_id") or ""),
-    "policy_id": str(_campaign.get("policy_version") or "unversioned"),
-    "evaluation_mode": "replay",
-    "scan_result": {
-        "findings": list(result.get("findings") or []),
-        "candidate_findings": list(result.get("candidate_findings") or []),
-    },
+from ai_test_asset_center.campaign_api_contract import (
+    build_evaluation_submission,
+)
+from tools.normalize_evaluation_run_envelope import normalize_envelope
+
+_mainline_run = result.get("mainline_run") or v12.get("mainline_run")
+if not isinstance(_mainline_run, dict):
+    raise RuntimeError("benchmark_mainline_run_missing")
+_product_submission = build_evaluation_submission(
+    ROOT,
+    PROJECT,
+    {"evaluation_mode": str(_mainline_run.get("evaluation_mode") or "")},
+)
+evaluation_submission = normalize_envelope({
+    **_product_submission,
     "pipeline_health": dict(_pipeline_health),
     "operational_metrics": _ops_metrics,
     "fixture_governance": {
         "post_run_cleanup": _post_run_cleanup,
         "post_run_cleanliness": _post_run_cleanliness,
     },
-    "formal_count_projection": _counts,
-}
+})
 
 _external = build_external_evaluation_projection(
     measurement_status="NOT_MEASURED",

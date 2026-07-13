@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .auto_test_data_factory import load_openapi_from_input
+from .openapi_spec_utils import load_openapi_from_input
 from .real_id_resolver import infer_path_params, normalize_path_placeholders, path_has_placeholders
 
 QUERY_SAFE_RE = re.compile(r"^[A-Za-z0-9_.:\-@]+$")

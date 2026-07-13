@@ -1,0 +1,986 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-receipt.v1",
+  "created_at_utc": "2026-07-12T00:01:22Z",
+  "dataset_id": "benchmark-mall-131-frozen",
+  "dataset_version": "v1-frozen-131-20260710",
+  "dataset_manifest_fingerprint": "ca86b7c658ddadb4c3f7039c3c9f3044d3bcf17c90adc57148b90a1cbfe056ca",
+  "target_id": "benchmark-mall-held-in-131",
+  "project_id": "evaluation-benchmark-mall-held-in-131",
+  "industry": "ecommerce",
+  "split": "held_in",
+  "expectation": "seeded_defects",
+  "environment_ref": "http://localhost:8080",
+  "environment_type": "test",
+  "runtime_fingerprint": "7df24d66250de541954b35cdd2a269d6303aa3358c9278a276440cdb3551d02a",
+  "input_fingerprint": "c9690a85c9813308c42c60a428df70eec6aa55e07c185b04e9852bed12615a08",
+  "fixture_fingerprint": "69575a028f6a8610db2aaa3fb2a69fe95da213ba4e0d5cec5023b8cc9f3e18b3",
+  "context_fingerprint": "52d1ea355a53d886ae58b95270ee24c71949447dc89d38658421ba729577ee43",
+  "run_id": "scan_benchmark_mall_1783814064347",
+  "policy_id": "v1.0.0-baseline",
+  "evaluation_mode": "replay",
+  "measurement_status": "NOT_MEASURED",
+  "not_measured_reason": "pipeline_health_degraded_without_completed_execution",
+  "pipeline_health": {
+    "status": "DEGRADED",
+    "empty_findings_means_no_bugs": false,
+    "execution_status": "partial",
+    "execution_reason": "partial_execution",
+    "observability_status": "ok",
+    "observability_gaps": [],
+    "failed_stages": {},
+    "failed_phases": {},
+    "degraded_phases": {},
+    "stage_failures": [],
+    "result_error": "",
+    "no_real_traffic": false,
+    "cleanup_failure_count": 36,
+    "usage_cost_unknown": true,
+    "reasoner_status": "degraded",
+    "reasoner_failure_count": 3,
+    "reasoner_error_class_counts": {
+      "network": 1,
+      "response_parse": 2
+    },
+    "secret_scan_failed": false,
+    "missing_phases": [],
+    "unexecuted_candidate_signal": {
+      "stop_reason": "slice_budget_reached",
+      "pending_slice_count": 0,
+      "binding_or_precondition_blocks": 3,
+      "skip_reason_counts": {
+        "DELETE_SAFETY_GUARD": 14,
+        "missing_runtime_path_binding": 2
+      }
+    },
+    "operator_note": "Experiment Executor 仅完成部分入选实验；已执行收据可形成结论，未执行/阻断部分必须保留为覆盖缺口，不能宣称全量完成。",
+    "preflight": {
+      "present": true,
+      "ready": true,
+      "all_checks_passed": false,
+      "errors": 0,
+      "warnings": 1
+    }
+  },
+  "metrics": {},
+  "operational_metrics": {
+    "elapsed_seconds": 361.652,
+    "wall_clock_seconds": 361.652,
+    "total_findings": 28,
+    "total_candidates": 98,
+    "formal_customer_deliverable_count": 49,
+    "discovery_funnel": {
+      "stages": [
+        {
+          "name": "candidate_generation",
+          "input": 682,
+          "output": 682,
+          "conversion": 1.0,
+          "dropped": 0
+        },
+        {
+          "name": "probe_selection",
+          "input": 682,
+          "output": 200,
+          "conversion": 0.2933,
+          "dropped": 482
+        },
+        {
+          "name": "execution",
+          "input": 298,
+          "output": 293,
+          "conversion": 0.9832,
+          "dropped": 5
+        },
+        {
+          "name": "verification",
+          "input": 293,
+          "output": 41,
+          "conversion": 0.1399,
+          "dropped": 252
+        },
+        {
+          "name": "formal_accounting",
+          "input": 41,
+          "output": 28,
+          "conversion": 0.6829,
+          "dropped": 13
+        }
+      ],
+      "top_blocking_reasons": [
+        {
+          "reason": "sandbox_cleanup_not_reversible",
+          "count": 195
+        },
+        {
+          "reason": "dropped_no_endpoint",
+          "count": 79
+        },
+        {
+          "reason": "endpoint_binding:semantic_overlap_not_found",
+          "count": 52
+        },
+        {
+          "reason": "endpoint_binding:entity_not_in_catalog",
+          "count": 23
+        },
+        {
+          "reason": "sandbox_cleanup_failed",
+          "count": 17
+        },
+        {
+          "reason": "DELETE_SAFETY_GUARD",
+          "count": 14
+        },
+        {
+          "reason": "documented_observer_missing",
+          "count": 10
+        },
+        {
+          "reason": "endpoint_binding:path_hint_not_in_catalog",
+          "count": 4
+        },
+        {
+          "reason": "missing_runtime_path_binding",
+          "count": 3
+        },
+        {
+          "reason": "slice_budget_reached",
+          "count": 1
+        }
+      ],
+      "validated_bug_count": 49,
+      "pending_finding_count": 0,
+      "candidate_count": 682,
+      "explanation": "本轮已验证 Bug 28；待确认发现 0（不计入客户可见已验证 Bug）；候选信号 682。候选生成 682 条切片，入选执行 200 条（预算择优，未入选 482）。执行阶段输入 298，成功产出可验证轨迹 293，损耗 5。验证阶段评估 293，检出违规/发现 41。Top 阻断原因：sandbox_cleanup_not_reversible×195、dropped_no_endpoint×79、endpoint_binding:semantic_overlap_not_found×52。下一步：部分假设无法绑定 API 文档中的真实 endpoint，请检查 OpenAPI/API 文档是否完整；部分探针缺少真实路径/ID 绑定或前置条件未满足，请补齐 OpenAPI 可列表端点与多角色测试账号后再解读零缺陷；本轮切片预算未覆盖全部候选，请提高 QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND / 轮次或继续增量发现后再宣称全量无缺陷；检查 runtime_contract / base_url / 执行批准是否已批准，否则执行阶段会 plan_only 或 blocked。",
+      "pipeline_health": {
+        "status": "DEGRADED",
+        "empty_findings_means_no_bugs": false,
+        "execution_status": "partial",
+        "execution_reason": "partial_execution",
+        "observability_status": "ok",
+        "observability_gaps": [],
+        "failed_stages": {},
+        "failed_phases": {},
+        "degraded_phases": {},
+        "stage_failures": [],
+        "result_error": "",
+        "no_real_traffic": false,
+        "cleanup_failure_count": 36,
+        "usage_cost_unknown": true,
+        "reasoner_status": "degraded",
+        "reasoner_failure_count": 3,
+        "reasoner_error_class_counts": {
+          "network": 1,
+          "response_parse": 2
+        },
+        "secret_scan_failed": false,
+        "missing_phases": [],
+        "unexecuted_candidate_signal": {
+          "stop_reason": "slice_budget_reached",
+          "pending_slice_count": 0,
+          "binding_or_precondition_blocks": 3,
+          "skip_reason_counts": {
+            "DELETE_SAFETY_GUARD": 14,
+            "missing_runtime_path_binding": 2
+          }
+        },
+        "operator_note": "Experiment Executor 仅完成部分入选实验；已执行收据可形成结论，未执行/阻断部分必须保留为覆盖缺口，不能宣称全量完成。",
+        "preflight": {
+          "present": true,
+          "ready": true,
+          "all_checks_passed": false,
+          "errors": 0,
+          "warnings": 1
+        }
+      },
+      "mainline_unification": {
+        "analyzer": {
+          "input": 57,
+          "bound": 31,
+          "dropped_no_endpoint": 26,
+          "dropped_reason_counts": {
+            "semantic_overlap_not_found": 26
+          },
+          "dropped_samples": [
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_0_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_1_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_2_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_3_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_4_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_5_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_6_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_7_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_8_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_9_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_10_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_11_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_12_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_13_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_14_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "conservation_0_6dcd5daf",
+              "engine": "conservation",
+              "family": "conservation",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_0_d77d0059",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_1_572e4936",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_1"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_2_674a6129",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_2"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_3_72e48c8b",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_3"
+            }
+          ],
+          "dropped_samples_truncated": 6,
+          "by_origin": {
+            "analyzer": {
+              "input": 57,
+              "bound": 31,
+              "dropped_no_endpoint": 26
+            }
+          },
+          "origin": "analyzer"
+        },
+        "llm_reasoner": {
+          "input": 745,
+          "bound": 692,
+          "dropped_no_endpoint": 53,
+          "dropped_reason_counts": {
+            "entity_not_in_catalog": 23,
+            "path_hint_not_in_catalog": 4,
+            "semantic_overlap_not_found": 26
+          },
+          "dropped_samples": [
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "onto_b6f82d3096ed8bce",
+              "engine": "bug_ontology",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "system",
+              "title_excerpt": "异步操作必须在合理时间内达到最终一致状态"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_0_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_14_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_7_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_1_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_13_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_10_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_4_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_6_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_8_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_5_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_12_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "INV-007",
+              "engine": "invariant",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "Admin endpoints",
+              "title_excerpt": "后台操作强制权限校验"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "POP-004",
+              "engine": "population",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "有唯一性约束的实体",
+              "title_excerpt": "并发创建绕过唯一性约束：相同唯一键请求同时到达导致重复记录"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "POP-007",
+              "engine": "population",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "金额字段",
+              "title_excerpt": "负数金额：允许负值金额导致退款或支付方向错误"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "SAGA-004",
+              "engine": "saga",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "payment_callback",
+              "title_excerpt": "支付回调重复处理补偿缺失"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "SAGA-008",
+              "engine": "saga",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "order_creation",
+              "title_excerpt": "下单时锁定库存成功但订单创建失败无补偿"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "conservation_0_6dcd5daf",
+              "engine": "conservation",
+              "family": "conservation",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "async_task_0_d77d0059",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "async_task_1_572e4936",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_1"
+            }
+          ],
+          "dropped_samples_truncated": 33,
+          "by_origin": {
+            "llm_reasoner": {
+              "input": 745,
+              "bound": 692,
+              "dropped_no_endpoint": 53
+            }
+          },
+          "origin": "llm_reasoner",
+          "status": "degraded",
+          "total_hypotheses": 745,
+          "total_engines": 20,
+          "successful_engine_count": 15,
+          "successful_engine_names": [
+            "causality",
+            "invariant",
+            "reconciliation",
+            "population",
+            "temporal",
+            "saga",
+            "event_chain",
+            "metamorphic",
+            "business_rules",
+            "multi_tenant",
+            "conservation",
+            "concurrency",
+            "async_task",
+            "cache_consistency",
+            "bug_ontology"
+          ],
+          "failed_engine_count": 3,
+          "degraded_engine_count": 2,
+          "degraded_engine_names": [
+            "state_machine",
+            "authorization"
+          ],
+          "observed_model_request_count": 14,
+          "observed_model_response_count": 13,
+          "model_usage": {
+            "request_count": 13,
+            "prompt_tokens": 98922,
+            "completion_tokens": 38700,
+            "total_tokens": 137622,
+            "cost_usd": 0.0,
+            "responses_with_cost": 0
+          },
+          "failed_engine_names": [
+            "counterexample",
+            "consistency",
+            "outcome"
+          ],
+          "engine_error_classes": {
+            "counterexample": "network",
+            "consistency": "response_parse",
+            "outcome": "response_parse"
+          },
+          "engine_error_codes": {
+            "counterexample": "tls_eof",
+            "consistency": "empty_hypotheses",
+            "outcome": "empty_hypotheses"
+          },
+          "engine_error_class_counts": {
+            "network": 1,
+            "response_parse": 2
+          },
+          "engine_attempt_events": {
+            "causality": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 142.062
+              }
+            ],
+            "invariant": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 65.716
+              }
+            ],
+            "reconciliation": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 35.31
+              }
+            ],
+            "counterexample": [
+              {
+                "attempt": 1,
+                "status": "failed",
+                "category": "response_parse",
+                "code": "empty_hypotheses",
+                "retry_scheduled": true,
+                "duration_seconds": 3.459
+              },
+              {
+                "attempt": 2,
+                "status": "failed",
+                "category": "network",
+                "code": "tls_eof",
+                "retry_scheduled": false,
+                "duration_seconds": 5.011
+              }
+            ],
+            "consistency": [
+              {
+                "attempt": 1,
+                "status": "failed",
+                "category": "response_parse",
+                "code": "empty_hypotheses",
+                "retry_scheduled": true,
+                "duration_seconds": 12.696
+              },
+              {
+                "attempt": 2,
+                "status": "failed",
+                "category": "response_parse",
+                "code": "empty_hypotheses",
+                "retry_scheduled": false,
+                "duration_seconds": 7.744
+              }
+            ],
+            "population": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 31.908
+              }
+            ],
+            "outcome": [
+              {
+                "attempt": 1,
+                "status": "failed",
+                "category": "response_parse",
+                "code": "empty_hypotheses",
+                "retry_scheduled": true,
+                "duration_seconds": 7.474
+              },
+              {
+                "attempt": 2,
+                "status": "failed",
+                "category": "response_parse",
+                "code": "empty_hypotheses",
+                "retry_scheduled": false,
+                "duration_seconds": 8.473
+              }
+            ],
+            "temporal": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 43.048
+              }
+            ],
+            "saga": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 58.511
+              }
+            ],
+            "event_chain": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 50.788
+              }
+            ],
+            "metamorphic": [
+              {
+                "attempt": 1,
+                "status": "success",
+                "category": "",
+                "code": "",
+                "retry_scheduled": false,
+                "duration_seconds": 60.825
+              }
+            ]
+          },
+          "max_workers": 4,
+          "max_hypotheses_per_engine": 15,
+          "timeout_seconds": 300,
+          "max_tokens": 32768
+        }
+      },
+      "formal_count_projection": {
+        "schema_version": "qualibug.discovery-quality-projection.v1",
+        "formal_customer_deliverable_count": 49,
+        "executed_clue_count": 77,
+        "confirmation_receipt_count": 49,
+        "candidate_count": 77,
+        "funnel_validated_bug_count": 49,
+        "count_consistency": {
+          "formal_equals_funnel_validated": true,
+          "note": "formal_customer_deliverable_count is the only commercial defect count; confirmation_receipt_count and funnel diagnostics are internal only."
+        }
+      }
+    },
+    "formal_count_projection": {
+      "schema_version": "qualibug.discovery-quality-projection.v1",
+      "formal_customer_deliverable_count": 49,
+      "executed_clue_count": 77,
+      "confirmation_receipt_count": 49,
+      "candidate_count": 77,
+      "funnel_validated_bug_count": 49,
+      "count_consistency": {
+        "formal_equals_funnel_validated": true,
+        "note": "formal_customer_deliverable_count is the only commercial defect count; confirmation_receipt_count and funnel diagnostics are internal only."
+      }
+    },
+    "operational_metrics_status": "NOT_MEASURED",
+    "operational_metrics_reason": "OperationalMetricsNotMeasured: provider did not report cost_usd for every observed model request",
+    "estimated_cost_usd": null,
+    "request_count": null,
+    "engine_success_rate": null,
+    "cleanup_failures": 639,
+    "dirty_test_environments": 1
+  },
+  "fixture_governance": {
+    "post_run_cleanup": {
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      },
+      "token_refresh": {
+        "status": "ok",
+        "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+        "exit_code": 0,
+        "attempts": 1
+      },
+      "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+      "reset_receipt": {
+        "schema_version": "benchmark_target_reset.v1",
+        "receipt_id": "reset_36713a8936f74128",
+        "project": "benchmark_mall",
+        "target_base_url": "http://localhost:8080",
+        "status": "completed",
+        "reset_at_utc": "2026-07-12T00:00:25Z",
+        "target_db_reset": {
+          "status": "ok",
+          "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+          "exit_code": 0
+        }
+      }
+    },
+    "post_run_cleanliness": {
+      "status": "clean_reset_receipt_verified",
+      "write_count": 769,
+      "incomplete_cleanup_count": 476,
+      "reset_receipt_id": "reset_36713a8936f74128",
+      "archived_audit": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260712T000025Z_sandbox_write_audit.jsonl",
+      "archived_audit_sha256": "40e39c6f7725ccc2f7f9565fd49ed5465ce32b2b11c0368fb3affcc1547e1393",
+      "archived_receipt": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260712T000025Z_target_reset_receipt.json"
+    }
+  },
+  "receipt_fingerprint": "7dc145b1a6f65a150f057df02432dd74189641a2cb670631c7c54257e6a33da2"
+}

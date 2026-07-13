@@ -1,0 +1,2533 @@
+LLM_CONFIG_FILE: D:\QualiBug-AI\QualiBug-AI-main\.env.local
+RESET_TARGET_DB: C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable\qualibug_enterprise_benchmark_v0_5_windows_native_stable\scripts\init_db_windows.ps1
+RESET_TARGET_DB: ok
+REFRESH_TOKENS: D:\QualiBug-AI\QualiBug-AI-main\_refresh_tokens.py
+buyer01          refreshed  (HTTP 200, len=300)
+buyer02          refreshed  (HTTP 200, len=300)
+seller01         refreshed  (HTTP 200, len=303)
+admin            refreshed  (HTTP 200, len=301)
+finance01        refreshed  (HTTP 200, len=305)
+warehouse01      refreshed  (HTTP 200, len=311)
+auditor01        refreshed  (HTTP 200, len=305)
+disabled_buyer   refreshed  (HTTP 200, len=312)
+REFRESHED 8/8 tokens -> D:\QualiBug-AI\QualiBug-AI-main\platform_inputs\benchmark_mall\test_accounts.json
+REFRESH_TOKENS: ok
+PREP: {'target_db_reset': {'status': 'ok', 'script': 'C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1', 'exit_code': 0}, 'token_refresh': {'status': 'ok', 'script': 'D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py', 'exit_code': 0, 'attempts': 1}, 'reset_receipt_path': 'D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json', 'reset_receipt': {'schema_version': 'benchmark_target_reset.v1', 'receipt_id': 'reset_651cc87124ec4460', 'project': 'benchmark_mall', 'target_base_url': 'http://localhost:8080', 'status': 'completed', 'reset_at_utc': '2026-07-13T03:50:21Z', 'target_db_reset': {'status': 'ok', 'script': 'C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1', 'exit_code': 0}}}
+TARGET_CLEANLINESS: {"status": "clean_no_prior_write_audit", "audit_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\platform_workspace\\benchmark_mall\\defect_discovery\\sandbox_write_audit.jsonl"}
+RESET: removed D:\QualiBug-AI\QualiBug-AI-main\platform_workspace\benchmark_mall
+RESET: removed D:\QualiBug-AI\QualiBug-AI-main\platform_outputs\benchmark_mall
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] Deduplicated 6 engines with identical prompt templates (17 -> 11)
+
+[Stage 2] Reasoner — 11 engines, 4 parallel workers...
+    [OK] [causality] 15 hypotheses (success)
+    [OK] [invariant] 15 hypotheses (success)
+    [FAIL] [reconciliation] 0 hypotheses (failed) class=response_parse code=empty_hypotheses attempts=2
+    [FAIL] [counterexample] 0 hypotheses (failed) class=response_parse code=empty_hypotheses attempts=2
+    [FAIL] [consistency] 0 hypotheses (failed) class=response_parse code=empty_hypotheses attempts=2
+    [FAIL] [population] 0 hypotheses (failed) class=response_parse code=empty_hypotheses attempts=2
+    [FAIL] [outcome] 0 hypotheses (failed) class=response_parse code=empty_hypotheses attempts=2
+    [OK] [temporal] 15 hypotheses (success)
+    [OK] [saga] 15 hypotheses (success)
+    [OK] [event_chain] 15 hypotheses (success)
+    [OK] [metamorphic] 12 hypotheses (success)
+
+[Stage 2] Analyzers — 运行 8 个分析器...
+    [OK] [business_rules] 15 hypotheses
+    [WARN] [state_machine] 0 hypotheses
+    [OK] [multi_tenant] 15 hypotheses
+    [OK] [conservation] 1 hypotheses
+    [OK] [concurrency] 1 hypotheses
+    [OK] [async_task] 10 hypotheses
+    [OK] [cache_consistency] 15 hypotheses
+    [WARN] [authorization] 0 hypotheses
+  [OK] 分析器生成了 57 条假设
+  [INFO] universal_api_parser: detected format=markdown_api
+  [OK] Ontology: 626 ontology-driven hypotheses generated
+  [OK] 去重移除了 17 条重复假设
+  [OK] 最高优先级假设: [P1] 可能存在缓存失效问题: /api/cart/items/
+  [OK] 生成了 753 条假设 (across 11 engines)
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+RESET_TARGET_DB: C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable\qualibug_enterprise_benchmark_v0_5_windows_native_stable\scripts\init_db_windows.ps1
+RESET_TARGET_DB: ok
+REFRESH_TOKENS: D:\QualiBug-AI\QualiBug-AI-main\_refresh_tokens.py
+buyer01          refreshed  (HTTP 200, len=300)
+buyer02          refreshed  (HTTP 200, len=300)
+seller01         refreshed  (HTTP 200, len=303)
+admin            refreshed  (HTTP 200, len=301)
+finance01        refreshed  (HTTP 200, len=305)
+warehouse01      refreshed  (HTTP 200, len=311)
+auditor01        refreshed  (HTTP 200, len=305)
+disabled_buyer   refreshed  (HTTP 200, len=312)
+REFRESHED 8/8 tokens -> D:\QualiBug-AI\QualiBug-AI-main\platform_inputs\benchmark_mall\test_accounts.json
+REFRESH_TOKENS: ok
+======================================================================
+MODE=llm_throughput  elapsed=309.0s
+{
+  "mode": "llm_throughput",
+  "unify_analyzers": "1",
+  "unify_llm_reasoner": "1",
+  "elapsed_sec": 309.0,
+  "prep": {
+    "target_db_reset": {
+      "status": "ok",
+      "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+      "exit_code": 0
+    },
+    "token_refresh": {
+      "status": "ok",
+      "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+      "exit_code": 0,
+      "attempts": 1
+    },
+    "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+    "reset_receipt": {
+      "schema_version": "benchmark_target_reset.v1",
+      "receipt_id": "reset_651cc87124ec4460",
+      "project": "benchmark_mall",
+      "target_base_url": "http://localhost:8080",
+      "status": "completed",
+      "reset_at_utc": "2026-07-13T03:50:21Z",
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      }
+    }
+  },
+  "post_run_cleanup": {
+    "target_db_reset": {
+      "status": "ok",
+      "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+      "exit_code": 0
+    },
+    "token_refresh": {
+      "status": "ok",
+      "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+      "exit_code": 0,
+      "attempts": 1
+    },
+    "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+    "reset_receipt": {
+      "schema_version": "benchmark_target_reset.v1",
+      "receipt_id": "reset_ae8248a335924465",
+      "project": "benchmark_mall",
+      "target_base_url": "http://localhost:8080",
+      "status": "completed",
+      "reset_at_utc": "2026-07-13T03:55:30Z",
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      }
+    }
+  },
+  "post_run_cleanliness": {
+    "status": "clean_reset_receipt_verified",
+    "write_count": 169,
+    "incomplete_cleanup_count": 25,
+    "reset_receipt_id": "reset_ae8248a335924465",
+    "archived_audit": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260713T035530Z_sandbox_write_audit.jsonl",
+    "archived_audit_sha256": "b5e31c22ca7b70c514db1894994a2ffbbe56bd5e58b79efe5179f7a04f1ad855",
+    "archived_receipt": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260713T035530Z_target_reset_receipt.json"
+  },
+  "success": true,
+  "grade": "partial_coverage",
+  "execution_status": "completed",
+  "total_findings": 0,
+  "total_candidates": 30,
+  "formal_customer_deliverable_count": 0,
+  "formal_count_projection": {
+    "schema_version": "qualibug.discovery-quality-projection.v2",
+    "authority_status": "VERIFIED",
+    "authority_reason": "",
+    "formal_customer_deliverable_count": 0,
+    "canonical_defect_count": 0,
+    "canonical_defect_ids": [],
+    "delivery_occurrence_count": 0,
+    "delivery_occurrence_finding_ids": [],
+    "canonical_representative_findings": [],
+    "executed_clue_count": 30,
+    "confirmation_receipt_count": 0,
+    "candidate_count": 30,
+    "funnel_validated_bug_count": 0,
+    "count_consistency": {
+      "formal_equals_funnel_validated": true,
+      "note": "formal_customer_deliverable_count equals canonical_defect_count; delivery_occurrence_count and funnel diagnostics are audit-only."
+    }
+  },
+  "error": null,
+  "mainline_unification": {
+    "analyzer": {
+      "input": 57,
+      "bound": 31,
+      "dropped_no_endpoint": 26,
+      "dropped_reason_counts": {
+        "semantic_overlap_not_found": 26
+      },
+      "dropped_samples": [
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_0_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_1_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_2_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_3_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_4_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_5_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_6_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_7_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_8_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_9_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_10_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_11_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_12_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_13_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_14_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "conservation_0_6dcd5daf",
+          "engine": "conservation",
+          "family": "conservation",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_0_d77d0059",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_1_572e4936",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_1"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_2_674a6129",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_2"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_3_72e48c8b",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_3"
+        }
+      ],
+      "dropped_samples_truncated": 6,
+      "by_origin": {
+        "analyzer": {
+          "input": 57,
+          "bound": 31,
+          "dropped_no_endpoint": 26
+        }
+      },
+      "origin": "analyzer"
+    },
+    "llm_reasoner": {
+      "input": 753,
+      "bound": 709,
+      "dropped_no_endpoint": 44,
+      "dropped_reason_counts": {
+        "entity_not_in_catalog": 16,
+        "path_hint_not_in_catalog": 2,
+        "semantic_overlap_not_found": 26
+      },
+      "dropped_samples": [
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "CAUSAL-AUTH-001",
+          "engine": "causality",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "buyer",
+          "title_excerpt": "买家未授权创建商品"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "CAUSAL-AUTH-002",
+          "engine": "causality",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "buyer",
+          "title_excerpt": "买家越权取消他人订单"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "CAUSAL-AUTH-004",
+          "engine": "causality",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "buyer",
+          "title_excerpt": "买家越权查看他人地址"
+        },
+        {
+          "reason": "path_hint_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "CAUSAL-AUTH-005",
+          "engine": "causality",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [
+            "/auditor/admin"
+          ],
+          "entity_hint": "buyer",
+          "title_excerpt": "非授权角色访问销售报表"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "onto_b6f82d3096ed8bce",
+          "engine": "bug_ontology",
+          "family": "consistency",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "system",
+          "title_excerpt": "异步操作必须在合理时间内达到最终一致状态"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_0_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_14_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_7_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_1_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_13_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_10_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_4_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_6_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_8_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_5_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_12_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "path_hint_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "INV-015",
+          "engine": "invariant",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [
+            "/warehouse/finance"
+          ],
+          "entity_hint": "Admin endpoints",
+          "title_excerpt": "后台接口角色鉴权：禁止越权操作"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "META-004",
+          "engine": "metamorphic",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "金额计算接口",
+          "title_excerpt": "金额字段缩放计算结果违反线性关系"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "META-010",
+          "engine": "metamorphic",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "分页请求",
+          "title_excerpt": "恶意较大page_size导致服务器内存耗尽"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "conservation_0_6dcd5daf",
+          "engine": "conservation",
+          "family": "conservation",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+        }
+      ],
+      "dropped_samples_truncated": 24,
+      "by_origin": {
+        "llm_reasoner": {
+          "input": 753,
+          "bound": 709,
+          "dropped_no_endpoint": 44
+        }
+      },
+      "origin": "llm_reasoner",
+      "status": "degraded",
+      "total_hypotheses": 753,
+      "total_engines": 20,
+      "successful_engine_count": 13,
+      "successful_engine_names": [
+        "causality",
+        "invariant",
+        "temporal",
+        "saga",
+        "event_chain",
+        "metamorphic",
+        "business_rules",
+        "multi_tenant",
+        "conservation",
+        "concurrency",
+        "async_task",
+        "cache_consistency",
+        "bug_ontology"
+      ],
+      "failed_engine_count": 5,
+      "degraded_engine_count": 2,
+      "degraded_engine_names": [
+        "state_machine",
+        "authorization"
+      ],
+      "observed_model_request_count": 17,
+      "observed_model_response_count": 17,
+      "model_usage": {
+        "request_count": 17,
+        "prompt_tokens": 125162,
+        "completion_tokens": 37228,
+        "total_tokens": 162390,
+        "cost_usd": 0.0,
+        "responses_with_cost": 0
+      },
+      "failed_engine_names": [
+        "reconciliation",
+        "counterexample",
+        "consistency",
+        "population",
+        "outcome"
+      ],
+      "engine_error_classes": {
+        "reconciliation": "response_parse",
+        "counterexample": "response_parse",
+        "consistency": "response_parse",
+        "population": "response_parse",
+        "outcome": "response_parse"
+      },
+      "engine_error_codes": {
+        "reconciliation": "empty_hypotheses",
+        "counterexample": "empty_hypotheses",
+        "consistency": "empty_hypotheses",
+        "population": "empty_hypotheses",
+        "outcome": "empty_hypotheses"
+      },
+      "engine_error_class_counts": {
+        "response_parse": 5
+      },
+      "engine_attempt_events": {
+        "causality": [
+          {
+            "attempt": 1,
+            "status": "success",
+            "category": "",
+            "code": "",
+            "retry_scheduled": false,
+            "duration_seconds": 104.035
+          }
+        ],
+        "invariant": [
+          {
+            "attempt": 1,
+            "status": "success",
+            "category": "",
+            "code": "",
+            "retry_scheduled": false,
+            "duration_seconds": 102.359
+          }
+        ],
+        "reconciliation": [
+          {
+            "attempt": 1,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": true,
+            "duration_seconds": 3.446
+          },
+          {
+            "attempt": 2,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": false,
+            "duration_seconds": 6.571
+          }
+        ],
+        "counterexample": [
+          {
+            "attempt": 1,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": true,
+            "duration_seconds": 4.782
+          },
+          {
+            "attempt": 2,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": false,
+            "duration_seconds": 3.082
+          }
+        ],
+        "consistency": [
+          {
+            "attempt": 1,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": true,
+            "duration_seconds": 7.566
+          },
+          {
+            "attempt": 2,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": false,
+            "duration_seconds": 3.265
+          }
+        ],
+        "population": [
+          {
+            "attempt": 1,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": true,
+            "duration_seconds": 7.8
+          },
+          {
+            "attempt": 2,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": false,
+            "duration_seconds": 7.88
+          }
+        ],
+        "outcome": [
+          {
+            "attempt": 1,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": true,
+            "duration_seconds": 3.959
+          },
+          {
+            "attempt": 2,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": false,
+            "duration_seconds": 10.188
+          }
+        ],
+        "temporal": [
+          {
+            "attempt": 1,
+            "status": "success",
+            "category": "",
+            "code": "",
+            "retry_scheduled": false,
+            "duration_seconds": 55.954
+          }
+        ],
+        "saga": [
+          {
+            "attempt": 1,
+            "status": "success",
+            "category": "",
+            "code": "",
+            "retry_scheduled": false,
+            "duration_seconds": 88.537
+          }
+        ],
+        "event_chain": [
+          {
+            "attempt": 1,
+            "status": "success",
+            "category": "",
+            "code": "",
+            "retry_scheduled": false,
+            "duration_seconds": 68.75
+          }
+        ],
+        "metamorphic": [
+          {
+            "attempt": 1,
+            "status": "failed",
+            "category": "response_parse",
+            "code": "empty_hypotheses",
+            "retry_scheduled": true,
+            "duration_seconds": 6.497
+          },
+          {
+            "attempt": 2,
+            "status": "success",
+            "category": "",
+            "code": "",
+            "retry_scheduled": false,
+            "duration_seconds": 68.327
+          }
+        ]
+      },
+      "max_workers": 4,
+      "max_hypotheses_per_engine": 15,
+      "timeout_seconds": 300,
+      "max_tokens": 32768
+    }
+  },
+  "discovery_funnel": {
+    "schema_version": "qualibug.discovery-funnel.v2",
+    "stages": [
+      {
+        "name": "obligation_generation",
+        "input": 307,
+        "success": 307,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {},
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 4,
+            "api_permission_contract": 17,
+            "database_schema": 20,
+            "engine": 243,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 12,
+            "hypothesis:llm_reasoner": 231,
+            "permission_matrix": 94,
+            "requirement": 100,
+            "test_account": 25
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 121,
+            "inventory": 1,
+            "money": 19,
+            "money_quantity_conservation": 2,
+            "permission": 126,
+            "source_observation": 1,
+            "state_machine": 1,
+            "transition": 8
+          },
+          "operation": {
+            "/api/auth/admin/users/:id/status": 1,
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/auth/password/reset": 1,
+            "/api/auth/register": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 5,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/use": 10,
+            "/api/coupons/validate": 16,
+            "/api/inventory/:sku": 11,
+            "/api/inventory/admin/adjust": 3,
+            "/api/inventory/consume": 13,
+            "/api/inventory/release": 11,
+            "/api/inventory/reserve": 11,
+            "/api/orders": 43,
+            "/api/orders/:id": 17,
+            "/api/orders/:id/cancel": 12,
+            "/api/orders/:id/confirm": 11,
+            "/api/orders/:id/ship": 18,
+            "/api/payments/admin/manual-success": 1,
+            "/api/payments/order/:orderId": 35,
+            "/api/payments/pay": 14,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 2,
+            "/api/products/admin/:sku": 3,
+            "/api/refunds": 23,
+            "/api/refunds/:id": 8,
+            "/api/refunds/:id/approve": 14,
+            "/api/refunds/:id/reject": 14,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 7,
+            "/api/users/admin/search": 3,
+            "/api/users/admin/users/:id/balance": 15,
+            "DELETE /api/cart/items/{id}": 2,
+            "DELETE /api/products/admin/SKU-DRAFT-006": 1,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 12,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 18,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 9,
+            "POST /api/auth/password/reset": 1,
+            "POST /api/auth/register": 1,
+            "POST /api/cart/items": 7,
+            "POST /api/coupons/validate": 2,
+            "POST /api/inventory/admin/adjust": 2,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20,
+            "POST /api/users/addresses": 2
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 13,
+            "auditor:auditor01": 13,
+            "authenticated": 2,
+            "buyer": 3,
+            "buyer:buyer01": 165,
+            "buyer:buyer02": 13,
+            "buyer:disabled_buyer": 16,
+            "finance:finance01": 13,
+            "readonly": 3,
+            "scenario_native": 29,
+            "seller:seller01": 13,
+            "warehouse": 1,
+            "warehouse:warehouse01": 13
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 307
+          },
+          "round": {
+            "1": 307
+          },
+          "terminal_status": {
+            "BLOCKED": 16,
+            "HARNESS_FAILED": 154,
+            "REJECTED": 137
+          },
+          "reason_code": {}
+        }
+      },
+      {
+        "name": "experiment_compile",
+        "input": 307,
+        "success": 302,
+        "blocked": 5,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {
+          "LEGACY_SCENARIO_RECEIPT_MISSING": 5
+        },
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 4,
+            "api_permission_contract": 17,
+            "database_schema": 20,
+            "engine": 243,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 12,
+            "hypothesis:llm_reasoner": 231,
+            "permission_matrix": 94,
+            "requirement": 100,
+            "test_account": 25
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 121,
+            "inventory": 1,
+            "money": 19,
+            "money_quantity_conservation": 2,
+            "permission": 126,
+            "source_observation": 1,
+            "state_machine": 1,
+            "transition": 8
+          },
+          "operation": {
+            "/api/auth/admin/users/:id/status": 1,
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/auth/password/reset": 1,
+            "/api/auth/register": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 5,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/use": 10,
+            "/api/coupons/validate": 16,
+            "/api/inventory/:sku": 11,
+            "/api/inventory/admin/adjust": 3,
+            "/api/inventory/consume": 13,
+            "/api/inventory/release": 11,
+            "/api/inventory/reserve": 11,
+            "/api/orders": 43,
+            "/api/orders/:id": 17,
+            "/api/orders/:id/cancel": 12,
+            "/api/orders/:id/confirm": 11,
+            "/api/orders/:id/ship": 18,
+            "/api/payments/admin/manual-success": 1,
+            "/api/payments/order/:orderId": 35,
+            "/api/payments/pay": 14,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 2,
+            "/api/products/admin/:sku": 3,
+            "/api/refunds": 23,
+            "/api/refunds/:id": 8,
+            "/api/refunds/:id/approve": 14,
+            "/api/refunds/:id/reject": 14,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 7,
+            "/api/users/admin/search": 3,
+            "/api/users/admin/users/:id/balance": 15,
+            "DELETE /api/cart/items/{id}": 2,
+            "DELETE /api/products/admin/SKU-DRAFT-006": 1,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 12,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 18,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 9,
+            "POST /api/auth/password/reset": 1,
+            "POST /api/auth/register": 1,
+            "POST /api/cart/items": 7,
+            "POST /api/coupons/validate": 2,
+            "POST /api/inventory/admin/adjust": 2,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20,
+            "POST /api/users/addresses": 2
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 13,
+            "auditor:auditor01": 13,
+            "authenticated": 2,
+            "buyer": 3,
+            "buyer:buyer01": 165,
+            "buyer:buyer02": 13,
+            "buyer:disabled_buyer": 16,
+            "finance:finance01": 13,
+            "readonly": 3,
+            "scenario_native": 29,
+            "seller:seller01": 13,
+            "warehouse": 1,
+            "warehouse:warehouse01": 13
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 307
+          },
+          "round": {
+            "1": 307
+          },
+          "terminal_status": {
+            "BLOCKED": 16,
+            "HARNESS_FAILED": 154,
+            "REJECTED": 137
+          },
+          "reason_code": {
+            "LEGACY_SCENARIO_RECEIPT_MISSING": 5
+          }
+        }
+      },
+      {
+        "name": "binding_materialization",
+        "input": 307,
+        "success": 302,
+        "blocked": 5,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {
+          "LEGACY_SCENARIO_RECEIPT_MISSING": 5
+        },
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 4,
+            "api_permission_contract": 17,
+            "database_schema": 20,
+            "engine": 243,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 12,
+            "hypothesis:llm_reasoner": 231,
+            "permission_matrix": 94,
+            "requirement": 100,
+            "test_account": 25
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 121,
+            "inventory": 1,
+            "money": 19,
+            "money_quantity_conservation": 2,
+            "permission": 126,
+            "source_observation": 1,
+            "state_machine": 1,
+            "transition": 8
+          },
+          "operation": {
+            "/api/auth/admin/users/:id/status": 1,
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/auth/password/reset": 1,
+            "/api/auth/register": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 5,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/use": 10,
+            "/api/coupons/validate": 16,
+            "/api/inventory/:sku": 11,
+            "/api/inventory/admin/adjust": 3,
+            "/api/inventory/consume": 13,
+            "/api/inventory/release": 11,
+            "/api/inventory/reserve": 11,
+            "/api/orders": 43,
+            "/api/orders/:id": 17,
+            "/api/orders/:id/cancel": 12,
+            "/api/orders/:id/confirm": 11,
+            "/api/orders/:id/ship": 18,
+            "/api/payments/admin/manual-success": 1,
+            "/api/payments/order/:orderId": 35,
+            "/api/payments/pay": 14,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 2,
+            "/api/products/admin/:sku": 3,
+            "/api/refunds": 23,
+            "/api/refunds/:id": 8,
+            "/api/refunds/:id/approve": 14,
+            "/api/refunds/:id/reject": 14,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 7,
+            "/api/users/admin/search": 3,
+            "/api/users/admin/users/:id/balance": 15,
+            "DELETE /api/cart/items/{id}": 2,
+            "DELETE /api/products/admin/SKU-DRAFT-006": 1,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 12,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 18,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 9,
+            "POST /api/auth/password/reset": 1,
+            "POST /api/auth/register": 1,
+            "POST /api/cart/items": 7,
+            "POST /api/coupons/validate": 2,
+            "POST /api/inventory/admin/adjust": 2,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20,
+            "POST /api/users/addresses": 2
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 13,
+            "auditor:auditor01": 13,
+            "authenticated": 2,
+            "buyer": 3,
+            "buyer:buyer01": 165,
+            "buyer:buyer02": 13,
+            "buyer:disabled_buyer": 16,
+            "finance:finance01": 13,
+            "readonly": 3,
+            "scenario_native": 29,
+            "seller:seller01": 13,
+            "warehouse": 1,
+            "warehouse:warehouse01": 13
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 307
+          },
+          "round": {
+            "1": 307
+          },
+          "terminal_status": {
+            "BLOCKED": 16,
+            "HARNESS_FAILED": 154,
+            "REJECTED": 137
+          },
+          "reason_code": {
+            "LEGACY_SCENARIO_RECEIPT_MISSING": 5
+          }
+        }
+      },
+      {
+        "name": "fixture_setup",
+        "input": 302,
+        "success": 302,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {},
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 4,
+            "api_permission_contract": 17,
+            "database_schema": 20,
+            "engine": 238,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 12,
+            "hypothesis:llm_reasoner": 226,
+            "permission_matrix": 94,
+            "requirement": 100,
+            "test_account": 25
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 116,
+            "inventory": 1,
+            "money": 19,
+            "money_quantity_conservation": 2,
+            "permission": 126,
+            "source_observation": 1,
+            "state_machine": 1,
+            "transition": 8
+          },
+          "operation": {
+            "/api/auth/admin/users/:id/status": 1,
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/auth/password/reset": 1,
+            "/api/auth/register": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 4,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/use": 10,
+            "/api/coupons/validate": 15,
+            "/api/inventory/:sku": 11,
+            "/api/inventory/admin/adjust": 3,
+            "/api/inventory/consume": 13,
+            "/api/inventory/release": 11,
+            "/api/inventory/reserve": 11,
+            "/api/orders": 43,
+            "/api/orders/:id": 17,
+            "/api/orders/:id/cancel": 12,
+            "/api/orders/:id/confirm": 11,
+            "/api/orders/:id/ship": 18,
+            "/api/payments/order/:orderId": 35,
+            "/api/payments/pay": 14,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 1,
+            "/api/products/admin/:sku": 2,
+            "/api/refunds": 23,
+            "/api/refunds/:id": 8,
+            "/api/refunds/:id/approve": 14,
+            "/api/refunds/:id/reject": 14,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 7,
+            "/api/users/admin/search": 3,
+            "/api/users/admin/users/:id/balance": 15,
+            "DELETE /api/cart/items/{id}": 2,
+            "DELETE /api/products/admin/SKU-DRAFT-006": 1,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 12,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 18,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 9,
+            "POST /api/auth/password/reset": 1,
+            "POST /api/auth/register": 1,
+            "POST /api/cart/items": 7,
+            "POST /api/coupons/validate": 2,
+            "POST /api/inventory/admin/adjust": 2,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20,
+            "POST /api/users/addresses": 2
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 13,
+            "auditor:auditor01": 13,
+            "authenticated": 2,
+            "buyer": 3,
+            "buyer:buyer01": 165,
+            "buyer:buyer02": 13,
+            "buyer:disabled_buyer": 16,
+            "finance:finance01": 13,
+            "readonly": 3,
+            "scenario_native": 29,
+            "seller:seller01": 13,
+            "warehouse": 1,
+            "warehouse:warehouse01": 13
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 302
+          },
+          "round": {
+            "1": 302
+          },
+          "terminal_status": {
+            "BLOCKED": 11,
+            "HARNESS_FAILED": 154,
+            "REJECTED": 137
+          },
+          "reason_code": {}
+        }
+      },
+      {
+        "name": "governed_execution",
+        "input": 302,
+        "success": 137,
+        "blocked": 11,
+        "failed": 154,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {
+          "BLOCKED_EXECUTION_ERROR": 11,
+          "LEGACY_EXECUTION_ERROR": 154
+        },
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 4,
+            "api_permission_contract": 17,
+            "database_schema": 20,
+            "engine": 238,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 12,
+            "hypothesis:llm_reasoner": 226,
+            "permission_matrix": 94,
+            "requirement": 100,
+            "test_account": 25
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 116,
+            "inventory": 1,
+            "money": 19,
+            "money_quantity_conservation": 2,
+            "permission": 126,
+            "source_observation": 1,
+            "state_machine": 1,
+            "transition": 8
+          },
+          "operation": {
+            "/api/auth/admin/users/:id/status": 1,
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/auth/password/reset": 1,
+            "/api/auth/register": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 4,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/use": 10,
+            "/api/coupons/validate": 15,
+            "/api/inventory/:sku": 11,
+            "/api/inventory/admin/adjust": 3,
+            "/api/inventory/consume": 13,
+            "/api/inventory/release": 11,
+            "/api/inventory/reserve": 11,
+            "/api/orders": 43,
+            "/api/orders/:id": 17,
+            "/api/orders/:id/cancel": 12,
+            "/api/orders/:id/confirm": 11,
+            "/api/orders/:id/ship": 18,
+            "/api/payments/order/:orderId": 35,
+            "/api/payments/pay": 14,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 1,
+            "/api/products/admin/:sku": 2,
+            "/api/refunds": 23,
+            "/api/refunds/:id": 8,
+            "/api/refunds/:id/approve": 14,
+            "/api/refunds/:id/reject": 14,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 7,
+            "/api/users/admin/search": 3,
+            "/api/users/admin/users/:id/balance": 15,
+            "DELETE /api/cart/items/{id}": 2,
+            "DELETE /api/products/admin/SKU-DRAFT-006": 1,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 12,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 18,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 9,
+            "POST /api/auth/password/reset": 1,
+            "POST /api/auth/register": 1,
+            "POST /api/cart/items": 7,
+            "POST /api/coupons/validate": 2,
+            "POST /api/inventory/admin/adjust": 2,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20,
+            "POST /api/users/addresses": 2
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 13,
+            "auditor:auditor01": 13,
+            "authenticated": 2,
+            "buyer": 3,
+            "buyer:buyer01": 165,
+            "buyer:buyer02": 13,
+            "buyer:disabled_buyer": 16,
+            "finance:finance01": 13,
+            "readonly": 3,
+            "scenario_native": 29,
+            "seller:seller01": 13,
+            "warehouse": 1,
+            "warehouse:warehouse01": 13
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 302
+          },
+          "round": {
+            "1": 302
+          },
+          "terminal_status": {
+            "BLOCKED": 11,
+            "HARNESS_FAILED": 154,
+            "REJECTED": 137
+          },
+          "reason_code": {
+            "BLOCKED_EXECUTION_ERROR": 11,
+            "LEGACY_EXECUTION_ERROR": 154
+          }
+        }
+      },
+      {
+        "name": "observation",
+        "input": 137,
+        "success": 137,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {},
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 1,
+            "database_schema": 20,
+            "engine": 105,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 7,
+            "hypothesis:llm_reasoner": 98,
+            "permission_matrix": 14,
+            "requirement": 92,
+            "test_account": 4
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 89,
+            "money": 6,
+            "money_quantity_conservation": 1,
+            "permission": 11,
+            "source_observation": 1,
+            "state_machine": 1
+          },
+          "operation": {
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 2,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/validate": 13,
+            "/api/inventory/:sku": 11,
+            "/api/orders": 37,
+            "/api/orders/:id": 17,
+            "/api/payments/order/:orderId": 34,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 1,
+            "/api/products/admin/:sku": 1,
+            "/api/refunds": 22,
+            "/api/refunds/:id": 8,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 4,
+            "/api/users/admin/search": 3,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 10,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 17,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 7,
+            "POST /api/cart/items": 5,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 1,
+            "auditor:auditor01": 1,
+            "authenticated": 2,
+            "buyer": 2,
+            "buyer:buyer01": 107,
+            "buyer:buyer02": 2,
+            "buyer:disabled_buyer": 4,
+            "finance:finance01": 1,
+            "readonly": 2,
+            "scenario_native": 5,
+            "seller:seller01": 1,
+            "warehouse": 1,
+            "warehouse:warehouse01": 1
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 137
+          },
+          "round": {
+            "1": 137
+          },
+          "terminal_status": {
+            "REJECTED": 137
+          },
+          "reason_code": {}
+        }
+      },
+      {
+        "name": "assertion",
+        "input": 137,
+        "success": 137,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {},
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 1,
+            "database_schema": 20,
+            "engine": 105,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 7,
+            "hypothesis:llm_reasoner": 98,
+            "permission_matrix": 14,
+            "requirement": 92,
+            "test_account": 4
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 89,
+            "money": 6,
+            "money_quantity_conservation": 1,
+            "permission": 11,
+            "source_observation": 1,
+            "state_machine": 1
+          },
+          "operation": {
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 2,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/validate": 13,
+            "/api/inventory/:sku": 11,
+            "/api/orders": 37,
+            "/api/orders/:id": 17,
+            "/api/payments/order/:orderId": 34,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 1,
+            "/api/products/admin/:sku": 1,
+            "/api/refunds": 22,
+            "/api/refunds/:id": 8,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 4,
+            "/api/users/admin/search": 3,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 10,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 17,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 7,
+            "POST /api/cart/items": 5,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 1,
+            "auditor:auditor01": 1,
+            "authenticated": 2,
+            "buyer": 2,
+            "buyer:buyer01": 107,
+            "buyer:buyer02": 2,
+            "buyer:disabled_buyer": 4,
+            "finance:finance01": 1,
+            "readonly": 2,
+            "scenario_native": 5,
+            "seller:seller01": 1,
+            "warehouse": 1,
+            "warehouse:warehouse01": 1
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 137
+          },
+          "round": {
+            "1": 137
+          },
+          "terminal_status": {
+            "REJECTED": 137
+          },
+          "reason_code": {}
+        }
+      },
+      {
+        "name": "oracle_resolution",
+        "input": 137,
+        "success": 137,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {},
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 1,
+            "database_schema": 20,
+            "engine": 105,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 7,
+            "hypothesis:llm_reasoner": 98,
+            "permission_matrix": 14,
+            "requirement": 92,
+            "test_account": 4
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 89,
+            "money": 6,
+            "money_quantity_conservation": 1,
+            "permission": 11,
+            "source_observation": 1,
+            "state_machine": 1
+          },
+          "operation": {
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 2,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/validate": 13,
+            "/api/inventory/:sku": 11,
+            "/api/orders": 37,
+            "/api/orders/:id": 17,
+            "/api/payments/order/:orderId": 34,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 1,
+            "/api/products/admin/:sku": 1,
+            "/api/refunds": 22,
+            "/api/refunds/:id": 8,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 4,
+            "/api/users/admin/search": 3,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 10,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 17,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 7,
+            "POST /api/cart/items": 5,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 1,
+            "auditor:auditor01": 1,
+            "authenticated": 2,
+            "buyer": 2,
+            "buyer:buyer01": 107,
+            "buyer:buyer02": 2,
+            "buyer:disabled_buyer": 4,
+            "finance:finance01": 1,
+            "readonly": 2,
+            "scenario_native": 5,
+            "seller:seller01": 1,
+            "warehouse": 1,
+            "warehouse:warehouse01": 1
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 137
+          },
+          "round": {
+            "1": 137
+          },
+          "terminal_status": {
+            "REJECTED": 137
+          },
+          "reason_code": {}
+        }
+      },
+      {
+        "name": "delivery_gate",
+        "input": 137,
+        "success": 137,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {
+          "LEGACY_RECEIPT_CHAIN_UNVERIFIABLE": 137
+        },
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 1,
+            "database_schema": 20,
+            "engine": 105,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 7,
+            "hypothesis:llm_reasoner": 98,
+            "permission_matrix": 14,
+            "requirement": 92,
+            "test_account": 4
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 89,
+            "money": 6,
+            "money_quantity_conservation": 1,
+            "permission": 11,
+            "source_observation": 1,
+            "state_machine": 1
+          },
+          "operation": {
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 2,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/validate": 13,
+            "/api/inventory/:sku": 11,
+            "/api/orders": 37,
+            "/api/orders/:id": 17,
+            "/api/payments/order/:orderId": 34,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 1,
+            "/api/products/admin/:sku": 1,
+            "/api/refunds": 22,
+            "/api/refunds/:id": 8,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 4,
+            "/api/users/admin/search": 3,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 10,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 17,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 7,
+            "POST /api/cart/items": 5,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 1,
+            "auditor:auditor01": 1,
+            "authenticated": 2,
+            "buyer": 2,
+            "buyer:buyer01": 107,
+            "buyer:buyer02": 2,
+            "buyer:disabled_buyer": 4,
+            "finance:finance01": 1,
+            "readonly": 2,
+            "scenario_native": 5,
+            "seller:seller01": 1,
+            "warehouse": 1,
+            "warehouse:warehouse01": 1
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 137
+          },
+          "round": {
+            "1": 137
+          },
+          "terminal_status": {
+            "REJECTED": 137
+          },
+          "reason_code": {
+            "LEGACY_RECEIPT_CHAIN_UNVERIFIABLE": 137
+          }
+        }
+      },
+      {
+        "name": "cleanup",
+        "input": 137,
+        "success": 137,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {},
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 1,
+            "database_schema": 20,
+            "engine": 105,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 7,
+            "hypothesis:llm_reasoner": 98,
+            "permission_matrix": 14,
+            "requirement": 92,
+            "test_account": 4
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 89,
+            "money": 6,
+            "money_quantity_conservation": 1,
+            "permission": 11,
+            "source_observation": 1,
+            "state_machine": 1
+          },
+          "operation": {
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 2,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/validate": 13,
+            "/api/inventory/:sku": 11,
+            "/api/orders": 37,
+            "/api/orders/:id": 17,
+            "/api/payments/order/:orderId": 34,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 1,
+            "/api/products/admin/:sku": 1,
+            "/api/refunds": 22,
+            "/api/refunds/:id": 8,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 4,
+            "/api/users/admin/search": 3,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 10,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 17,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 7,
+            "POST /api/cart/items": 5,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 1,
+            "auditor:auditor01": 1,
+            "authenticated": 2,
+            "buyer": 2,
+            "buyer:buyer01": 107,
+            "buyer:buyer02": 2,
+            "buyer:disabled_buyer": 4,
+            "finance:finance01": 1,
+            "readonly": 2,
+            "scenario_native": 5,
+            "seller:seller01": 1,
+            "warehouse": 1,
+            "warehouse:warehouse01": 1
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 137
+          },
+          "round": {
+            "1": 137
+          },
+          "terminal_status": {
+            "REJECTED": 137
+          },
+          "reason_code": {}
+        }
+      },
+      {
+        "name": "formal_projection",
+        "input": 307,
+        "success": 307,
+        "blocked": 0,
+        "failed": 0,
+        "elapsed_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "reason_counts": {},
+        "dimensions": {
+          "source": {
+            "api_document": 16,
+            "api_endpoint": 4,
+            "api_permission_contract": 17,
+            "database_schema": 20,
+            "engine": 243,
+            "historical_bug": 3,
+            "historical_bug_id": 3,
+            "hypothesis:analyzer": 12,
+            "hypothesis:llm_reasoner": 231,
+            "permission_matrix": 94,
+            "requirement": 100,
+            "test_account": 25
+          },
+          "risk_family": {
+            "authorization_access_control": 4,
+            "concurrency": 2,
+            "dependency": 4,
+            "input_validation": 18,
+            "invariant": 121,
+            "inventory": 1,
+            "money": 19,
+            "money_quantity_conservation": 2,
+            "permission": 126,
+            "source_observation": 1,
+            "state_machine": 1,
+            "transition": 8
+          },
+          "operation": {
+            "/api/auth/admin/users/:id/status": 1,
+            "/api/auth/login": 2,
+            "/api/auth/me": 1,
+            "/api/auth/password/reset": 1,
+            "/api/auth/register": 1,
+            "/api/cart/items": 18,
+            "/api/cart/items/:id": 5,
+            "/api/coupons": 9,
+            "/api/coupons/:id": 2,
+            "/api/coupons/use": 10,
+            "/api/coupons/validate": 16,
+            "/api/inventory/:sku": 11,
+            "/api/inventory/admin/adjust": 3,
+            "/api/inventory/consume": 13,
+            "/api/inventory/release": 11,
+            "/api/inventory/reserve": 11,
+            "/api/orders": 43,
+            "/api/orders/:id": 17,
+            "/api/orders/:id/cancel": 12,
+            "/api/orders/:id/confirm": 11,
+            "/api/orders/:id/ship": 18,
+            "/api/payments/admin/manual-success": 1,
+            "/api/payments/order/:orderId": 35,
+            "/api/payments/pay": 14,
+            "/api/products": 5,
+            "/api/products/:sku": 3,
+            "/api/products/admin": 2,
+            "/api/products/admin/:sku": 3,
+            "/api/refunds": 23,
+            "/api/refunds/:id": 8,
+            "/api/refunds/:id/approve": 14,
+            "/api/refunds/:id/reject": 14,
+            "/api/reports/inventory-risk": 4,
+            "/api/reports/sales": 1,
+            "/api/reports/users": 4,
+            "/api/users/addresses": 7,
+            "/api/users/admin/search": 3,
+            "/api/users/admin/users/:id/balance": 15,
+            "DELETE /api/cart/items/{id}": 2,
+            "DELETE /api/products/admin/SKU-DRAFT-006": 1,
+            "GET /api/addresses": 45,
+            "GET /api/auth/me": 1,
+            "GET /api/cart/items": 12,
+            "GET /api/coupons": 9,
+            "GET /api/inventory/SKU-DRAFT-006": 9,
+            "GET /api/order": 20,
+            "GET /api/orders": 65,
+            "GET /api/orders/{id}": 1,
+            "GET /api/payments/order/{id}": 18,
+            "GET /api/products": 18,
+            "GET /api/products/SKU-DRAFT-006": 1,
+            "GET /api/refunds": 1,
+            "GET /api/refunds/{id}": 9,
+            "GET /api/reports/inventory-risk": 2,
+            "GET /api/reports/sales": 1,
+            "GET /api/reports/users": 4,
+            "GET /api/user/addresses": 45,
+            "GET /api/users/addresses": 47,
+            "GET /api/users/admin/search": 1,
+            "PATCH /api/cart/items/{id}": 2,
+            "PATCH /api/products/admin/SKU-DRAFT-006": 1,
+            "POST /api/auth/login": 9,
+            "POST /api/auth/password/reset": 1,
+            "POST /api/auth/register": 1,
+            "POST /api/cart/items": 7,
+            "POST /api/coupons/validate": 2,
+            "POST /api/inventory/admin/adjust": 2,
+            "POST /api/orders": 25,
+            "POST /api/orders/{id}/cancel": 9,
+            "POST /api/products/admin": 1,
+            "POST /api/refunds": 20,
+            "POST /api/users/addresses": 2
+          },
+          "actor": {
+            "account_status_probe": 1,
+            "admin:admin": 13,
+            "auditor:auditor01": 13,
+            "authenticated": 2,
+            "buyer": 3,
+            "buyer:buyer01": 165,
+            "buyer:buyer02": 13,
+            "buyer:disabled_buyer": 16,
+            "finance:finance01": 13,
+            "readonly": 3,
+            "scenario_native": 29,
+            "seller:seller01": 13,
+            "warehouse": 1,
+            "warehouse:warehouse01": 13
+          },
+          "adapter": {
+            "legacy_champion_receipt_adapter": 307
+          },
+          "round": {
+            "1": 307
+          },
+          "terminal_status": {
+            "BLOCKED": 16,
+            "HARNESS_FAILED": 154,
+            "REJECTED": 137
+          },
+          "reason_code": {}
+        }
+      }
+    ],
+    "top_blocking_reasons": [
+      {
+        "reason": "LEGACY_EXECUTION_ERROR",
+        "count": 154
+      },
+      {
+        "reason": "LEGACY_RECEIPT_CHAIN_UNVERIFIABLE",
+        "count": 137
+      },
+      {
+        "reason": "BLOCKED_EXECUTION_ERROR",
+        "count": 11
+      },
+      {
+        "reason": "LEGACY_SCENARIO_RECEIPT_MISSING",
+        "count": 5
+      }
+    ],
+    "validated_bug_count": 0,
+    "canonical_defect_count": 0,
+    "canonical_defect_ids": [],
+    "delivery_occurrence_count": 0,
+    "delivery_occurrence_finding_ids": [],
+    "pending_finding_count": 137,
+    "candidate_count": 307,
+    "explanation": "307 selected obligations, 307 terminal outcomes, 0 formal deliverables; pipeline health DEGRADED; all counts come from immutable attempt and formal projection receipts.",
+    "pipeline_health": {
+      "status": "DEGRADED",
+      "execution_status": "completed",
+      "selected_obligation_count": 307,
+      "terminal_obligation_count": 307,
+      "executed_obligation_count": 137,
+      "blocked_obligation_count": 16,
+      "harness_failure_count": 154,
+      "cleanup_failure_count": 0,
+      "observation_receipt_missing_count": 0,
+      "empty_findings_means_no_bugs": false,
+      "usage_cost_unknown": true,
+      "reasoner_status": "degraded",
+      "reasoner_failure_count": 5,
+      "reasoner_error_class_counts": {
+        "response_parse": 5
+      },
+      "secret_scan_failed": false,
+      "formal_id_mismatch": false,
+      "observability_gap_count": 0,
+      "observability_gaps": [],
+      "terminal_reason_counts": {
+        "BLOCKED_EXECUTION_ERROR": 11,
+        "LEGACY_EXECUTION_ERROR": 154,
+        "LEGACY_RECEIPT_CHAIN_UNVERIFIABLE": 137,
+        "LEGACY_SCENARIO_RECEIPT_MISSING": 5
+      },
+      "formal_customer_deliverable_count": 0,
+      "canonical_defect_count": 0,
+      "canonical_defect_ids": [],
+      "delivery_occurrence_count": 0,
+      "delivery_occurrence_finding_ids": [],
+      "shadow_attempt_deliverable_count": 0,
+      "planning_gap_reason": "",
+      "operator_note": "Attempt receipts expose incomplete, blocked, failed, or unmeasured discovery work; empty findings must not be interpreted as a defect-free target. Health flags: usage/cost_coverage_unknown, reasoner_failures, blocked_or_deferred_obligations. Terminal reasons: blocked_execution_error=11, legacy_execution_error=154, legacy_receipt_chain_unverifiable=137, legacy_scenario_receipt_missing=5.",
+      "execution_reason": "preflight_health_failed",
+      "preflight": {
+        "present": true,
+        "ready": true,
+        "all_checks_passed": false,
+        "errors": 0,
+        "warnings": 1
+      }
+    },
+    "receipt_authority": "obligation_attempt_ledger",
+    "formal_count_projection": {
+      "schema_version": "qualibug.discovery-quality-projection.v2",
+      "authority_status": "VERIFIED",
+      "authority_reason": "",
+      "formal_customer_deliverable_count": 0,
+      "canonical_defect_count": 0,
+      "canonical_defect_ids": [],
+      "delivery_occurrence_count": 0,
+      "delivery_occurrence_finding_ids": [],
+      "canonical_representative_findings": [],
+      "executed_clue_count": 30,
+      "confirmation_receipt_count": 0,
+      "candidate_count": 30,
+      "funnel_validated_bug_count": 0,
+      "count_consistency": {
+        "formal_equals_funnel_validated": true,
+        "note": "formal_customer_deliverable_count equals canonical_defect_count; delivery_occurrence_count and funnel diagnostics are audit-only."
+      }
+    }
+  },
+  "auto_scale": {
+    "executable_pool_size": 699,
+    "slice_budget": 200,
+    "round_limit": 8,
+    "source": "auto_scaled_to_system_size"
+  },
+  "behavior_slice_summary": {
+    "total_slices": 699,
+    "by_kind": {
+      "dependency": 16,
+      "invariant": 275,
+      "source_observation": 3,
+      "transition": 8
+    },
+    "coverage_gap_count": 5,
+    "source_field_bound_invariant_count": 3,
+    "supplementary_slices": 85,
+    "historical_slices": 7,
+    "unified_slices": 740,
+    "pool_optimization": {
+      "input": 1134,
+      "protected": 62,
+      "collapsed_permission_isolation": 423,
+      "collapsed_llm_invariant": 12,
+      "output": 699
+    }
+  },
+  "multi_round_summary": null,
+  "input_gaps": [],
+  "external_evaluation": {
+    "schema_version": "qualibug.discovery-quality-projection.v2",
+    "measurement_status": "NOT_MEASURED",
+    "claim_status": "NOT_MEASURED",
+    "reason": "external_evaluator_receipt_required",
+    "commercial_promotion_evidence": false,
+    "formal_customer_deliverable_count": 0,
+    "quality_score": null,
+    "recall": null,
+    "precision": null,
+    "f1": null,
+    "display": {
+      "quality_label": "尚未完成外部质量评测",
+      "suppress_quality_score": true,
+      "suppress_recall_precision": true
+    },
+    "submission_file": "llm_throughput.evaluation_submission.json"
+  },
+  "score_semantics": {
+    "score_field": "internal_evidence_strength_only",
+    "commercial_quality_score": null,
+    "note": "score is not recall/precision/commercial capability while external_evaluation is NOT_MEASURED"
+  },
+  "commercial_quality_score": null
+}
+======================================================================

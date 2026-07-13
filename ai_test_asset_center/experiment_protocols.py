@@ -7,6 +7,7 @@ single status-code probe.
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 
@@ -52,17 +53,57 @@ def _request_body_schema(operation: dict[str, Any]) -> dict[str, Any]:
 
 def _validation_protocol_material(
     operation: dict[str, Any],
+    property_spec: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
     if not control or not schema:
         return {}, {}, {}
+    properties = _dict(schema.get("properties"))
+
+    explicit_targets: list[str] = []
+    expression = _dict(property_spec.get("expression"))
+    direct_values = [
+        property_spec.get("field"),
+        property_spec.get("field_name"),
+        property_spec.get("field_ref"),
+        property_spec.get("json_path"),
+        expression.get("field"),
+        expression.get("field_name"),
+        expression.get("field_ref"),
+        expression.get("json_path"),
+    ]
+    semantic_text = "\n".join(
+        _text(value)
+        for value in (
+            expression.get("raw"),
+            property_spec.get("source_intent"),
+            property_spec.get("description"),
+        )
+        if _text(value)
+    )
+    for field in properties:
+        normalized_direct = {
+            _text(value).removeprefix("$.")
+            for value in direct_values
+            if _text(value)
+        }
+        if field in normalized_direct or re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(str(field))}(?![A-Za-z0-9_])",
+            semantic_text,
+        ):
+            explicit_targets.append(str(field))
+
     required = [
         _text(value)
         for value in schema.get("required") or []
         if _text(value)
     ]
-    for field in required:
+    required_order = [
+        *[field for field in explicit_targets if field in required],
+        *[field for field in required if field not in explicit_targets],
+    ]
+    for field in required_order:
         if field not in control:
             continue
         treatment = deepcopy(control)
@@ -70,6 +111,42 @@ def _validation_protocol_material(
         return control, treatment, {
             "json_path": f"$.{field}",
             "constraint": "required",
+            "source": "request_schema",
+        }
+
+    def matches_declared_type(value: Any, declared_type: str) -> bool:
+        if declared_type == "string":
+            return isinstance(value, str)
+        if declared_type == "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if declared_type == "number":
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if declared_type == "boolean":
+            return isinstance(value, bool)
+        if declared_type == "array":
+            return isinstance(value, list)
+        if declared_type == "object":
+            return isinstance(value, dict)
+        if declared_type == "null":
+            return value is None
+        return False
+
+    field_order = [
+        *explicit_targets,
+        *[str(field) for field in properties if str(field) not in explicit_targets],
+    ]
+    for field in field_order:
+        raw_property = properties.get(field)
+        property_schema = _dict(raw_property)
+        declared_type = _text(property_schema.get("type")).lower()
+        if field not in control or not matches_declared_type(control[field], declared_type):
+            continue
+        invalid_value: Any = [] if declared_type == "object" else {} if declared_type != "null" else True
+        treatment = deepcopy(control)
+        treatment[field] = invalid_value
+        return control, treatment, {
+            "json_path": f"$.{field}",
+            "constraint": f"type:{declared_type}",
             "source": "request_schema",
         }
     return {}, {}, {}
@@ -144,6 +221,47 @@ def compile_family_protocol(
             }],
         }
 
+    if family == "concurrency":
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OPERATION",
+                "detail": "concurrency_requires_write_operation",
+            }
+        body = source_request_example(operation)
+        if method in {"POST", "PUT", "PATCH"} and not body:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": "source_request_example_missing",
+            }
+        barrier_group = f"barrier:{operation_ref}"
+        return {
+            "status": "COMPILED",
+            "control_plan": [{
+                "step_id": "control_1",
+                "actor_ref": control_actor_ref or treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "concurrency_participant_control",
+                "protocol_step": "concurrent_write",
+                "barrier_group": barrier_group,
+                "barrier_participant": "control",
+                "body": deepcopy(body),
+                "property_template": _text(property_spec.get("template")),
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "concurrency_participant_treatment",
+                "protocol_step": "concurrent_write",
+                "barrier_group": barrier_group,
+                "barrier_participant": "treatment",
+                "body": deepcopy(body),
+                "property_template": _text(property_spec.get("template")),
+            }],
+        }
+
     if family == "validation":
         if method not in {"POST", "PUT", "PATCH"}:
             return {
@@ -151,7 +269,10 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_MISSING_OPERATION",
                 "detail": "validation_body_protocol_requires_write_operation",
             }
-        control_body, treatment_body, mutation = _validation_protocol_material(operation)
+        control_body, treatment_body, mutation = _validation_protocol_material(
+            operation,
+            property_spec,
+        )
         if not mutation:
             return {
                 "status": "BLOCKED",

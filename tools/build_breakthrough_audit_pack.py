@@ -15,6 +15,9 @@ if str(ROOT) not in sys.path:
 from ai_test_asset_center.artifact_redactor import scan_for_secrets, write_json_redacted
 from ai_test_asset_center.behavior_ir import SCHEMA_VERSION as BIR_SCHEMA
 from ai_test_asset_center.experiment_contract import SCHEMA_VERSION as EXP_SCHEMA
+from ai_test_asset_center.discovery_quality_projection import (
+    SCHEMA_VERSION as QUALITY_PROJECTION_SCHEMA,
+)
 from ai_test_asset_center.test_obligation import SCHEMA_VERSION as OBL_SCHEMA
 
 
@@ -215,7 +218,7 @@ def main() -> None:
             "experiment": EXP_SCHEMA,
             "fixture_dag": "qualibug.fixture-dag.v1",
             "artifact_redactor": "qualibug.artifact-redactor.v1",
-            "quality_projection": "qualibug.discovery-quality-projection.v1",
+            "quality_projection": QUALITY_PROJECTION_SCHEMA,
         },
         "fingerprints": {
             "baseline_receipt": baseline_meta,

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Adapters that surface frontend runtime artifacts as discovery signals."""
 
@@ -11,6 +11,7 @@ try:
 except ImportError:
     run_frontend_runtime_smoke = None
 from .real_project_onboarding import ROOT, config_paths
+from .target_endpoint import resolve_target_base_url
 
 
 def generate_frontend_runtime_probes(
@@ -85,6 +86,7 @@ def collect_frontend_runtime_issues(
     cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     cfg = cfg if isinstance(cfg, dict) else {}
+    target_base_url = resolve_target_base_url(cfg.get("base_url"))
     issues: list[dict[str, Any]] = []
     workspace_dir, output_dir = _runtime_workspace_and_output(project_id, root)
     try:
@@ -92,7 +94,7 @@ def collect_frontend_runtime_issues(
             workspace_dir=workspace_dir,
             output_dir=output_dir,
             scenario=scenario,
-            api_base_url=str(cfg.get("base_url") or "http://127.0.0.1:8088"),
+            api_base_url=target_base_url,
             build_workspace=True,
         ).to_dict()
         for step in smoke_report.get("steps") or []:
@@ -143,4 +145,3 @@ def collect_frontend_runtime_issues(
             )
         )
     return issues
-

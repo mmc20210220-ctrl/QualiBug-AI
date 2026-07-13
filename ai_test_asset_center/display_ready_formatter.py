@@ -2529,7 +2529,8 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     if bug_status.get("status") != "reproduced":
         repro_rate = 0 if bug_status.get("status") in {"risk_clue", "not_reproduced"} else min(repro_rate, 69)
 
-    risk_id = _clean(finding.get("risk_id") or finding.get("finding_id") or finding.get("bug_id") or finding.get("issue_id"))
+    canonical_defect_id = _clean(finding.get("canonical_defect_id"))
+    risk_id = canonical_defect_id or _clean(finding.get("risk_id") or finding.get("finding_id") or finding.get("bug_id") or finding.get("issue_id"))
     # 判断 risk_id 是否是误填的标题（而非真正的唯一标识）：
     # - 太长（>40字符）
     # - 包含中文（标题有中文）
@@ -2545,7 +2546,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         (_raw_title and risk_id in _raw_title) or
         (risk_id and _raw_title in risk_id)
     )
-    if _looks_like_title:
+    if _looks_like_title and not canonical_defect_id:
         import hashlib as _hashlib
         _title_hash = _hashlib.md5(title.encode("utf-8")).hexdigest()[:8]
         if repro_path:
@@ -2567,6 +2568,16 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
 
     return {
         "id": risk_id,
+        "canonical_defect_id": canonical_defect_id,
+        "canonical_identity_fingerprint": _clean(
+            finding.get("canonical_identity_fingerprint")
+        ),
+        "delivery_occurrence_count": int(
+            finding.get("delivery_occurrence_count") or 0
+        ),
+        "delivery_occurrence_finding_ids": list(
+            finding.get("delivery_occurrence_finding_ids") or []
+        ) if isinstance(finding.get("delivery_occurrence_finding_ids"), list) else [],
         "candidate_id": _clean(finding.get("candidate_id")),
         "slice_id": _clean(finding.get("slice_id")),
         "obligation_id": _clean(finding.get("obligation_id")),
@@ -2992,6 +3003,7 @@ def _build_display_contract(display_findings: list[dict], raw_report: dict | Non
         completeness = item.get("evidence_completeness") if isinstance(item.get("evidence_completeness"), dict) else {}
         projection.append({
             "id": item.get("id"),
+            "canonical_defect_id": item.get("canonical_defect_id"),
             "title": item.get("title"),
             "severity": item.get("severity"),
             "bug_status": item.get("bug_status"),
@@ -3012,6 +3024,16 @@ def _build_display_contract(display_findings: list[dict], raw_report: dict | Non
         "source_of_truth": "backend.display_ready_formatter.format_findings_display_ready",
         "display_key": "risks",
         "materialized_risk_count": materialized_count,
+        "canonical_defect_count": sum(
+            1
+            for item in display_findings
+            if isinstance(item, dict) and item.get("canonical_defect_id")
+        ),
+        "canonical_defect_ids": [
+            str(item.get("canonical_defect_id"))
+            for item in display_findings
+            if isinstance(item, dict) and item.get("canonical_defect_id")
+        ],
         "raw_candidate_risk_count": raw_candidate_count,
         "raw_to_display_delta": max(0, raw_candidate_count - materialized_count),
         "ready_bug_count": ready_bug_count,
@@ -3156,7 +3178,22 @@ def format_findings_display_ready(
         risks = []
 
     # 业务级去重：同一业务缺陷被多个 Oracle/引擎重复报告时，只保留最高严重度的
-    risks = _dedupe_by_business_semantics(risks)
+    canonical_ids = [
+        _clean(item.get("canonical_defect_id"))
+        for item in risks
+        if isinstance(item, dict) and _clean(item.get("canonical_defect_id"))
+    ]
+    if canonical_ids:
+        if len(canonical_ids) != len(risks):
+            raise ValueError("canonical_and_legacy_findings_cannot_be_mixed")
+        if len(canonical_ids) != len(set(canonical_ids)):
+            raise ValueError("duplicate_canonical_defect_id")
+        # Receipt-derived identity is immutable. Formatting must not re-identify
+        # customer defects from mutable titles, severities, or route wording.
+        risks = list(risks)
+    else:
+        # Kept only for non-commercial legacy diagnostic renderers.
+        risks = _dedupe_by_business_semantics(risks)
 
     display_findings = [_format_single_finding(r, enterprise_ctx) for r in risks if isinstance(r, dict)]
     display_findings = _sort_display_findings(display_findings)

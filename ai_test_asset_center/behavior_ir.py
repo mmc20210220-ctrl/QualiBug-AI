@@ -105,6 +105,26 @@ _UNIVERSAL_ACTIONS = {
     "manage",
     "administer",
 }
+_UNIVERSAL_RESOURCES = {
+    "*",
+    "all",
+    "any",
+    "all_resources",
+    "everything",
+    "global",
+}
+_EXCLUSIVE_ROLE_MARKERS = (
+    r"\bonly\b",
+    r"\bsolely\b",
+    r"\bexclusively\b",
+    r"\brestricted\s+to\b",
+    r"\blimited\s+to\b",
+    r"\bexclusive\s+to\b",
+    "\u4ec5\u9650",
+    "\u53ea\u9650",
+    "\u552f\u6709",
+    "\u5fc5\u987b\u7531",
+)
 _PERMIT_DECISIONS = {"allow", "allowed", "grant", "granted", "permit", "permitted"}
 _DENY_DECISIONS = {
     "deny",
@@ -116,6 +136,12 @@ _DENY_DECISIONS = {
     "prohibit",
     "prohibited",
 }
+_CLEANUP_ACTION_RE = re.compile(
+    r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|"
+    r"remove|delete|deactivate|suspend|expire|invalidate|terminate|withdraw|"
+    r"abandon|discard|retire|freeze|reset|clear|purge)$",
+    re.I,
+)
 
 
 def _path_shape(value: Any) -> str:
@@ -137,11 +163,354 @@ def _path_shape(value: Any) -> str:
     return "/" + "/".join(segments)
 
 
+def _canonical_json_key(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _merge_unique_sorted(*collections: list[Any]) -> list[Any]:
+    by_key: dict[str, Any] = {}
+    for collection in collections:
+        for value in _list(collection):
+            by_key.setdefault(_canonical_json_key(value), value)
+    return [by_key[key] for key in sorted(by_key)]
+
+
+def _json_examples_from_text(value: Any) -> list[dict[str, Any]]:
+    text = _text(value)
+    if not text:
+        return []
+    examples: list[dict[str, Any]] = []
+    blocks = re.findall(
+        r"```(?:json|JSON)?\s*(\{.*?\})\s*```",
+        text,
+        flags=re.DOTALL,
+    )
+    if not blocks:
+        match = re.search(r"(\{(?:[^{}]|\{[^{}]*\})*\})", text, flags=re.DOTALL)
+        blocks = [match.group(1)] if match else []
+    for block in blocks:
+        try:
+            parsed = json.loads(block)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict) and parsed:
+            examples.append(parsed)
+    curl_blocks = re.findall(
+        r"(?:-d|--data|--data-raw)\s+['\"](\{.*?\})['\"]",
+        text,
+        flags=re.DOTALL,
+    )
+    for block in curl_blocks:
+        try:
+            parsed = json.loads(block)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict) and parsed:
+            examples.append(parsed)
+    yaml_blocks = re.findall(
+        r"```(?:yaml|yml)\s*(.*?)\s*```",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    for block in yaml_blocks:
+        parsed_yaml: dict[str, Any] = {}
+        for line in block.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, raw_value = (part.strip() for part in line.split(":", 1))
+            if not key:
+                continue
+            try:
+                parsed_value = json.loads(raw_value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed_value = raw_value.strip("'\"")
+            parsed_yaml[key] = parsed_value
+        if parsed_yaml:
+            examples.append(parsed_yaml)
+    return examples
+
+
+def _request_example_from_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    direct = _dict(schema.get("example"))
+    if direct:
+        return deepcopy(direct)
+    for media in _dict(schema.get("content")).values():
+        if not isinstance(media, dict):
+            continue
+        example = _dict(media.get("example"))
+        if example:
+            return deepcopy(example)
+        for row in _dict(media.get("examples")).values():
+            value = _dict(row).get("value")
+            if isinstance(value, dict) and value:
+                return deepcopy(value)
+    return {}
+
+
+def _operation_request_example(operation: dict[str, Any]) -> dict[str, Any]:
+    direct = _dict(operation.get("request_example"))
+    if direct:
+        return deepcopy(direct)
+    schema_example = _request_example_from_schema(
+        _dict(operation.get("request_schema") or operation.get("requestBody"))
+    )
+    if schema_example:
+        return schema_example
+    examples = _list(operation.get("examples"))
+    for example in examples:
+        if isinstance(example, dict) and example:
+            return deepcopy(example)
+    source_examples = _json_examples_from_text(operation.get("source_excerpt"))
+    return deepcopy(source_examples[0]) if source_examples else {}
+
+
+def _schema_type_for_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    if value is None:
+        return "null"
+    return "string"
+
+
+def _schema_from_example(value: Any) -> dict[str, Any]:
+    schema_type = _schema_type_for_value(value)
+    if isinstance(value, dict):
+        return {
+            "type": "object",
+            "required": sorted(str(key) for key in value),
+            "properties": {
+                str(key): _schema_from_example(child)
+                for key, child in sorted(value.items(), key=lambda item: str(item[0]))
+            },
+        }
+    if isinstance(value, list):
+        first = next((item for item in value if item is not None), None)
+        return {
+            "type": "array",
+            "items": _schema_from_example(first) if first is not None else {},
+        }
+    return {"type": schema_type}
+
+
+def _schema_from_field_dictionary(fields: list[Any]) -> dict[str, Any]:
+    properties: dict[str, Any] = {}
+    for field in sorted({_text(value) for value in fields if _text(value)}):
+        head = field.split(".", 1)[0].split("[", 1)[0]
+        if not head:
+            continue
+        properties.setdefault(head, {"type": "string"})
+    if not properties:
+        return {}
+    return {
+        "type": "object",
+        "properties": properties,
+    }
+
+
+def _merge_schema_dicts(prior: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    if not prior:
+        return deepcopy(incoming)
+    if not incoming:
+        return deepcopy(prior)
+    merged: dict[str, Any] = {}
+    for key in sorted(set(prior) | set(incoming)):
+        left = prior.get(key)
+        right = incoming.get(key)
+        if isinstance(left, dict) and isinstance(right, dict):
+            merged[key] = _merge_schema_dicts(left, right)
+        elif isinstance(left, list) and isinstance(right, list):
+            merged[key] = _merge_unique_sorted(left, right)
+        elif key not in prior:
+            merged[key] = deepcopy(right)
+        elif key not in incoming or left == right:
+            merged[key] = deepcopy(left)
+        else:
+            merged[key] = min(left, right, key=_canonical_json_key)
+    return merged
+
+
+def _schema_conflict_paths(prior: Any, incoming: Any, path: str = "") -> list[str]:
+    if not prior or not incoming:
+        return []
+    if isinstance(prior, dict) and isinstance(incoming, dict):
+        conflicts: list[str] = []
+        for key in sorted(set(prior) & set(incoming)):
+            if key in {"example", "examples", "required", "description", "summary"}:
+                continue
+            conflicts.extend(
+                _schema_conflict_paths(
+                    prior.get(key),
+                    incoming.get(key),
+                    f"{path}.{key}" if path else str(key),
+                )
+            )
+        return conflicts
+    if isinstance(prior, list) or isinstance(incoming, list):
+        return []
+    return [path or "$"] if prior != incoming else []
+
+
+def _request_schema_for_operation(operation: dict[str, Any]) -> dict[str, Any]:
+    schema = deepcopy(_dict(operation.get("request_schema") or operation.get("requestBody")))
+    example = _operation_request_example(operation)
+    field_schema = _schema_from_field_dictionary(_list(operation.get("field_dictionary")))
+    inferred = _schema_from_example(example) if example else field_schema
+    if not schema and (example or inferred):
+        schema = {"content": {"application/json": {}}}
+    content = _dict(schema.get("content"))
+    if content:
+        media = _dict(content.get("application/json"))
+        if example and not _dict(media.get("example")):
+            media["example"] = deepcopy(example)
+        if inferred:
+            media["schema"] = _merge_schema_dicts(_dict(media.get("schema")), inferred)
+        content["application/json"] = media
+        schema["content"] = content
+    elif inferred:
+        schema = _merge_schema_dicts(schema, inferred)
+    return schema
+
+
+def _best_text(left: Any, right: Any) -> str:
+    candidates = [_text(left), _text(right)]
+    candidates = [value for value in candidates if value]
+    if not candidates:
+        return ""
+    return sorted(candidates, key=lambda value: (-len(value), value))[0]
+
+
+def _canonical_operation_id(source_refs: list[Any], fallback: str) -> str:
+    aliases = [
+        _text(value)
+        for value in source_refs
+        if _text(value) and ":" not in _text(value)
+    ]
+    return sorted(aliases)[0] if aliases else fallback
+
+
+def _canonical_transport_operation_id(service: Any, method: Any, path: Any) -> str:
+    service_part = re.sub(r"[^a-z0-9]+", "_", _text(service).lower()).strip("_")
+    path_part = re.sub(r"[^a-z0-9]+", "_", _path_shape(path).lower()).strip("_")
+    return "_".join(part for part in (service_part, _text(method).lower(), path_part or "root") if part)
+
+
+def _canonicalize_duplicate_operation_ids(model: dict[str, Any]) -> None:
+    operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
+    by_operation_id: dict[str, list[dict[str, Any]]] = {}
+    for operation in operations:
+        operation_id = _text(operation.get("operation_id"))
+        if operation_id:
+            by_operation_id.setdefault(operation_id, []).append(operation)
+        operation["canonical_operation_id"] = _canonical_transport_operation_id(
+            operation.get("service"), operation.get("method"), operation.get("path")
+        )
+    used_ids = {_text(row.get("operation_id")) for row in operations if _text(row.get("operation_id"))}
+    for source_operation_id, duplicates in sorted(by_operation_id.items()):
+        if len(duplicates) < 2:
+            continue
+        duplicate_refs: list[str] = []
+        source_refs: list[dict[str, Any]] = []
+        for operation in sorted(duplicates, key=lambda row: _text(row.get("id"))):
+            canonical_id = _text(operation.get("canonical_operation_id"))
+            if canonical_id in used_ids and canonical_id != source_operation_id:
+                canonical_id = f"{canonical_id}_{_text(operation.get('id'))[-8:]}"
+            operation["operation_id"] = canonical_id
+            used_ids.add(canonical_id)
+            duplicate_refs.append(_text(operation.get("id")))
+            source_refs.extend(_list(operation.get("source_refs")))
+        model["conflicts"].append(_fact_node(
+            node_id=_stable_id("conflict", "duplicate_source_operation_id", source_operation_id),
+            typed_fields={
+                "conflict_type": "duplicate_source_operation_id",
+                "source_operation_id": source_operation_id,
+                "operation_refs": duplicate_refs,
+            },
+            source_refs=_merge_unique_sorted(source_refs),
+            confidence=1.0,
+            derivation="explicit",
+            status="conflicting",
+        ))
+
+
+def _singular_token(value: Any) -> str:
+    token = re.sub(r"[^a-z0-9]+", "", _text(value).lower())
+    if token.endswith("ies") and len(token) > 3:
+        return token[:-3] + "y"
+    if token.endswith("ses") and len(token) > 3:
+        return token[:-2]
+    if token.endswith("s") and len(token) > 1 and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def _canonical_entity_name(value: Any) -> str:
+    parts = [
+        _singular_token(part)
+        for part in re.findall(r"[a-z0-9]+", _text(value).lower())
+        if _singular_token(part)
+    ]
+    return "_".join(parts)
+
+
+def _operation_structural_entity(
+    operation: dict[str, Any],
+    entities: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    path_parts = [
+        _singular_token(part)
+        for part in re.findall(r"[a-z0-9]+", _path_shape(operation.get("path")))
+        if _singular_token(part) not in {"api", "v1", "v2", "v3", "admin"}
+    ]
+    if not path_parts:
+        return None
+    ranked: list[tuple[int, int, int, dict[str, Any]]] = []
+    for entity in entities:
+        canonical = _canonical_entity_name(entity.get("name"))
+        entity_parts = [part for part in canonical.split("_") if part]
+        if not entity_parts or len(entity_parts) > len(path_parts):
+            continue
+        positions = [
+            index
+            for index in range(len(path_parts) - len(entity_parts) + 1)
+            if path_parts[index:index + len(entity_parts)] == entity_parts
+        ]
+        if not positions:
+            continue
+        ranked.append((
+            len(entity_parts),
+            len(canonical),
+            -min(positions),
+            entity,
+        ))
+    if not ranked:
+        return None
+    best_score = max(row[:3] for row in ranked)
+    matches = [row[3] for row in ranked if row[:3] == best_score]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _resource_matches_operation(resource: Any, operation: dict[str, Any]) -> bool:
     resource_text = _text(resource).lower()
     operation_path = _text(operation.get("path"))
     if not resource_text or not operation_path:
         return False
+    if _normalize_action(resource_text) in _UNIVERSAL_RESOURCES:
+        return True
     if resource_text.startswith("/"):
         return _path_shape(resource_text) == _path_shape(operation_path)
     resource_tokens = set(re.findall(r"[a-z0-9_]+", resource_text))
@@ -433,6 +802,175 @@ def _derive_permission_relations(
     return relations
 
 
+def _role_terms(actor: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    for raw in (actor.get("role_key"), actor.get("role")):
+        value = _text(raw).lower()
+        if not value:
+            continue
+        variants = {
+            value,
+            value.replace("_", " "),
+            value.replace("-", " "),
+        }
+        normalized = _normalize_action(value)
+        if normalized.endswith("_role"):
+            variants.add(normalized[:-5].replace("_", " "))
+            variants.add(normalized[:-5])
+        for variant in variants:
+            cleaned = variant.strip(" _-")
+            if len(cleaned) > 1 and cleaned not in terms:
+                terms.append(cleaned)
+    return terms
+
+
+def _contains_role_term(source_text: str, term: str) -> bool:
+    term = _text(term).lower()
+    if not term:
+        return False
+    if not term.isascii():
+        return term in source_text
+    pieces = [piece for piece in re.split(r"[\s_\-]+", term) if piece]
+    if not pieces:
+        return False
+    body = r"[\s/_:\-]+".join(re.escape(piece) for piece in pieces)
+    return re.search(rf"(?<![a-z0-9]){body}(?![a-z0-9])", source_text) is not None
+
+
+def _operation_contract_text(operation: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for field in ("method", "path", "operation_id", "summary", "description"):
+        value = _text(operation.get(field))
+        if value:
+            parts.append(value)
+    parts.extend(_text(value) for value in _list(operation.get("tags")) if _text(value))
+    return " ".join(parts).lower()
+
+
+def _has_exclusive_role_marker(source_text: str) -> bool:
+    return any(re.search(marker, source_text) for marker in _EXCLUSIVE_ROLE_MARKERS)
+
+
+def _source_declared_allowed_roles(
+    operation: dict[str, Any],
+    actors_by_role: dict[str, list[dict[str, Any]]],
+) -> set[str]:
+    source_text = _operation_contract_text(operation)
+    if not source_text or not _has_exclusive_role_marker(source_text):
+        return set()
+    allowed: set[str] = set()
+    for role_key, actors in actors_by_role.items():
+        if any(
+            _contains_role_term(source_text, term)
+            for actor in actors
+            for term in _role_terms(actor)
+        ):
+            allowed.add(role_key)
+    return allowed
+
+
+def _permission_conflict_node(
+    *,
+    actor_ref: str,
+    operation_ref: str,
+    source_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return _fact_node(
+        node_id=_stable_id("conflict", "source_role_restriction", actor_ref, operation_ref),
+        typed_fields={
+            "conflict_type": "permission_decision_conflict",
+            "actor_ref": actor_ref,
+            "operation_ref": operation_ref,
+            "decisions": ["DENY", "PERMIT"],
+        },
+        source_refs=source_refs,
+        confidence=1.0,
+        derivation="explicit",
+        status="conflicting",
+    )
+
+
+def _derive_source_role_restriction_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
+    actors_by_role: dict[str, list[dict[str, Any]]] = {}
+    for actor in _list(model.get("actors")):
+        if not isinstance(actor, dict):
+            continue
+        role_key = _text(actor.get("role_key") or actor.get("role")).lower()
+        if role_key:
+            actors_by_role.setdefault(role_key, []).append(actor)
+    if not actors_by_role:
+        return []
+
+    derived: list[dict[str, Any]] = []
+    for operation in _list(model.get("operations")):
+        if not isinstance(operation, dict):
+            continue
+        operation_ref = _text(operation.get("id"))
+        if not operation_ref:
+            continue
+        allowed_roles = _source_declared_allowed_roles(operation, actors_by_role)
+        if not allowed_roles:
+            continue
+        source_text = _operation_contract_text(operation)
+        source_refs = list(operation.get("source_refs") or [])
+        source_refs.append(_source_ref(
+            "operation_contract",
+            locator=f"{_text(operation.get('method'))} {_text(operation.get('path'))}",
+            quote=source_text[:200],
+            kind="role_restriction",
+        ))
+        for role_key, actors in actors_by_role.items():
+            permission_decision = "PERMIT" if role_key in allowed_roles else "DENY"
+            relation_type = "permits" if permission_decision == "PERMIT" else "denies"
+            opposite_type = "denies" if relation_type == "permits" else "permits"
+            for actor in actors:
+                actor_ref = _text(actor.get("id"))
+                if not actor_ref:
+                    continue
+                existing = [
+                    row
+                    for row in [*model["relations"], *derived]
+                    if _text(row.get("operation_ref")) == operation_ref
+                    and _text(row.get("actor_ref") or row.get("from_ref")) == actor_ref
+                ]
+                opposite = [
+                    row for row in existing
+                    if _text(row.get("relation_type")) == opposite_type
+                    and _text(row.get("status")) not in {"unsupported", "unknown"}
+                ]
+                same = [
+                    row for row in existing
+                    if _text(row.get("relation_type")) == relation_type
+                    and _text(row.get("status")) not in {"unsupported", "unknown"}
+                ]
+                if opposite:
+                    for row in opposite:
+                        row["status"] = "conflicting"
+                    relation_status = "conflicting"
+                    model["conflicts"].append(_permission_conflict_node(
+                        actor_ref=actor_ref,
+                        operation_ref=operation_ref,
+                        source_refs=source_refs,
+                    ))
+                elif same:
+                    continue
+                else:
+                    relation_status = "accepted"
+                derived.append(_relation_node(
+                    relation_type=relation_type,
+                    from_ref=actor_ref,
+                    to_ref=operation_ref,
+                    operation_ref=operation_ref,
+                    actor_ref=actor_ref,
+                    source_refs=source_refs,
+                    confidence=0.84,
+                    derivation="explicit",
+                    status=relation_status,
+                    permission_decision=permission_decision,
+                ))
+    return derived
+
+
 def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
     operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
     relations: list[dict[str, Any]] = []
@@ -444,14 +982,23 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
             continue
         candidates: list[dict[str, Any]] = []
         for candidate in operations:
-            if _text(candidate.get("method")).upper() != "DELETE":
+            candidate_method = _text(candidate.get("method")).upper()
+            if candidate_method not in {"DELETE", "POST", "PATCH", "PUT"}:
                 continue
-            delete_shape = _path_shape(candidate.get("path")).rstrip("/")
-            segments = delete_shape.split("/")
+            compensation_shape = _path_shape(candidate.get("path")).rstrip("/")
+            segments = compensation_shape.split("/")
             if not segments or segments[-1] != "{}":
+                action_collection = "/".join(segments[:-2]).rstrip("/") if len(segments) >= 3 else ""
+                action_name = segments[-1] if segments else ""
+                if (
+                    candidate_method in {"POST", "PATCH", "PUT"}
+                    and action_collection == create_shape
+                    and _CLEANUP_ACTION_RE.search(action_name)
+                ):
+                    candidates.append(candidate)
                 continue
             collection_shape = "/".join(segments[:-1]).rstrip("/")
-            if collection_shape == create_shape:
+            if candidate_method == "DELETE" and collection_shape == create_shape:
                 candidates.append(candidate)
         if len(candidates) != 1:
             continue
@@ -478,7 +1025,17 @@ def _derive_operation_entity_relations(model: dict[str, Any]) -> list[dict[str, 
     entities = [row for row in _list(model.get("entities")) if isinstance(row, dict)]
     by_key: dict[str, list[dict[str, Any]]] = {}
     for entity in entities:
-        for key in {_text(entity.get("id")).lower(), _text(entity.get("name")).lower()}:
+        aliases = [
+            _text(entity.get("id")),
+            _text(entity.get("name")),
+            *_list(entity.get("source_entity_names")),
+        ]
+        for key in {
+            normalized
+            for value in aliases
+            for normalized in (_text(value).lower(), _canonical_entity_name(value))
+            if normalized
+        }:
             if key:
                 by_key.setdefault(key, []).append(entity)
     relation_type_by_method = {
@@ -494,11 +1051,24 @@ def _derive_operation_entity_relations(model: dict[str, Any]) -> list[dict[str, 
     for operation in _list(model.get("operations")):
         if not isinstance(operation, dict):
             continue
+        resolved_entities: list[tuple[dict[str, Any], str]] = []
         for entity_hint in _list(operation.get("entity_refs")):
-            matches = by_key.get(_text(entity_hint).lower(), [])
-            if len(matches) != 1:
-                continue
-            entity = matches[0]
+            matches = list(dict.fromkeys(
+                id(row)
+                for key in (
+                    _text(entity_hint).lower(),
+                    _canonical_entity_name(entity_hint),
+                )
+                for row in by_key.get(key, [])
+            ))
+            if len(matches) == 1:
+                entity = next(row for row in entities if id(row) == matches[0])
+                resolved_entities.append((entity, "explicit"))
+        if not resolved_entities:
+            structural = _operation_structural_entity(operation, entities)
+            if structural is not None:
+                resolved_entities.append((structural, "schema-derived"))
+        for entity, derivation in resolved_entities:
             operation_ref = _text(operation.get("id"))
             relations.append(_relation_node(
                 relation_type=relation_type_by_method.get(
@@ -516,6 +1086,7 @@ def _derive_operation_entity_relations(model: dict[str, Any]) -> list[dict[str, 
                     float(operation.get("confidence") or 0.7),
                     float(entity.get("confidence") or 0.7),
                 ),
+                derivation=derivation,
             ))
     return relations
 
@@ -565,8 +1136,44 @@ def _derive_state_transition_relations(
                 continue
             from_state = states_by_key.get((entity, _text(transition.get("from") or transition.get("from_state")).lower()))
             to_state = states_by_key.get((entity, _text(transition.get("to") or transition.get("to_state")).lower()))
-            operation = _resolve_operation(operations, transition)
+            operation_binding = any(
+                _text(transition.get(key))
+                for key in ("operation_ref", "operation_id", "operation", "method", "path")
+            )
+            operation = _resolve_operation(operations, transition) if operation_binding else None
+            from_name = _text(transition.get("from") or transition.get("from_state"))
+            to_name = _text(transition.get("to") or transition.get("to_state"))
             if not from_state or not to_state or not operation:
+                if from_state and to_state and not operation:
+                    model["coverage_gaps"].append(_fact_node(
+                        node_id=_stable_id(
+                            "gap",
+                            "state_transition_operation_unresolved",
+                            entity,
+                            from_name,
+                            to_name,
+                        ),
+                        typed_fields={
+                            "gap_type": "state_transition_operation_unresolved",
+                            "entity_ref": entity,
+                            "from_state": from_name,
+                            "to_state": to_name,
+                            "operation_hint": _text(
+                                transition.get("operation_ref")
+                                or transition.get("operation_id")
+                                or transition.get("operation")
+                            ),
+                            "description": "State transition has no unique source-bound operation",
+                        },
+                        source_refs=[_source_ref(
+                            _text(transition.get("source_id")) or "state_machine",
+                            locator=f"{entity}:{from_name}->{to_name}",
+                            kind="state_transition",
+                        )],
+                        confidence=1.0,
+                        derivation="explicit",
+                        status="unsupported",
+                    ))
                 continue
             operation_ref = _text(operation.get("id"))
             relations.append(_relation_node(
@@ -592,6 +1199,33 @@ def _invariant_relation_type(invariant: dict[str, Any]) -> str:
     return "conserves" if any(
         token in kind for token in ("conserv", "balance", "amount", "quantity")
     ) else "observes"
+
+
+_TOKEN_OVERLAP_RELATION_GATE = "token_overlap_only_requires_explicit_source_relation"
+_NON_AUTHORITATIVE_SOURCE_RELATION_STATUSES = {
+    "candidate",
+    "proposed",
+    "unknown",
+    "unsupported",
+    "rejected",
+}
+
+
+def _source_relationship_candidate_reason(edge: dict[str, Any]) -> str:
+    status = _text(edge.get("status")).lower()
+    evidence_gate = _text(edge.get("evidence_gate"))
+    derivation = _text(edge.get("derivation")).lower().replace("-", "_")
+    evidence = _dict(edge.get("evidence"))
+
+    if evidence_gate == _TOKEN_OVERLAP_RELATION_GATE:
+        return evidence_gate
+    if derivation == "token_overlap":
+        return _TOKEN_OVERLAP_RELATION_GATE
+    if evidence and set(evidence) <= {"token_overlap"}:
+        return _TOKEN_OVERLAP_RELATION_GATE
+    if status in _NON_AUTHORITATIVE_SOURCE_RELATION_STATUSES:
+        return evidence_gate or status
+    return ""
 
 
 def _derive_source_relationship_relations(
@@ -638,6 +1272,27 @@ def _derive_source_relationship_relations(
             locator=relationship_id,
             kind=relationship_type,
         )
+        candidate_reason = _source_relationship_candidate_reason(edge)
+        if candidate_reason:
+            model["coverage_gaps"].append(_fact_node(
+                node_id=_stable_id("gap", "source_relationship_candidate_only", relationship_id),
+                typed_fields={
+                    "gap_type": "source_relationship_candidate_only",
+                    "description": "A source relationship is candidate-only and lacks explicit source evidence for an executable semantic join",
+                    "relationship_id": relationship_id,
+                    "relationship_type": relationship_type,
+                    "source_rule_ref": source_rule_ref,
+                    "source_operation_ref": source_operation_ref,
+                    "candidate_reason": candidate_reason,
+                    "invariant_match_count": len(invariant_matches),
+                    "operation_match_count": len(operation_matches),
+                },
+                source_refs=[edge_source_ref],
+                confidence=1.0,
+                derivation="explicit",
+                status="unsupported",
+            ))
+            continue
         if len(invariant_matches) != 1 or len(operation_matches) != 1:
             model["coverage_gaps"].append(_fact_node(
                 node_id=_stable_id("gap", "source_relationship_unresolved", relationship_id),
@@ -754,10 +1409,15 @@ def validate_behavior_ir(
         if not isinstance(model.get(collection), list):
             errors.append(f"missing_collection:{collection}")
             continue
+        seen_ids: set[str] = set()
         for item in model[collection]:
             if not isinstance(item, dict) or not _text(item.get("id")):
                 errors.append(f"invalid_node:{collection}")
                 continue
+            item_id = _text(item.get("id"))
+            if item_id in seen_ids:
+                errors.append(f"duplicate_node_id:{collection}:{item_id}")
+            seen_ids.add(item_id)
             if _text(item.get("derivation")) and _text(item.get("derivation")) not in _DERIVATIONS:
                 errors.append(f"bad_derivation:{item.get('id')}")
             if _text(item.get("status")) and _text(item.get("status")) not in _STATUSES:
@@ -841,7 +1501,11 @@ def build_behavior_ir_from_knowledge_asset(
         ))
 
     # Operations from OpenAPI / asset interfaces
-    seen_ops: set[str] = set()
+    operations_by_transport_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def merge_unique(existing: list[Any], incoming: list[Any]) -> list[Any]:
+        return _merge_unique_sorted(existing, incoming)
+
     for op in list(api_operations or []) + _list(data.get("operations") or data.get("interfaces")):
         if not isinstance(op, dict):
             continue
@@ -849,20 +1513,39 @@ def build_behavior_ir_from_knowledge_asset(
         path = _text(op.get("path") or op.get("endpoint") or op.get("url"))
         if not path:
             continue
+        service = _text(op.get("service") or op.get("service_name") or op.get("server"))
         op_id = _text(op.get("operation_id") or op.get("operationId") or op.get("id")) or _stable_id("op", method, path)
-        if op_id in seen_ops:
-            continue
-        seen_ops.add(op_id)
         side_effect = "write" if method in {"POST", "PUT", "PATCH", "DELETE"} else "read"
-        model["operations"].append(_fact_node(
-            node_id=op_id if op_id.startswith("bir_") else _stable_id("op", method, path),
+        field_dictionary = _merge_unique_sorted(
+            _list(op.get("field_dictionary")),
+        )
+        request_schema = _request_schema_for_operation(op)
+        request_example = _operation_request_example(op)
+        source_operation_refs = _merge_unique_sorted([
+            _text(value)
+            for value in (
+                op.get("interface_id"),
+                op.get("operation_id"),
+                op.get("operationId"),
+                op.get("id"),
+            )
+            if _text(value)
+        ])
+        operation = _fact_node(
+            node_id=op_id if op_id.startswith("bir_") else _stable_id("op", service, method, path),
             typed_fields={
                 "operation_id": op_id,
+                "service": service,
                 "method": method,
                 "path": path,
-                "request_schema": _dict(op.get("request_schema") or op.get("requestBody")),
+                "request_schema": request_schema,
+                "request_example": request_example,
                 "response_schema": _dict(op.get("response_schema") or op.get("responses")),
-                "parameters": _list(op.get("parameters")),
+                "parameters": _merge_unique_sorted(
+                    _list(op.get("parameters")),
+                    field_dictionary,
+                ),
+                "field_dictionary": field_dictionary,
                 "security": _list(op.get("security")),
                 "summary": _text(op.get("summary") or op.get("title")),
                 "description": _text(op.get("description")),
@@ -871,21 +1554,94 @@ def build_behavior_ir_from_knowledge_asset(
                 "read_write": side_effect,
                 "entity_refs": [_text(x) for x in _list(op.get("entity_refs")) if _text(x)],
                 "examples": _list(op.get("examples")),
-                "source_operation_refs": list(dict.fromkeys(
-                    _text(value)
-                    for value in (
-                        op.get("interface_id"),
-                        op.get("operation_id"),
-                        op.get("operationId"),
-                        op.get("id"),
-                    )
-                    if _text(value)
-                )),
+                "source_operation_refs": source_operation_refs,
             },
             source_refs=[_source_ref(_text(op.get("source_id")) or "api_spec", locator=f"{method} {path}", kind="api_operation")],
             confidence=0.85 if op.get("operation_id") else 0.7,
             derivation="schema-derived" if not op.get("operation_id") else "explicit",
-        ))
+        )
+        transport_identity = (service, method, _path_shape(path))
+        existing = operations_by_transport_identity.get(transport_identity)
+        if existing is None:
+            operations_by_transport_identity[transport_identity] = operation
+            model["operations"].append(operation)
+            continue
+
+        existing["source_refs"] = merge_unique(
+            _list(existing.get("source_refs")),
+            _list(operation.get("source_refs")),
+        )
+        existing["source_operation_refs"] = merge_unique(
+            _list(existing.get("source_operation_refs")),
+            _list(operation.get("source_operation_refs")),
+        )
+        for field in (
+            "parameters",
+            "field_dictionary",
+            "security",
+            "tags",
+            "entity_refs",
+            "examples",
+        ):
+            existing[field] = merge_unique(
+                _list(existing.get(field)),
+                _list(operation.get(field)),
+            )
+        for field in ("request_schema", "response_schema"):
+            prior = _dict(existing.get(field))
+            incoming = _dict(operation.get(field))
+            if not prior and incoming:
+                existing[field] = incoming
+            elif prior and incoming and prior != incoming:
+                existing[field] = _merge_schema_dicts(prior, incoming)
+                conflict_paths = _schema_conflict_paths(prior, incoming)
+                if not conflict_paths:
+                    continue
+                conflict_id = _stable_id(
+                    "conflict",
+                    "operation_schema",
+                    method,
+                    transport_identity[1],
+                    field,
+                )
+                model["conflicts"].append(_fact_node(
+                    node_id=conflict_id,
+                    typed_fields={
+                        "conflict_type": "operation_schema_conflict",
+                        "operation_ref": _text(existing.get("id")),
+                        "field": field,
+                        "method": method,
+                        "path_shape": transport_identity[2],
+                        "conflict_paths": conflict_paths,
+                    },
+                    source_refs=merge_unique(
+                        _list(existing.get("source_refs")),
+                        _list(operation.get("source_refs")),
+                    ),
+                    confidence=1.0,
+                    derivation="explicit",
+                    status="conflicting",
+                ))
+        if _dict(operation.get("request_example")):
+            existing["request_example"] = (
+                existing.get("request_example")
+                if _dict(existing.get("request_example"))
+                else operation.get("request_example")
+            )
+        for field in ("summary", "description"):
+            existing[field] = _best_text(existing.get(field), operation.get(field))
+        existing["operation_id"] = _canonical_operation_id(
+            _list(existing.get("source_operation_refs")),
+            _text(existing.get("operation_id")),
+        )
+        existing["confidence"] = max(
+            float(existing.get("confidence") or 0.0),
+            float(operation.get("confidence") or 0.0),
+        )
+        if operation.get("derivation") == "explicit":
+            existing["derivation"] = "explicit"
+
+    _canonicalize_duplicate_operation_ids(model)
 
     # Entities from every structured asset vocabulary. The knowledge asset
     # exposes business_objects/data_tables, while other callers may use the
@@ -894,37 +1650,80 @@ def build_behavior_ir_from_knowledge_asset(
     entity_rows: list[Any] = []
     for key in ("objects", "entities", "tables", "business_objects", "data_tables"):
         entity_rows.extend(_list(data.get(key)))
-    seen_entities: set[str] = set()
+    entities_by_canonical_name: dict[str, dict[str, Any]] = {}
     for ent in entity_rows:
         if isinstance(ent, str):
             name = _text(ent)
-            if not name or name.lower() in seen_entities:
+            canonical_name = _canonical_entity_name(name)
+            if not name or not canonical_name:
                 continue
-            seen_entities.add(name.lower())
-            model["entities"].append(_fact_node(
+            existing = entities_by_canonical_name.get(canonical_name)
+            if existing is not None:
+                existing["source_entity_names"] = merge_unique(
+                    _list(existing.get("source_entity_names")),
+                    [name],
+                )
+                continue
+            entity = _fact_node(
                 node_id=_stable_id("ent", name),
-                typed_fields={"name": name, "kind": "resource"},
+                typed_fields={
+                    "name": name,
+                    "kind": "resource",
+                    "entity_kinds": ["resource"],
+                    "source_entity_names": [name],
+                },
                 confidence=0.6,
                 derivation="schema-derived",
-            ))
+            )
+            entities_by_canonical_name[canonical_name] = entity
+            model["entities"].append(entity)
             continue
         if not isinstance(ent, dict):
             continue
         name = _text(ent.get("name") or ent.get("object") or ent.get("table") or ent.get("entity"))
-        if not name or name.lower() in seen_entities:
+        canonical_name = _canonical_entity_name(name)
+        if not name or not canonical_name:
             continue
-        seen_entities.add(name.lower())
-        model["entities"].append(_fact_node(
+        kind = _text(ent.get("kind") or "resource")
+        source_refs = [_source_ref(_text(ent.get("source_id")), locator=name)]
+        existing = entities_by_canonical_name.get(canonical_name)
+        if existing is not None:
+            existing["source_entity_names"] = merge_unique(
+                _list(existing.get("source_entity_names")),
+                [name],
+            )
+            existing["entity_kinds"] = merge_unique(
+                _list(existing.get("entity_kinds")),
+                [kind],
+            )
+            existing["fields"] = merge_unique(
+                _list(existing.get("fields")),
+                _list(ent.get("fields") or ent.get("columns")),
+            )
+            existing["source_refs"] = merge_unique(
+                _list(existing.get("source_refs")),
+                source_refs,
+            )
+            existing["confidence"] = max(
+                float(existing.get("confidence") or 0.0),
+                float(ent.get("confidence") or 0.7),
+            )
+            continue
+        entity = _fact_node(
             node_id=_text(ent.get("entity_id") or ent.get("id")) or _stable_id("ent", name),
             typed_fields={
                 "name": name,
-                "kind": _text(ent.get("kind") or "resource"),
+                "kind": kind,
+                "entity_kinds": [kind],
+                "source_entity_names": [name],
                 "fields": _list(ent.get("fields") or ent.get("columns")),
             },
-            source_refs=[_source_ref(_text(ent.get("source_id")), locator=name)],
+            source_refs=source_refs,
             confidence=float(ent.get("confidence") or 0.7),
             derivation="explicit",
-        ))
+        )
+        entities_by_canonical_name[canonical_name] = entity
+        model["entities"].append(entity)
 
     # Actors from permission matrix / roles / runtime actors (secret_ref only)
     actor_names: set[str] = set()
@@ -1156,6 +1955,7 @@ def build_behavior_ir_from_knowledge_asset(
         permission_rows,
         closed_world=permission_matrix_complete,
     ))
+    model["relations"].extend(_derive_source_role_restriction_relations(model))
     model["relations"].extend(_derive_operation_entity_relations(model))
     model["relations"].extend(_derive_state_transition_relations(model, data))
     model["relations"].extend(_derive_source_relationship_relations(model, data))

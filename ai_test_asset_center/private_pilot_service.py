@@ -30,8 +30,11 @@ from . import db_persistence as db_persist
 from . import jwt_auth
 from .real_id_resolver import normalize_path_placeholders
 from .real_project_onboarding import ROOT, _safe_project_id
-from .scan_counter import increment_scan_counter
 from .campaign_api_contract import CampaignContractError, structured_error
+from .canonical_defect_registry import CANONICAL_DEFECT_REGISTRY_SCHEMA
+from .discovery_quality_projection import (
+    SCHEMA_VERSION as QUALITY_PROJECTION_SCHEMA,
+)
 
 
 CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
@@ -39,6 +42,24 @@ KNOWLEDGE_MANAGER_ROLES = {"knowledge_admin", "project_owner", "qa_lead", "admin
 SETTINGS_MANAGER_ROLES = {"project_owner", "security_owner", "testops_admin", "admin"}
 PROJECT_SCOPE_HEADER = "X-QualiBug-Project-Scopes"
 MASKED_CREDENTIAL_VALUE = "********"
+
+
+def _canonical_display_scope_matches(
+    expected_ids: list[str],
+    displayed_ids: list[str],
+) -> bool:
+    """Compare canonical identity scope without constraining UI sort order."""
+
+    expected = [str(value or "").strip() for value in expected_ids]
+    displayed = [str(value or "").strip() for value in displayed_ids]
+    return (
+        bool(all(expected))
+        and bool(all(displayed))
+        and len(expected) == len(displayed)
+        and len(expected) == len(set(expected))
+        and len(displayed) == len(set(displayed))
+        and set(expected) == set(displayed)
+    ) or (not expected and not displayed)
 
 
 def _is_masked_credential_value(value: Any) -> bool:
@@ -1654,39 +1675,9 @@ def _current_campaign_bundle_finding_stats(
     root: Path,
     campaign_payload: dict[str, Any],
 ) -> dict[str, int]:
-    campaign = campaign_payload.get("campaign") if isinstance(campaign_payload.get("campaign"), dict) else {}
-    campaign_id = str(campaign.get("campaign_id") or "").strip()
-    if not campaign_id:
-        return {"raw": 0, "deduped": 0}
-    bundle_root = root / "platform_workspace" / _safe_project_id(project_id) / "evidence_bundles"
-    if not bundle_root.exists():
-        return {"raw": 0, "deduped": 0}
-    deduped_keys: set[str] = set()
-    raw_count = 0
-    for bundle_dir in bundle_root.iterdir():
-        if not bundle_dir.is_dir():
-            continue
-        campaign_path = bundle_dir / "campaign.json"
-        findings_path = bundle_dir / "findings.json"
-        if not campaign_path.exists() or not findings_path.exists():
-            continue
-        try:
-            bundle_campaign = json.loads(campaign_path.read_text(encoding="utf-8") or "{}")
-            bundle_findings = json.loads(findings_path.read_text(encoding="utf-8") or "[]")
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(bundle_campaign, dict) or str(bundle_campaign.get("campaign_id") or "").strip() != campaign_id:
-            continue
-        if not isinstance(bundle_findings, list):
-            continue
-        raw_count += len([item for item in bundle_findings if isinstance(item, dict)])
-        for finding in bundle_findings:
-            if not isinstance(finding, dict):
-                continue
-            key = PrivatePilotHandler._report_finding_dedupe_key(finding)
-            if key:
-                deduped_keys.add(key)
-    return {"raw": raw_count, "deduped": len(deduped_keys)}
+    """Retired history-bundle counter retained for compatibility diagnostics."""
+
+    return {"raw": 0, "deduped": 0}
 KNOWLEDGE_INGEST_SOURCE_TYPES = (
     "prd",
     "mrd",
@@ -2569,6 +2560,169 @@ def _extend_stage3_impact_analysis(report: dict[str, Any], analyses: list[dict[s
     stage3["llm_powered"] = sum(1 for item in existing if item.get("source") == "llm_evidence_impact")
     stage3["heuristic"] = sum(1 for item in existing if item.get("source") != "llm_evidence_impact")
     report["stage3_impact_analysis"] = stage3
+
+
+def _canonical_current_report_scope(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project a report onto the current-run canonical defect namespace only."""
+
+    from .__main__ import _canonical_product_scope
+
+    report = payload if isinstance(payload, dict) else {}
+    nested = report.get("v12") if isinstance(report.get("v12"), dict) else {}
+
+    def _authority_value(key: str) -> Any:
+        value = report.get(key)
+        return value if value is not None else nested.get(key)
+
+    registry = _authority_value("canonical_defect_registry")
+    registry = registry if isinstance(registry, dict) else {}
+    canonical_ids = {
+        str(value or "").strip()
+        for value in registry.get("canonical_defect_ids", [])
+        if str(value or "").strip()
+    } if isinstance(registry.get("canonical_defect_ids"), list) else set()
+    declared_rows: list[dict[str, Any]] = []
+    for raw in (
+        report.get("findings"),
+        nested.get("findings"),
+        report.get("real_findings"),
+    ):
+        if not isinstance(raw, list):
+            continue
+        declared_rows = [dict(item) for item in raw if isinstance(item, dict)]
+        if declared_rows:
+            break
+    candidate_rows: list[dict[str, Any]] = []
+    for raw in (
+        report.get("candidate_findings"),
+        nested.get("candidate_findings"),
+        report.get("risk_clues"),
+    ):
+        if isinstance(raw, list):
+            candidate_rows = [
+                dict(item) for item in raw if isinstance(item, dict)
+            ]
+            break
+
+    if not registry:
+        quarantined = [
+            {
+                **row,
+                "finding_class": "candidate",
+                "customer_delivery_status": "blocked",
+                "customer_delivery_gate_reasons": [
+                    "CANONICAL_DEFECT_REGISTRY_REQUIRED"
+                ],
+            }
+            for row in declared_rows
+        ]
+        return {
+            "status": "BLOCKED",
+            "reason": "canonical_defect_registry_required",
+            "defects": [],
+            "candidates": [*candidate_rows, *quarantined],
+            "formal_customer_deliverable_count": 0,
+            "canonical_defect_ids": [],
+            "delivery_occurrences": [],
+            "legacy_diagnostics": {
+                "ignored_declared_total": int(report.get("total_findings") or 0),
+                "legacy_history_affects_current_scope": False,
+            },
+        }
+
+    canonical_rows = [
+        row
+        for row in declared_rows
+        if str(row.get("canonical_defect_id") or "").strip() in canonical_ids
+    ]
+    runtime_payload = {
+        "mainline_run": _authority_value("mainline_run"),
+        "obligation_attempt_ledger": _authority_value(
+            "obligation_attempt_ledger"
+        ),
+        "canonical_defect_registry": registry,
+        "formal_count_projection": _authority_value("formal_count_projection"),
+        "defect_identity_consistency": _authority_value(
+            "defect_identity_consistency"
+        ),
+        "delivery_occurrences": _authority_value("delivery_occurrences"),
+        "findings": canonical_rows,
+        "candidate_findings": candidate_rows,
+    }
+    scope = _canonical_product_scope(runtime_payload)
+    return {
+        "status": scope["status"],
+        "reason": scope["reason"],
+        "defects": list(scope["findings"]),
+        "candidates": list(scope["candidates"]),
+        "formal_customer_deliverable_count": len(scope["findings"]),
+        "canonical_defect_ids": list(
+            scope["canonical_defect_registry"].get("canonical_defect_ids")
+            or []
+        ),
+        "delivery_occurrences": list(scope["delivery_occurrences"]),
+        "canonical_defect_registry": dict(
+            scope["canonical_defect_registry"]
+        ),
+        "formal_count_projection": dict(scope["formal_count_projection"]),
+        "defect_identity_consistency": dict(
+            scope["defect_identity_consistency"]
+        ),
+        "legacy_diagnostics": {
+            "ignored_declared_total": int(report.get("total_findings") or 0),
+            "ignored_noncanonical_row_count": max(
+                0, len(declared_rows) - len(canonical_rows)
+            ),
+            "legacy_history_affects_current_scope": False,
+        },
+    }
+
+
+def _canonical_delta_identity(
+    payload: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]], str]:
+    """Return exact current canonical IDs or a visible disable reason."""
+
+    report = payload if isinstance(payload, dict) else {}
+    nested = report.get("v12") if isinstance(report.get("v12"), dict) else {}
+    registry = report.get("canonical_defect_registry")
+    if not isinstance(registry, dict):
+        registry = nested.get("canonical_defect_registry")
+    if not isinstance(registry, dict) or not registry:
+        return [], [], "canonical_defect_registry_required_for_delta"
+    if (
+        registry.get("schema_version")
+        != CANONICAL_DEFECT_REGISTRY_SCHEMA
+        or registry.get("status") != "VERIFIED"
+    ):
+        return [], [], "canonical_defect_registry_invalid_for_delta"
+    mainline = report.get("mainline_run")
+    if not isinstance(mainline, dict):
+        mainline = nested.get("mainline_run")
+    if not isinstance(mainline, dict) or not bool(
+        mainline.get("customer_outputs_published")
+    ):
+        return [], [], "customer_canonical_scope_not_published"
+    canonical_ids = [
+        str(value or "").strip()
+        for value in registry.get("canonical_defect_ids", [])
+    ] if isinstance(registry.get("canonical_defect_ids"), list) else []
+    if (
+        not all(canonical_ids)
+        or len(canonical_ids) != len(set(canonical_ids))
+        or int(registry.get("canonical_defect_count") or 0)
+        != len(canonical_ids)
+    ):
+        return [], [], "canonical_defect_ids_invalid_for_delta"
+    rows: list[dict[str, Any]] = []
+    for raw in (report.get("findings"), nested.get("findings")):
+        if isinstance(raw, list):
+            rows = [dict(item) for item in raw if isinstance(item, dict)]
+            break
+    row_ids = [str(row.get("canonical_defect_id") or "").strip() for row in rows]
+    if row_ids != canonical_ids:
+        return [], [], "canonical_finding_scope_mismatch_for_delta"
+    return canonical_ids, rows, ""
 
 
 class PrivatePilotHandler(BaseHTTPRequestHandler):
@@ -3622,6 +3776,13 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                             campaign_context=scan_context,
                             save_report=True,
                         )
+                        if (
+                            not isinstance(_scan_result, dict)
+                            or _scan_result.get("success") is not True
+                        ):
+                            raise RuntimeError(
+                                f"auto_scan_failed:{(_scan_result or {}).get('error') if isinstance(_scan_result, dict) else 'invalid_result'}"
+                            )
                         _update_continuous_state(_scan_root, _scan_project, _scan_result)
                     except Exception as _auto_exc:
                         # Fail loud & observable: never let an auto-scan die silently.
@@ -4036,6 +4197,15 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
                 campaign_context=campaign_context,
             )
+            if not isinstance(result, dict) or result.get("success") is not True:
+                failure = result if isinstance(result, dict) else {}
+                return self._json({
+                    "ok": False,
+                    "error": str(failure.get("error") or "V12_SCAN_FAILED"),
+                    "message": str(failure.get("reason") or "scan returned an invalid result")[:500],
+                    "failure_stage": failure.get("failure_stage"),
+                    "pipeline_health": failure.get("pipeline_health", {}),
+                }, 500)
             # #region debug-point C:http-scan-result
             _dbg_report(
                 hypothesis_id="C",
@@ -4048,94 +4218,12 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 trace_id=trace_id,
             )
             # #endregion
-            # Persist to DB — use cumulative merge so bugs accumulate across scans
-            try:
-                db_persist.init_db(root)
-                # Extract findings from report
-                report_path = root / "platform_outputs" / project / "intelligence_report.json"
-                report_data = {}
-                if report_path.exists():
-                    import json as _jr
-                    report_data = _jr.loads(report_path.read_text(encoding="utf-8"))
-                findings_list = report_data.get("real_findings") or report_data.get("bug_scores") or []
-                # Also include multi-source findings from scan result
-                if isinstance(result.get("db_findings"), list):
-                    findings_list = list(findings_list) + result["db_findings"]
-                if isinstance(result.get("e2e_findings"), list):
-                    findings_list = list(findings_list) + result["e2e_findings"]
-                if isinstance(result.get("deep_findings"), list):
-                    findings_list = list(findings_list) + result["deep_findings"]
-                if isinstance(result.get("ui_findings"), list):
-                    findings_list = list(findings_list) + result["ui_findings"]
-                # Dedupe input list before merging
-                seen_titles: set[str] = set()
-                deduped_findings: list[dict] = []
-                for f in (findings_list if isinstance(findings_list, list) else []):
-                    if not isinstance(f, dict):
-                        continue
-                    t = str(f.get("title") or f.get("description", ""))[:160].lower()
-                    if t in seen_titles:
-                        continue
-                    seen_titles.add(t)
-                    deduped_findings.append(f)
-                # Save scan record
-                enriched = dict(result)
-                enriched["findings"] = [
-                    {"title": str(f.get("title") or f.get("description", ""))[:120],
-                     "severity": str(f.get("severity", "P1")),
-                     "category": str(f.get("category", "")),
-                     "description": str(f.get("description", ""))[:500],
-                     "confidence_score": float(f.get("confidence_score") or f.get("score") or 0),
-                     "_api_path": str(f.get("_api_path") or f.get("path") or ""),
-                     "_api_method": str(f.get("_api_method") or f.get("method") or ""),
-                     "evidence": f.get("evidence") if isinstance(f.get("evidence"), dict) else {}}
-                    for f in deduped_findings
-                ]
-                scan_id = db_persist.save_scan(root, self._request_tenant(), project, enriched)
-                # Cumulative merge — bugs accumulate, never silently dropped
-                merge_result = db_persist.merge_findings_cumulative(
-                    root, self._request_tenant(), project, scan_id, enriched["findings"]
-                )
-            except Exception:
-                merge_result = {}
-            # Increment scan counter through the shared helper so CLI and HTTP
-            # entrypoints project the same run metadata into command center.
-            try:
-                increment_scan_counter(root / "platform_outputs" / project / "scan_counter.json")
-            except Exception:
-                pass
-            # Also write raw findings for frontend Dashboard/Findings compatibility
-            try:
-                # Re-read from evaluation result
-                out_dir = root / "platform_outputs" / project
-                eval_json = out_dir / "intelligence_report.json"
-                if eval_json.exists():
-                    import json as _j2
-                    existing = _j2.loads(eval_json.read_text(encoding="utf-8"))
-                    # Merge raw findings — only set raw_total once (first scan), never decrement
-                    old_raw = existing.get("raw_total", 0)
-                    new_raw = result.get("total_findings", 0)
-                    existing["raw_total"] = max(old_raw, new_raw) if old_raw else new_raw
-                    # Preserve real_findings across scans
-                    if not existing.get("real_findings"):
-                        existing["real_findings"] = existing.get("bug_scores", [])
-                    existing["layers"] = result.get("layers", {})
-                    # Merge DB verification findings
-                    db_finds = result.get("db_findings")
-                    if isinstance(db_finds, list) and db_finds:
-                        existing["db_verification"] = {"findings": db_finds, "total": len(db_finds)}
-                    e2e_finds = result.get("e2e_findings")
-                    if isinstance(e2e_finds, list) and e2e_finds:
-                        existing.setdefault("e2e_findings", []).extend(e2e_finds)
-                    deep_finds = result.get("deep_findings")
-                    if isinstance(deep_finds, list) and deep_finds:
-                        existing.setdefault("deep_findings", []).extend(deep_finds)
-                    ui_finds = result.get("ui_findings")
-                    if isinstance(ui_finds, list) and ui_finds:
-                        existing.setdefault("ui_findings", []).extend(ui_finds)
-                    eval_json.write_text(_j2.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-            except Exception:
-                pass
+            merge_result = {
+                "status": "disabled",
+                "reason": "legacy_title_cumulative_persistence_retired",
+                "identity_authority": "canonical_defect_registry",
+                "affects_current_counts_or_readiness": False,
+            }
             # Save spectrum result to disk for Dashboard polling
             if result.get("spectrum"):
                 spectrum_dir = root / "platform_outputs" / project / "spectrum"
@@ -4331,51 +4419,6 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     continue
         return fallback
 
-    @staticmethod
-    def _discovery_current_scope_summary(payload: dict[str, Any]) -> dict[str, Any]:
-        campaign_projection = payload.get("continuous_discovery_campaign") if isinstance(payload.get("continuous_discovery_campaign"), dict) else {}
-        summary = campaign_projection.get("summary") if isinstance(campaign_projection.get("summary"), dict) else {}
-        current_run = campaign_projection.get("current_run") if isinstance(campaign_projection.get("current_run"), dict) else {}
-        campaign = campaign_projection.get("campaign") if isinstance(campaign_projection.get("campaign"), dict) else {}
-        scopes = [current_run, summary, campaign_projection, campaign]
-
-        def _pick_int(*keys: str) -> int | None:
-            for scope in scopes:
-                if not isinstance(scope, dict):
-                    continue
-                for key in keys:
-                    if key not in scope:
-                        continue
-                    try:
-                        return int(float(scope.get(key)))
-                    except Exception:
-                        continue
-            return None
-
-        total_findings = _pick_int(
-            "current_campaign_bundle_finding_count_raw",
-            "current_report_total_findings",
-            "total_findings",
-        )
-        customer_ready_defects = _pick_int(
-            "current_campaign_customer_ready_defect_count",
-            "current_report_customer_ready_defect_count",
-            "customer_ready_defects",
-            "ready_bug_count",
-        )
-        confirmed_slice_count = _pick_int(
-            "current_campaign_confirmed_slice_count",
-            "confirmed_slice_count",
-        )
-        if total_findings is None and customer_ready_defects is None and confirmed_slice_count is None:
-            return {}
-        return {
-            "total_findings": max(0, int(total_findings or 0)),
-            "customer_ready_defects": max(0, int(customer_ready_defects or 0)),
-            "confirmed_slice_count": max(0, int(confirmed_slice_count or 0)),
-            "report_source_path": str(payload.get("report_source_path") or ""),
-        }
-
     def _load_v12_report(self, project_id: str, root: Path) -> dict[str, Any]:
         project = _safe_project_id(project_id)
         explicit_candidates = [
@@ -4388,11 +4431,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             root / "benchmark_outputs" / project / "intelligence_report.json",
         ]
 
-        # Do not return the first/newest JSON blindly. Real backend runs can write
-        # summary numbers to one report while evidence files are written under
-        # platform_workspace. Pick the strongest source-of-truth by materialized
-        # finding signal, then by mtime. This prevents the React page from reading
-        # an older/empty scan_result while the backend report shows newer totals.
+        # Prefer a verified canonical report, then recency. Raw finding volume is
+        # not an authority and must never make an older/history union win.
         candidate_payloads: list[tuple[int, float, dict[str, Any]]] = []
         for path in explicit_candidates:
             if not path.exists():
@@ -4401,33 +4441,22 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             if not payload:
                 continue
             payload.setdefault("report_source_path", path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
-            candidate_payloads.append((self._report_signal_count(payload), path.stat().st_mtime, payload))
-
-        workspace_report = self._load_workspace_report(project, root)
-        if workspace_report:
-            workspace_path = root / "platform_workspace" / project
-            candidate_payloads.append((
-                self._report_signal_count(workspace_report),
-                workspace_path.stat().st_mtime if workspace_path.exists() else time.time(),
-                workspace_report,
-            ))
-
-        # When the latest scan_result only contains the current scan delta, a
-        # completed campaign can legitimately produce 0 new findings while
-        # historical confirmed defects still exist in a related evidence bundle.
-        # Recover the strongest same-snapshot/lineage evidence bundle so the
-        # command center reflects real customer-visible defects instead of a
-        # misleading empty list.
-        anchor_candidate = max(candidate_payloads, key=lambda item: (item[1], item[0])) if candidate_payloads else None
-        anchor_report = anchor_candidate[2] if anchor_candidate else {}
-        related_bundle_candidates = self._load_evidence_bundle_report_candidates(project, root, anchor_report)
-        candidate_payloads.extend(related_bundle_candidates)
-        aggregate_candidate = self._aggregate_related_report_candidate(anchor_candidate, related_bundle_candidates)
-        if aggregate_candidate is not None:
-            candidate_payloads.append(aggregate_candidate)
+            nested = payload.get("v12") if isinstance(payload.get("v12"), dict) else {}
+            registry = payload.get("canonical_defect_registry")
+            if not isinstance(registry, dict):
+                registry = nested.get("canonical_defect_registry")
+            authority_rank = 1 if (
+                isinstance(registry, dict)
+                and registry.get("schema_version")
+                == CANONICAL_DEFECT_REGISTRY_SCHEMA
+                and registry.get("status") == "VERIFIED"
+            ) else 0
+            candidate_payloads.append((authority_rank, path.stat().st_mtime, payload))
 
         if candidate_payloads:
-            candidate_payloads.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            candidate_payloads.sort(
+                key=lambda item: (item[0], item[1]), reverse=True
+            )
             return candidate_payloads[0][2]
 
         # Last-resort benchmark aggregate: useful when a benchmark run was written
@@ -4475,339 +4504,17 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 chosen = (score, signal_count, payload)
         return chosen[2] if chosen else {}
 
-    def _load_evidence_bundle_report_candidates(
-        self,
-        project_id: str,
-        root: Path,
-        anchor_report: dict[str, Any] | None = None,
-    ) -> list[tuple[int, float, dict[str, Any]]]:
-        project = _safe_project_id(project_id)
-        bundle_root = root / "platform_workspace" / project / "evidence_bundles"
-        if not bundle_root.exists():
-            return []
-        anchor = anchor_report if isinstance(anchor_report, dict) else {}
-        anchor_campaign = anchor.get("campaign") if isinstance(anchor.get("campaign"), dict) else {}
-        anchor_campaign_id = self._first_text(anchor_campaign.get("campaign_id"), anchor.get("campaign_id"))
-        anchor_lineage_id = self._first_text(anchor_campaign.get("lineage_campaign_id"))
-        anchor_snapshot = self._first_text(anchor_campaign.get("source_snapshot_hash"), (anchor.get("behavior_slice_ledger") or {}).get("source_snapshot_hash") if isinstance(anchor.get("behavior_slice_ledger"), dict) else "")
-        anchor_source_hash = self._first_text(anchor_campaign.get("source_hash"), (anchor.get("runtime_contract") or {}).get("source_manifest", {}).get("source_hash") if isinstance((anchor.get("runtime_contract") or {}).get("source_manifest"), dict) else "")
-        anchor_scope_id = self._first_text(anchor_campaign.get("scope_id"), anchor.get("scope_id"))
-        anchor_environment_ref = self._first_text(anchor_campaign.get("environment_ref"), anchor.get("environment_ref"))
-        anchored = bool(anchor_campaign_id or anchor_snapshot or anchor_source_hash)
-        candidates: list[tuple[int, float, dict[str, Any]]] = []
-        for manifest_path in sorted(bundle_root.glob("evb_*/manifest.json")):
-            manifest = self._read_json_dict(manifest_path)
-            if not manifest or self._first_text(manifest.get("project_id")) != project:
-                continue
-            campaign = self._read_json_dict(manifest_path.with_name("campaign.json"))
-            findings_path = manifest_path.with_name("findings.json")
-            if not findings_path.exists():
-                continue
-            try:
-                raw_findings = json.loads(findings_path.read_text(encoding="utf-8") or "[]")
-            except Exception:
-                continue
-            if not isinstance(raw_findings, list):
-                continue
-            findings = [item for item in raw_findings if isinstance(item, dict)]
-            if not findings:
-                continue
-            bundle_campaign_id = self._first_text(campaign.get("campaign_id"), manifest.get("campaign_id"))
-            bundle_lineage_id = self._first_text(campaign.get("lineage_campaign_id"))
-            bundle_snapshot = self._first_text(campaign.get("source_snapshot_hash"))
-            bundle_source_hash = self._first_text(campaign.get("source_hash"), (manifest.get("source_manifest") or {}).get("source_hash") if isinstance(manifest.get("source_manifest"), dict) else "")
-            bundle_scope_id = self._first_text(campaign.get("scope_id"), manifest.get("scope_id"))
-            bundle_environment_ref = self._first_text(campaign.get("environment_ref"), manifest.get("environment_ref"))
-            family_ids = {value for value in (anchor_campaign_id, anchor_lineage_id) if value}
-            bundle_family_ids = {value for value in (bundle_campaign_id, bundle_lineage_id) if value}
-            family_match = bool(family_ids and bundle_family_ids.intersection(family_ids))
-            scope_match = not (anchor_scope_id and bundle_scope_id) or anchor_scope_id == bundle_scope_id
-            environment_match = not (anchor_environment_ref and bundle_environment_ref) or anchor_environment_ref == bundle_environment_ref
-            source_match = bool(
-                (anchor_snapshot and bundle_snapshot == anchor_snapshot)
-                or (anchor_source_hash and bundle_source_hash == anchor_source_hash)
-            )
-            if anchored:
-                if family_ids:
-                    if not (family_match and scope_match and environment_match):
-                        continue
-                elif not (source_match and scope_match and environment_match):
-                    continue
-            created_at = self._first_text(manifest.get("created_at_utc"), self._mtime_utc(findings_path))
-            payload = {
-                "project_id": project,
-                "project_name": project_id,
-                "generated_at_utc": created_at,
-                "system_grade": self._first_text(anchor.get("system_grade"), anchor.get("grade")),
-                "overall_score": self._coerce_float(anchor.get("overall_score"), self._coerce_float(anchor.get("score"), 0.0)),
-                "total_findings": len(findings),
-                "raw_total": len(findings),
-                "real_findings": findings,
-                "bug_scores": findings,
-                "summary": f"从 evidence bundle 回填 {len(findings)} 条历史确认结果。",
-                "report_source_path": findings_path.relative_to(root).as_posix() if findings_path.is_relative_to(root) else str(findings_path),
-                "campaign": campaign,
-                "evidence_bundle": {
-                    "bundle_id": self._first_text(manifest.get("bundle_id"), manifest_path.parent.name),
-                    "manifest_ref": str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root) else str(manifest_path),
-                    "evidence_level": self._first_text(manifest.get("evidence_level")),
-                },
-            }
-            candidates.append((self._report_signal_count(payload), findings_path.stat().st_mtime, payload))
-        return candidates
-
     @staticmethod
-    def _report_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
-        for key in ("real_findings", "findings", "bug_scores"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-        return []
-
-    @staticmethod
-    def _report_finding_dedupe_key(item: dict[str, Any]) -> str:
-        import re as _re
-
-        title = str(item.get("title") or item.get("description") or "")[:200].strip().lower()
-        title = _re.sub(r"^(\[[^\]]*\]\s*)+", "", title)
-        title = _re.sub(r"\s+", " ", title).strip()
-        method = str(
-            item.get("_api_method")
-            or item.get("method")
-            or (item.get("evidence") or {}).get("method")
-            or ""
-        ).strip().upper()
-        path = str(
-            item.get("_api_path")
-            or item.get("path")
-            or (item.get("evidence") or {}).get("path")
-            or ""
-        ).strip()
-        risk_id = str(item.get("risk_id") or item.get("id") or "").strip().lower()
-        if title or method or path:
-            return f"{title}|{method}|{path}"
-        return risk_id
-
-    def _aggregate_related_report_candidate(
-        self,
-        anchor_candidate: tuple[int, float, dict[str, Any]] | None,
-        related_candidates: list[tuple[int, float, dict[str, Any]]],
-    ) -> tuple[int, float, dict[str, Any]] | None:
-        if anchor_candidate is None:
-            return None
-        source_candidates = [item for item in [*related_candidates, anchor_candidate] if isinstance(item[2], dict)]
-        if len(source_candidates) < 2:
-            return None
-
-        strongest_signal = max(item[0] for item in source_candidates)
-        merged_findings: dict[str, dict[str, Any]] = {}
-        for _signal, _mtime, payload in sorted(source_candidates, key=lambda item: item[1]):
-            for finding in self._report_findings(payload):
-                key = self._report_finding_dedupe_key(finding)
-                if not key:
-                    continue
-                merged_findings[key] = dict(finding)
-
-        merged_total = len(merged_findings)
-        if merged_total <= strongest_signal:
-            return None
-
-        latest_signal, latest_mtime, latest_payload = max(source_candidates, key=lambda item: (item[1], item[0]))
-        anchor_payload = anchor_candidate[2]
-        merged_payload = dict(anchor_payload)
-        merged_list = list(merged_findings.values())
-        source_refs: list[str] = []
-        for _signal, _mtime, payload in sorted(source_candidates, key=lambda item: item[1]):
-            ref = str(payload.get("report_source_path") or "").strip()
-            if ref and ref not in source_refs:
-                source_refs.append(ref)
-        merged_payload.update({
-            "project_id": self._first_text(anchor_payload.get("project_id"), latest_payload.get("project_id")),
-            "project_name": self._first_text(anchor_payload.get("project_name"), latest_payload.get("project_name")),
-            "generated_at_utc": self._first_text(latest_payload.get("generated_at_utc"), anchor_payload.get("generated_at_utc")),
-            "total_findings": merged_total,
-            "raw_total": merged_total,
-            "real_findings": merged_list,
-            "bug_scores": merged_list,
-            "summary": f"聚合当前报告与 {max(0, len(source_refs) - 1)} 个关联 evidence bundle，回填 {merged_total} 条历史确认结果。",
-            "report_source_path": f"aggregated:{source_refs[0]}" if source_refs else "aggregated:evidence_bundle_union",
-            "report_source_paths": source_refs,
-        })
-        if not isinstance(merged_payload.get("campaign"), dict) and isinstance(latest_payload.get("campaign"), dict):
-            merged_payload["campaign"] = latest_payload.get("campaign")
-        if isinstance(latest_payload.get("evidence_bundle"), dict) or source_refs:
-            merged_payload["evidence_bundle"] = {
-                **(latest_payload.get("evidence_bundle") if isinstance(latest_payload.get("evidence_bundle"), dict) else {}),
-                "aggregate": True,
-                "source_count": len(source_refs),
-            }
-        return (merged_total, max(latest_mtime, anchor_candidate[1]), merged_payload)
-
-    def _load_workspace_report(self, project_id: str, root: Path) -> dict[str, Any]:
-        workspace = root / "platform_workspace" / project_id
-        if not workspace.exists():
-            return {}
-        findings: list[dict[str, Any]] = []
-        sources: list[str] = []
-        defect_dir = workspace / "defect_discovery"
-        if defect_dir.exists():
-            for path in sorted(defect_dir.glob("*_run.json")):
-                payload = self._read_json_dict(path)
-                if not payload:
-                    continue
-                for key in ("findings", "counterexample_findings", "readiness_findings", "structure_findings"):
-                    raw_items = payload.get(key)
-                    if not isinstance(raw_items, list):
-                        continue
-                    for index, item in enumerate(raw_items):
-                        if isinstance(item, dict):
-                            normalized = self._normalize_workspace_finding(item, payload, path, index)
-                            if normalized:
-                                findings.append(normalized)
-                                sources.append(path.name)
-
-        # Real HTTP probe execution can produce direct runtime evidence. Keep only
-        # suspicious or failed probes so the frontend does not label normal probes as bugs.
-        probe_result = workspace / "real_project" / "probe_execution_result.json"
-        payload = self._read_json_dict(probe_result)
-        items = payload.get("items")
-        if isinstance(items, list):
-            for index, item in enumerate(items):
-                if not isinstance(item, dict):
-                    continue
-                if not item.get("suspicious") and not item.get("error"):
-                    continue
-                normalized = self._normalize_probe_execution_finding(item, probe_result, index)
-                if normalized:
-                    findings.append(normalized)
-                    sources.append(probe_result.name)
-
-        findings = self._dedupe_risks(findings)
-        if not findings:
-            return {}
-        p0 = sum(1 for item in findings if self._normalize_severity(item.get("severity")) == "P0")
-        p1 = sum(1 for item in findings if self._normalize_severity(item.get("severity")) == "P1")
-        score = 97.0 if p0 + p1 else 80.0
-        grade = "A+" if score >= 95 else "A" if score >= 85 else "B" if score >= 70 else "C"
-        latest = max((path.stat().st_mtime for path in defect_dir.glob("*.json") if path.exists()), default=workspace.stat().st_mtime if workspace.exists() else time.time())
-        generated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(latest))
-        return {
-            "project_id": project_id,
-            "project_name": project_id,
-            "generated_at_utc": generated,
-            "system_grade": grade,
-            "overall_score": score,
-            "total_findings": len(findings),
-            "raw_total": len(findings),
-            "real_findings": findings,
-            "bug_scores": findings,
-            "summary": f"从 platform_workspace 聚合 {len(findings)} 条真实检测结果 / 覆盖缺口。",
-            "report_source_path": f"platform_workspace/{project_id}",
-            "workspace_sources": sorted(set(sources)),
-        }
-
-    def _normalize_workspace_finding(self, item: dict[str, Any], payload: dict[str, Any], source_path: Path, index: int) -> dict[str, Any]:
-        evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
-        method = self._first_text(item.get("method"), evidence.get("method"), (item.get("probe") or {}).get("method") if isinstance(item.get("probe"), dict) else "").upper()
-        path = self._first_text(item.get("path"), item.get("path_template"), evidence.get("path"), evidence.get("path_template"), (item.get("probe") or {}).get("path") if isinstance(item.get("probe"), dict) else "")
-        title = self._first_text(item.get("title"), item.get("technical_title"), item.get("detail"), item.get("description"), f"{source_path.stem} finding {index + 1}")
-        risk_type = self._first_text(item.get("risk_type"), item.get("category"), item.get("business_assurance_type"), source_path.stem)
-        status = self._first_text(item.get("status"), item.get("verdict"), "needs_human_review")
-        confidence = self._coerce_float(item.get("confidence_score"), self._coerce_float(item.get("confidence"), self._coerce_float(item.get("score"), 0.75)))
-        quality_gap = (
-            "coverage_gap" in risk_type
-            or "assurance" in risk_type
-            or status in {"needs_human_review", "candidate", "pending"}
-            or bool(item.get("claim_guard"))
-        )
-        expected = self._first_text(item.get("expected"), item.get("expected_behavior"), evidence.get("expected"), item.get("test_oracle"))
-        actual = self._first_text(item.get("actual"), item.get("actual_behavior"), item.get("bug_signal"), item.get("summary"), item.get("detail"), item.get("description"))
-        steps = item.get("reproduction_steps") if isinstance(item.get("reproduction_steps"), list) else []
-        if not steps:
-            steps = [
-                f"定位检测来源：{source_path.name}",
-                f"回放业务动作：{method or '业务操作'} {path or title}",
-                "对比预期规则、真实返回、日志与 DB 快照，确认是否可复现。",
-            ]
-        return {
-            "risk_id": self._first_text(item.get("risk_id"), item.get("finding_id"), item.get("issue_id"), item.get("bug_id"), f"{source_path.stem}_{index}"),
-            "title": title,
-            "technical_title": f"{method} {path} · {title}" if method or path else title,
-            "severity": self._normalize_severity(item.get("severity")),
-            "status": "pending" if quality_gap else ("confirmed" if status in {"confirmed", "validated", "reproduced"} else status),
-            "risk_type": risk_type,
-            "defect_family": self._first_text(item.get("defect_family"), "scenario_flow" if quality_gap else risk_type),
-            "summary": actual or title,
-            "business_impact": actual or title,
-            "suggested_action": expected or "补齐真实请求、响应、日志与 DB 快照后再进入缺陷交付。",
-            "expected": expected,
-            "actual": actual,
-            "confidence_score": confidence,
-            "reproducibility_score": confidence if not quality_gap else min(confidence, 0.45),
-            "affected_business_flow": {"name": self._first_text(item.get("flow"), item.get("contract_id"), risk_type)},
-            "affected_modules": [self._extract_module(title, actual)],
-            "affected_roles": [],
-            "first_seen_at": self._first_text(item.get("first_seen_at"), payload.get("generated_at_utc"), self._mtime_utc(source_path)),
-            "last_verified_at": self._first_text(item.get("last_verified_at"), payload.get("generated_at_utc"), self._mtime_utc(source_path)),
-            "reproduction_steps": steps,
-            "quality_assurance_gap": quality_gap,
-            "evidence_hint": f"来源文件：{source_path.name}；执行策略：{self._first_text(item.get('execution_policy'), evidence.get('execution_policy'), 'unknown')}",
-            "evidence": {**evidence, "method": method, "path": path, "source_file": source_path.name, "expected": expected, "actual": actual},
-            "_api_path": path,
-            "_api_method": method,
-        }
-
-    def _normalize_probe_execution_finding(self, item: dict[str, Any], source_path: Path, index: int) -> dict[str, Any]:
-        probe = item.get("probe") if isinstance(item.get("probe"), dict) else {}
-        method = self._first_text(probe.get("method"), item.get("method")).upper()
-        path = self._first_text(probe.get("path"), item.get("path"))
-        status_code = item.get("response_status")
-        error = self._first_text(item.get("error"), item.get("reason"))
-        title = self._first_text(probe.get("title"), f"运行时探针异常：{method} {path}")
-        return {
-            "risk_id": self._first_text(item.get("probe_id"), probe.get("probe_id"), f"probe_exec_{index}"),
-            "title": title,
-            "technical_title": f"{method} {path} · {title}",
-            "severity": self._normalize_severity(probe.get("severity") or "P1"),
-            "status": "confirmed" if item.get("suspicious") else "pending",
-            "risk_type": self._first_text(probe.get("risk_type"), "runtime_probe"),
-            "defect_family": self._first_text(probe.get("defect_family"), "runtime_probe"),
-            "summary": error or title,
-            "business_impact": error or title,
-            "suggested_action": self._first_text(probe.get("expected"), "对照响应码、日志与 DB 结果确认是否为可复现缺陷。"),
-            "expected": self._first_text(probe.get("expected")),
-            "actual": error or f"response_status={status_code}",
-            "confidence_score": self._coerce_float(item.get("confidence"), 0.70),
-            "reproducibility_score": self._coerce_float(item.get("confidence"), 0.70),
-            "affected_business_flow": {"name": self._first_text(probe.get("risk_type"), "runtime_probe")},
-            "affected_modules": [self._extract_module(title, error)],
-            "affected_roles": [],
-            "first_seen_at": self._mtime_utc(source_path),
-            "last_verified_at": self._mtime_utc(source_path),
-            "reproduction_steps": [f"执行 {method} {path}", "记录响应状态码、响应体、请求时间与 traceId", "核对业务数据是否出现不符合预期的副作用"],
-            "quality_assurance_gap": not bool(item.get("suspicious")),
-            "evidence_hint": f"来源文件：{source_path.name}；response_status={status_code}",
-            "evidence": {"method": method, "path": path, "status_code": status_code, "error": error, "source_file": source_path.name},
-            "_api_path": path,
-            "_api_method": method,
-        }
+    def _canonical_current_report_scope(
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return _canonical_current_report_scope(payload)
 
     @staticmethod
     def _dedupe_risks(risks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        seen: set[str] = set()
-        deduped: list[dict[str, Any]] = []
-        for item in risks:
-            key = "|".join([
-                str(item.get("risk_id") or ""),
-                str(item.get("title") or "")[:160],
-                str(item.get("_api_method") or (item.get("evidence") or {}).get("method") or ""),
-                str(item.get("_api_path") or (item.get("evidence") or {}).get("path") or ""),
-            ]).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(item)
-        return deduped
+        """Retired compatibility hook; never used for current defect identity."""
+
+        return [dict(item) for item in risks if isinstance(item, dict)]
 
     def _evidence_trust_score(self, risks: list[dict[str, Any]]) -> float:
         if not risks:
@@ -4993,6 +4700,18 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 finding_evidence["source_file"] = str(item.get("evidence_hint"))
 
             findings.append({
+                "canonical_defect_id": self._first_text(
+                    item.get("canonical_defect_id")
+                ),
+                "canonical_identity_fingerprint": self._first_text(
+                    item.get("canonical_identity_fingerprint")
+                ),
+                "delivery_occurrence_count": int(
+                    item.get("delivery_occurrence_count") or 0
+                ),
+                "delivery_occurrence_finding_ids": list(
+                    item.get("delivery_occurrence_finding_ids") or []
+                ) if isinstance(item.get("delivery_occurrence_finding_ids"), list) else [],
                 "candidate_id": self._first_text(item.get("candidate_id")),
                 "slice_id": self._first_text(item.get("slice_id")),
                 "obligation_id": self._first_text(item.get("obligation_id")),
@@ -5246,84 +4965,32 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         }
 
     def _build_command_center(self, project_id: str, root: Path) -> dict:
-        report = self._load_v12_report(project_id, root)
+        archived_report = self._load_v12_report(project_id, root)
         current_scan_report = self._load_current_scan_report(project_id, root)
+        report = current_scan_report if current_scan_report else archived_report
+        canonical_current_scope = self._canonical_current_report_scope(report)
+        canonical_source_risks = [
+            dict(item)
+            for item in canonical_current_scope.get("defects", [])
+            if isinstance(item, dict)
+        ]
+        canonical_source_candidates = [
+            dict(item)
+            for item in canonical_current_scope.get("candidates", [])
+            if isinstance(item, dict)
+        ]
         real_discovery_payload = _load_real_project_discovery_payload(root, project_id)
         current_report_source = current_scan_report if current_scan_report else report
-        discovery_current_scope = self._discovery_current_scope_summary(real_discovery_payload or {})
         enterprise_docs = self._load_enterprise_docs(project_id, root)
         knowledge_summary = self._load_knowledge_summary(project_id, root)
         discovery_payload = real_discovery_payload or self._auto_discovery_payload(project_id, root, report)
-        risks = self._v12_findings(report, enterprise_docs)
-        risks.extend(self._load_db_findings(root, project_id))
-        risks.extend(self._load_perf_regressions(root, project_id))
-        risks.extend(self._load_spectrum_findings(root, project_id))
-        risks.extend(self._load_multi_layer_findings(root, project_id))
-        # Load DB verification findings
-        db_verify = report.get("db_verification", {})
-        if isinstance(db_verify.get("findings"), list):
-            for f in db_verify["findings"]:
-                f.setdefault("risk_type", "db_verification")
-                f.setdefault("defect_family", "data_integrity")
-            risks.extend(db_verify["findings"])
-        # E2E flow findings
-        e2e = report.get("e2e_findings", [])
-        if isinstance(e2e, list):
-            for f in e2e:
-                f.setdefault("risk_type", "e2e_flow")
-                f.setdefault("defect_family", "business_flow")
-            risks.extend(e2e)
-        # Deep verifier findings
-        deep = report.get("deep_findings", [])
-        if isinstance(deep, list):
-            for f in deep:
-                f.setdefault("risk_type", "深度验证")
-                f.setdefault("defect_family", "deep_test")
-            risks.extend(deep)
-        # Frontend UI findings
-        ui = report.get("ui_findings", [])
-        if isinstance(ui, list):
-            for f in ui:
-                f.setdefault("risk_type", "frontend_ui")
-                f.setdefault("defect_family", "ui")
-                risks.append(_annotate_ui_risk_item(dict(f)))
-        # ── 累积 findings：从 DB 加载跨扫描累积的未修复 bug ──
-        # 这是"bug 货架"模型的核心：只要 bug 没修复（status='open'），
-        # 就一直保留在列表里，即使本次扫描没触发也要展示。
-        # 注意：只加载不在当前 report findings 中的（避免双重计算）
-        try:
-            tenant_id = _tenant_from_headers(dict(self.headers))
-            cumulative = db_persist.get_cumulative_findings(root, tenant_id, project_id)
-            if cumulative:
-                # Build dedupe keys from current report findings to avoid double-counting
-                import re as _re2
-                current_keys: set[str] = set()
-                for r in risks:
-                    t = str(r.get("title") or "")[:200].strip().lower()
-                    t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
-                    t = _re2.sub(r'\s+', ' ', t).strip()
-                    m = str(r.get("_api_method") or (r.get("evidence") or {}).get("method") or "").upper()
-                    p = str(r.get("_api_path") or (r.get("evidence") or {}).get("path") or "").strip()
-                    current_keys.add(f"{t}|{m}|{p}")
-                # Only add cumulative findings NOT already in current report
-                added_count = 0
-                for f in cumulative:
-                    t = str(f.get("title") or "")[:200].strip().lower()
-                    t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
-                    t = _re2.sub(r'\s+', ' ', t).strip()
-                    m = str(f.get("_api_method") or (f.get("evidence") or {}).get("method") or "").upper()
-                    p = str(f.get("_api_path") or (f.get("evidence") or {}).get("path") or "").strip()
-                    key = f"{t}|{m}|{p}"
-                    if key not in current_keys:
-                        f.setdefault("risk_type", f.get("category") or "累积发现")
-                        f.setdefault("defect_family", "cumulative")
-                        f.setdefault("_cumulative", True)
-                        risks.append(f)
-                        current_keys.add(key)
-                        added_count += 1
-        except Exception:
-            pass
-        risks = self._dedupe_risks([item for item in risks if isinstance(item, dict)])
+        legacy_diagnostic_row_count = self._report_signal_count(report)
+        # Current-run defects begin directly from receipt-derived registry
+        # representatives. Legacy shelves remain on diagnostic endpoints only.
+        risks = self._v12_findings(
+            {"findings": canonical_source_risks},
+            enterprise_docs,
+        )
 
         # ── 为所有未关联文档的 finding 补充文档匹配（通用，非 v12 finding 也需要）──
         if enterprise_docs:
@@ -5449,6 +5116,10 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             }
         except Exception as e:
             _dbg_report(hypothesis_id="F", msg="[WARN] display_ready_formatter fallback", data={"error": str(e)})
+            if canonical_current_scope.get("status") == "VERIFIED":
+                raise RuntimeError(
+                    f"canonical_display_formatting_failed:{type(e).__name__}:{e}"
+                ) from e
             display_risks = risks
             display_metrics = {}
 
@@ -5456,7 +5127,42 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             item for item in display_risks
             if isinstance(item, dict) and not bool(item.get("_summary_only"))
         ]
-        delivery_defects, internal_clues = _partition_delivery_tracks(all_display_risks)
+        expected_canonical_ids = list(
+            canonical_current_scope.get("canonical_defect_ids") or []
+        )
+        displayed_canonical_ids = [
+            str(item.get("canonical_defect_id") or "").strip()
+            for item in all_display_risks
+        ]
+        if not _canonical_display_scope_matches(
+            expected_canonical_ids,
+            displayed_canonical_ids,
+        ):
+            if canonical_current_scope.get("status") == "VERIFIED":
+                raise RuntimeError("canonical_display_scope_mismatch")
+            all_display_risks = []
+        delivery_defects = [
+            _annotate_ui_risk_item({
+                **item,
+                "finding_class": "deliverable",
+                "delivery_track": "defect",
+                "customer_delivery_status": "defect",
+                "customer_visible": True,
+                "gate_passed": True,
+                "bug_status": "reproduced",
+            })
+            for item in all_display_risks
+        ]
+        internal_clues = [
+            _annotate_ui_risk_item({
+                **item,
+                "finding_class": "candidate",
+                "delivery_track": "clue",
+                "customer_delivery_status": "clue",
+                "customer_visible": False,
+            })
+            for item in canonical_source_candidates
+        ]
         display_risks = delivery_defects
         overall_display_contract = display_metrics.get("display_contract") if isinstance(display_metrics.get("display_contract"), dict) else {}
         if isinstance(display_metrics.get("display_contract"), dict):
@@ -5506,7 +5212,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         defect_priority_summary = _build_defect_priority_summary(delivery_defects)
         defect_repro_summary = _build_defect_repro_summary(delivery_defects)
         defect_delivery_cards = _build_defect_delivery_cards(delivery_defects)
-        current_report_findings = self._report_findings(current_report_source)
+        current_report_findings = list(canonical_source_risks)
         current_report_category_counts: dict[str, int] = {}
         for item in current_report_findings:
             if not isinstance(item, dict):
@@ -5514,69 +5220,27 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             category = str(item.get("category") or item.get("risk_type") or "uncategorized").strip() or "uncategorized"
             current_report_category_counts[category] = current_report_category_counts.get(category, 0) + 1
         current_report_path = str(current_report_source.get("report_source_path") or current_report_source.get("report_path") or "")
-        if discovery_current_scope.get("report_source_path"):
-            current_report_path = str(discovery_current_scope.get("report_source_path") or current_report_path)
         current_report_breakdown = {
             "total_findings": len(current_report_findings),
             "category_counts": current_report_category_counts,
             "report_source_path": current_report_path,
         }
         current_campaign_bundle_stats = {"raw": 0, "deduped": 0}
-        if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
-            current_campaign_bundle_stats = _current_campaign_bundle_finding_stats(
-                project_id,
-                root,
-                discovery_payload["continuous_discovery_campaign"],
-            )
-        discovery_total_findings = int(discovery_current_scope.get("total_findings") or 0)
-        current_scope_total_findings = max(
-            0,
-            int(current_report_breakdown.get("total_findings") or 0),
-            discovery_total_findings,
-            int(current_campaign_bundle_stats.get("raw") or 0),
-        )
-        current_scope_raw_candidate_findings = max(
-            current_scope_total_findings,
-            int(current_report_source.get("raw_total") or current_report_source.get("total_findings") or current_scope_total_findings or 0),
-        )
-        has_campaign_scope = bool(discovery_current_scope) or bool(
-            int(current_campaign_bundle_stats.get("deduped") or 0)
-            or int(current_campaign_bundle_stats.get("raw") or 0)
-        )
-        if has_campaign_scope:
-            # Real campaign scope present: customer-ready defects is the deduped /
-            # validated campaign count, NEVER the raw bundle total. Using the raw
-            # total (current_scope_total_findings) here conflated "本轮候选总数"
-            # with "本轮 customer-ready 缺陷数".
-            current_scope_customer_ready_defect_count = max(
-                0,
-                int(discovery_current_scope.get("customer_ready_defects") or 0),
-                int(current_campaign_bundle_stats.get("deduped") or 0),
-            )
-            if current_scope_total_findings:
-                current_scope_customer_ready_defect_count = min(
-                    current_scope_customer_ready_defect_count,
-                    current_scope_total_findings,
-                )
-        else:
-            current_scope_customer_ready_defect_count = max(
-                0,
-                int(self._report_summary_number(
-                    current_report_source,
-                    "customer_ready_defects",
-                    "ready_bug_count",
-                    "total_bugs_found",
-                    fallback=current_scope_total_findings,
-                ) or current_scope_total_findings),
-            )
-            current_scope_customer_ready_defect_count = min(
-                current_scope_customer_ready_defect_count or current_scope_total_findings,
-                current_scope_total_findings or len(delivery_defects),
-            )
-        current_scope_materialized_findings = max(
-            current_scope_customer_ready_defect_count,
-            current_scope_total_findings,
-        )
+        legacy_current_scope_count_diagnostics = {
+            "declared_report_total": self._report_summary_number(
+                current_report_source,
+                "total_findings",
+                "raw_total",
+                fallback=0,
+            ),
+            "campaign_bundle_raw": 0,
+            "campaign_bundle_deduped": 0,
+            "affects_current_scope": False,
+        }
+        current_scope_total_findings = len(delivery_defects)
+        current_scope_raw_candidate_findings = len(canonical_source_candidates)
+        current_scope_customer_ready_defect_count = len(delivery_defects)
+        current_scope_materialized_findings = len(delivery_defects)
         family_customer_ready_defect_count = len(delivery_defects)
         campaign_scope = _current_campaign_scope_summary(
             discovery_payload.get("continuous_discovery_campaign")
@@ -5692,6 +5356,24 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             "scan_meta": scan_meta,
             "execution_evidence_summary": execution_evidence_summary,
             "regression_summary": regression_summary,
+            "canonical_scope": {
+                "status": canonical_current_scope.get("status"),
+                "reason": canonical_current_scope.get("reason"),
+                "formal_customer_deliverable_count": len(delivery_defects),
+                "canonical_defect_ids": list(
+                    canonical_current_scope.get("canonical_defect_ids") or []
+                ),
+                "delivery_occurrence_count": len(
+                    canonical_current_scope.get("delivery_occurrences") or []
+                ),
+                "delivery_occurrences_are_audit_only": True,
+            },
+            "legacy_product_path_diagnostics": {
+                **canonical_current_scope.get("legacy_diagnostics", {}),
+                **legacy_current_scope_count_diagnostics,
+                "legacy_rows_loaded_for_diagnostics": legacy_diagnostic_row_count,
+                "affects_current_counts_or_readiness": False,
+            },
             "defects": delivery_defects,
             "clues": internal_clues,
             "risks": display_risks,
@@ -6094,10 +5776,15 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 *_quarantined,
             ]
             data["formal_count_projection"] = {
-                "schema_version": "qualibug.discovery-quality-projection.v1",
-                "projection_status": "FAILED_SAFE",
+                "schema_version": QUALITY_PROJECTION_SCHEMA,
+                "authority_status": "BLOCKED",
+                "authority_reason": "current_scope_evidence_quarantined",
                 "formal_customer_deliverable_count": 0,
-                "formal_finding_ids": [],
+                "canonical_defect_count": 0,
+                "canonical_defect_ids": [],
+                "delivery_occurrence_count": 0,
+                "delivery_occurrence_finding_ids": [],
+                "canonical_representative_findings": [],
                 "executed_clue_count": len(_failed_safe_candidates),
                 "confirmation_receipt_count": 0,
                 "candidate_count": len(_failed_safe_candidates),
@@ -6111,7 +5798,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 },
             }
             data["finding_classification"] = {
-                "schema_version": "qualibug.discovery-quality-projection.v1",
+                "schema_version": QUALITY_PROJECTION_SCHEMA,
                 "projection_status": "FAILED_SAFE",
                 "deliverable": [],
                 "candidate": _failed_safe_candidates,
@@ -6409,31 +6096,47 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         """Auto-generate continuous discovery payload — tracks convergence across rounds."""
         import time
         now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-        real_findings = report.get("real_findings") or report.get("bug_scores") or []
-        if isinstance(real_findings, list):
-            real_findings = [item for item in real_findings if isinstance(item, dict)]
-        else:
-            real_findings = []
-        total_findings = len(real_findings)
-        raw_total = int(report.get("raw_total") or report.get("total_findings") or total_findings)
+        canonical_ids, real_findings, disabled_reason = _canonical_delta_identity(
+            report
+        )
+        if disabled_reason:
+            return {
+                "project_id": project_id,
+                "generated_at_utc": now,
+                "continuous_discovery_campaign": {
+                    "status": "disabled",
+                    "reason": disabled_reason,
+                    "summary": {
+                        "campaign_state": "disabled",
+                        "can_stop_now": False,
+                        "new_this_round": None,
+                    },
+                },
+                "metrics": {
+                    "continuous_discovery_status": "disabled",
+                    "continuous_discovery_reason": disabled_reason,
+                    "continuous_discovery_new": None,
+                    "doc_completeness": self._doc_completeness_score(
+                        project_id, root
+                    ),
+                },
+            }
+        total_findings = len(canonical_ids)
+        raw_total = total_findings
 
         # Track convergence: compare with previous scan findings
-        prev_titles = self._previous_finding_titles(project_id, root)
-        # Build current titles from report — match the DB storage format
-        current_titles = set()
-        for f in real_findings:
-            t = str(f.get("title") or f.get("description", ""))[:120]
-            if t: current_titles.add(t.lower())  # Normalize for matching
-        new_count = len(current_titles - prev_titles)
-        confirmed_count = len(current_titles & prev_titles)
-        resolved_count = max(0, raw_total - total_findings)
+        previous_ids = self._previous_canonical_defect_ids(project_id, root)
+        # Titles are display-only; convergence compares canonical identities.
+        current_ids = set(canonical_ids)
+        new_count = len(current_ids - previous_ids)
+        confirmed_count = len(current_ids & previous_ids)
 
         verified = sum(1 for f in real_findings if max(float(f.get("confidence_score", 0)), float(f.get("score", 0)), float(f.get("confidence", 0))) > 0.5)
         blocked = sum(1 for f in real_findings if str(f.get("severity", "")).upper() in ("P0", "CRITICAL"))
 
         scan_counter = self._scan_counter(project_id, root)
         current_run = scan_counter.get("count", total_findings // 3 or 1)
-        total_discovered = len(prev_titles | current_titles)  # All unique findings ever
+        total_discovered = len(previous_ids | current_ids)
         pending = max(0, raw_total - total_discovered)
 
         return {
@@ -6459,7 +6162,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 },
                 "coverage_ledger": {
                     "entries": [
-                        {"last_status": "validated" if str(f.get("title",""))[:80] in prev_titles else "new",
+                        {"canonical_defect_id": str(f.get("canonical_defect_id") or ""),
+                         "last_status": "validated" if str(f.get("canonical_defect_id") or "") in previous_ids else "new",
                          "frontier": {"title": str(f.get("title", f.get("description", "")))[:60]},
                          "last_blocker_reason": ""}
                         for f in real_findings[:10]
@@ -6467,7 +6171,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     "status_counts": {"validated": confirmed_count, "new": new_count, "blocked": blocked, "pending": pending},
                 },
                 "recommended_frontier": [
-                    {"title": str(f.get("title", f.get("description", "")))[:60],
+                    {"canonical_defect_id": str(f.get("canonical_defect_id") or ""),
+                     "title": str(f.get("title", f.get("description", "")))[:60],
                      "value_score": int(float(f.get("confidence_score", f.get("score", 1))) * 10)}
                     for f in real_findings[:5]
                 ],
@@ -6483,30 +6188,37 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             },
         }
 
-    def _previous_finding_titles(self, project_id: str, root: Path) -> set:
-        """Read previous scan findings from DB for convergence tracking."""
-        try:
-            db_persist.init_db(root)
-            import sqlite3
-            db_path = root / db_persist.DB_FILENAME
-            conn = sqlite3.connect(str(db_path))
-            conn.row_factory = sqlite3.Row
-            # Try both the project_id and a locale-agnostic normalized form
-            # (strip common company-suffix tokens in any language, not only 科技).
-            _project_aliases = {
-                str(project_id),
-                re.sub(r"(科技|技术|软件|信息|集团|有限公司|股份|inc|ltd|llc|corp|co)$", "", str(project_id), flags=re.I).strip("-_ "),
-            }
-            _project_aliases = {item for item in _project_aliases if item}
-            _placeholders = ",".join("?" for _ in range(len(_project_aliases) or 1))
-            rows = conn.execute(
-                f"SELECT title FROM findings WHERE tenant_id IN (?, ?) AND project_id IN ({_placeholders}) ORDER BY created_at",
-                (self._request_tenant(), "default", *sorted(_project_aliases)),
-            ).fetchall()
-            conn.close()
-            return {r["title"][:120].lower() for r in rows}
-        except Exception:
+    def _previous_canonical_defect_ids(
+        self, project_id: str, root: Path
+    ) -> set[str]:
+        """Read only the canonical-ID union from the continuous state ledger."""
+
+        state_path = (
+            root
+            / "platform_workspace"
+            / project_id
+            / "defect_discovery"
+            / _CONTINUOUS_STATE_FILE
+        )
+        if not state_path.exists():
             return set()
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"continuous_state_unreadable:{type(exc).__name__}:{exc}"
+            ) from exc
+        if not isinstance(state, dict):
+            raise RuntimeError("continuous_state_invalid")
+        values = state.get("canonical_defect_ids")
+        if values is None:
+            return set()
+        if not isinstance(values, list):
+            raise RuntimeError("continuous_state_canonical_ids_invalid")
+        ids = {str(value or "").strip() for value in values}
+        if not all(ids):
+            raise RuntimeError("continuous_state_canonical_ids_empty")
+        return ids
 
     def _doc_completeness_score(self, project_id: str, root: Path) -> int:
         """Score 0-100 based on uploaded enterprise documents knowledge richness."""
@@ -7002,7 +6714,6 @@ def _continuous_scan_loop(root: Path, project: str, tenant_id: str, interval_s: 
     reason so the UI can show "覆盖收敛，自动暂停".
     """
     import time as _time
-    import threading as _threading
     from .__main__ import scan as _scan_fn
 
     key = (str(root), project)
@@ -7020,27 +6731,23 @@ def _continuous_scan_loop(root: Path, project: str, tenant_id: str, interval_s: 
         try:
             # Run scan
             result = _scan_fn(project, root, save_report=True)
+            if not isinstance(result, dict) or result.get("success") is not True:
+                raise RuntimeError(
+                    f"continuous_scan_failed:{(result or {}).get('error') if isinstance(result, dict) else 'invalid_result'}"
+                )
 
-            # Cumulative merge
-            try:
-                db_persist.init_db(root)
-                report_path = root / "platform_outputs" / project / "intelligence_report.json"
-                report_data = {}
-                if report_path.exists():
-                    import json as _jr
-                    report_data = _jr.loads(report_path.read_text(encoding="utf-8"))
-                findings_list = report_data.get("real_findings") or report_data.get("bug_scores") or []
-                findings_list = [f for f in (findings_list if isinstance(findings_list, list) else []) if isinstance(f, dict)]
-                enriched = dict(result)
-                enriched["findings"] = findings_list
-                scan_id = db_persist.save_scan(root, tenant_id, project, enriched)
-                merge_result = db_persist.merge_findings_cumulative(root, tenant_id, project, scan_id, findings_list)
-                new_count = merge_result.get("new", 0)
-            except Exception:
-                new_count = 0
-
-            # Update continuous state
-            _update_continuous_state(root, project, result)
+            continuous_state = _update_continuous_state(root, project, result)
+            if continuous_state.get("status") == "disabled":
+                if key in _continuous_threads:
+                    _continuous_threads[key].update({
+                        "status": "disabled",
+                        "reason": continuous_state.get("reason"),
+                        "stop": True,
+                    })
+                break
+            runs = continuous_state.get("runs")
+            last_run = runs[-1] if isinstance(runs, list) and runs else {}
+            new_count = int(last_run.get("new_canonical_defect_count") or 0)
 
             # Convergence check
             if new_count == 0:
@@ -7062,8 +6769,34 @@ def _continuous_scan_loop(root: Path, project: str, tenant_id: str, interval_s: 
                     # Mark state as converged
                     _mark_continuous_converged(root, project, reason="连续{}轮无新发现且覆盖率≥{:.0%}".format(CONVERGE_ROUNDS, CONVERGE_COVERAGE))
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            failure_state = {
+                "status": "failed",
+                "converged": False,
+                "reason": f"continuous_scan_error:{type(exc).__name__}:{exc}",
+                "runs": [],
+                "total_runs": 0,
+                "canonical_defect_ids": [],
+            }
+            state_path = (
+                root
+                / "platform_workspace"
+                / project
+                / "defect_discovery"
+                / _CONTINUOUS_STATE_FILE
+            )
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(failure_state, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            if key in _continuous_threads:
+                _continuous_threads[key].update({
+                    "status": "failed",
+                    "reason": failure_state["reason"],
+                    "stop": True,
+                })
+            break
 
         # Wait for next interval (check stop flag every second)
         for _ in range(interval_s):
@@ -7091,7 +6824,9 @@ def _mark_continuous_converged(root: Path, project: str, reason: str) -> None:
     state_file.write_text(json.dumps(state, ensure_ascii=False, default=str), encoding="utf-8")
 
 
-def _update_continuous_state(root: Path, project: str, scan_result: dict) -> None:
+def _update_continuous_state(
+    root: Path, project: str, scan_result: dict
+) -> dict[str, Any]:
     """Track continuous discovery coverage state after each auto-scan."""
     state_dir = root / "platform_workspace" / project / "defect_discovery"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -7101,10 +6836,38 @@ def _update_continuous_state(root: Path, project: str, scan_result: dict) -> Non
     if state_file.exists():
         try:
             state = json.loads(state_file.read_text(encoding="utf-8")) or {}
-        except Exception:
-            state = {}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"continuous_state_unreadable:{type(exc).__name__}:{exc}"
+            ) from exc
 
-    total_findings = scan_result.get("total_findings", 0)
+    canonical_ids, _rows, disabled_reason = _canonical_delta_identity(
+        scan_result
+    )
+    if disabled_reason:
+        disabled_state = {
+            "status": "disabled",
+            "converged": False,
+            "reason": disabled_reason,
+            "runs": [],
+            "total_runs": 0,
+            "canonical_defect_ids": [],
+        }
+        state_file.write_text(
+            json.dumps(disabled_state, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        return disabled_state
+
+    previous_ids = {
+        str(value or "").strip()
+        for value in state.get("canonical_defect_ids", [])
+        if str(value or "").strip()
+    } if isinstance(state.get("canonical_defect_ids"), list) else set()
+    current_ids = set(canonical_ids)
+    new_ids = sorted(current_ids - previous_ids)
+    resolved_ids = sorted(previous_ids - current_ids)
+    total_findings = len(canonical_ids)
     coverage = scan_result.get("coverage", 0)
     grade = scan_result.get("grade", "C")
     total_ms = scan_result.get("total_ms", 0)
@@ -7114,6 +6877,11 @@ def _update_continuous_state(root: Path, project: str, scan_result: dict) -> Non
     runs.append({
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "findings": total_findings,
+        "canonical_defect_ids": canonical_ids,
+        "new_canonical_defect_ids": new_ids,
+        "new_canonical_defect_count": len(new_ids),
+        "resolved_canonical_defect_ids": resolved_ids,
+        "resolved_canonical_defect_count": len(resolved_ids),
         "coverage": coverage,
         "grade": grade,
         "duration_ms": total_ms,
@@ -7123,18 +6891,25 @@ def _update_continuous_state(root: Path, project: str, scan_result: dict) -> Non
 
     # Convergence detection
     recent = runs[-5:] if len(runs) >= 5 else runs
-    findings_values = [r["findings"] for r in recent]
-    max_findings = max(findings_values) if findings_values else 0
-    stable = len(set(findings_values[-3:])) == 1 if len(findings_values) >= 3 else False
-    converged = stable and coverage >= 0.7 and max_findings > 0
+    recent_new_counts = [
+        int(row.get("new_canonical_defect_count") or 0) for row in recent
+    ]
+    stable = (
+        len(recent_new_counts) >= 3
+        and all(value == 0 for value in recent_new_counts[-3:])
+    )
+    converged = stable and coverage >= 0.7
 
     state["runs"] = runs
     state["status"] = "scanning" if not converged else "converged"
     state["converged"] = converged
     state["last_scan"] = runs[-1]["timestamp"] if runs else ""
     state["total_runs"] = len(runs)
+    state["canonical_defect_ids"] = sorted(previous_ids | current_ids)
+    state["delta_identity_authority"] = "canonical_defect_registry"
 
     state_file.write_text(json.dumps(state, ensure_ascii=False, default=str), encoding="utf-8")
+    return state
 
 
 def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
@@ -7160,7 +6935,16 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
             "last_scan": state.get("last_scan", ""),
             "last_findings": last_run.get("findings", 0),
             "last_coverage": last_run.get("coverage", 0),
+            "reason": state.get("reason", ""),
+            "canonical_defect_ids": list(
+                state.get("canonical_defect_ids") or []
+            ) if isinstance(state.get("canonical_defect_ids"), list) else [],
+            "delta_identity_authority": state.get(
+                "delta_identity_authority", ""
+            ),
             "message": (
+                "Continuous discovery delta is disabled until a verified canonical defect registry is available."
+                if state.get("status") == "disabled" else
                 "持续检测覆盖已收敛，系统自动暂停。上传新文档后将自动恢复。"
                 if state.get("converged") else
                 "持续检测进行中，系统检测到新的覆盖空间。"

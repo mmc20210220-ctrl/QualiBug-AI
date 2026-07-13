@@ -14,17 +14,33 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_redactor import write_json_redacted
+from .canonical_defect_registry import (
+    CanonicalDefectRegistryError,
+    build_defect_identity_consistency,
+    canonical_representative_findings,
+    validate_canonical_defect_registry,
+    validate_defect_identity_consistency,
+)
 from .discovery_mainline_contract import validate_mainline_run_contract
 from .discovery_quality_projection import (
     attach_quality_projection_to_scan_result,
-    build_formal_id_consistency,
+    build_formal_count_projection,
+)
+from .obligation_attempt_ledger import (
+    ObligationAttemptLedgerError,
+    validate_obligation_attempt_ledger,
+)
+from .formal_delivery_authority import (
+    FormalDeliveryAuthorityError,
+    build_formal_delivery_authority_receipt,
+    validate_formal_delivery_authority_receipt,
 )
 from .target_policy import build_target_policy_decision
 
 
 CAMPAIGN_SCHEMA = "qualibug.project-campaign.v1"
 CAMPAIGN_VIEW_SCHEMA = "qualibug.project-campaign-view.v1"
-SUBMISSION_SCHEMA = "qualibug.discovery-evaluation-submission.v1"
+SUBMISSION_SCHEMA = "qualibug.discovery-evaluation-submission.v2"
 CAMPAIGN_STATES = {"draft", "ready", "running", "partial", "blocked", "failed_safe", "completed"}
 EXECUTION_STATES = {"completed", "partial", "blocked", "failed_safe", "not_executed"}
 PIPELINE_HEALTH_STATES = {"OK", "DEGRADED", "BLOCKED", "FAILED_SAFE"}
@@ -258,6 +274,189 @@ def build_identity_traces(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
     return traces
 
 
+def _validated_attempt_ledger_for_submission(
+    projected: dict[str, Any],
+    *,
+    formal_ids: list[str],
+) -> dict[str, Any] | None:
+    raw = (
+        projected.get("obligation_attempt_ledger")
+        or _v12(projected).get("obligation_attempt_ledger")
+    )
+    if raw is None:
+        raise CampaignContractError(
+            "formal_delivery_attempt_ledger_missing"
+        )
+    if not isinstance(raw, dict):
+        raise CampaignContractError(
+            "formal_delivery_attempt_ledger_not_object"
+        )
+    try:
+        return validate_obligation_attempt_ledger(raw)
+    except ObligationAttemptLedgerError as exc:
+        raise CampaignContractError(
+            f"formal_delivery_attempt_ledger_invalid:{exc}"
+        ) from exc
+
+
+def _extend_projected_identity_consistency(
+    projected: dict[str, Any],
+    *,
+    extra_occurrence_scopes: dict[str, list[str]] | None = None,
+    extra_canonical_scopes: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    base = _dict(projected.get("defect_identity_consistency"))
+    try:
+        validated = validate_defect_identity_consistency(
+            base,
+            required_occurrence_scopes={
+                "delivery_gate_ids",
+                "registry_occurrence_ids",
+                "formal_projection_occurrence_ids",
+            },
+            required_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+                "product_projection_ids",
+            },
+        )
+        return build_defect_identity_consistency(
+            occurrence_scopes={
+                **{
+                    name: list(values)
+                    for name, values in _dict(
+                        validated.get("occurrence_scopes")
+                    ).items()
+                },
+                **dict(extra_occurrence_scopes or {}),
+            },
+            canonical_scopes={
+                **{
+                    name: list(values)
+                    for name, values in _dict(
+                        validated.get("canonical_scopes")
+                    ).items()
+                },
+                **dict(extra_canonical_scopes or {}),
+            },
+        )
+    except CanonicalDefectRegistryError as exc:
+        raise CampaignContractError(
+            f"PIPELINE_DEGRADED_IDENTITY_MISMATCH:{exc}"
+        ) from exc
+
+
+def _validate_redacted_evaluation_submission(value: Any) -> None:
+    envelope = _dict(value)
+    if envelope.get("schema_version") != SUBMISSION_SCHEMA:
+        raise CampaignContractError("persisted_submission_schema_invalid")
+    observed_fingerprint = _text(envelope.get("fingerprint"))
+    unsigned = {
+        key: item for key, item in envelope.items() if key != "fingerprint"
+    }
+    expected_fingerprint = hashlib.sha256(
+        _canonical_bytes(unsigned)
+    ).hexdigest()
+    if not observed_fingerprint or observed_fingerprint != expected_fingerprint:
+        raise CampaignContractError(
+            "persisted_submission_fingerprint_invalid_after_redaction"
+        )
+    mainline = validate_mainline_run_contract(_dict(envelope.get("mainline_run")))
+    scan_result = _dict(envelope.get("scan_result"))
+    findings = [
+        item for item in _list(scan_result.get("findings"))
+        if isinstance(item, dict)
+    ]
+    if len(findings) != len(_list(scan_result.get("findings"))):
+        raise CampaignContractError("persisted_submission_findings_invalid")
+    delivery_occurrences = [
+        item for item in _list(scan_result.get("delivery_occurrences"))
+        if isinstance(item, dict)
+    ]
+    if len(delivery_occurrences) != len(
+        _list(scan_result.get("delivery_occurrences"))
+    ):
+        raise CampaignContractError(
+            "persisted_submission_delivery_occurrences_invalid"
+        )
+    ledger = _dict(scan_result.get("obligation_attempt_ledger"))
+    embedded_authority = validate_formal_delivery_authority_receipt(
+        _dict(envelope.get("formal_delivery_authority"))
+    )
+    rebuilt_authority = build_formal_delivery_authority_receipt(
+        mainline_run=mainline,
+        findings=delivery_occurrences,
+        obligation_attempt_ledger=ledger,
+    )
+    if rebuilt_authority != embedded_authority:
+        raise CampaignContractError(
+            "persisted_submission_formal_authority_mismatch"
+        )
+    if _dict(scan_result.get("formal_delivery_authority")) != embedded_authority:
+        raise CampaignContractError(
+            "persisted_submission_authority_copy_mismatch"
+        )
+    try:
+        registry = validate_canonical_defect_registry(
+            _dict(envelope.get("canonical_defect_registry")),
+            mainline_run=mainline,
+            deliverable_occurrences=delivery_occurrences,
+            obligation_attempt_ledger=ledger,
+        )
+        if _dict(scan_result.get("canonical_defect_registry")) != registry:
+            raise CanonicalDefectRegistryError(
+                "persisted_submission_registry_copy_mismatch"
+            )
+        if canonical_representative_findings(
+            registry,
+            deliverable_occurrences=delivery_occurrences,
+        ) != findings:
+            raise CanonicalDefectRegistryError(
+                "persisted_submission_canonical_findings_mismatch"
+            )
+        consistency = validate_defect_identity_consistency(
+            _dict(envelope.get("defect_identity_consistency")),
+            required_occurrence_scopes={
+                "delivery_gate_ids",
+                "formal_authority_occurrence_ids",
+                "registry_occurrence_ids",
+                "evaluator_submission_occurrence_ids",
+            },
+            required_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+                "evaluator_submission_ids",
+            },
+        )
+    except CanonicalDefectRegistryError as exc:
+        raise CampaignContractError(
+            f"persisted_submission_canonical_authority_invalid:{exc}"
+        ) from exc
+    rebuilt_projection = build_formal_count_projection(
+        findings=delivery_occurrences,
+        candidate_findings=[],
+        obligation_attempt_ledger=ledger,
+        mainline_run=mainline,
+        canonical_defect_registry=registry,
+    )
+    if (
+        _dict(scan_result.get("formal_count_projection"))
+        != rebuilt_projection
+        or _dict(envelope.get("formal_count_projection"))
+        != rebuilt_projection
+    ):
+        raise CampaignContractError(
+            "persisted_submission_formal_projection_copy_mismatch"
+        )
+    if (
+        _dict(scan_result.get("defect_identity_consistency"))
+        != consistency
+    ):
+        raise CampaignContractError(
+            "persisted_submission_identity_consistency_copy_mismatch"
+        )
+
+
 def build_campaign_view(root: Path, project_id: str, campaign_id: str = "") -> dict[str, Any]:
     scan_result = load_scan_result(root, project_id)
     projected = attach_quality_projection_to_scan_result(scan_result)
@@ -284,23 +483,25 @@ def build_campaign_view(root: Path, project_id: str, campaign_id: str = "") -> d
         execution_status = "failed_safe"
     selected = _selected_experiments(projected)
     traces = build_identity_traces(projected)
-    formal_ids = list(
-        _dict(projected.get("formal_count_projection")).get("formal_finding_ids")
+    occurrence_ids = list(
+        _dict(projected.get("formal_count_projection")).get(
+            "delivery_occurrence_finding_ids"
+        )
         or []
     )
-    trace_formal_ids = sorted({
+    trace_occurrence_ids = sorted([
         _text(item.get("finding_id"))
         for item in traces
-        if _text(item.get("finding_id")) in set(formal_ids)
-    })
-    formal_id_consistency = build_formal_id_consistency(
-        delivery_gate_ids=formal_ids,
-        formal_projection_ids=formal_ids,
-        trace_ledger_ids=trace_formal_ids,
-        product_projection_ids=formal_ids,
+        if _text(item.get("finding_id")) in set(occurrence_ids)
+    ])
+    defect_identity_consistency = _extend_projected_identity_consistency(
+        projected,
+        extra_occurrence_scopes={
+            "trace_ledger_occurrence_ids": trace_occurrence_ids,
+        },
     )
-    if not formal_id_consistency["consistent"]:
-        health_status = "DEGRADED"
+    if not defect_identity_consistency["consistent"]:
+        raise CampaignContractError("PIPELINE_DEGRADED_COUNT_MISMATCH")
     return _fingerprinted({
         "schema_version": CAMPAIGN_VIEW_SCHEMA,
         "campaign_id": actual_campaign_id,
@@ -316,8 +517,11 @@ def build_campaign_view(root: Path, project_id: str, campaign_id: str = "") -> d
         "complete_identity_trace_count": sum(1 for item in traces if item.get("identity_complete")),
         "identity_traces": traces,
         "mainline_run": mainline_run,
+        "canonical_defect_registry": _dict(
+            projected.get("canonical_defect_registry")
+        ),
         "formal_count_projection": _dict(projected.get("formal_count_projection")),
-        "formal_id_consistency": formal_id_consistency,
+        "defect_identity_consistency": defect_identity_consistency,
         "finding_classification": _dict(projected.get("finding_classification")),
         "obligation_execution_projection": _dict(projected.get("obligation_execution_projection")),
         "external_evaluation": _dict(projected.get("external_evaluation")),
@@ -359,12 +563,23 @@ def finding_rows(view: dict[str, Any], classification: str) -> list[dict[str, An
         if not isinstance(item, dict):
             continue
         row = dict(item)
-        identity = _text(row.get("id") or row.get("finding_id") or row.get("bug_id") or row.get("risk_id"))
+        identity = _text(
+            row.get("canonical_defect_id")
+            if normalized == "deliverable"
+            else ""
+        ) or _text(
+            row.get("id")
+            or row.get("finding_id")
+            or row.get("bug_id")
+            or row.get("risk_id")
+        )
         if not identity:
             raise CampaignContractError(
                 f"finding identity missing for classification {normalized}"
             )
         row["id"] = identity
+        if normalized == "deliverable":
+            row["canonical_defect_id"] = identity
         row["finding_id"] = identity
         row["finding_class"] = normalized
         rows.append(row)
@@ -412,38 +627,117 @@ def build_evaluation_submission(root: Path, project_id: str, body: dict[str, Any
     if metrics["cleanup_failures"] is None:
         metrics["cleanup_failures"] = pipeline_health.get("cleanup_failure_count")
     submission_id = f"evalsub_{uuid.uuid4().hex}"
-    policy_id = _text(body.get("policy_id") or _dict(projected.get("policy")).get("policy_version") or _campaign(projected).get("policy_version")) or "unversioned"
-    classification = _dict(projected.get("finding_classification"))
-    deliverable_findings = [
-        item for item in _list(classification.get("deliverable")) if isinstance(item, dict)
+    run_id = mainline_run["run_id"]
+    requested_run_id = _text(body.get("run_id"))
+    if requested_run_id and requested_run_id != run_id:
+        raise CampaignContractError("run_id_mainline_contract_mismatch")
+    policy_id = _text(
+        projected.get("policy_id")
+        or _dict(projected.get("policy")).get("policy_id")
+        or _campaign(projected).get("policy_id")
+        or mainline_run.get("policy_version")
+    )
+    if not policy_id:
+        raise CampaignContractError("policy_id_missing")
+    requested_policy_id = _text(body.get("policy_id"))
+    if requested_policy_id and requested_policy_id != policy_id:
+        raise CampaignContractError("policy_id_runtime_contract_mismatch")
+    canonical_findings = [
+        item for item in _list(projected.get("findings")) if isinstance(item, dict)
     ]
-    formal_ids = list(
-        _dict(projected.get("formal_count_projection")).get("formal_finding_ids")
+    delivery_occurrences = [
+        item
+        for item in _list(
+            projected.get("delivery_occurrences")
+            or v12.get("delivery_occurrences")
+        )
+        if isinstance(item, dict)
+    ]
+    canonical_ids = list(
+        _dict(projected.get("formal_count_projection")).get(
+            "canonical_defect_ids"
+        )
+        or []
+    )
+    occurrence_ids = list(
+        _dict(projected.get("formal_count_projection")).get(
+            "delivery_occurrence_finding_ids"
+        )
         or []
     )
     evaluator_submission_ids = sorted({
+        _text(item.get("canonical_defect_id"))
+        for item in canonical_findings
+        if _text(item.get("canonical_defect_id"))
+    })
+    evaluator_submission_occurrence_ids = sorted({
         _text(item.get("finding_id") or item.get("id"))
-        for item in deliverable_findings
+        for item in delivery_occurrences
         if _text(item.get("finding_id") or item.get("id"))
     })
-    trace_formal_ids = sorted({
+    trace_occurrence_ids = sorted([
         _text(item.get("finding_id"))
         for item in build_identity_traces(projected)
-        if _text(item.get("finding_id")) in set(formal_ids)
-    })
-    formal_id_consistency = build_formal_id_consistency(
-        delivery_gate_ids=formal_ids,
-        formal_projection_ids=formal_ids,
-        evaluator_submission_ids=evaluator_submission_ids,
-        trace_ledger_ids=trace_formal_ids,
-        product_projection_ids=formal_ids,
+        if _text(item.get("finding_id")) in set(occurrence_ids)
+    ])
+    defect_identity_consistency = _extend_projected_identity_consistency(
+        projected,
+        extra_occurrence_scopes={
+            "formal_authority_occurrence_ids": occurrence_ids,
+            "evaluator_submission_occurrence_ids": (
+                evaluator_submission_occurrence_ids
+            ),
+            "trace_ledger_occurrence_ids": trace_occurrence_ids,
+        },
+        extra_canonical_scopes={
+            "evaluator_submission_ids": evaluator_submission_ids,
+        },
     )
-    if not formal_id_consistency["consistent"]:
+    if not defect_identity_consistency["consistent"]:
         raise CampaignContractError("PIPELINE_DEGRADED_COUNT_MISMATCH")
+    validated_attempt_ledger = _validated_attempt_ledger_for_submission(
+        projected,
+        formal_ids=occurrence_ids,
+    )
+    try:
+        canonical_registry = validate_canonical_defect_registry(
+            _dict(projected.get("canonical_defect_registry")),
+            mainline_run=mainline_run,
+            deliverable_occurrences=delivery_occurrences,
+            obligation_attempt_ledger=validated_attempt_ledger,
+        )
+        if canonical_registry["canonical_defect_ids"] != canonical_ids:
+            raise CanonicalDefectRegistryError(
+                "campaign_canonical_projection_mismatch"
+            )
+        if canonical_representative_findings(
+            canonical_registry,
+            deliverable_occurrences=delivery_occurrences,
+        ) != canonical_findings:
+            raise CanonicalDefectRegistryError(
+                "campaign_canonical_findings_mismatch"
+            )
+        formal_delivery_authority = build_formal_delivery_authority_receipt(
+            mainline_run=mainline_run,
+            findings=delivery_occurrences,
+            obligation_attempt_ledger=validated_attempt_ledger,
+        )
+    except (FormalDeliveryAuthorityError, CanonicalDefectRegistryError) as exc:
+        raise CampaignContractError(
+            f"formal_delivery_authority_invalid:{exc}"
+        ) from exc
+    formal_count_projection = build_formal_count_projection(
+        findings=delivery_occurrences,
+        candidate_findings=[],
+        obligation_attempt_ledger=validated_attempt_ledger,
+        mainline_run=mainline_run,
+        canonical_defect_registry=canonical_registry,
+    )
     envelope = _fingerprinted({
         "schema_version": SUBMISSION_SCHEMA,
         "submission_id": submission_id,
-        "run_id": _text(body.get("run_id") or projected.get("scan_id")) or submission_id,
+        "run_id": run_id,
+        "campaign_id": mainline_run["campaign_id"],
         "project_id": project_id,
         "policy_id": policy_id,
         "evaluation_mode": requested_mode,
@@ -453,16 +747,28 @@ def build_evaluation_submission(root: Path, project_id: str, body: dict[str, Any
         "pipeline_health": pipeline_health,
         "operational_metrics": metrics,
         "scan_result": {
-            "findings": deliverable_findings,
+            "findings": canonical_findings,
+            "delivery_occurrences": delivery_occurrences,
             "candidate_findings": [],
+            "obligation_attempt_ledger": validated_attempt_ledger,
+            "canonical_defect_registry": canonical_registry,
+            "formal_count_projection": formal_count_projection,
+            "defect_identity_consistency": defect_identity_consistency,
+            "formal_delivery_authority": formal_delivery_authority,
         },
         "mainline_run": mainline_run,
-        "formal_count_projection": _dict(projected.get("formal_count_projection")),
-        "formal_id_consistency": formal_id_consistency,
+        "canonical_defect_registry": canonical_registry,
+        "formal_count_projection": formal_count_projection,
+        "defect_identity_consistency": defect_identity_consistency,
+        "formal_delivery_authority": formal_delivery_authority,
         "source_fingerprints": _dict(_dict(projected.get("obligation_execution_projection")).get("fingerprints")),
     })
     output = root / "platform_outputs" / project_id / "evaluation_submissions" / f"{submission_id}.json"
-    redaction_receipt = write_json_redacted(output, envelope)
+    redaction_receipt = write_json_redacted(
+        output,
+        envelope,
+        post_redaction_validator=_validate_redacted_evaluation_submission,
+    )
     return {
         **envelope,
         "artifact_ref": str(output),

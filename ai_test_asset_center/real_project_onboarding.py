@@ -9,62 +9,21 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
+from .project_runtime_config import load_real_project_config
+from .project_runtime_primitives import (
+    PROJECT_ROOT as ROOT,
+    html_escape as _html_escape,
+    join_url as _join_url,
+    load_json_artifact as _load_json,
+    parse_json_input as _parse_json_input,
+    project_config_paths as config_paths,
+    read_text_artifact as _read_text,
+    safe_project_id as _safe_project_id,
+    write_json_artifact as _write_json,
+    write_json_if_allowed as _write_json_if_allowed,
+)
+
 PRIVATE_MARKERS = {"private_ground_truth", "bug_sets", "enabled_bugs", "current_bug_set", "ground_truth_bugs"}
-
-
-def _safe_project_id(value: str | None) -> str:
-    raw = (value or "real_project_demo").strip()
-    safe = "".join(ch for ch in raw if ch.isalnum() or ch in "_-.")
-    return safe or "real_project_demo"
-
-
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-
-
-def _write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _load_json(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(_read_text(path) or "null")
-    except Exception:
-        return default
-
-
-def _html_escape(value: Any) -> str:
-    text = str(value if value is not None else "")
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
-def _parse_json_input(
-    inline_value: str | None = None,
-    file_value: str | None = None,
-    *,
-    default: Any = None,
-) -> Any:
-    if file_value:
-        path = Path(str(file_value))
-        return _load_json(path, default)
-    text = str(inline_value or "").strip()
-    if not text:
-        return default
-    try:
-        return json.loads(text)
-    except Exception:
-        return default
-
-
-def _write_json_if_allowed(path: Path, data: Any, *, overwrite: bool) -> bool:
-    if path.exists() and not overwrite:
-        return False
-    _write_json(path, data)
-    return True
 
 
 def _fetch(url: str, method: str = "GET", body: bytes | None = None, headers: dict[str, str] | None = None, timeout: int = 10) -> dict[str, Any]:
@@ -87,89 +46,6 @@ def _fetch(url: str, method: str = "GET", body: bytes | None = None, headers: di
         return {"ok": False, "status_code": int(exc.code), "body": body_text, "error": str(exc)}
     except Exception as exc:
         return {"ok": False, "status_code": None, "body": "", "error": str(exc)}
-
-
-def _join_url(base_url: str, path: str) -> str:
-    base = (base_url or "").rstrip("/")
-    p = (path or "").strip()
-    if not p.startswith("/"):
-        p = "/" + p
-    return base + p
-
-
-def config_paths(project_id: str, root: Path | None = None) -> dict[str, Path]:
-    root = root or ROOT
-    project = _safe_project_id(project_id)
-    return {
-        "input_dir": root / "platform_inputs" / project,
-        "workspace_dir": root / "platform_workspace" / project / "real_project",
-        "output_dir": root / "platform_outputs" / project / "real_project",
-    }
-
-
-def _first_text(*values: Any) -> str:
-    for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _merge_connector_runtime_defaults(project_id: str, cfg: dict[str, Any], root: Path) -> dict[str, Any]:
-    if not isinstance(cfg, dict):
-        cfg = {}
-    try:
-        from .enterprise_pilot_runtime import load_connector_registry
-
-        registry = load_connector_registry(project_id, root)
-    except Exception:
-        return cfg
-    profile = registry.get("test_profile") if isinstance(registry, dict) else {}
-    if not isinstance(profile, dict):
-        return cfg
-    connectors = registry.get("connectors") if isinstance(registry.get("connectors"), list) else []
-    primary_connector = next((item for item in connectors if isinstance(item, dict) and item.get("enabled") is True), None)
-
-    merged = dict(cfg)
-    merged["base_url"] = _first_text(
-        merged.get("base_url"),
-        profile.get("api_base_url"),
-        primary_connector.get("endpoint_ref") if isinstance(primary_connector, dict) else "",
-    )
-    merged["ui_base_url"] = _first_text(merged.get("ui_base_url"), profile.get("ui_base_url"))
-    if not isinstance(merged.get("frontend_urls"), dict) and isinstance(profile.get("frontend_urls"), dict):
-        merged["frontend_urls"] = dict(profile["frontend_urls"])
-    if not isinstance(merged.get("test_credentials"), dict) and isinstance(profile.get("test_credentials"), dict):
-        merged["test_credentials"] = dict(profile["test_credentials"])
-    if not isinstance(merged.get("database"), dict) and isinstance(profile.get("database"), dict):
-        merged["database"] = dict(profile["database"])
-    merged["environment_ref"] = _first_text(merged.get("environment_ref"), profile.get("environment_ref"))
-    merged["deployment_scope_id"] = _first_text(merged.get("deployment_scope_id"), profile.get("scope_id"))
-    return merged
-
-
-def load_real_project_config(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:
-    root = root or ROOT
-    paths = config_paths(project_id, root)
-    cfg = _load_json(paths["input_dir"] / "real_project_config.json", {})
-    cfg = _merge_connector_runtime_defaults(project_id, cfg, root)
-    cfg.setdefault("project_id", _safe_project_id(project_id))
-    cfg.setdefault("project_name", cfg["project_id"])
-    cfg.setdefault("base_url", "")
-    cfg.setdefault("openapi_source", "json")
-    cfg.setdefault("openapi_url", "")
-    cfg.setdefault("discovery_mode", "safe")
-    cfg.setdefault("auth_type", "password_login")
-    cfg.setdefault("login_api", "/auth/login")
-    cfg.setdefault("safe_mode", False)
-    cfg.setdefault("allow_destructive_tests", False)
-    cfg.setdefault("request_timeout_seconds", 10)
-    cfg.setdefault("max_probe_count", 100)
-    cfg.setdefault("deployment_mode", "private_deployment")
-    cfg.setdefault("learning_sync_mode", "local_only")
-    cfg.setdefault("deployment_scope_id", "")
-    cfg.setdefault("environment_class", "sandbox")
-    return cfg
 
 
 def execution_safety_verdict(

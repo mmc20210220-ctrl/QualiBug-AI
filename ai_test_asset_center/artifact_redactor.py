@@ -15,7 +15,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 SCHEMA_VERSION = "qualibug.artifact-redactor.v1"
@@ -249,10 +249,18 @@ def redact_and_validate(payload: Any) -> tuple[Any, dict[str, Any]]:
     return redacted, combined
 
 
-def write_json_redacted(path: Path | str, payload: Any, *, indent: int = 2) -> dict[str, Any]:
+def write_json_redacted(
+    path: Path | str,
+    payload: Any,
+    *,
+    indent: int = 2,
+    post_redaction_validator: Callable[[Any], None] | None = None,
+) -> dict[str, Any]:
     """Write JSON only after recursive redaction and secret scan succeed."""
     target = Path(path)
     redacted, receipt = redact_and_validate(payload)
+    if post_redaction_validator is not None:
+        post_redaction_validator(redacted)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:

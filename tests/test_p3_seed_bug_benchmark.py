@@ -81,7 +81,7 @@ def _seed_defects() -> list[dict]:
 
 
 def test_p3_seed_bug_benchmark_detects_seeded_business_defects() -> None:
-    from ai_test_asset_center.p3_seed_bug_benchmark import evaluate_seed_bug_benchmark
+    from benchmark_evaluator.p3_seed_bug_benchmark import evaluate_seed_bug_benchmark
 
     report = evaluate_seed_bug_benchmark(_scan_result_with_seeded_observations(), _seed_defects())
     found_ids = {item["seed_id"] for item in report["findings"]}
@@ -100,7 +100,7 @@ def test_p3_seed_bug_benchmark_detects_seeded_business_defects() -> None:
 
 
 def test_p3_seed_bug_benchmark_reports_missed_defects() -> None:
-    from ai_test_asset_center.p3_seed_bug_benchmark import evaluate_seed_bug_benchmark
+    from benchmark_evaluator.p3_seed_bug_benchmark import evaluate_seed_bug_benchmark
 
     report = evaluate_seed_bug_benchmark({"auto_har": {"entries": []}}, _seed_defects())
 
@@ -112,7 +112,7 @@ def test_p3_seed_bug_benchmark_reports_missed_defects() -> None:
 
 
 def test_p3_seed_bug_benchmark_supports_raw_http_observations() -> None:
-    from ai_test_asset_center.p3_seed_bug_benchmark import evaluate_seed_bug_benchmark
+    from benchmark_evaluator.p3_seed_bug_benchmark import evaluate_seed_bug_benchmark
 
     report = evaluate_seed_bug_benchmark(
         [

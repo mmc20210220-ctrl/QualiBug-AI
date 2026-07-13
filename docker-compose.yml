@@ -7,12 +7,14 @@ services:
       dockerfile: Dockerfile
     image: qualibug-ai:95.0.0-private-pilot
     ports:
-      # Host 5000 is kept for local demos; container port stays canonical 8088.
-      - "5000:8088"
+      - "127.0.0.1:8088:8088"
     environment:
       QUALIBUG_PROJECT: default
       QUALIBUG_PRODUCTION: "1"
       QUALIBUG_PORT: "8088"
+      QUALIBUG_BIND_HOST: "0.0.0.0"
+      QUALIBUG_ALLOW_PUBLIC_BIND: "1"
+      QUALIBUG_JWT_SECRET: ${QUALIBUG_JWT_SECRET:?QUALIBUG_JWT_SECRET is required}
     volumes:
       - qualibug-platform-outputs:/app/platform_outputs
       - qualibug-platform-workspace:/app/platform_workspace

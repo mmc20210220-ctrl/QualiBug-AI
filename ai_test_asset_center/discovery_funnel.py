@@ -10,6 +10,9 @@ from .obligation_attempt_ledger import (
     validate_obligation_attempt_ledger,
 )
 from .discovery_mainline_contract import validate_mainline_run_contract
+from .discovery_quality_projection import (
+    SCHEMA_VERSION as QUALITY_PROJECTION_SCHEMA,
+)
 
 
 REQUIRED_STAGE_NAMES = (
@@ -300,13 +303,41 @@ def _stage_projection(
 def _formal_projection(result: dict[str, Any]) -> dict[str, Any]:
     nested = _dict(result.get("v12"))
     formal = _dict(result.get("formal_count_projection") or nested.get("formal_count_projection"))
-    if not isinstance(formal.get("formal_finding_ids"), list):
+    if formal.get("schema_version") != QUALITY_PROJECTION_SCHEMA:
         raise DiscoveryFunnelError("formal_count_projection_missing")
-    ids = sorted({_text(value) for value in formal["formal_finding_ids"] if _text(value)})
-    count = _int(formal.get("formal_customer_deliverable_count"), len(ids))
-    if count != len(ids):
+    if not isinstance(formal.get("canonical_defect_ids"), list):
+        raise DiscoveryFunnelError("canonical_defect_ids_missing")
+    if not isinstance(formal.get("delivery_occurrence_finding_ids"), list):
+        raise DiscoveryFunnelError("delivery_occurrence_finding_ids_missing")
+    canonical_ids = sorted({
+        _text(value)
+        for value in formal["canonical_defect_ids"]
+        if _text(value)
+    })
+    occurrence_ids = sorted({
+        _text(value)
+        for value in formal["delivery_occurrence_finding_ids"]
+        if _text(value)
+    })
+    count = _int(
+        formal.get("formal_customer_deliverable_count"),
+        len(canonical_ids),
+    )
+    occurrence_count = _int(
+        formal.get("delivery_occurrence_count"),
+        len(occurrence_ids),
+    )
+    if count != len(canonical_ids):
         raise DiscoveryFunnelError("formal_count_projection_id_mismatch")
-    return {**formal, "formal_customer_deliverable_count": count, "formal_finding_ids": ids}
+    if occurrence_count != len(occurrence_ids):
+        raise DiscoveryFunnelError("delivery_occurrence_projection_id_mismatch")
+    return {
+        **formal,
+        "formal_customer_deliverable_count": count,
+        "canonical_defect_ids": canonical_ids,
+        "delivery_occurrence_count": occurrence_count,
+        "delivery_occurrence_finding_ids": occurrence_ids,
+    }
 
 
 def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
@@ -326,8 +357,7 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         customer_outputs_published = bool(
             validate_mainline_run_contract(raw_contract)["customer_outputs_published"]
         )
-    expected_formal_ids = attempt_deliverable_ids if customer_outputs_published else []
-    if expected_formal_ids != formal["formal_finding_ids"]:
+    if attempt_deliverable_ids != formal["delivery_occurrence_finding_ids"]:
         raise DiscoveryFunnelError("formal_projection_attempt_id_mismatch")
     terminal_counts = Counter(_text(item.get("terminal_status")).upper() for item in attempts)
     selected = _int(ledger.get("selected_count"))
@@ -358,9 +388,12 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         for key, value in _dict(reasoner.get("engine_error_class_counts")).items()
         if _text(key) and _int(value) > 0
     }
-    formal_consistency = _dict(result.get("formal_id_consistency"))
-    formal_mismatch = bool(formal_consistency and formal_consistency.get("consistent") is False)
     nested_result = _dict(result.get("v12"))
+    formal_consistency = _dict(
+        result.get("defect_identity_consistency")
+        or nested_result.get("defect_identity_consistency")
+    )
+    formal_mismatch = bool(formal_consistency and formal_consistency.get("consistent") is False)
     execution_observability = [
         dict(row)
         for row in _list(
@@ -467,7 +500,12 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         "observability_gaps": observability_gaps,
         "terminal_reason_counts": dict(sorted(reasons.items())),
         "formal_customer_deliverable_count": formal["formal_customer_deliverable_count"],
-        "formal_finding_ids": list(formal["formal_finding_ids"]),
+        "canonical_defect_count": formal["formal_customer_deliverable_count"],
+        "canonical_defect_ids": list(formal["canonical_defect_ids"]),
+        "delivery_occurrence_count": formal["delivery_occurrence_count"],
+        "delivery_occurrence_finding_ids": list(
+            formal["delivery_occurrence_finding_ids"]
+        ),
         "shadow_attempt_deliverable_count": (
             0 if customer_outputs_published else len(attempt_deliverable_ids)
         ),
@@ -510,7 +548,12 @@ def build_funnel(
         "stages": stages,
         "top_blocking_reasons": top_reasons,
         "validated_bug_count": formal["formal_customer_deliverable_count"],
-        "formal_finding_ids": list(formal["formal_finding_ids"]),
+        "canonical_defect_count": formal["formal_customer_deliverable_count"],
+        "canonical_defect_ids": list(formal["canonical_defect_ids"]),
+        "delivery_occurrence_count": formal["delivery_occurrence_count"],
+        "delivery_occurrence_finding_ids": list(
+            formal["delivery_occurrence_finding_ids"]
+        ),
         "pending_finding_count": rejected_pending,
         "candidate_count": _int(ledger.get("selected_count")),
         "explanation": (

@@ -19,6 +19,8 @@ import json, copy, re, uuid, time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .target_endpoint import resolve_target_base_url
+
 
 # ═══════════════════════════════════════════════════════════════
 # Data Models
@@ -443,12 +445,13 @@ class FixtureAutoConstructor:
             return [template_map.get(r, r) for r in result]
         return result
 
-def to_curl_commands(self, plan: FixturePlan, base_url: str = "http://127.0.0.1:8088/api") -> list[str]:
+    def to_curl_commands(self, plan: FixturePlan, base_url: str | None = None) -> list[str]:
         """Generate curl commands for creating the fixture objects."""
+        target_base_url = resolve_target_base_url(base_url)
         commands = []
         for obj in plan.objects:
             entity = obj.entity_type.lower()
             body = json.dumps(obj.fields)
-            cmd = f'curl -s -X POST {base_url}/{entity} -H "Content-Type: application/json" -d \'{body}\''
+            cmd = f'curl -s -X POST {target_base_url}/{entity} -H "Content-Type: application/json" -d \'{body}\''
             commands.append(cmd)
         return commands

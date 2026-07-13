@@ -575,11 +575,11 @@ def apply_governed_campaign_cleanup(
     items: list[dict[str, Any]],
     cleanup_receipt: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Re-adjudicate only findings blocked solely by per-scenario cleanup.
+    """Compatibility projection that never changes a terminal Gate decision.
 
-    A controller-level reset is valid cleanup when it ran after the scan,
-    emitted an audit receipt, and proved the environment clean. All original
-    scenario cleanup evidence remains attached for traceability.
+    Campaign reset may prove the environment clean for subsequent work, but it
+    cannot rewrite the original attempt's cleanup failure, Gate receipt, or
+    formal classification.
     """
 
     if not isinstance(cleanup_receipt, dict):
@@ -593,75 +593,29 @@ def apply_governed_campaign_cleanup(
     if not audit_receipt_id or not observation_ref:
         raise ValueError("campaign cleanup receipt requires audit and after-observation references")
 
-    eligible_cleanup_reasons = {
-        "CLEANUP_NOT_SUCCEEDED",
-        "CLEANUP_RECEIPT_MISSING",
-        "CLEANUP_EVIDENCE_MISSING",
-    }
+    from .customer_delivery_gate_v2 import (
+        CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
+        DeliveryGateV2Error,
+        validate_customer_delivery_gate_receipt_v2,
+    )
 
-    def restore_upstream_cleanup_only_candidate(item: dict[str, Any]) -> dict[str, Any]:
-        """Undo display-track demotion for candidates blocked only by cleanup.
-
-        `_classify_findings` preserves the original business-gate result in
-        `upstream_gate_passed`, then marks the row as an internal candidate for
-        display. Campaign-level cleanup adjudication must evaluate the original
-        defect claim, not the later display-track mutation.
-        """
-
-        existing_reasons = {
-            str(reason)
-            for reason in _list(item.get("customer_delivery_gate_reasons"))
-            if str(reason)
-        }
-        if not (
-            item.get("upstream_gate_passed") is True
-            and existing_reasons
-            and existing_reasons.issubset(eligible_cleanup_reasons)
-        ):
-            return copy.deepcopy(item)
-        restored = copy.deepcopy(item)
-        restored["gate_passed"] = True
-        restored["customer_delivery_status"] = "defect"
-        restored["customer_delivery_gate_reasons_before_campaign_cleanup"] = sorted(existing_reasons)
-        return restored
-
-    readjudicated: list[dict[str, Any]] = []
-    untouched: list[dict[str, Any]] = []
+    defects: list[dict[str, Any]] = []
+    clues: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        item_for_cleanup = restore_upstream_cleanup_only_candidate(item)
-        reasons = set(customer_delivery_rejection_reasons(item_for_cleanup))
-        if not reasons or not reasons.issubset(eligible_cleanup_reasons):
-            untouched.append(copy.deepcopy(item_for_cleanup))
-            continue
-        updated = copy.deepcopy(item_for_cleanup)
-        evidence = _dict(updated.get("evidence"))
-        raw_evidence = _dict(updated.get("raw_evidence"))
-        sandbox_write = _dict(raw_evidence.get("sandbox_write"))
-        original_cleanup = copy.deepcopy(
-            _dict(evidence.get("cleanup")) or _dict(sandbox_write.get("cleanup"))
-        )
-        cleanup = {
-            "status": "completed",
-            "receipt_ref": audit_receipt_id,
-            "after_observation_ref": observation_ref,
-            "scope": "governed_campaign_cleanup",
-        }
-        evidence["cleanup"] = cleanup
-        evidence["scenario_cleanup_before_campaign_reset"] = original_cleanup
-        sandbox_write["cleanup"] = cleanup
-        sandbox_write["scenario_cleanup_before_campaign_reset"] = original_cleanup
-        raw_evidence["sandbox_write"] = sandbox_write
-        updated["evidence"] = evidence
-        updated["raw_evidence"] = raw_evidence
-        updated["campaign_cleanup_receipt"] = {
-            "audit_receipt_id": audit_receipt_id,
-            "after_cleanup_observation_ref": observation_ref,
-        }
-        if is_customer_deliverable_defect(updated):
-            readjudicated.append(updated)
-        else:
-            untouched.append(updated)
-    defects, residual_clues = split_customer_delivery_tracks(readjudicated + untouched)
-    return defects, residual_clues
+        row = copy.deepcopy(item)
+        gate = _dict(row.get("delivery_gate_receipt"))
+        if gate.get("schema_version") == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
+            try:
+                validated = validate_customer_delivery_gate_receipt_v2(
+                    gate,
+                    finding=row if gate.get("status") == "DELIVERABLE" else None,
+                )
+            except DeliveryGateV2Error as exc:
+                raise ValueError(f"campaign cleanup found invalid gate receipt: {exc}") from exc
+            if validated.get("status") == "DELIVERABLE":
+                defects.append(row)
+                continue
+        clues.append(row)
+    return defects, clues

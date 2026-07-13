@@ -13,7 +13,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from ai_test_asset_center.benchmark_compute import (
+from .benchmark_compute import (
     _extract_api_paths,
     _finding_paths,
     _finding_text_blob,

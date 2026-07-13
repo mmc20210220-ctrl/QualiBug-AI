@@ -195,6 +195,7 @@ def _scenario_readiness_preflight(
 def _check_runtime_patches(doctor_payload: dict[str, Any]) -> dict[str, Any]:
     runtime = doctor_payload.get("runtime_patches", {}) if isinstance(doctor_payload.get("runtime_patches"), dict) else {}
     required = [
+        "callable_chain",
         "customer_delivery_gate",
         "scan_campaign_context",
         "credential_safety",

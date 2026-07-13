@@ -10,6 +10,11 @@ from .operational_receipts import (
     OperationalReceiptError,
     validate_execution_operational_receipt,
 )
+from .customer_delivery_gate_v2 import (
+    CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
+    DeliveryGateV2Error,
+    validate_customer_delivery_gate_bundle,
+)
 
 
 OBLIGATION_ATTEMPT_LEDGER_SCHEMA = "qualibug.obligation-attempt-ledger.v1"
@@ -55,6 +60,20 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _reason_detail(receipt: dict[str, Any]) -> str:
+    row = _object(receipt, field="reason_detail_receipt")
+    for key in ("reason_detail", "detail", "blocked_detail", "error"):
+        value = _text(row.get(key))
+        if value:
+            return value[:500]
+    raw_missing = row.get("missing_requirements")
+    missing_values = raw_missing if isinstance(raw_missing, list) else [raw_missing]
+    missing = [_text(value) for value in missing_values if _text(value)]
+    if missing:
+        return ",".join(missing)[:500]
+    return ""
+
+
 def _receipt_map(value: Any, *, field: str) -> dict[str, dict[str, Any]]:
     if not isinstance(value, Mapping):
         raise ObligationAttemptLedgerError(f"{field}_not_object")
@@ -65,6 +84,82 @@ def _receipt_map(value: Any, *, field: str) -> dict[str, dict[str, Any]]:
             raise ObligationAttemptLedgerError(f"{field}_obligation_id_missing")
         normalized[obligation_id] = _object(raw_receipt, field=f"{field}:{obligation_id}")
     return normalized
+
+
+def _validated_gate_bundle(
+    *,
+    obligation_id: str,
+    run: dict[str, Any],
+    execution_receipt: dict[str, Any],
+    gate_receipt: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate v2 evidence; legacy non-deliverable gates stay diagnostic-only."""
+
+    status = _text(gate_receipt.get("status")).upper()
+    if gate_receipt.get("schema_version") != CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
+        if status == "DELIVERABLE":
+            raise ObligationAttemptLedgerError(
+                f"formal_gate_v2_required:{obligation_id}"
+            )
+        if _text(gate_receipt.get("finding_id")):
+            raise ObligationAttemptLedgerError(
+                f"legacy_nondeliverable_finding_id_present:{obligation_id}"
+            )
+        return dict(gate_receipt), {}
+
+    evidence_bundle = {
+        "finding": (
+            dict(execution_receipt.get("finding"))
+            if isinstance(execution_receipt.get("finding"), dict)
+            else None
+        ),
+        "execution_receipt": _object(
+            execution_receipt.get("delivery_execution_receipt"),
+            field=f"delivery_execution_receipt:{obligation_id}",
+        ),
+        "contract_evidence_receipts": [
+            dict(value)
+            for value in execution_receipt.get("contract_evidence_receipts", []) or []
+            if isinstance(value, dict)
+        ],
+        "observer_receipts": [
+            dict(value)
+            for value in execution_receipt.get("observer_receipts", []) or []
+            if isinstance(value, dict)
+        ],
+        "oracle_receipt": _object(
+            execution_receipt.get("oracle_receipt"),
+            field=f"oracle_receipt:{obligation_id}",
+        ),
+        "reproduction_receipt": _object(
+            execution_receipt.get("reproduction_receipt"),
+            field=f"reproduction_receipt:{obligation_id}",
+        ),
+    }
+    try:
+        validated = validate_customer_delivery_gate_bundle(
+            gate_receipt,
+            **evidence_bundle,
+        )
+    except (DeliveryGateV2Error, ValueError) as exc:
+        raise ObligationAttemptLedgerError(
+            f"delivery_gate_bundle_invalid:{obligation_id}:{exc}"
+        ) from exc
+    identity = _object(validated.get("identity"), field="delivery_gate_identity")
+    expected_pairs = {
+        "run_id": _text(run.get("run_id")),
+        "campaign_id": _text(run.get("campaign_id")),
+        "mainline_contract_fingerprint": _text(run.get("contract_fingerprint")),
+        "obligation_id": obligation_id,
+        "execution_id": _text(execution_receipt.get("execution_id")),
+        "experiment_id": _text(execution_receipt.get("experiment_id")),
+    }
+    for field, expected in expected_pairs.items():
+        if not expected or _text(identity.get(field)) != expected:
+            raise ObligationAttemptLedgerError(
+                f"delivery_gate_identity_mismatch:{obligation_id}:{field}"
+            )
+    return validated, evidence_bundle
 
 
 def _stage_record(stage: str, receipt: dict[str, Any]) -> dict[str, Any] | None:
@@ -92,6 +187,7 @@ def _stage_record(stage: str, receipt: dict[str, Any]) -> dict[str, Any] | None:
         "stage": stage,
         "status": status,
         "reason_code": _text(receipt.get("reason_code")),
+        "reason_detail": _reason_detail(receipt),
         "receipt_id": receipt_id,
         "input_fingerprint": _text(receipt.get("input_fingerprint")),
         "output_fingerprint": _text(receipt.get("output_fingerprint")),
@@ -185,10 +281,28 @@ def build_obligation_attempt_ledger(
                 f"gate_without_executed_obligation:{obligation_id}"
             )
 
+        gate_evidence_bundle: dict[str, Any] = {}
+        if gate_receipt:
+            gate_receipt, gate_evidence_bundle = _validated_gate_bundle(
+                obligation_id=obligation_id,
+                run=run,
+                execution_receipt=execution_receipt,
+                gate_receipt=gate_receipt,
+            )
+
         terminal_stage, terminal_receipt = terminals[0]
+        if terminal_stage == "gate":
+            terminal_receipt = gate_receipt
         terminal_status = _text(terminal_receipt.get("status")).upper()
         reason_code = _text(terminal_receipt.get("reason_code"))
-        finding_id = _text(terminal_receipt.get("finding_id"))
+        finding_id = _text(
+            _object(terminal_receipt.get("identity"), field="gate_identity").get(
+                "finding_id"
+            )
+            if terminal_receipt.get("schema_version")
+            == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            else terminal_receipt.get("finding_id")
+        )
         if terminal_status == "DELIVERABLE" and not finding_id:
             raise ObligationAttemptLedgerError(
                 f"deliverable_finding_id_missing:{obligation_id}"
@@ -307,6 +421,7 @@ def build_obligation_attempt_ledger(
             "terminal_stage": terminal_stage,
             "terminal_status": terminal_status,
             "reason_code": reason_code,
+            "reason_detail": _reason_detail(terminal_receipt),
             "input_fingerprint": _text(
                 selected_row.get("input_fingerprint")
                 or compile_receipt.get("input_fingerprint")
@@ -326,6 +441,12 @@ def build_obligation_attempt_ledger(
         }
         if operational_receipt:
             attempt["operational_receipt"] = operational_receipt
+        if (
+            gate_receipt.get("schema_version")
+            == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+        ):
+            attempt["gate_receipt"] = dict(gate_receipt)
+            attempt["delivery_evidence_bundle"] = gate_evidence_bundle
         attempt["attempt_fingerprint"] = _fingerprint(attempt)
         attempts.append(attempt)
 
@@ -353,6 +474,22 @@ def validate_obligation_attempt_ledger(
     """Validate schema plus immutable ledger and per-attempt fingerprints."""
 
     value = _object(ledger, field="obligation_attempt_ledger")
+    required_root_fields = {
+        "schema_version",
+        "run_id",
+        "campaign_id",
+        "mainline_contract_fingerprint",
+        "selected_count",
+        "terminal_count",
+        "complete",
+        "terminal_status_counts",
+        "attempts",
+        "ledger_fingerprint",
+    }
+    if set(value) != required_root_fields:
+        raise ObligationAttemptLedgerError(
+            "obligation_attempt_ledger_fields_invalid"
+        )
     if value.get("schema_version") != OBLIGATION_ATTEMPT_LEDGER_SCHEMA:
         raise ObligationAttemptLedgerError("obligation_attempt_ledger_schema_invalid")
     observed_fingerprint = _text(value.get("ledger_fingerprint"))
@@ -372,8 +509,78 @@ def validate_obligation_attempt_ledger(
     attempts = value.get("attempts")
     if not isinstance(attempts, list):
         raise ObligationAttemptLedgerError("obligation_attempts_not_list")
+    try:
+        selected_count = int(value.get("selected_count"))
+        terminal_count = int(value.get("terminal_count"))
+    except (TypeError, ValueError) as exc:
+        raise ObligationAttemptLedgerError(
+            "obligation_attempt_counts_invalid"
+        ) from exc
+    if (
+        selected_count < 0
+        or terminal_count < 0
+        or selected_count != terminal_count
+        or terminal_count != len(attempts)
+        or value.get("complete") is not True
+    ):
+        raise ObligationAttemptLedgerError(
+            "obligation_attempt_terminal_coverage_invalid"
+        )
+    obligation_ids = [
+        _text(_object(row, field="obligation_attempt").get("obligation_id"))
+        for row in attempts
+    ]
+    if not all(obligation_ids) or len(obligation_ids) != len(set(obligation_ids)):
+        raise ObligationAttemptLedgerError(
+            "obligation_attempt_identity_invalid"
+        )
+    terminal_statuses = [
+        _text(_object(row, field="obligation_attempt").get("terminal_status"))
+        .upper()
+        for row in attempts
+    ]
+    if any(status not in TERMINAL_STATUSES for status in terminal_statuses):
+        raise ObligationAttemptLedgerError(
+            "obligation_terminal_status_invalid"
+        )
+    expected_terminal_counts = dict(sorted(Counter(terminal_statuses).items()))
+    if value.get("terminal_status_counts") != expected_terminal_counts:
+        raise ObligationAttemptLedgerError(
+            "obligation_terminal_status_counts_invalid"
+        )
     for row in attempts:
         attempt = _object(row, field="obligation_attempt")
+        terminal_status = _text(attempt.get("terminal_status")).upper()
+        terminal_stage = _text(attempt.get("terminal_stage"))
+        if terminal_stage not in {"compile", "execution", "gate"}:
+            raise ObligationAttemptLedgerError(
+                f"obligation_terminal_stage_invalid:{_text(attempt.get('obligation_id'))}"
+            )
+        if terminal_status == "DELIVERABLE" and not _text(
+            attempt.get("finding_id")
+        ):
+            raise ObligationAttemptLedgerError(
+                f"deliverable_finding_id_missing:{_text(attempt.get('obligation_id'))}"
+            )
+        if terminal_status != "DELIVERABLE" and _text(
+            attempt.get("finding_id")
+        ):
+            raise ObligationAttemptLedgerError(
+                f"nondeliverable_finding_id_present:{_text(attempt.get('obligation_id'))}"
+            )
+        stages = attempt.get("stages")
+        if not isinstance(stages, list) or not stages:
+            raise ObligationAttemptLedgerError(
+                f"obligation_attempt_stages_invalid:{_text(attempt.get('obligation_id'))}"
+            )
+        stage_names = [
+            _text(_object(stage, field="obligation_attempt_stage").get("stage"))
+            for stage in stages
+        ]
+        if len(stage_names) != len(set(stage_names)) or terminal_stage not in stage_names:
+            raise ObligationAttemptLedgerError(
+                f"obligation_attempt_stage_chain_invalid:{_text(attempt.get('obligation_id'))}"
+            )
         observed_attempt_fingerprint = _text(attempt.get("attempt_fingerprint"))
         expected_attempt_fingerprint = _fingerprint({
             key: item
@@ -385,6 +592,65 @@ def validate_obligation_attempt_ledger(
             raise ObligationAttemptLedgerError(
                 f"obligation_attempt_fingerprint_mismatch:{obligation_id}"
             )
+        gate_receipt = _object(
+            attempt.get("gate_receipt"),
+            field="obligation_attempt_gate_receipt",
+        )
+        if gate_receipt:
+            bundle = _object(
+                attempt.get("delivery_evidence_bundle"),
+                field="obligation_attempt_delivery_evidence_bundle",
+            )
+            try:
+                validated_gate = validate_customer_delivery_gate_bundle(
+                    gate_receipt,
+                    finding=(
+                        dict(bundle.get("finding"))
+                        if isinstance(bundle.get("finding"), dict)
+                        else None
+                    ),
+                    execution_receipt=_object(
+                        bundle.get("execution_receipt"),
+                        field="ledger_delivery_execution_receipt",
+                    ),
+                    contract_evidence_receipts=[
+                        dict(item)
+                        for item in bundle.get("contract_evidence_receipts", []) or []
+                        if isinstance(item, dict)
+                    ],
+                    observer_receipts=[
+                        dict(item)
+                        for item in bundle.get("observer_receipts", []) or []
+                        if isinstance(item, dict)
+                    ],
+                    oracle_receipt=_object(
+                        bundle.get("oracle_receipt"),
+                        field="ledger_oracle_receipt",
+                    ),
+                    reproduction_receipt=_object(
+                        bundle.get("reproduction_receipt"),
+                        field="ledger_reproduction_receipt",
+                    ),
+                )
+            except (DeliveryGateV2Error, ValueError) as exc:
+                raise ObligationAttemptLedgerError(
+                    f"obligation_attempt_gate_bundle_invalid:{_text(attempt.get('obligation_id'))}:{exc}"
+                ) from exc
+            identity = _object(
+                validated_gate.get("identity"),
+                field="validated_gate_identity",
+            )
+            if any((
+                _text(validated_gate.get("status"))
+                != _text(attempt.get("terminal_status")),
+                _text(validated_gate.get("gate_receipt_id"))
+                != _text(attempt.get("gate_receipt_id")),
+                _text(identity.get("finding_id"))
+                != _text(attempt.get("finding_id")),
+            )):
+                raise ObligationAttemptLedgerError(
+                    f"obligation_attempt_gate_projection_mismatch:{_text(attempt.get('obligation_id'))}"
+                )
     return value
 
 

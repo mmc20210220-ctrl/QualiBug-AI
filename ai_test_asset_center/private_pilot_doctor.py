@@ -136,7 +136,12 @@ def _credential_key_status(root: Path) -> dict[str, Any]:
 
 
 def _runtime_patch_status() -> dict[str, Any]:
+    from ai_test_asset_center.private_pilot_entrypoint import (
+        runtime_patch_chain_status,
+    )
+
     return {
+        "callable_chain": runtime_patch_chain_status(),
         "customer_delivery_gate": {
             "patched": bool(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False)),
             "source": str(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE", "")),

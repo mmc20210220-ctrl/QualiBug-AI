@@ -1,0 +1,1786 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-receipt.v1",
+  "created_at_utc": "2026-07-10T10:07:25Z",
+  "dataset_id": "diagnostic-benchmark-mall",
+  "dataset_version": "v1-20260710",
+  "dataset_manifest_fingerprint": "9bf3464917c0da2efb3487278e6cf895c38ea2231a1ebf55c19fd7d67f7a84cc",
+  "target_id": "benchmark-mall-held-in",
+  "project_id": "evaluation-benchmark-mall-held-in",
+  "industry": "ecommerce",
+  "split": "held_in",
+  "expectation": "seeded_defects",
+  "environment_ref": "http://localhost:8080",
+  "environment_type": "test",
+  "runtime_fingerprint": "8752dfd2374c1ff55c7cbcd49c2f323cd846199013341499f118626eaa9085b4",
+  "input_fingerprint": "282fff01ed5c1f6d1c5e3b0cbf276bb1eb25452b5609e5f0927a623c915b7025",
+  "fixture_fingerprint": "ba53a38d3dc7934281947cf5924ac09ea8fce20bd153a9f2c536a12b3d279138",
+  "context_fingerprint": "d62f79afb41a601ceb162be43c1f7fb318fcaf849bccce2328fa0830aae645de",
+  "run_id": "scan_benchmark_mall_1783676751444",
+  "policy_id": "v1.0.0-baseline",
+  "evaluation_mode": "replay",
+  "measurement_status": "MEASURED",
+  "not_measured_reason": "",
+  "pipeline_health": {
+    "status": "DEGRADED",
+    "empty_findings_means_no_bugs": false,
+    "execution_status": "completed",
+    "execution_reason": "preflight_health_failed",
+    "observability_status": "ok",
+    "observability_gaps": [],
+    "failed_stages": {},
+    "stage_failures": [],
+    "result_error": "",
+    "no_real_traffic": false,
+    "cleanup_failure_count": 6,
+    "usage_cost_unknown": true,
+    "secret_scan_failed": false,
+    "missing_phases": [],
+    "unexecuted_candidate_signal": {
+      "stop_reason": "selected_final_unattempted_slice_batch",
+      "pending_slice_count": 0,
+      "binding_or_precondition_blocks": 28,
+      "skip_reason_counts": {
+        "missing_runtime_path_binding": 26
+      }
+    },
+    "operator_note": "执行虽已返回，但产品级 preflight 未通过；结果覆盖不完整，空 findings 不能解释为目标无缺陷。",
+    "preflight": {
+      "present": true,
+      "ready": true,
+      "all_checks_passed": false,
+      "errors": 0,
+      "warnings": 1
+    }
+  },
+  "metrics": {
+    "benchmark_active": true,
+    "ground_truth_available": true,
+    "ground_truth_bug_count": 71,
+    "scan_findings_total": 27,
+    "duplicate_findings_excluded": 0,
+    "true_positives": 5,
+    "false_positives": 22,
+    "false_negatives": 66,
+    "recall": 0.0704,
+    "precision": 0.1852,
+    "false_positive_rate": 0.8148,
+    "false_negative_rate": 0.9296,
+    "f1_score": 0.102,
+    "high_value_recall": 0.0943,
+    "evidence_completeness_rate": 1.0,
+    "evidence_complete_count": 27,
+    "evidence_total_count": 27,
+    "reproduction_success_rate": 1.0,
+    "reproduction_success_count": 27,
+    "reproduction_total_count": 27,
+    "regression_success_rate": 0,
+    "regression_total_count": 0,
+    "regression_passed_count": 0,
+    "matched_bugs": [
+      {
+        "finding_title": "[V12 HttpStatusOracle] [Actor permission probe] auditor → PATCH /api/products/admin/:sku",
+        "finding_severity": "P1",
+        "match_score": 0.77,
+        "gt_bug_id": "PRODUCT-006",
+        "gt_title": "删除商品未校验角色",
+        "gt_severity": "critical",
+        "gt_type": "权限",
+        "gt_risk_family": "authorization_access_control"
+      },
+      {
+        "finding_title": "[V12 HttpStatusOracle] [Concurrency probe] double POST /api/inventory/reserve",
+        "finding_severity": "P1",
+        "match_score": 0.77,
+        "gt_bug_id": "INV-001",
+        "gt_title": "库存锁定未使用事务行锁导致并发超卖",
+        "gt_severity": "critical",
+        "gt_type": "并发/库存",
+        "gt_risk_family": "concurrency_race_condition"
+      },
+      {
+        "finding_title": "[V12 HttpStatusOracle] [Data isolation probe] buyer → GET /api/orders",
+        "finding_severity": "P1",
+        "match_score": 0.65,
+        "gt_bug_id": "ORDER-006",
+        "gt_title": "订单列表可用 userId 查询他人订单",
+        "gt_severity": "high",
+        "gt_type": "数据隔离",
+        "gt_risk_family": "tenant_isolation"
+      },
+      {
+        "finding_title": "[V12 HttpStatusOracle] [Data isolation probe] finance → GET /api/cart/items",
+        "finding_severity": "P1",
+        "match_score": 0.77,
+        "gt_bug_id": "CART-001",
+        "gt_title": "购物车查询可用 userId 查看他人购物车",
+        "gt_severity": "high",
+        "gt_type": "数据隔离",
+        "gt_risk_family": "tenant_isolation"
+      },
+      {
+        "finding_title": "[V12 VisibilityOracle] [来源约束不变量] product: DRAFT",
+        "finding_severity": "P1",
+        "match_score": 0.89,
+        "gt_bug_id": "PRODUCT-001",
+        "gt_title": "商品列表默认返回下架和草稿商品",
+        "gt_severity": "high",
+        "gt_type": "前端/商品状态",
+        "gt_risk_family": "state_machine"
+      }
+    ],
+    "missed_bug_ids": [
+      "AUTH-001",
+      "AUTH-002",
+      "AUTH-003",
+      "AUTH-004",
+      "AUTH-005",
+      "USER-001",
+      "USER-002",
+      "USER-003",
+      "USER-004",
+      "PRODUCT-002",
+      "PRODUCT-003",
+      "PRODUCT-004",
+      "PRODUCT-005",
+      "PRODUCT-007",
+      "INV-002",
+      "INV-003",
+      "INV-004",
+      "INV-005",
+      "INV-006",
+      "CART-002",
+      "CART-003",
+      "CART-004",
+      "CART-005",
+      "COUPON-001",
+      "COUPON-002",
+      "COUPON-003",
+      "COUPON-004",
+      "COUPON-005",
+      "COUPON-006",
+      "COUPON-007",
+      "ORDER-001",
+      "ORDER-002",
+      "ORDER-003",
+      "ORDER-004",
+      "ORDER-005",
+      "ORDER-007",
+      "ORDER-008",
+      "ORDER-009",
+      "ORDER-010",
+      "ORDER-011",
+      "ORDER-012",
+      "PAY-001",
+      "PAY-002",
+      "PAY-003",
+      "PAY-004",
+      "PAY-005",
+      "PAY-006",
+      "PAY-007",
+      "REFUND-001",
+      "REFUND-002",
+      "REFUND-003",
+      "REFUND-004",
+      "REFUND-005",
+      "REFUND-006",
+      "REPORT-001",
+      "REPORT-002",
+      "REPORT-003",
+      "REPORT-004",
+      "DB-001",
+      "DB-002",
+      "DB-003",
+      "DB-004",
+      "UI-001",
+      "UI-002",
+      "UI-003",
+      "UI-004"
+    ],
+    "bug_type_breakdown": {
+      "权限/账号状态": {
+        "total": 1,
+        "detected": 0
+      },
+      "权限": {
+        "total": 8,
+        "detected": 1
+      },
+      "越权": {
+        "total": 1,
+        "detected": 0
+      },
+      "参数校验": {
+        "total": 5,
+        "detected": 0
+      },
+      "数据隔离": {
+        "total": 9,
+        "detected": 2
+      },
+      "资金": {
+        "total": 3,
+        "detected": 0
+      },
+      "前端/商品状态": {
+        "total": 1,
+        "detected": 1
+      },
+      "商品状态": {
+        "total": 4,
+        "detected": 0
+      },
+      "参数校验/资金": {
+        "total": 2,
+        "detected": 0
+      },
+      "并发/库存": {
+        "total": 1,
+        "detected": 1
+      },
+      "数据一致性": {
+        "total": 1,
+        "detected": 0
+      },
+      "库存": {
+        "total": 2,
+        "detected": 0
+      },
+      "参数校验/库存": {
+        "total": 1,
+        "detected": 0
+      },
+      "优惠券": {
+        "total": 3,
+        "detected": 0
+      },
+      "优惠券/金额": {
+        "total": 2,
+        "detected": 0
+      },
+      "优惠券/幂等": {
+        "total": 1,
+        "detected": 0
+      },
+      "优惠券/业务规则": {
+        "total": 1,
+        "detected": 0
+      },
+      "资金计算": {
+        "total": 1,
+        "detected": 0
+      },
+      "数据隔离/状态机": {
+        "total": 1,
+        "detected": 0
+      },
+      "状态机": {
+        "total": 4,
+        "detected": 0
+      },
+      "库存/幂等": {
+        "total": 1,
+        "detected": 0
+      },
+      "状态机/支付": {
+        "total": 1,
+        "detected": 0
+      },
+      "幂等/资金": {
+        "total": 1,
+        "detected": 0
+      },
+      "幂等": {
+        "total": 2,
+        "detected": 0
+      },
+      "数据隔离/资金": {
+        "total": 1,
+        "detected": 0
+      },
+      "分布式一致性": {
+        "total": 1,
+        "detected": 0
+      },
+      "状态机/退款": {
+        "total": 1,
+        "detected": 0
+      },
+      "权限/敏感数据": {
+        "total": 1,
+        "detected": 0
+      },
+      "权限/隐私": {
+        "total": 1,
+        "detected": 0
+      },
+      "统计口径": {
+        "total": 1,
+        "detected": 0
+      },
+      "数据库约束/幂等": {
+        "total": 1,
+        "detected": 0
+      },
+      "数据库约束/金额": {
+        "total": 1,
+        "detected": 0
+      },
+      "数据库约束/库存": {
+        "total": 1,
+        "detected": 0
+      },
+      "数据库约束/参数": {
+        "total": 1,
+        "detected": 0
+      },
+      "前端/UI": {
+        "total": 1,
+        "detected": 0
+      },
+      "前端/状态机": {
+        "total": 1,
+        "detected": 0
+      },
+      "前端/危险操作": {
+        "total": 1,
+        "detected": 0
+      },
+      "前端/权限": {
+        "total": 1,
+        "detected": 0
+      }
+    },
+    "risk_family_breakdown": {
+      "authorization_access_control": {
+        "total": 13,
+        "detected": 1
+      },
+      "unclassified": {
+        "total": 3,
+        "detected": 0
+      },
+      "input_validation_boundary": {
+        "total": 1,
+        "detected": 0
+      },
+      "tenant_isolation": {
+        "total": 11,
+        "detected": 2
+      },
+      "money_quantity_conservation": {
+        "total": 21,
+        "detected": 0
+      },
+      "state_machine": {
+        "total": 12,
+        "detected": 1
+      },
+      "idempotency_duplicate_submit": {
+        "total": 7,
+        "detected": 0
+      },
+      "concurrency_race_condition": {
+        "total": 1,
+        "detected": 1
+      },
+      "data_consistency": {
+        "total": 2,
+        "detected": 0
+      }
+    },
+    "coverage_matrix": {
+      "schema_version": "risk_invariant_coverage_v1",
+      "ontology_family_count": 16,
+      "ontology_invariant_count": 57,
+      "covered_family_count": 4,
+      "confirmed_family_count": 4,
+      "family_coverage_rate": 0.25,
+      "confirmed_family_rate": 0.25,
+      "unclassified_signal_count": 0,
+      "families": [
+        {
+          "family": "authorization_access_control",
+          "display_name": "权限与访问控制",
+          "target_invariant_count": 5,
+          "confirmed_count": 10,
+          "candidate_count": 0,
+          "evidence_complete_count": 10,
+          "touched_invariants": [
+            "actor_must_be_authenticated",
+            "actor_must_have_required_role",
+            "read_only_actor_cannot_write"
+          ],
+          "coverage_status": "confirmed_with_evidence",
+          "touched_invariant_count": 3,
+          "ground_truth_total": 13
+        },
+        {
+          "family": "concurrency_race_condition",
+          "display_name": "并发竞态",
+          "target_invariant_count": 3,
+          "confirmed_count": 11,
+          "candidate_count": 0,
+          "evidence_complete_count": 11,
+          "touched_invariants": [
+            "concurrent_mutations_must_preserve_invariants",
+            "unique_resource_must_not_be_double_allocated",
+            "balance_or_stock_update_must_be_atomic"
+          ],
+          "coverage_status": "confirmed_with_evidence",
+          "touched_invariant_count": 3,
+          "ground_truth_total": 1
+        },
+        {
+          "family": "state_machine",
+          "display_name": "状态机与生命周期",
+          "target_invariant_count": 4,
+          "confirmed_count": 2,
+          "candidate_count": 0,
+          "evidence_complete_count": 2,
+          "touched_invariants": [
+            "object_must_follow_allowed_state_transition",
+            "terminal_state_must_not_accept_mutation",
+            "state_transition_side_effects_must_be_consistent"
+          ],
+          "coverage_status": "confirmed_with_evidence",
+          "touched_invariant_count": 3,
+          "ground_truth_total": 12
+        },
+        {
+          "family": "tenant_isolation",
+          "display_name": "租户/组织/数据隔离",
+          "target_invariant_count": 4,
+          "confirmed_count": 4,
+          "candidate_count": 0,
+          "evidence_complete_count": 4,
+          "touched_invariants": [
+            "tenant_id_must_match_actor_scope",
+            "cross_tenant_object_access_must_be_rejected",
+            "tenant_scoped_search_must_not_leak_other_tenants"
+          ],
+          "coverage_status": "confirmed_with_evidence",
+          "touched_invariant_count": 3,
+          "ground_truth_total": 11
+        },
+        {
+          "family": "async_eventual_consistency",
+          "display_name": "异步任务/消息/回调",
+          "target_invariant_count": 4,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "audit_traceability",
+          "display_name": "审计与可追踪性",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "cache_stale_state",
+          "display_name": "缓存与状态漂移",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "configuration_environment",
+          "display_name": "配置/环境/发布风险",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "data_consistency",
+          "display_name": "数据一致性",
+          "target_invariant_count": 4,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0,
+          "ground_truth_total": 2
+        },
+        {
+          "family": "idempotency_duplicate_submit",
+          "display_name": "幂等与重复提交",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0,
+          "ground_truth_total": 7
+        },
+        {
+          "family": "input_validation_boundary",
+          "display_name": "输入校验与边界",
+          "target_invariant_count": 4,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0,
+          "ground_truth_total": 1
+        },
+        {
+          "family": "money_quantity_conservation",
+          "display_name": "金额/数量/库存/积分守恒",
+          "target_invariant_count": 5,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0,
+          "ground_truth_total": 21
+        },
+        {
+          "family": "regression_historical_bug",
+          "display_name": "历史 bug 回归",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "ui_api_contract_drift",
+          "display_name": "UI/API 契约漂移",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "visibility_disclosure",
+          "display_name": "可见性与数据泄露",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "workflow_approval",
+          "display_name": "审批流/工作流",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        }
+      ],
+      "invariants": [
+        {
+          "invariant": "actor_must_be_authenticated",
+          "family": "authorization_access_control",
+          "confirmed_count": 10,
+          "candidate_count": 0,
+          "evidence_complete_count": 10,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "actor_must_have_required_role",
+          "family": "authorization_access_control",
+          "confirmed_count": 10,
+          "candidate_count": 0,
+          "evidence_complete_count": 10,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "read_only_actor_cannot_write",
+          "family": "authorization_access_control",
+          "confirmed_count": 10,
+          "candidate_count": 0,
+          "evidence_complete_count": 10,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "balance_or_stock_update_must_be_atomic",
+          "family": "concurrency_race_condition",
+          "confirmed_count": 11,
+          "candidate_count": 0,
+          "evidence_complete_count": 11,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "concurrent_mutations_must_preserve_invariants",
+          "family": "concurrency_race_condition",
+          "confirmed_count": 11,
+          "candidate_count": 0,
+          "evidence_complete_count": 11,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "unique_resource_must_not_be_double_allocated",
+          "family": "concurrency_race_condition",
+          "confirmed_count": 11,
+          "candidate_count": 0,
+          "evidence_complete_count": 11,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "object_must_follow_allowed_state_transition",
+          "family": "state_machine",
+          "confirmed_count": 2,
+          "candidate_count": 0,
+          "evidence_complete_count": 2,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "state_transition_side_effects_must_be_consistent",
+          "family": "state_machine",
+          "confirmed_count": 2,
+          "candidate_count": 0,
+          "evidence_complete_count": 2,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "terminal_state_must_not_accept_mutation",
+          "family": "state_machine",
+          "confirmed_count": 2,
+          "candidate_count": 0,
+          "evidence_complete_count": 2,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "cross_tenant_object_access_must_be_rejected",
+          "family": "tenant_isolation",
+          "confirmed_count": 4,
+          "candidate_count": 0,
+          "evidence_complete_count": 4,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "tenant_id_must_match_actor_scope",
+          "family": "tenant_isolation",
+          "confirmed_count": 4,
+          "candidate_count": 0,
+          "evidence_complete_count": 4,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "tenant_scoped_search_must_not_leak_other_tenants",
+          "family": "tenant_isolation",
+          "confirmed_count": 4,
+          "candidate_count": 0,
+          "evidence_complete_count": 4,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "async_side_effect_must_eventually_complete",
+          "family": "async_eventual_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "callback_replay_must_be_idempotent",
+          "family": "async_eventual_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "failed_async_task_must_be_observable_and_retryable",
+          "family": "async_eventual_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "message_must_not_be_lost_or_double_consumed",
+          "family": "async_eventual_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "audit_event_must_bind_actor_action_target_and_time",
+          "family": "audit_traceability",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "audit_trail_must_not_expose_secrets",
+          "family": "audit_traceability",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "sensitive_action_must_create_audit_event",
+          "family": "audit_traceability",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "disabled_actor_cannot_access",
+          "family": "authorization_access_control",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "frontend_visibility_must_not_replace_backend_authz",
+          "family": "authorization_access_control",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "cache_invalidation_must_follow_write_side_effect",
+          "family": "cache_stale_state",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "cache_must_not_serve_forbidden_or_deleted_state",
+          "family": "cache_stale_state",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "stale_read_must_not_violate_business_decision",
+          "family": "cache_stale_state",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "environment_boundary_must_be_explicit",
+          "family": "configuration_environment",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "feature_flag_must_not_bypass_safety_gate",
+          "family": "configuration_environment",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "secret_must_not_be_rendered_or_logged",
+          "family": "configuration_environment",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "api_response_must_match_persisted_state",
+          "family": "data_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "cache_view_must_eventually_match_database",
+          "family": "data_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "derived_counts_must_match_source_records",
+          "family": "data_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "master_detail_records_must_be_consistent",
+          "family": "data_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "duplicate_request_must_not_create_duplicate_side_effects",
+          "family": "idempotency_duplicate_submit",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "idempotency_key_must_bind_to_original_operation",
+          "family": "idempotency_duplicate_submit",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "retry_must_return_consistent_business_result",
+          "family": "idempotency_duplicate_submit",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "invalid_input_must_be_rejected",
+          "family": "input_validation_boundary",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "numeric_bounds_must_be_enforced",
+          "family": "input_validation_boundary",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "string_and_file_limits_must_be_enforced",
+          "family": "input_validation_boundary",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "structured_input_must_not_escape_parser_or_storage",
+          "family": "input_validation_boundary",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "discount_must_not_exceed_policy",
+          "family": "money_quantity_conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "inventory_must_not_go_negative",
+          "family": "money_quantity_conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "ledger_must_balance_with_business_state",
+          "family": "money_quantity_conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "money_must_not_be_created_or_lost",
+          "family": "money_quantity_conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "refund_amount_must_not_exceed_paid_amount",
+          "family": "money_quantity_conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "historical_bug_probe_must_remain_passing_after_fix",
+          "family": "regression_historical_bug",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "regression_suite_must_track_customer_ready_defects",
+          "family": "regression_historical_bug",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "resolved_defect_must_not_reappear_in_same_scope",
+          "family": "regression_historical_bug",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "invalid_transition_must_be_rejected",
+          "family": "state_machine",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "tenant_scoped_export_must_not_leak_other_tenants",
+          "family": "tenant_isolation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "api_success_must_be_visible_in_ui_state",
+          "family": "ui_api_contract_drift",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "ui_action_must_call_expected_api_contract",
+          "family": "ui_api_contract_drift",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "ui_error_state_must_match_api_failure",
+          "family": "ui_api_contract_drift",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "hidden_object_must_not_be_discoverable_by_search",
+          "family": "visibility_disclosure",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "list_detail_export_visibility_must_be_consistent",
+          "family": "visibility_disclosure",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "sensitive_fields_must_be_masked_or_omitted",
+          "family": "visibility_disclosure",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "approval_step_must_be_executed_by_authorized_actor",
+          "family": "workflow_approval",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "rejected_workflow_must_not_continue_as_approved",
+          "family": "workflow_approval",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "required_approval_chain_must_not_be_skipped",
+          "family": "workflow_approval",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        }
+      ],
+      "honesty_note": "This is risk/invariant coverage from scan outputs, not bug recall unless ground_truth_available is true."
+    },
+    "ground_truth_fingerprint": "8a0b52c7223cb17a2ff8cb6e6991ce99aa8b42bb712c583e60e566e797c4e56d",
+    "formal_findings_evaluated": 27,
+    "non_delivery_findings_excluded": 16
+  },
+  "operational_metrics": {
+    "elapsed_seconds": 1157.549,
+    "wall_clock_seconds": 1157.549498,
+    "total_findings": 43,
+    "total_candidates": 161,
+    "formal_customer_deliverable_count": 27,
+    "discovery_funnel": {
+      "stages": [
+        {
+          "name": "candidate_generation",
+          "input": 441,
+          "output": 441,
+          "conversion": 1.0,
+          "dropped": 0
+        },
+        {
+          "name": "probe_selection",
+          "input": 441,
+          "output": 200,
+          "conversion": 0.4535,
+          "dropped": 241
+        },
+        {
+          "name": "execution",
+          "input": 200,
+          "output": 64,
+          "conversion": 0.32,
+          "dropped": 136
+        },
+        {
+          "name": "verification",
+          "input": 64,
+          "output": 47,
+          "conversion": 0.7344,
+          "dropped": 17
+        },
+        {
+          "name": "formal_accounting",
+          "input": 47,
+          "output": 27,
+          "conversion": 0.5745,
+          "dropped": 20
+        }
+      ],
+      "top_blocking_reasons": [
+        {
+          "reason": "dropped_no_endpoint",
+          "count": 67
+        },
+        {
+          "reason": "endpoint_binding:semantic_overlap_not_found",
+          "count": 42
+        },
+        {
+          "reason": "missing_runtime_path_binding",
+          "count": 39
+        },
+        {
+          "reason": "endpoint_binding:entity_not_in_catalog",
+          "count": 20
+        },
+        {
+          "reason": "sandbox_cleanup_not_reversible",
+          "count": 15
+        },
+        {
+          "reason": "endpoint_binding:path_hint_not_in_catalog",
+          "count": 5
+        }
+      ],
+      "validated_bug_count": 27,
+      "pending_finding_count": 1,
+      "candidate_count": 441,
+      "explanation": "本轮已验证 Bug 27；待确认发现 1（不计入客户可见已验证 Bug）；候选信号 441。候选生成 441 条切片，入选执行 200 条（预算择优，未入选 241）。执行阶段输入 200，成功产出可验证轨迹 64，损耗 136。验证阶段评估 64，检出违规/发现 47。Top 阻断原因：dropped_no_endpoint×67、endpoint_binding:semantic_overlap_not_found×42、missing_runtime_path_binding×39。下一步：部分假设无法绑定 API 文档中的真实 endpoint，请检查 OpenAPI/API 文档是否完整；部分探针缺少真实路径/ID 绑定或前置条件未满足，请补齐 OpenAPI 可列表端点与多角色测试账号后再解读零缺陷；检查 runtime_contract / base_url / 执行批准是否已批准，否则执行阶段会 plan_only 或 blocked。",
+      "pipeline_health": {
+        "status": "DEGRADED",
+        "empty_findings_means_no_bugs": false,
+        "execution_status": "completed",
+        "execution_reason": "preflight_health_failed",
+        "observability_status": "ok",
+        "observability_gaps": [],
+        "failed_stages": {},
+        "stage_failures": [],
+        "result_error": "",
+        "no_real_traffic": false,
+        "cleanup_failure_count": 6,
+        "usage_cost_unknown": true,
+        "secret_scan_failed": false,
+        "missing_phases": [],
+        "unexecuted_candidate_signal": {
+          "stop_reason": "selected_final_unattempted_slice_batch",
+          "pending_slice_count": 0,
+          "binding_or_precondition_blocks": 28,
+          "skip_reason_counts": {
+            "missing_runtime_path_binding": 26
+          }
+        },
+        "operator_note": "执行虽已返回，但产品级 preflight 未通过；结果覆盖不完整，空 findings 不能解释为目标无缺陷。",
+        "preflight": {
+          "present": true,
+          "ready": true,
+          "all_checks_passed": false,
+          "errors": 0,
+          "warnings": 1
+        }
+      },
+      "mainline_unification": {
+        "analyzer": {
+          "input": 52,
+          "bound": 31,
+          "dropped_no_endpoint": 21,
+          "dropped_reason_counts": {
+            "semantic_overlap_not_found": 21
+          },
+          "dropped_samples": [
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_0_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_1_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_2_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_3_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_4_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_5_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_6_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_7_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_8_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_9_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_10_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_11_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_12_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_13_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "business_rules_14_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "conservation_0_6dcd5daf",
+              "engine": "conservation",
+              "family": "conservation",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_0_d77d0059",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_1_572e4936",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_1"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_2_674a6129",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_2"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "analyzer",
+              "hypothesis_id": "async_task_3_72e48c8b",
+              "engine": "async_task",
+              "family": "async_task",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "异步任务缺少重试配置: PRD_Task_3"
+            }
+          ],
+          "dropped_samples_truncated": 1,
+          "by_origin": {
+            "analyzer": {
+              "input": 52,
+              "bound": 31,
+              "dropped_no_endpoint": 21
+            }
+          },
+          "origin": "analyzer"
+        },
+        "llm_reasoner": {
+          "input": 669,
+          "bound": 623,
+          "dropped_no_endpoint": 46,
+          "dropped_reason_counts": {
+            "entity_not_in_catalog": 20,
+            "path_hint_not_in_catalog": 5,
+            "semantic_overlap_not_found": 21
+          },
+          "dropped_samples": [
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "COUNTER-003",
+              "engine": "counterexample",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "管理端点（需 admin 权限）",
+              "title_excerpt": "不同角色访问同一资源返回不同结果（权限模型不一致）"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "CONSIS-001",
+              "engine": "consistency",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "Tenant A",
+              "title_excerpt": "API未校验租户ID导致URL参数篡改跨租户访问"
+            },
+            {
+              "reason": "path_hint_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "CONSIS-006",
+              "engine": "consistency",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [
+                "/Token"
+              ],
+              "entity_hint": "JWT payload",
+              "title_excerpt": "JWT/Token中的租户声明可被篡改实现垂直越权"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "COUNTER-001",
+              "engine": "counterexample",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "创建端点（如 POST /api/items）",
+              "title_excerpt": "创建后立即查询可能看不到新资源（创建与查询的视图不一致）"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "COUNTER-002",
+              "engine": "counterexample",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "更新端点（如 PUT /api/items/{id}）",
+              "title_excerpt": "更新操作后列表与详情展示不一致（缓存或视图未同步）"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "CONSIS-003",
+              "engine": "consistency",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "资源ID",
+              "title_excerpt": "资源ID可预测导致通过枚举访问其他租户数据"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "CONSIS-004",
+              "engine": "consistency",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "缓存键",
+              "title_excerpt": "缓存未按租户分隔导致跨租户数据泄露"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "CONSIS-005",
+              "engine": "consistency",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "导出接口",
+              "title_excerpt": "报表导出未限制租户范围导致导出全量数据"
+            },
+            {
+              "reason": "path_hint_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "CONSIS-007",
+              "engine": "consistency",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [
+                "/SSE"
+              ],
+              "entity_hint": "WebSocket频道",
+              "title_excerpt": "WebSocket/SSE推送未隔离租户导致实时数据泄露"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "COUNTER-004",
+              "engine": "counterexample",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "分页查询（page, size）",
+              "title_excerpt": "分页参数矛盾：不同分页大小下 total_count 或资源排序不一致"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "COUNTER-005",
+              "engine": "counterexample",
+              "family": "invariant",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "带过滤条件的查询（如 ?status=active）",
+              "title_excerpt": "过滤查询条件与结果集不一致（过滤参数未生效或默认条件冲突）"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "CONSIS-002",
+              "engine": "consistency",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "请求体中的记录数组",
+              "title_excerpt": "批量创建接口未对每条记录进行租户归属校验"
+            },
+            {
+              "reason": "entity_not_in_catalog",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "onto_b6f82d3096ed8bce",
+              "engine": "bug_ontology",
+              "family": "consistency",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "system",
+              "title_excerpt": "异步操作必须在合理时间内达到最终一致状态"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_0_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_14_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_7_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_1_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_13_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_10_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            },
+            {
+              "reason": "semantic_overlap_not_found",
+              "origin": "llm_reasoner",
+              "hypothesis_id": "business_rules_4_c36b52d1",
+              "engine": "business_rules",
+              "family": "business_rules",
+              "method_hint": "",
+              "operation_id_hint": "",
+              "path_hints": [],
+              "entity_hint": "",
+              "title_excerpt": "未命名发现"
+            }
+          ],
+          "dropped_samples_truncated": 26,
+          "by_origin": {
+            "llm_reasoner": {
+              "input": 669,
+              "bound": 623,
+              "dropped_no_endpoint": 46
+            }
+          },
+          "origin": "llm_reasoner",
+          "status": "ok",
+          "total_hypotheses": 669,
+          "total_engines": 20,
+          "successful_engine_count": 16,
+          "failed_engine_count": 2,
+          "degraded_engine_count": 2,
+          "observed_model_request_count": 25,
+          "model_usage": {
+            "request_count": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "responses_with_cost": 0
+          },
+          "max_workers": 4,
+          "max_hypotheses_per_engine": 15,
+          "timeout_seconds": 300,
+          "max_tokens": 32768
+        }
+      },
+      "formal_count_projection": {
+        "schema_version": "qualibug.discovery-quality-projection.v1",
+        "formal_customer_deliverable_count": 27,
+        "executed_clue_count": 177,
+        "confirmation_receipt_count": 43,
+        "candidate_count": 161,
+        "funnel_validated_bug_count": 27,
+        "count_consistency": {
+          "formal_equals_funnel_validated": true,
+          "note": "formal_customer_deliverable_count is the only commercial defect count; confirmation_receipt_count and funnel diagnostics are internal only."
+        }
+      }
+    },
+    "formal_count_projection": {
+      "schema_version": "qualibug.discovery-quality-projection.v1",
+      "formal_customer_deliverable_count": 27,
+      "executed_clue_count": 177,
+      "confirmation_receipt_count": 43,
+      "candidate_count": 161,
+      "funnel_validated_bug_count": 27,
+      "count_consistency": {
+        "formal_equals_funnel_validated": true,
+        "note": "formal_customer_deliverable_count is the only commercial defect count; confirmation_receipt_count and funnel diagnostics are internal only."
+      }
+    },
+    "estimated_cost_usd": 0.0,
+    "request_count": 261,
+    "production_http_requests": 0,
+    "cleanup_failures": 173,
+    "safety_incidents": 0,
+    "dirty_test_environments": 1,
+    "execution_success_rate": 0.831169,
+    "engine_success_rate": 0.8,
+    "duplicate_rate": 0.488095,
+    "operational_metrics_status": "MEASURED"
+  },
+  "fixture_governance": {
+    "post_run_cleanup": {
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      },
+      "token_refresh": {
+        "status": "ok",
+        "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+        "exit_code": 0
+      },
+      "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+      "reset_receipt": {
+        "schema_version": "benchmark_target_reset.v1",
+        "receipt_id": "reset_a97fa0861bf94ad6",
+        "project": "benchmark_mall",
+        "target_base_url": "http://localhost:8080",
+        "status": "completed",
+        "reset_at_utc": "2026-07-10T10:05:07Z",
+        "target_db_reset": {
+          "status": "ok",
+          "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+          "exit_code": 0
+        }
+      }
+    },
+    "post_run_cleanliness": {
+      "status": "clean_no_prior_write_audit",
+      "audit_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\platform_workspace\\benchmark_mall\\defect_discovery\\sandbox_write_audit.jsonl"
+    }
+  },
+  "receipt_fingerprint": "44669180ff846427b56b07151c20d61616215760a954834c14f4a7dcf6eab964"
+}

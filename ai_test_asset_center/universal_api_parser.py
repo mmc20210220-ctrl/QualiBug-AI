@@ -199,7 +199,9 @@ def _convert_markdown_api(text: str) -> dict[str, Any]:
                 example = _json.loads(json_match.group(1))
                 if isinstance(example, dict):
                     for k, v in example.items():
-                        body_schema["properties"][k] = {"type": "string", "example": v}
+                        property_schema = _infer_schema_from_value(v)
+                        property_schema["example"] = v
+                        body_schema["properties"][k] = property_schema
                     request_body = {"content": {"application/json": {"schema": body_schema, "example": example}}}
             except Exception:
                 pass

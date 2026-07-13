@@ -1,7 +1,7 @@
 # QualiBug AI API Documentation
 
 **Version**: Phase92A  
-**Base URL**: `http://localhost:5000`
+**Base URL**: `http://localhost:8088`
 
 ---
 

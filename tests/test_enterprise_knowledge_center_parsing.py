@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ai_test_asset_center.enterprise_knowledge_center import (
     _classify_source,
+    _links_by_overlap,
     _parse_source,
     build_enterprise_business_knowledge_asset,
     ingest_enterprise_knowledge_documents,
@@ -163,3 +164,30 @@ def test_build_asset_includes_new_extracted_structures(tmp_path: Path) -> None:
     assert asset["summary"]["source_type_distribution"]["db_field_dictionary"] == 1
     assert asset["summary"]["source_type_distribution"]["uiux_svg"] == 1
     assert any(row["relation"] == "source_to_asset" for row in asset["relationships"])
+
+
+def test_token_overlap_relationships_are_candidate_only() -> None:
+    edges = _links_by_overlap(
+        [{
+            "rule_id": "rule-cart-quantity",
+            "statement": "Cart quantity must be conserved.",
+            "tokens": ["cart", "quantity", "conserved"],
+        }],
+        [{
+            "interface_id": "api:POST:/cart/items",
+            "method": "POST",
+            "path": "/cart/items",
+            "summary": "Add cart quantity",
+            "tokens": ["cart", "quantity", "add"],
+        }],
+        "rule_id",
+        "interface_id",
+        relation="rule_to_interface",
+    )
+
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["relation"] == "rule_to_interface"
+    assert edge["status"] == "candidate"
+    assert edge["derivation"] == "token_overlap"
+    assert edge["evidence_gate"] == "token_overlap_only_requires_explicit_source_relation"

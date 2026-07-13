@@ -1,0 +1,1574 @@
+[iteration19 heartbeat] elapsed=0s utc=2026-07-11T06:41:35Z
+LLM_CONFIG_FILE: D:\QualiBug-AI\QualiBug-AI-main\.env.local
+RESET_TARGET_DB: C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable\qualibug_enterprise_benchmark_v0_5_windows_native_stable\scripts\init_db_windows.ps1
+RESET_TARGET_DB: ok
+REFRESH_TOKENS: D:\QualiBug-AI\QualiBug-AI-main\_refresh_tokens.py
+buyer01          refreshed  (HTTP 200, len=300)
+buyer02          refreshed  (HTTP 200, len=300)
+seller01         refreshed  (HTTP 200, len=303)
+admin            refreshed  (HTTP 200, len=301)
+finance01        refreshed  (HTTP 200, len=305)
+warehouse01      refreshed  (HTTP 200, len=311)
+auditor01        refreshed  (HTTP 200, len=305)
+disabled_buyer   refreshed  (HTTP 200, len=312)
+REFRESHED 8/8 tokens -> D:\QualiBug-AI\QualiBug-AI-main\platform_inputs\benchmark_mall\test_accounts.json
+REFRESH_TOKENS: ok
+PREP: {'target_db_reset': {'status': 'ok', 'script': 'C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1', 'exit_code': 0}, 'token_refresh': {'status': 'ok', 'script': 'D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py', 'exit_code': 0, 'attempts': 1}, 'reset_receipt_path': 'D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json', 'reset_receipt': {'schema_version': 'benchmark_target_reset.v1', 'receipt_id': 'reset_4b9145534d4b4560', 'project': 'benchmark_mall', 'target_base_url': 'http://localhost:8080', 'status': 'completed', 'reset_at_utc': '2026-07-11T06:41:37Z', 'target_db_reset': {'status': 'ok', 'script': 'C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1', 'exit_code': 0}}}
+TARGET_CLEANLINESS: {"status": "clean_no_prior_write_audit", "audit_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\platform_workspace\\benchmark_mall\\defect_discovery\\sandbox_write_audit.jsonl"}
+RESET: removed D:\QualiBug-AI\QualiBug-AI-main\platform_workspace\benchmark_mall
+RESET: removed D:\QualiBug-AI\QualiBug-AI-main\platform_outputs\benchmark_mall
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] Deduplicated 6 engines with identical prompt templates (17 -> 11)
+
+[Stage 2] Reasoner — 11 engines, 4 parallel workers...
+[iteration19 heartbeat] elapsed=20s utc=2026-07-11T06:41:55Z
+[iteration19 heartbeat] elapsed=40s utc=2026-07-11T06:42:15Z
+[iteration19 heartbeat] elapsed=60s utc=2026-07-11T06:42:35Z
+[iteration19 heartbeat] elapsed=80s utc=2026-07-11T06:42:55Z
+[iteration19 heartbeat] elapsed=100s utc=2026-07-11T06:43:15Z
+[iteration19 heartbeat] elapsed=120s utc=2026-07-11T06:43:35Z
+[iteration19 heartbeat] elapsed=140s utc=2026-07-11T06:43:55Z
+[iteration19 heartbeat] elapsed=160s utc=2026-07-11T06:44:15Z
+[iteration19 heartbeat] elapsed=180s utc=2026-07-11T06:44:35Z
+[iteration19 heartbeat] elapsed=200s utc=2026-07-11T06:44:55Z
+[iteration19 heartbeat] elapsed=220s utc=2026-07-11T06:45:15Z
+    [OK] [causality] 15 hypotheses (success)
+    [OK] [invariant] 15 hypotheses (success)
+    [OK] [reconciliation] 15 hypotheses (success)
+    [FAIL] [counterexample] 0 hypotheses (failed)
+    [FAIL] [consistency] 0 hypotheses (failed)
+    [FAIL] [population] 0 hypotheses (failed)
+    [FAIL] [outcome] 0 hypotheses (failed)
+    [OK] [temporal] 15 hypotheses (success)
+    [OK] [saga] 8 hypotheses (success)
+    [OK] [event_chain] 8 hypotheses (success)
+    [OK] [metamorphic] 8 hypotheses (success)
+
+[Stage 2] Analyzers — 运行 8 个分析器...
+    [OK] [business_rules] 15 hypotheses
+    [WARN] [state_machine] 0 hypotheses
+    [OK] [multi_tenant] 15 hypotheses
+    [OK] [conservation] 1 hypotheses
+    [OK] [concurrency] 1 hypotheses
+    [OK] [async_task] 10 hypotheses
+    [OK] [cache_consistency] 15 hypotheses
+    [WARN] [authorization] 0 hypotheses
+  [OK] 分析器生成了 57 条假设
+  [INFO] universal_api_parser: detected format=markdown_api
+  [OK] Ontology: 626 ontology-driven hypotheses generated
+  [OK] 去重移除了 17 条重复假设
+  [OK] 最高优先级假设: [P1] 可能存在缓存失效问题: /api/cart/items/
+  [OK] 生成了 750 条假设 (across 11 engines)
+[iteration19 heartbeat] elapsed=240s utc=2026-07-11T06:45:35Z
+[iteration19 heartbeat] elapsed=260s utc=2026-07-11T06:45:55Z
+  [INFO] universal_api_parser: detected format=markdown_api
+[iteration19 heartbeat] elapsed=280s utc=2026-07-11T06:46:15Z
+  [INFO] Deduplicated 6 engines with identical prompt templates (17 -> 11)
+
+[Stage 2] Reasoner — 11 engines, 4 parallel workers...
+[iteration19 heartbeat] elapsed=300s utc=2026-07-11T06:46:35Z
+[iteration19 heartbeat] elapsed=320s utc=2026-07-11T06:46:55Z
+[iteration19 heartbeat] elapsed=340s utc=2026-07-11T06:47:15Z
+[iteration19 heartbeat] elapsed=360s utc=2026-07-11T06:47:35Z
+[iteration19 heartbeat] elapsed=380s utc=2026-07-11T06:47:55Z
+[iteration19 heartbeat] elapsed=400s utc=2026-07-11T06:48:15Z
+[iteration19 heartbeat] elapsed=420s utc=2026-07-11T06:48:35Z
+[iteration19 heartbeat] elapsed=440s utc=2026-07-11T06:48:55Z
+[iteration19 heartbeat] elapsed=460s utc=2026-07-11T06:49:15Z
+[iteration19 heartbeat] elapsed=480s utc=2026-07-11T06:49:35Z
+[iteration19 heartbeat] elapsed=500s utc=2026-07-11T06:49:55Z
+    [OK] [causality] 15 hypotheses (success)
+    [OK] [invariant] 15 hypotheses (success)
+    [OK] [reconciliation] 5 hypotheses (success)
+    [FAIL] [counterexample] 0 hypotheses (failed)
+    [FAIL] [consistency] 0 hypotheses (failed)
+    [FAIL] [population] 0 hypotheses (failed)
+    [FAIL] [outcome] 0 hypotheses (failed)
+    [OK] [temporal] 15 hypotheses (success)
+    [OK] [saga] 6 hypotheses (success)
+    [OK] [event_chain] 8 hypotheses (success)
+    [FAIL] [metamorphic] 0 hypotheses (failed)
+
+[Stage 2] Analyzers — 运行 8 个分析器...
+    [OK] [business_rules] 15 hypotheses
+    [WARN] [state_machine] 0 hypotheses
+    [OK] [multi_tenant] 15 hypotheses
+    [OK] [conservation] 1 hypotheses
+    [OK] [concurrency] 1 hypotheses
+    [OK] [async_task] 10 hypotheses
+    [OK] [cache_consistency] 15 hypotheses
+    [WARN] [authorization] 0 hypotheses
+  [OK] 分析器生成了 57 条假设
+  [INFO] universal_api_parser: detected format=markdown_api
+  [OK] Ontology: 626 ontology-driven hypotheses generated
+  [OK] 去重移除了 17 条重复假设
+  [OK] 最高优先级假设: [P1] 可能存在缓存失效问题: /api/cart/items/
+  [OK] 生成了 730 条假设 (across 11 engines)
+[iteration19 heartbeat] elapsed=520s utc=2026-07-11T06:50:15Z
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] Deduplicated 6 engines with identical prompt templates (17 -> 11)
+
+[Stage 2] Reasoner — 11 engines, 4 parallel workers...
+[iteration19 heartbeat] elapsed=540s utc=2026-07-11T06:50:35Z
+[iteration19 heartbeat] elapsed=560s utc=2026-07-11T06:50:55Z
+[iteration19 heartbeat] elapsed=580s utc=2026-07-11T06:51:15Z
+[iteration19 heartbeat] elapsed=600s utc=2026-07-11T06:51:35Z
+[iteration19 heartbeat] elapsed=620s utc=2026-07-11T06:51:55Z
+[iteration19 heartbeat] elapsed=640s utc=2026-07-11T06:52:15Z
+[iteration19 heartbeat] elapsed=660s utc=2026-07-11T06:52:35Z
+[iteration19 heartbeat] elapsed=680s utc=2026-07-11T06:52:55Z
+[iteration19 heartbeat] elapsed=700s utc=2026-07-11T06:53:15Z
+[iteration19 heartbeat] elapsed=720s utc=2026-07-11T06:53:35Z
+[iteration19 heartbeat] elapsed=740s utc=2026-07-11T06:53:56Z
+    [OK] [causality] 15 hypotheses (success)
+    [OK] [invariant] 10 hypotheses (success)
+    [FAIL] [reconciliation] 0 hypotheses (failed)
+    [FAIL] [counterexample] 0 hypotheses (failed)
+    [OK] [consistency] 15 hypotheses (success)
+    [FAIL] [population] 0 hypotheses (failed)
+    [FAIL] [outcome] 0 hypotheses (failed)
+    [OK] [temporal] 15 hypotheses (success)
+    [OK] [saga] 9 hypotheses (success)
+    [OK] [event_chain] 7 hypotheses (success)
+    [OK] [metamorphic] 7 hypotheses (success)
+
+[Stage 2] Analyzers — 运行 8 个分析器...
+    [OK] [business_rules] 15 hypotheses
+    [WARN] [state_machine] 0 hypotheses
+    [OK] [multi_tenant] 15 hypotheses
+    [OK] [conservation] 1 hypotheses
+    [OK] [concurrency] 1 hypotheses
+    [OK] [async_task] 10 hypotheses
+    [OK] [cache_consistency] 15 hypotheses
+    [WARN] [authorization] 0 hypotheses
+  [OK] 分析器生成了 57 条假设
+  [INFO] universal_api_parser: detected format=markdown_api
+  [OK] Ontology: 626 ontology-driven hypotheses generated
+  [OK] 去重移除了 17 条重复假设
+  [OK] 最高优先级假设: [P1] 可能存在缓存失效问题: /api/cart/items/
+  [OK] 生成了 744 条假设 (across 11 engines)
+[iteration19 heartbeat] elapsed=760s utc=2026-07-11T06:54:16Z
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] Deduplicated 6 engines with identical prompt templates (17 -> 11)
+
+[Stage 2] Reasoner — 11 engines, 4 parallel workers...
+[iteration19 heartbeat] elapsed=780s utc=2026-07-11T06:54:36Z
+[iteration19 heartbeat] elapsed=800s utc=2026-07-11T06:54:56Z
+[iteration19 heartbeat] elapsed=820s utc=2026-07-11T06:55:16Z
+[iteration19 heartbeat] elapsed=840s utc=2026-07-11T06:55:36Z
+[iteration19 heartbeat] elapsed=860s utc=2026-07-11T06:55:56Z
+[iteration19 heartbeat] elapsed=880s utc=2026-07-11T06:56:16Z
+[iteration19 heartbeat] elapsed=900s utc=2026-07-11T06:56:36Z
+[iteration19 heartbeat] elapsed=920s utc=2026-07-11T06:56:56Z
+    [WARN] [causality] 5 hypotheses (degraded)
+    [OK] [invariant] 15 hypotheses (success)
+    [FAIL] [reconciliation] 0 hypotheses (failed)
+    [FAIL] [counterexample] 0 hypotheses (failed)
+    [FAIL] [consistency] 0 hypotheses (failed)
+    [FAIL] [population] 0 hypotheses (failed)
+    [FAIL] [outcome] 0 hypotheses (failed)
+    [FAIL] [temporal] 0 hypotheses (failed)
+    [FAIL] [saga] 0 hypotheses (failed)
+    [OK] [event_chain] 10 hypotheses (success)
+    [OK] [metamorphic] 10 hypotheses (success)
+
+[Stage 2] Analyzers — 运行 8 个分析器...
+    [OK] [business_rules] 15 hypotheses
+    [WARN] [state_machine] 0 hypotheses
+    [OK] [multi_tenant] 15 hypotheses
+    [OK] [conservation] 1 hypotheses
+    [OK] [concurrency] 1 hypotheses
+    [OK] [async_task] 10 hypotheses
+    [OK] [cache_consistency] 15 hypotheses
+    [WARN] [authorization] 0 hypotheses
+  [OK] 分析器生成了 57 条假设
+  [INFO] universal_api_parser: detected format=markdown_api
+  [OK] Ontology: 626 ontology-driven hypotheses generated
+  [OK] 去重移除了 17 条重复假设
+  [OK] 最高优先级假设: [P1] 可能存在缓存失效问题: /api/cart/items/
+  [OK] 生成了 706 条假设 (across 11 engines)
+[iteration19 heartbeat] elapsed=940s utc=2026-07-11T06:57:16Z
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=markdown_api
+  [INFO] universal_api_parser: detected format=openapi3
+  [INFO] universal_api_parser: detected format=markdown_api
+[iteration19 heartbeat] elapsed=960s utc=2026-07-11T06:57:36Z
+RESET_TARGET_DB: C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable\qualibug_enterprise_benchmark_v0_5_windows_native_stable\scripts\init_db_windows.ps1
+RESET_TARGET_DB: ok
+REFRESH_TOKENS: D:\QualiBug-AI\QualiBug-AI-main\_refresh_tokens.py
+buyer01          refreshed  (HTTP 200, len=300)
+buyer02          refreshed  (HTTP 200, len=300)
+seller01         refreshed  (HTTP 200, len=303)
+admin            refreshed  (HTTP 200, len=301)
+finance01        refreshed  (HTTP 200, len=305)
+warehouse01      refreshed  (HTTP 200, len=311)
+auditor01        refreshed  (HTTP 200, len=305)
+disabled_buyer   refreshed  (HTTP 200, len=312)
+REFRESHED 8/8 tokens -> D:\QualiBug-AI\QualiBug-AI-main\platform_inputs\benchmark_mall\test_accounts.json
+REFRESH_TOKENS: ok
+[iteration19 heartbeat] elapsed=980s utc=2026-07-11T06:57:56Z
+======================================================================
+MODE=llm_throughput  elapsed=976.9s
+{
+  "mode": "llm_throughput",
+  "unify_analyzers": "1",
+  "unify_llm_reasoner": "1",
+  "elapsed_sec": 976.9,
+  "prep": {
+    "target_db_reset": {
+      "status": "ok",
+      "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+      "exit_code": 0
+    },
+    "token_refresh": {
+      "status": "ok",
+      "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+      "exit_code": 0,
+      "attempts": 1
+    },
+    "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+    "reset_receipt": {
+      "schema_version": "benchmark_target_reset.v1",
+      "receipt_id": "reset_4b9145534d4b4560",
+      "project": "benchmark_mall",
+      "target_base_url": "http://localhost:8080",
+      "status": "completed",
+      "reset_at_utc": "2026-07-11T06:41:37Z",
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      }
+    }
+  },
+  "post_run_cleanup": {
+    "target_db_reset": {
+      "status": "ok",
+      "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+      "exit_code": 0
+    },
+    "token_refresh": {
+      "status": "ok",
+      "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+      "exit_code": 0,
+      "attempts": 1
+    },
+    "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+    "reset_receipt": {
+      "schema_version": "benchmark_target_reset.v1",
+      "receipt_id": "reset_fe05fbd77e294c48",
+      "project": "benchmark_mall",
+      "target_base_url": "http://localhost:8080",
+      "status": "completed",
+      "reset_at_utc": "2026-07-11T06:57:54Z",
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      }
+    }
+  },
+  "post_run_cleanliness": {
+    "status": "clean_reset_receipt_verified",
+    "write_count": 320,
+    "incomplete_cleanup_count": 204,
+    "reset_receipt_id": "reset_fe05fbd77e294c48",
+    "archived_audit": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260711T065754Z_sandbox_write_audit.jsonl",
+    "archived_audit_sha256": "93d882e23bed5381ad5647bfdfe4703eb77b6a2d3c6fe61293077ada91e0bc7c",
+    "archived_receipt": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260711T065754Z_target_reset_receipt.json"
+  },
+  "success": true,
+  "grade": "partial_coverage",
+  "execution_status": "completed",
+  "total_findings": 36,
+  "total_candidates": 199,
+  "formal_customer_deliverable_count": 67,
+  "formal_count_projection": {
+    "schema_version": "qualibug.discovery-quality-projection.v1",
+    "formal_customer_deliverable_count": 67,
+    "executed_clue_count": 168,
+    "confirmation_receipt_count": 67,
+    "candidate_count": 168,
+    "funnel_validated_bug_count": 67,
+    "count_consistency": {
+      "formal_equals_funnel_validated": true,
+      "note": "formal_customer_deliverable_count is the only commercial defect count; confirmation_receipt_count and funnel diagnostics are internal only."
+    }
+  },
+  "error": null,
+  "mainline_unification": {
+    "analyzer": {
+      "input": 57,
+      "bound": 31,
+      "dropped_no_endpoint": 26,
+      "dropped_reason_counts": {
+        "semantic_overlap_not_found": 26
+      },
+      "dropped_samples": [
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_0_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_1_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_2_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_3_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_4_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_5_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_6_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_7_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_8_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_9_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_10_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_11_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_12_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_13_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "business_rules_14_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "conservation_0_6dcd5daf",
+          "engine": "conservation",
+          "family": "conservation",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_0_d77d0059",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_1_572e4936",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_1"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_2_674a6129",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_2"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "analyzer",
+          "hypothesis_id": "async_task_3_72e48c8b",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_3"
+        }
+      ],
+      "dropped_samples_truncated": 6,
+      "by_origin": {
+        "analyzer": {
+          "input": 57,
+          "bound": 31,
+          "dropped_no_endpoint": 26
+        }
+      },
+      "origin": "analyzer"
+    },
+    "llm_reasoner": {
+      "input": 706,
+      "bound": 660,
+      "dropped_no_endpoint": 46,
+      "dropped_reason_counts": {
+        "entity_not_in_catalog": 20,
+        "semantic_overlap_not_found": 26
+      },
+      "dropped_samples": [
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "onto_b6f82d3096ed8bce",
+          "engine": "bug_ontology",
+          "family": "consistency",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "system",
+          "title_excerpt": "异步操作必须在合理时间内达到最终一致状态"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_0_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_14_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_7_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_1_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_13_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_10_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_4_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_6_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_8_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_5_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "business_rules_12_c36b52d1",
+          "engine": "business_rules",
+          "family": "business_rules",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "未命名发现"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "EVENT-002",
+          "engine": "event_chain",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "Order (cancel)",
+          "title_excerpt": "订单取消后库存释放事件丢失导致库存永久锁定"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "EVENT-003",
+          "engine": "event_chain",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "Payment (pay)",
+          "title_excerpt": "支付成功事件重复消费导致库存重复扣减"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "EVENT-005",
+          "engine": "event_chain",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "Refund (approve)",
+          "title_excerpt": "退款审批通过后余额调整事件丢失"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "EVENT-007",
+          "engine": "event_chain",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "Order (create)",
+          "title_excerpt": "下单时库存预占事件丢失导致超卖"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "META-006",
+          "engine": "metamorphic",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "分页参数",
+          "title_excerpt": "极大分页参数可能引发服务OOM"
+        },
+        {
+          "reason": "entity_not_in_catalog",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "META-010",
+          "engine": "metamorphic",
+          "family": "invariant",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "查询条件",
+          "title_excerpt": "分页与过滤组合可能导致数据重复或遗漏"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "conservation_0_6dcd5daf",
+          "engine": "conservation",
+          "family": "conservation",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+        },
+        {
+          "reason": "semantic_overlap_not_found",
+          "origin": "llm_reasoner",
+          "hypothesis_id": "async_task_0_d77d0059",
+          "engine": "async_task",
+          "family": "async_task",
+          "method_hint": "",
+          "operation_id_hint": "",
+          "path_hints": [],
+          "entity_hint": "",
+          "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+        }
+      ],
+      "dropped_samples_truncated": 26,
+      "by_origin": {
+        "llm_reasoner": {
+          "input": 706,
+          "bound": 660,
+          "dropped_no_endpoint": 46
+        }
+      },
+      "origin": "llm_reasoner",
+      "status": "ok",
+      "total_hypotheses": 706,
+      "total_engines": 20,
+      "successful_engine_count": 10,
+      "failed_engine_count": 7,
+      "degraded_engine_count": 3,
+      "observed_model_request_count": 22,
+      "model_usage": {
+        "request_count": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "responses_with_cost": 0
+      },
+      "max_workers": 4,
+      "max_hypotheses_per_engine": 15,
+      "timeout_seconds": 300,
+      "max_tokens": 32768
+    }
+  },
+  "discovery_funnel": {
+    "stages": [
+      {
+        "name": "candidate_generation",
+        "input": 592,
+        "output": 592,
+        "conversion": 1.0,
+        "dropped": 0
+      },
+      {
+        "name": "probe_selection",
+        "input": 592,
+        "output": 129,
+        "conversion": 0.2179,
+        "dropped": 463
+      },
+      {
+        "name": "execution",
+        "input": 129,
+        "output": 75,
+        "conversion": 0.5814,
+        "dropped": 54
+      },
+      {
+        "name": "verification",
+        "input": 75,
+        "output": 53,
+        "conversion": 0.7067,
+        "dropped": 22
+      },
+      {
+        "name": "formal_accounting",
+        "input": 53,
+        "output": 36,
+        "conversion": 0.6792,
+        "dropped": 17
+      }
+    ],
+    "top_blocking_reasons": [
+      {
+        "reason": "dropped_no_endpoint",
+        "count": 72
+      },
+      {
+        "reason": "missing_runtime_path_binding",
+        "count": 69
+      },
+      {
+        "reason": "documented_observer_missing",
+        "count": 60
+      },
+      {
+        "reason": "endpoint_binding:semantic_overlap_not_found",
+        "count": 52
+      },
+      {
+        "reason": "endpoint_binding:entity_not_in_catalog",
+        "count": 20
+      },
+      {
+        "reason": "identity_mutation_requires_disposable_fixture",
+        "count": 18
+      },
+      {
+        "reason": "sandbox_cleanup_not_reversible",
+        "count": 15
+      },
+      {
+        "reason": "sandbox_cleanup_failed",
+        "count": 1
+      }
+    ],
+    "validated_bug_count": 67,
+    "pending_finding_count": 0,
+    "candidate_count": 592,
+    "explanation": "本轮已验证 Bug 36；待确认发现 0（不计入客户可见已验证 Bug）；候选信号 592。候选生成 592 条切片，入选执行 129 条（预算择优，未入选 463）。执行阶段输入 129，成功产出可验证轨迹 75，损耗 54。验证阶段评估 75，检出违规/发现 53。Top 阻断原因：dropped_no_endpoint×72、missing_runtime_path_binding×69、documented_observer_missing×60。下一步：部分假设无法绑定 API 文档中的真实 endpoint，请检查 OpenAPI/API 文档是否完整；部分探针缺少真实路径/ID 绑定或前置条件未满足，请补齐 OpenAPI 可列表端点与多角色测试账号后再解读零缺陷；检查 runtime_contract / base_url / 执行批准是否已批准，否则执行阶段会 plan_only 或 blocked。",
+    "pipeline_health": {
+      "status": "DEGRADED",
+      "empty_findings_means_no_bugs": false,
+      "execution_status": "completed",
+      "execution_reason": "preflight_health_failed",
+      "observability_status": "ok",
+      "observability_gaps": [],
+      "failed_stages": {},
+      "failed_phases": {},
+      "degraded_phases": {},
+      "stage_failures": [],
+      "result_error": "",
+      "no_real_traffic": false,
+      "cleanup_failure_count": 9,
+      "usage_cost_unknown": true,
+      "secret_scan_failed": false,
+      "missing_phases": [],
+      "unexecuted_candidate_signal": {
+        "stop_reason": "selected_final_unattempted_slice_batch",
+        "pending_slice_count": 0,
+        "binding_or_precondition_blocks": 48,
+        "skip_reason_counts": {
+          "missing_runtime_path_binding": 46,
+          "identity_mutation_requires_disposable_fixture": 18
+        }
+      },
+      "operator_note": "执行虽已返回，但产品级 preflight 未通过；结果覆盖不完整，空 findings 不能解释为目标无缺陷。",
+      "preflight": {
+        "present": true,
+        "ready": true,
+        "all_checks_passed": false,
+        "errors": 0,
+        "warnings": 1
+      }
+    },
+    "mainline_unification": {
+      "analyzer": {
+        "input": 57,
+        "bound": 31,
+        "dropped_no_endpoint": 26,
+        "dropped_reason_counts": {
+          "semantic_overlap_not_found": 26
+        },
+        "dropped_samples": [
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_0_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_1_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_2_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_3_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_4_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_5_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_6_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_7_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_8_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_9_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_10_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_11_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_12_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_13_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "business_rules_14_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "conservation_0_6dcd5daf",
+            "engine": "conservation",
+            "family": "conservation",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "async_task_0_d77d0059",
+            "engine": "async_task",
+            "family": "async_task",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "async_task_1_572e4936",
+            "engine": "async_task",
+            "family": "async_task",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "异步任务缺少重试配置: PRD_Task_1"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "async_task_2_674a6129",
+            "engine": "async_task",
+            "family": "async_task",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "异步任务缺少重试配置: PRD_Task_2"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "analyzer",
+            "hypothesis_id": "async_task_3_72e48c8b",
+            "engine": "async_task",
+            "family": "async_task",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "异步任务缺少重试配置: PRD_Task_3"
+          }
+        ],
+        "dropped_samples_truncated": 6,
+        "by_origin": {
+          "analyzer": {
+            "input": 57,
+            "bound": 31,
+            "dropped_no_endpoint": 26
+          }
+        },
+        "origin": "analyzer"
+      },
+      "llm_reasoner": {
+        "input": 706,
+        "bound": 660,
+        "dropped_no_endpoint": 46,
+        "dropped_reason_counts": {
+          "entity_not_in_catalog": 20,
+          "semantic_overlap_not_found": 26
+        },
+        "dropped_samples": [
+          {
+            "reason": "entity_not_in_catalog",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "onto_b6f82d3096ed8bce",
+            "engine": "bug_ontology",
+            "family": "consistency",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "system",
+            "title_excerpt": "异步操作必须在合理时间内达到最终一致状态"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_0_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_14_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_7_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_1_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_13_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_10_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_4_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_6_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_8_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_5_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "business_rules_12_c36b52d1",
+            "engine": "business_rules",
+            "family": "business_rules",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "未命名发现"
+          },
+          {
+            "reason": "entity_not_in_catalog",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "EVENT-002",
+            "engine": "event_chain",
+            "family": "invariant",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "Order (cancel)",
+            "title_excerpt": "订单取消后库存释放事件丢失导致库存永久锁定"
+          },
+          {
+            "reason": "entity_not_in_catalog",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "EVENT-003",
+            "engine": "event_chain",
+            "family": "invariant",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "Payment (pay)",
+            "title_excerpt": "支付成功事件重复消费导致库存重复扣减"
+          },
+          {
+            "reason": "entity_not_in_catalog",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "EVENT-005",
+            "engine": "event_chain",
+            "family": "invariant",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "Refund (approve)",
+            "title_excerpt": "退款审批通过后余额调整事件丢失"
+          },
+          {
+            "reason": "entity_not_in_catalog",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "EVENT-007",
+            "engine": "event_chain",
+            "family": "invariant",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "Order (create)",
+            "title_excerpt": "下单时库存预占事件丢失导致超卖"
+          },
+          {
+            "reason": "entity_not_in_catalog",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "META-006",
+            "engine": "metamorphic",
+            "family": "invariant",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "分页参数",
+            "title_excerpt": "极大分页参数可能引发服务OOM"
+          },
+          {
+            "reason": "entity_not_in_catalog",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "META-010",
+            "engine": "metamorphic",
+            "family": "invariant",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "查询条件",
+            "title_excerpt": "分页与过滤组合可能导致数据重复或遗漏"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "conservation_0_6dcd5daf",
+            "engine": "conservation",
+            "family": "conservation",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "金额计算可能存在精度问题: balance_规则_27"
+          },
+          {
+            "reason": "semantic_overlap_not_found",
+            "origin": "llm_reasoner",
+            "hypothesis_id": "async_task_0_d77d0059",
+            "engine": "async_task",
+            "family": "async_task",
+            "method_hint": "",
+            "operation_id_hint": "",
+            "path_hints": [],
+            "entity_hint": "",
+            "title_excerpt": "异步任务缺少重试配置: PRD_Task_0"
+          }
+        ],
+        "dropped_samples_truncated": 26,
+        "by_origin": {
+          "llm_reasoner": {
+            "input": 706,
+            "bound": 660,
+            "dropped_no_endpoint": 46
+          }
+        },
+        "origin": "llm_reasoner",
+        "status": "ok",
+        "total_hypotheses": 706,
+        "total_engines": 20,
+        "successful_engine_count": 10,
+        "failed_engine_count": 7,
+        "degraded_engine_count": 3,
+        "observed_model_request_count": 22,
+        "model_usage": {
+          "request_count": 0,
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "cost_usd": 0.0,
+          "responses_with_cost": 0
+        },
+        "max_workers": 4,
+        "max_hypotheses_per_engine": 15,
+        "timeout_seconds": 300,
+        "max_tokens": 32768
+      }
+    },
+    "formal_count_projection": {
+      "schema_version": "qualibug.discovery-quality-projection.v1",
+      "formal_customer_deliverable_count": 67,
+      "executed_clue_count": 168,
+      "confirmation_receipt_count": 67,
+      "candidate_count": 168,
+      "funnel_validated_bug_count": 67,
+      "count_consistency": {
+        "formal_equals_funnel_validated": true,
+        "note": "formal_customer_deliverable_count is the only commercial defect count; confirmation_receipt_count and funnel diagnostics are internal only."
+      }
+    }
+  },
+  "auto_scale": {
+    "executable_pool_size": 592,
+    "slice_budget": 200,
+    "round_limit": 8,
+    "source": "auto_scaled_to_system_size"
+  },
+  "behavior_slice_summary": {
+    "total_slices": 592,
+    "by_kind": {
+      "dependency": 16,
+      "invariant": 275,
+      "source_observation": 3,
+      "transition": 8
+    },
+    "coverage_gap_count": 5,
+    "source_field_bound_invariant_count": 3,
+    "supplementary_slices": 92,
+    "unified_slices": 691,
+    "pool_optimization": {
+      "input": 1085,
+      "protected": 62,
+      "collapsed_permission_isolation": 481,
+      "collapsed_llm_invariant": 12,
+      "output": 592
+    }
+  },
+  "multi_round_summary": {
+    "rounds_run": 4,
+    "max_rounds": 8,
+    "accumulated_findings": 247,
+    "accumulated_evidence_graphs": 189,
+    "accumulated_execution_trace_summaries": 648
+  },
+  "input_gaps": [],
+  "external_evaluation": {
+    "schema_version": "qualibug.discovery-quality-projection.v1",
+    "measurement_status": "NOT_MEASURED",
+    "claim_status": "NOT_MEASURED",
+    "reason": "external_evaluator_receipt_required",
+    "commercial_promotion_evidence": false,
+    "formal_customer_deliverable_count": 67,
+    "quality_score": null,
+    "recall": null,
+    "precision": null,
+    "f1": null,
+    "display": {
+      "quality_label": "尚未完成外部质量评测",
+      "suppress_quality_score": true,
+      "suppress_recall_precision": true
+    },
+    "submission_file": "llm_throughput.evaluation_submission.json"
+  },
+  "score_semantics": {
+    "score_field": "internal_evidence_strength_only",
+    "commercial_quality_score": null,
+    "note": "score is not recall/precision/commercial capability while external_evaluation is NOT_MEASURED"
+  },
+  "commercial_quality_score": null
+}
+======================================================================
+[iteration19 footer] elapsed=991.1s utc=2026-07-11T06:58:06Z

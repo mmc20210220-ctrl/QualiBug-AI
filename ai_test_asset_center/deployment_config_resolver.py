@@ -10,7 +10,11 @@ from typing import Any
 
 from .policy_registry import get_policy_registry
 from .policy_wiring import get_policy_dict
-from .real_project_onboarding import ROOT, _safe_project_id, load_real_project_config
+from .project_runtime_config import load_real_project_config
+from .project_runtime_primitives import (
+    PROJECT_ROOT as ROOT,
+    safe_project_id as _safe_project_id,
+)
 
 ALLOWED_DEPLOYMENT_MODES = {"private_deployment", "public_saas", "dedicated_cloud"}
 ALLOWED_SYNC_MODES = {

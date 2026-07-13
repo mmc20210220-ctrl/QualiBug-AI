@@ -86,6 +86,32 @@ def _compile_gap(*, subject_ref: str, relation_types: set[str]) -> dict[str, Any
     }
 
 
+def _boolish_true(value: Any) -> bool:
+    return value is True or _text(value).lower() == "true"
+
+
+def _is_unresolvable_actor_secret_ref(secret_ref: str) -> bool:
+    return _text(secret_ref).lower().startswith("secret_ref:actor:")
+
+
+def _actor_role_key(actor: dict[str, Any]) -> str:
+    return _text(actor.get("role_key") or actor.get("role")).lower()
+
+
+def _actor_has_runtime_binding(actor: dict[str, Any]) -> bool:
+    role = _actor_role_key(actor)
+    if role in {"anonymous", "public"}:
+        return True
+    secret_ref = _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
+    if _is_unresolvable_actor_secret_ref(secret_ref):
+        return False
+    if _text(actor.get("account_ref")):
+        return True
+    if _boolish_true(actor.get("runtime_bound")):
+        return bool(secret_ref)
+    return bool(secret_ref)
+
+
 def _cleanup_requirement(
     operation: dict[str, Any],
     operations: list[dict[str, Any]],
@@ -117,11 +143,29 @@ def _cleanup_requirement(
 
 def _active_actors(actors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     blocked = {"disabled", "locked", "inactive", "suspended"}
-    return [
+    active = [
         actor
         for actor in actors
         if _text(actor.get("account_status")).lower() not in blocked
+        and _actor_has_runtime_binding(actor)
     ]
+    by_role: dict[str, list[dict[str, Any]]] = {}
+    for actor in active:
+        role_key = _actor_role_key(actor)
+        by_role.setdefault(role_key, []).append(actor)
+
+    selected_ids: set[int] = set()
+    for role_actors in by_role.values():
+        account_bound = [actor for actor in role_actors if _text(actor.get("account_ref"))]
+        runtime_bound = [
+            actor
+            for actor in role_actors
+            if _boolish_true(actor.get("runtime_bound"))
+        ]
+        chosen = account_bound or runtime_bound or role_actors
+        selected_ids.update(id(actor) for actor in chosen)
+
+    return [actor for actor in active if id(actor) in selected_ids]
 
 
 def _combined_source_refs(*nodes: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
@@ -139,6 +183,49 @@ def _combined_source_refs(*nodes: dict[str, Any], limit: int = 5) -> list[dict[s
             if len(out) >= limit:
                 return out
     return out
+
+
+def _actor_binding_gap(
+    *,
+    actor: dict[str, Any],
+    operation_ref: str = "",
+    relation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    actor_ref = _text(actor.get("id"))
+    relation_id = _text(_dict(relation).get("id"))
+    secret_ref = _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
+    reason = (
+        "unresolved_role_secret_ref"
+        if _is_unresolvable_actor_secret_ref(secret_ref)
+        else "missing_runtime_actor_binding"
+    )
+    material = "|".join([
+        "BLOCKED_MISSING_ACTOR_BINDING",
+        actor_ref,
+        _text(operation_ref),
+        relation_id,
+        reason,
+    ])
+    return {
+        "id": f"compile_gap_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]}",
+        "code": "BLOCKED_MISSING_ACTOR_BINDING",
+        "subject_ref": _text(operation_ref) or actor_ref,
+        "actor_ref": actor_ref,
+        "operation_ref": _text(operation_ref),
+        "relation_refs": [relation_id] if relation_id else [],
+        "reason": reason,
+        "required_binding": "runtime_actor_or_resolvable_secret_ref",
+        "description": "Actor relation is source-known but cannot be executed without a runtime account or resolvable credential reference",
+        "status": "unsupported",
+        "source_refs": _combined_source_refs(actor, _dict(relation)),
+    }
+
+
+def _append_gap_once(coverage_gaps: list[dict[str, Any]], gap: dict[str, Any]) -> None:
+    gap_id = _text(gap.get("id"))
+    if gap_id and any(_text(existing.get("id")) == gap_id for existing in coverage_gaps):
+        return
+    coverage_gaps.append(gap)
 
 
 def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[str, Any]:
@@ -171,12 +258,42 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         for actor in active_actors
         if _text(actor.get("id"))
     }
+    actors_by_id = {
+        _text(actor.get("id")): actor
+        for actor in actors
+        if _text(actor.get("id"))
+    }
+    executable_roles = {
+        _actor_role_key(actor)
+        for actor in active_actors
+        if _actor_role_key(actor)
+    }
+
+    def note_unbound_actor_relation(relation: dict[str, Any], operation_ref: str) -> None:
+        actor_ref = _relation_actor_ref(relation)
+        if not actor_ref or actor_ref in active_actors_by_id:
+            return
+        actor = actors_by_id.get(actor_ref)
+        if not actor or _actor_has_runtime_binding(actor):
+            return
+        if _actor_role_key(actor) in executable_roles:
+            return
+        _append_gap_once(
+            coverage_gaps,
+            _actor_binding_gap(
+                actor=actor,
+                operation_ref=operation_ref,
+                relation=relation,
+            ),
+        )
 
     # Authorization joins explicit permit and deny relations for one operation.
-    for op in operations[:120]:
+    for op in operations:
         operation_ref = _text(op.get("id"))
         permit_relations = _relations_for_operation(relations, operation_ref, {"permits"})
         deny_relations = _relations_for_operation(relations, operation_ref, {"denies"})
+        for relation in [*permit_relations, *deny_relations]:
+            note_unbound_actor_relation(relation, operation_ref)
         for permit_relation in permit_relations:
             allowed = active_actors_by_id.get(_relation_actor_ref(permit_relation))
             if not allowed:
@@ -323,7 +440,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             ))
 
     # Conservation / privacy / validation from invariants
-    for inv in invariants[:30]:
+    for inv in invariants:
         expr = _dict(inv.get("expression"))
         kind = _text(expr.get("kind") or "business_rule").lower()
         family = "validation"
@@ -370,6 +487,27 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
         for operation_ref, operation_relations in relations_by_operation.items():
             op = operations_by_id[operation_ref]
+            explicit_body_validation = family == "validation" and any(
+                token in kind
+                for token in (
+                    "valid",
+                    "schema",
+                    "type",
+                    "required",
+                    "format",
+                    "constraint",
+                    "校验",
+                    "验证",
+                )
+            )
+            if explicit_body_validation and _text(
+                op.get("read_write") or op.get("side_effect_class")
+            ) != "write":
+                coverage_gaps.append(_compile_gap(
+                    subject_ref=invariant_ref,
+                    relation_types=relation_types,
+                ))
+                continue
             template_by_family = {
                 "idempotency": "idempotent_effect_cardinality",
                 "concurrency": "concurrent_final_invariant",
@@ -393,6 +531,8 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             elif family == "concurrency":
                 property_spec["insufficient_signal"] = "dual_2xx_alone"
             permit_relations = _relations_for_operation(relations, operation_ref, {"permits"})
+            for relation in permit_relations:
+                note_unbound_actor_relation(relation, operation_ref)
             permitted_actor_refs = sorted({
                 _relation_actor_ref(relation)
                 for relation in permit_relations
@@ -468,27 +608,52 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
         for operation_ref, operation_relations in relations_by_operation.items():
             op = operations_by_id[operation_ref]
+            permit_relations = _relations_for_operation(relations, operation_ref, {"permits"})
+            for relation in permit_relations:
+                note_unbound_actor_relation(relation, operation_ref)
+            permitted_actor_refs = sorted({
+                _relation_actor_ref(relation)
+                for relation in permit_relations
+                if _relation_actor_ref(relation) in active_actors_by_id
+            })
+            if not permitted_actor_refs:
+                if not permit_relations:
+                    coverage_gaps.append(_compile_gap(
+                        subject_ref=operation_ref,
+                        relation_types={"permits"},
+                    ))
+                continue
+            actor_ref = permitted_actor_refs[0]
+            actor = active_actors_by_id[actor_ref]
+            actor_relations = [
+                relation
+                for relation in permit_relations
+                if _relation_actor_ref(relation) == actor_ref
+            ]
             obligations.append(make_obligation(
                 risk_family="validation",
-                subject_refs=[entity_ref, operation_ref],
+                subject_refs=[entity_ref, operation_ref, actor_ref],
                 property_spec={
                     "template": "single_dimension_mutation",
                     "entity_ref": entity_ref,
                     "operation_ref": operation_ref,
+                    "actor_ref": actor_ref,
                     "require_control_success": True,
                 },
+                required_actors=[actor_ref],
                 required_operations=[operation_ref],
                 required_observers=["http_response", "entity_state"],
                 cleanup_requirement=_cleanup_requirement(op, operations, relations, required=True),
-                source_refs=_combined_source_refs(ent, op, *operation_relations),
+                source_refs=_combined_source_refs(ent, op, actor, *operation_relations, *actor_relations),
                 relation_refs=sorted({
                     _text(relation.get("id"))
-                    for relation in operation_relations
+                    for relation in [*operation_relations, *actor_relations]
                     if _text(relation.get("id"))
                 }),
                 confidence=min(
                     float(ent.get("confidence") or 0.6),
                     float(op.get("confidence") or 0.7),
+                    float(actor.get("confidence") or 0.7),
                 ),
             ))
 

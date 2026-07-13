@@ -29,7 +29,8 @@ connector export
 
 ```bash
 cp deploy/private.env.example deploy/private.env
-# Edit QUALIBUG_PRIVATE_ROOT for the enterprise workspace path.
+# Set QUALIBUG_JWT_SECRET to a unique high-entropy value and edit
+# QUALIBUG_PRIVATE_ROOT for the enterprise workspace path.
 python -m ai_test_asset_center.private_pilot_service
 ```
 
@@ -43,6 +44,8 @@ http://127.0.0.1:8088/
 
 ```bash
 cp deploy/private.env.example deploy/private.env
+# Replace the QUALIBUG_JWT_SECRET placeholder before startup. Compose fails
+# closed when it is missing.
 docker compose --env-file deploy/private.env -f deploy/docker-compose.private.yml up --build
 ```
 

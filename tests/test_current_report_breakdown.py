@@ -40,9 +40,16 @@ def test_build_command_center_exposes_current_report_breakdown(monkeypatch, tmp_
     data = payload["data"]
     breakdown = data["scan_meta"]["current_report_breakdown"]
 
-    assert breakdown["total_findings"] == 3
-    assert breakdown["category_counts"] == {"state_machine": 2, "concurrency": 1}
+    assert breakdown["total_findings"] == 0
+    assert breakdown["category_counts"] == {}
     assert breakdown["report_source_path"].startswith("aggregated:")
+    assert data["canonical_scope"]["status"] == "BLOCKED"
+    assert data["legacy_product_path_diagnostics"][
+        "legacy_rows_loaded_for_diagnostics"
+    ] == 3
+    assert data["legacy_product_path_diagnostics"][
+        "affects_current_counts_or_readiness"
+    ] is False
     assert data["value_metrics"]["current_report_breakdown"] == breakdown
     assert data["executive_summary"]["current_report_breakdown"] == breakdown
     assert data["data_contract"]["current_report_breakdown"] == breakdown

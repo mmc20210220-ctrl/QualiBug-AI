@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .canonical_defect_registry import CANONICAL_DEFECT_REGISTRY_SCHEMA
+
 
 _SENSITIVE_KEYS = {
     "authorization", "cookie", "set-cookie", "password", "passwd", "secret",
@@ -133,6 +135,9 @@ def persist_evidence_bundle(
     auto_har: dict[str, Any] | None,
     evidence_graphs: list[dict[str, Any]] | None,
     findings: list[dict[str, Any]] | None,
+    candidate_findings: list[dict[str, Any]] | None = None,
+    canonical_defect_registry: dict[str, Any] | None = None,
+    delivery_occurrences: list[dict[str, Any]] | None = None,
     ui_execution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a redacted evidence bundle and return its integrity manifest."""
@@ -140,6 +145,54 @@ def persist_evidence_bundle(
     campaign_record = campaign if isinstance(campaign, dict) else {}
     contract = runtime_contract if isinstance(runtime_contract, dict) else {}
     status = str(execution_status or "not_executed")
+    canonical_findings = findings if isinstance(findings, list) else []
+    candidates = candidate_findings if isinstance(candidate_findings, list) else []
+    occurrences = delivery_occurrences if isinstance(delivery_occurrences, list) else []
+    registry = (
+        canonical_defect_registry
+        if isinstance(canonical_defect_registry, dict)
+        else {}
+    )
+    identity_authority_status = "UNVERIFIED_LEGACY"
+    canonical_ids: list[str] = []
+    occurrence_ids: list[str] = []
+    if registry:
+        if (
+            registry.get("schema_version")
+            != CANONICAL_DEFECT_REGISTRY_SCHEMA
+            or registry.get("status") != "VERIFIED"
+        ):
+            raise EvidenceArtifactError("canonical_defect_registry_invalid")
+        canonical_ids = [
+            str(value or "").strip()
+            for value in registry.get("canonical_defect_ids", [])
+        ] if isinstance(registry.get("canonical_defect_ids"), list) else []
+        occurrence_ids = [
+            str(value or "").strip()
+            for value in registry.get("delivery_occurrence_finding_ids", [])
+        ] if isinstance(registry.get("delivery_occurrence_finding_ids"), list) else []
+        finding_ids = [
+            str(item.get("canonical_defect_id") or "").strip()
+            for item in canonical_findings
+            if isinstance(item, dict)
+        ]
+        persisted_occurrence_ids = sorted(
+            str(item.get("finding_id") or item.get("id") or "").strip()
+            for item in occurrences
+            if isinstance(item, dict)
+        )
+        if (
+            not all(canonical_ids)
+            or len(canonical_ids) != len(set(canonical_ids))
+            or finding_ids != canonical_ids
+            or persisted_occurrence_ids != occurrence_ids
+            or int(registry.get("canonical_defect_count") or 0)
+            != len(canonical_ids)
+            or int(registry.get("delivery_occurrence_count") or 0)
+            != len(occurrence_ids)
+        ):
+            raise EvidenceArtifactError("canonical_evidence_scope_mismatch")
+        identity_authority_status = "VERIFIED"
     fingerprint = _hash_json({
         "project": project,
         "run": str(run_id or ""),
@@ -148,7 +201,10 @@ def persist_evidence_bundle(
         "status": status,
         "har": auto_har or {},
         "graphs": evidence_graphs or [],
-        "findings": findings or [],
+        "canonical_findings": canonical_findings,
+        "candidate_findings": candidates,
+        "canonical_defect_registry": registry,
+        "delivery_occurrences": occurrences,
         "ui_execution": ui_execution or {},
     })
     bundle_id = f"evb_{fingerprint[:24]}"
@@ -160,17 +216,30 @@ def persist_evidence_bundle(
     artifacts.append(_write_artifact(directory, "campaign", campaign_record))
     artifacts.append(_write_artifact(directory, "auto_har", auto_har if isinstance(auto_har, dict) else {"status": "no_traffic"}))
     artifacts.append(_write_artifact(directory, "evidence_graphs", evidence_graphs if isinstance(evidence_graphs, list) else []))
-    artifacts.append(_write_artifact(directory, "findings", findings if isinstance(findings, list) else []))
+    artifacts.append(_write_artifact(directory, "findings", canonical_findings))
+    artifacts.append(_write_artifact(directory, "candidate_findings", candidates))
+    if registry:
+        artifacts.append(
+            _write_artifact(directory, "canonical_defect_registry", registry)
+        )
+        artifacts.append(
+            _write_artifact(directory, "delivery_occurrences", occurrences)
+        )
     artifacts.append(_write_artifact(directory, "ui_execution", ui_execution if isinstance(ui_execution, dict) else {"status": "not_requested"}))
 
-    runtime_captured = _has_runtime_evidence(findings, auto_har)
+    runtime_captured = _has_runtime_evidence(
+        [*canonical_findings, *occurrences], auto_har
+    )
     bundle = {
-        "schema_version": "qualibug-evidence-bundle-v1",
+        "schema_version": "qualibug-evidence-bundle-v2",
         "bundle_id": bundle_id,
         "project_id": project,
         "run_id": str(run_id or "")[:160],
         "campaign_id": str(campaign_record.get("campaign_id") or "")[:160],
         "execution_status": status,
+        "identity_authority_status": identity_authority_status,
+        "canonical_defect_count": len(canonical_ids),
+        "delivery_occurrence_count": len(occurrence_ids),
         "evidence_level": "runtime_captured" if runtime_captured else "plan_or_no_traffic",
         "source_manifest": _redact(contract.get("source_manifest") if isinstance(contract.get("source_manifest"), dict) else {}),
         "created_at_utc": _now(),

@@ -22,6 +22,7 @@ from .bug_engine_reporter import build_customer_bug_report
 from .bug_engine_gap_analyzer import build_evidence_gap_report
 from .bug_engine_deep_probe_planner import build_deep_probe_plan_files
 from .loop_runtime import LoopRuntimeSession
+from .target_endpoint import resolve_target_base_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,7 +123,7 @@ def _fetch_openapi_spec(base_url: str | None = None, timeout: float = 5.0) -> di
 
     Failure is safe: the planner can still use runtime evidence.
     """
-    base = (base_url or os.environ.get("QUALIBUG_TARGET_BASE_URL") or "http://127.0.0.1:8088").rstrip("/")
+    base = resolve_target_base_url(base_url)
     if base.endswith("/api"):
         base = base[:-4]
     url = base + "/openapi.json"
@@ -315,7 +316,12 @@ def run_bug_engine_auto(
 
     target = ensure_local_buglab() if bootstrap_target else {"started": False, "status": "skipped"}
     stale = reconcile_stale_runtime(project_id, output_dir) if reset_stale_runtime else {"action": "skipped"}
-    base_url_for_reports = os.environ.get("QUALIBUG_TARGET_BASE_URL", "http://127.0.0.1:8088")
+    bootstrapped_base_url = ""
+    if bootstrap_target:
+        health_url = str(target.get("health_url") or "")
+        if health_url.endswith("/api/health"):
+            bootstrapped_base_url = health_url[: -len("/api/health")]
+    base_url_for_reports = resolve_target_base_url(bootstrapped_base_url or None)
     openapi_spec = _fetch_openapi_spec(base_url_for_reports)
 
     summary: dict[str, Any] = {

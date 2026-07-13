@@ -8,6 +8,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV QUALIBUG_PRODUCTION=1
 ENV QUALIBUG_PORT=8088
+ENV QUALIBUG_BIND_HOST=0.0.0.0
+ENV QUALIBUG_ALLOW_PUBLIC_BIND=1
 ENV QUALIBUG_FRONTEND_DIST=/app/frontend_dist
 
 # Set working directory
@@ -18,16 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Copy the product distribution before installing it.  The image deliberately
+# excludes evaluator/private packages through .dockerignore and pyproject.toml.
+COPY pyproject.toml README.md ./
 COPY ai_test_asset_center/ ./ai_test_asset_center/
 COPY aitestops/ ./aitestops/
-COPY mes_target/ ./mes_target/
-COPY pyproject.toml .
-COPY README.md .
+RUN pip install --no-cache-dir .
+
 # Copy prebuilt customer pilot SPA so the backend serves UI + API on one port
 COPY frontend/dist ./frontend_dist/
 
@@ -38,7 +37,8 @@ RUN mkdir -p /app/platform_outputs /app/platform_workspace /app/logs
 COPY .env.local.example .env.local.example
 
 # Create non-root user for security
-RUN useradd --create-home --shell /bin/bash qualibug
+RUN useradd --create-home --shell /bin/bash qualibug \
+    && chown -R qualibug:qualibug /app/platform_outputs /app/platform_workspace /app/logs
 USER qualibug
 
 # Health check: canonical API health path. /health remains a legacy alias.

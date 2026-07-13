@@ -6,6 +6,7 @@ import ai_test_asset_center.discovery_engine as discovery_engine
 
 
 def _isolate_initialization(monkeypatch) -> None:
+    monkeypatch.setenv("QUALIBUG_TARGET_BASE_URL", "https://target.example.test")
     client = SimpleNamespace(
         config=SimpleNamespace(model="", max_tokens=1, timeout_seconds=1),
     )
@@ -29,7 +30,7 @@ def test_engine_initializes_project_root_and_required_guardrails(tmp_path, monke
 
     engine = discovery_engine.AutonomousDiscoveryEngine(project_id="customer-project", root=tmp_path)
 
-    assert engine.base == "http://127.0.0.1:8088"
+    assert engine.base == "https://target.example.test"
     assert engine._project == "customer-project"
     assert engine._root == tmp_path.resolve()
     assert engine.client.config.timeout_seconds >= 300

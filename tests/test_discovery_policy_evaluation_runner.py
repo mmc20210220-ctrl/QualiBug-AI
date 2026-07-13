@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from ai_test_asset_center.discovery_evaluation_contract import MANIFEST_SCHEMA, load_evaluation_manifest
+from ai_test_asset_center.discovery_evaluation_contract import (
+    EvaluationContractError,
+    MANIFEST_SCHEMA,
+    load_evaluation_manifest,
+    validate_authenticated_policy_comparison,
+)
 from ai_test_asset_center.discovery_policy_evaluation_runner import (
     COMPARISON_SCHEMA,
     FIXTURE_CLEANUP_SCHEMA,
@@ -19,7 +24,31 @@ from ai_test_asset_center.discovery_policy_evaluation_runner import (
 )
 from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
 from ai_test_asset_center.autonomous_evolution_orchestrator import EvolutionOrchestrator
+from ai_test_asset_center.evaluator_receipt_auth import (
+    EVALUATOR_HMAC_KEY_ENV,
+    EVALUATOR_HMAC_KEYRING_ENV,
+    seal_evaluator_artifact,
+    verify_evaluator_artifact,
+)
+from ai_test_asset_center.evaluator_execution_attestation import (
+    PROCESS_BOUNDARY_SCHEMA,
+)
 from ai_test_asset_center.policy_registry import PolicyRecord, PolicyRegistry, StrategyBundle
+from tests.phase3_gate_support import (
+    build_formal_evaluation_scope,
+    build_formal_scope_contract,
+)
+
+
+TEST_EVALUATOR_HMAC_KEY = "policy-runner-test-key-0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _evaluator_hmac_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "QUALIBUG_EVALUATOR_RECEIPT_HMAC_KEY",
+        TEST_EVALUATOR_HMAC_KEY,
+    )
 
 
 def _write(path: Path, payload: Any) -> None:
@@ -230,7 +259,7 @@ class RecordingScanExecutor:
         seeded = target_id != "clean"
         champion_finds = policy_id == self.champion_policy_id and target_id == "held-in"
         challenger_finds = policy_id == self.challenger_policy_id
-        findings = [_finding(target_id)] if seeded and (challenger_finds or champion_finds) else []
+        raw_findings = [_finding(target_id)] if seeded and (challenger_finds or champion_finds) else []
         run_id = f"run-{len(self.calls)}-{mode}-{policy_id}-{target_id}"
         mainline_run = build_mainline_run_contract(
             mainline_authority=self.returned_authority_override or authority,
@@ -240,6 +269,23 @@ class RecordingScanExecutor:
             environment_id=kwargs["runtime_view"]["target"]["runtime"]["environment_ref"],
             policy_version=kwargs["policy_version"],
             evaluation_mode=mode,
+        )
+        findings, attempt_ledger = build_formal_evaluation_scope(
+            raw_findings,
+            run_id=run_id,
+            campaign_id=kwargs["campaign_id"],
+            target_id=target_id,
+            environment_id=kwargs["runtime_view"]["target"]["runtime"][
+                "environment_ref"
+            ],
+            policy_version=kwargs["policy_version"],
+            evaluation_mode=mode,
+            mainline_authority=self.returned_authority_override or authority,
+        )
+        formal_scope = build_formal_scope_contract(
+            mainline_run=mainline_run,
+            findings=findings,
+            obligation_attempt_ledger=attempt_ledger,
         )
         return {
             "schema_version": SCAN_RESULT_SCHEMA,
@@ -261,8 +307,14 @@ class RecordingScanExecutor:
                 "fixture_fingerprint",
                 "context_fingerprint",
             )},
-            "findings": findings,
+            "findings": list(
+                formal_scope["formal_count_projection"][
+                    "canonical_representative_findings"
+                ]
+            ),
             "candidates": [],
+            "obligation_attempt_ledger": attempt_ledger,
+            **formal_scope,
             "pipeline_health": {"status": "OK"},
             "operational_metrics": {
                 "wall_clock_seconds": 1,
@@ -276,7 +328,53 @@ class RecordingScanExecutor:
                 "engine_success_rate": 1,
                 "duplicate_rate": 0,
             },
+            "process_boundary": {
+                "schema_version": PROCESS_BOUNDARY_SCHEMA,
+                "isolation": "isolated_subprocess",
+                "worker_protocol_schema": (
+                    "qualibug.observed-product-scan-worker-request.v1"
+                ),
+                "evaluator_secrets_removed": True,
+                "request_fingerprint": "a" * 64,
+                "result_fingerprint": "b" * 64,
+                "exit_code": 0,
+            },
         }
+
+
+def _trusted_observations(**kwargs: Any) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for attempt in kwargs["scan_output"]["obligation_attempt_ledger"][
+        "attempts"
+    ]:
+        operational = attempt.get("operational_receipt") or {}
+        request_count = int(
+            operational.get("http_request_attempt_count") or 0
+        )
+        if request_count == 0:
+            continue
+        observations.append({
+            "obligation_id": attempt["obligation_id"],
+            "execution_id": attempt["execution_id"],
+            "source_kind": "evaluator_http_proxy",
+            "source_receipt_id": (
+                f"proxy:{kwargs['campaign_id']}:{attempt['obligation_id']}"
+            ),
+            "source_fingerprint": hashlib.sha256(
+                f"{kwargs['campaign_id']}:{attempt['obligation_id']}".encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
+            "target_request_count": request_count,
+            "write_count": int(
+                operational.get("accepted_write_count") or 0
+            ),
+            "production_request_count": int(
+                operational.get("production_http_request_count") or 0
+            ),
+            "audit_receipt_ids": [],
+        })
+    return observations
 
 
 def _runner(
@@ -300,8 +398,50 @@ def _runner(
         output_root=tmp_path / "evaluations",
         fixture_controller=controller,
         scan_executor=executor,
+        trusted_observation_provider=_trusted_observations,
     )
     return runner, controller, executor, champion, challenger
+
+
+def test_runner_preserves_retired_key_verification_after_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    old_key = "old-policy-runner-key-0123456789abcdef"
+    new_key = "new-policy-runner-key-0123456789abcdef"
+    old_key_id = hashlib.sha256(old_key.encode("utf-8")).hexdigest()[:24]
+    new_key_id = hashlib.sha256(new_key.encode("utf-8")).hexdigest()[:24]
+    monkeypatch.delenv(EVALUATOR_HMAC_KEY_ENV, raising=False)
+    monkeypatch.setenv(
+        EVALUATOR_HMAC_KEYRING_ENV,
+        json.dumps({
+            "active_key_id": new_key_id,
+            "keys": {
+                old_key_id: old_key,
+                new_key_id: new_key,
+            },
+        }),
+    )
+    runner, *_ = _runner(tmp_path)
+    domain = "qualibug.runner-keyring-test.v1"
+    retired = seal_evaluator_artifact(
+        {"schema_version": domain, "value": 1},
+        signing_key=old_key,
+        domain=domain,
+        fingerprint_field="artifact_fingerprint",
+        authentication_field="artifact_authentication",
+    )
+
+    verified = verify_evaluator_artifact(
+        retired,
+        signing_key=runner.receipt_signing_key,
+        domain=domain,
+        fingerprint_field="artifact_fingerprint",
+        authentication_field="artifact_authentication",
+    )
+
+    assert runner.receipt_signing_key is None
+    assert verified == retired
 
 
 def test_runner_executes_every_target_four_times_and_never_activates_candidate(tmp_path: Path) -> None:
@@ -320,6 +460,137 @@ def test_runner_executes_every_target_four_times_and_never_activates_candidate(t
     assert result["promotion_decision"]["promote"] is True
     assert challenger.status == "candidate"
     assert Path(result["comparison_ref"]).is_file()
+    for report_name, report_ref in result["report_refs"].items():
+        report = json.loads(Path(report_ref).read_text(encoding="utf-8"))
+        expected_policy = (
+            champion if report_name.startswith("champion_") else challenger
+        )
+        assert report["policy_identity"] == {
+            "policy_id": expected_policy.policy_id,
+            "policy_version": expected_policy.policy_version,
+            "strategy_fingerprint": strategy_fingerprint(
+                expected_policy.strategy
+            ),
+            "target_mainline_contract_fingerprints": report[
+                "policy_identity"
+            ]["target_mainline_contract_fingerprints"],
+        }
+
+
+def _reseal_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
+    return seal_evaluator_artifact(
+        comparison,
+        signing_key=TEST_EVALUATOR_HMAC_KEY,
+        domain=COMPARISON_SCHEMA,
+        fingerprint_field="comparison_fingerprint",
+        authentication_field="comparison_authentication",
+    )
+
+
+def test_strict_comparison_validator_requires_all_four_target_reports(
+    tmp_path: Path,
+) -> None:
+    runner, _, _, champion, challenger = _runner(tmp_path)
+    result = runner.run(
+        champion=champion,
+        challenger=challenger,
+        evaluation_id="strict-four-reports",
+    )
+    persisted = json.loads(
+        Path(result["comparison_ref"]).read_text(encoding="utf-8")
+    )
+    del persisted["report_refs"]["challenger_shadow"]
+    del persisted["report_fingerprints"]["challenger_shadow"]
+    forged = _reseal_comparison(persisted)
+
+    with pytest.raises(EvaluationContractError, match="four authenticated reports"):
+        validate_authenticated_policy_comparison(
+            forged,
+            receipt_signing_key=TEST_EVALUATOR_HMAC_KEY,
+        )
+
+
+def test_strict_comparison_validator_recomputes_metrics_and_gate_decision(
+    tmp_path: Path,
+) -> None:
+    runner, _, _, champion, challenger = _runner(tmp_path)
+    result = runner.run(
+        champion=champion,
+        challenger=challenger,
+        evaluation_id="strict-recompute",
+    )
+    persisted = json.loads(
+        Path(result["comparison_ref"]).read_text(encoding="utf-8")
+    )
+    persisted["challenger_metrics"]["true_positives"] += 100
+    persisted["promotion_decision"]["reason"] = "FORGED_BUT_RESEALED"
+    forged = _reseal_comparison(persisted)
+
+    with pytest.raises(EvaluationContractError, match="rebuild mismatch"):
+        validate_authenticated_policy_comparison(
+            forged,
+            receipt_signing_key=TEST_EVALUATOR_HMAC_KEY,
+        )
+
+
+def test_strict_comparison_validator_binds_policy_version_to_reports(
+    tmp_path: Path,
+) -> None:
+    runner, _, _, champion, challenger = _runner(tmp_path)
+    result = runner.run(
+        champion=champion,
+        challenger=challenger,
+        evaluation_id="strict-policy-version",
+    )
+    persisted = json.loads(
+        Path(result["comparison_ref"]).read_text(encoding="utf-8")
+    )
+    persisted["challenger"]["policy_version"] = "forged-version"
+    forged = _reseal_comparison(persisted)
+
+    with pytest.raises(EvaluationContractError, match="policy version mismatch"):
+        validate_authenticated_policy_comparison(
+            forged,
+            receipt_signing_key=TEST_EVALUATOR_HMAC_KEY,
+        )
+
+
+def test_strict_comparison_validator_accepts_retained_historical_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, _, _, champion, challenger = _runner(tmp_path)
+    result = runner.run(
+        champion=champion,
+        challenger=challenger,
+        evaluation_id="strict-key-rotation",
+    )
+    persisted = json.loads(
+        Path(result["comparison_ref"]).read_text(encoding="utf-8")
+    )
+    next_key = "policy-runner-next-key-0123456789abcdef"
+    old_key_id = hashlib.sha256(
+        TEST_EVALUATOR_HMAC_KEY.encode("utf-8")
+    ).hexdigest()[:24]
+    next_key_id = hashlib.sha256(next_key.encode("utf-8")).hexdigest()[:24]
+    monkeypatch.setenv(
+        "QUALIBUG_EVALUATOR_RECEIPT_HMAC_KEYRING",
+        json.dumps(
+            {
+                "active_key_id": next_key_id,
+                "keys": {
+                    old_key_id: TEST_EVALUATOR_HMAC_KEY,
+                    next_key_id: next_key,
+                },
+            }
+        ),
+    )
+
+    validated = validate_authenticated_policy_comparison(persisted)
+
+    assert validated["comparison_fingerprint"] == persisted[
+        "comparison_fingerprint"
+    ]
 
 
 def test_runner_binds_each_policy_mainline_authority_before_scan(tmp_path: Path) -> None:
@@ -374,6 +645,29 @@ def test_runner_rejects_shadow_execution_that_publishes_customer_output(tmp_path
     assert len(list((tmp_path / "evaluations" / "shadow-publish" / "failures").glob("*.json"))) == 1
 
 
+def test_failure_artifact_redacts_diagnostics_before_persistence(
+    tmp_path: Path,
+) -> None:
+    runner, _, _, champion, challenger = _runner(tmp_path)
+    secret = "sk-1234567890abcdefghijkl"
+
+    path = runner._persist_failure(
+        evaluation_id="redacted-failure",
+        champion=champion,
+        challenger=challenger,
+        error=RuntimeError(
+            f"Authorization: Bearer {secret}; password=do-not-persist"
+        ),
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    assert secret not in raw
+    assert "do-not-persist" not in raw
+    assert "REDACTED" in payload["error"]
+    assert len(payload["diagnostic_fingerprint"]) == 64
+
+
 def test_orchestrator_activates_only_the_runner_authenticated_candidate(tmp_path: Path) -> None:
     manifest_path = _manifest(tmp_path)
     registry_path = tmp_path / "policy-registry.json"
@@ -406,6 +700,7 @@ def test_orchestrator_activates_only_the_runner_authenticated_candidate(tmp_path
         output_root=str(tmp_path / "evaluations"),
         fixture_controller=controller,
         scan_executor=executor,
+        trusted_observation_provider=_trusted_observations,
         evaluation_id="orchestrated-observed",
     )
 

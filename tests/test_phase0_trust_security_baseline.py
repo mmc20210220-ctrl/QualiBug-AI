@@ -77,8 +77,13 @@ def _attempt_health_result(
     return {
         "obligation_attempt_ledger": ledger,
         "formal_count_projection": {
+            "schema_version": "qualibug.discovery-quality-projection.v2",
+            "authority_status": "VERIFIED",
             "formal_customer_deliverable_count": 0,
-            "formal_finding_ids": [],
+            "canonical_defect_count": 0,
+            "canonical_defect_ids": [],
+            "delivery_occurrence_count": 0,
+            "delivery_occurrence_finding_ids": [],
         },
     }
 
@@ -225,6 +230,25 @@ def test_not_measured_projection_suppresses_quality_score() -> None:
     assert projection["precision"] is None
     assert projection["display"]["suppress_quality_score"] is True
     assert "尚未完成外部质量评测" in projection["display"]["quality_label"]
+
+
+def test_product_projection_refuses_measured_claim_without_public_gateway() -> None:
+    with pytest.raises(ValueError, match="product_external_measurement_gateway_required"):
+        build_external_evaluation_projection(
+            measurement_status="MEASURED",
+            claim_status="MEASURED",
+            formal_customer_deliverable_count=100,
+            evaluator_report={
+                "claim_status": "MEASURED",
+                "commercial_promotion_evidence": True,
+                "metrics": {
+                    "quality_score": 100,
+                    "recall": 1.0,
+                    "precision": 1.0,
+                    "f1": 1.0,
+                },
+            },
+        )
 
 
 def test_formal_count_projection_uses_delivery_gate_only() -> None:

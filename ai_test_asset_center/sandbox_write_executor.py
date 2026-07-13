@@ -24,7 +24,11 @@ from typing import Any, Callable
 
 from .enterprise_project_config import match_production_data_exclusion
 from .real_id_resolver import collection_path as documented_collection_path
-from .real_id_resolver import normalize_path_placeholders, path_has_placeholders
+from .real_id_resolver import (
+    normalize_path_placeholders,
+    param_field_candidates,
+    path_has_placeholders,
+)
 from .target_policy import (
     build_target_policy_decision,
     is_nonproduction_environment as _policy_is_nonproduction_environment,
@@ -1145,6 +1149,30 @@ def _documented_compensate_cleanup_operation(
     return "", ""
 
 
+def _write_cleanup_preflight_reason(
+    method: str,
+    path: str,
+    documented_routes: list[dict[str, Any]] | None,
+) -> str:
+    """Block creates whose compensation is absent from source documentation.
+
+    A successful collection POST cannot be made safe after the server omits an
+    identity or the API omits a delete/compensating action.  Prove the cleanup
+    shape before transport; the concrete response identity is bound only after
+    the write succeeds.
+    """
+    if _text(method).upper() != "POST":
+        return ""
+    cleanup_method, cleanup_path = _documented_compensate_cleanup_operation(
+        path,
+        "__qualibug_pending_resource_id__",
+        documented_routes,
+    )
+    if cleanup_method and cleanup_path:
+        return ""
+    return "write_cleanup_operation_not_declared"
+
+
 def _is_action_style_write_path(path: str) -> bool:
     """True when the write targets an existing resource action, not a create.
 
@@ -1174,6 +1202,191 @@ def _is_action_style_write_path(path: str) -> bool:
     return False
 
 
+_COLLECTION_ENVELOPE_FIELDS = ("records", "data", "items", "results", "list", "rows")
+
+
+def _field_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _text(value).lower())
+
+
+def _documented_path_bindings(
+    method: str,
+    path: str,
+    documented_routes: list[dict[str, Any]] | None,
+) -> list[tuple[str, str, str]]:
+    """Bind concrete path segments only through an exact documented route.
+
+    The third tuple value is the collection token immediately before the
+    placeholder.  It permits structural aliases such as ``itemId`` for
+    ``/items/{id}`` without encoding any product or benchmark vocabulary.
+    Ambiguous route matches fail closed.
+    """
+    concrete_path = normalize_path_placeholders(_text(path)).split("?", 1)[0]
+    concrete_segments = [segment for segment in concrete_path.strip("/").split("/") if segment]
+    if not concrete_segments or path_has_placeholders(concrete_path):
+        return []
+
+    matches: list[tuple[tuple[str, str, str], ...]] = []
+    for route in documented_routes or []:
+        if not isinstance(route, dict) or _text(route.get("method")).upper() != method:
+            continue
+        route_path = normalize_path_placeholders(_text(route.get("path"))).split("?", 1)[0]
+        route_segments = [segment for segment in route_path.strip("/").split("/") if segment]
+        if len(route_segments) != len(concrete_segments):
+            continue
+        bindings: list[tuple[str, str, str]] = []
+        matched = True
+        for index, (template_segment, concrete_segment) in enumerate(
+            zip(route_segments, concrete_segments)
+        ):
+            placeholder = re.fullmatch(r"\{([A-Za-z_]\w*)\}", template_segment)
+            if placeholder:
+                collection_token = route_segments[index - 1] if index else ""
+                bindings.append((placeholder.group(1), concrete_segment, collection_token))
+            elif template_segment != concrete_segment:
+                matched = False
+                break
+        if matched and bindings:
+            matches.append(tuple(bindings))
+
+    unique = list(dict.fromkeys(matches))
+    return list(unique[0]) if len(unique) == 1 else []
+
+
+def _collection_entities(value: Any) -> list[dict[str, Any]] | None:
+    """Return entities from common source response envelopes, if present."""
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if not isinstance(value, dict):
+        return None
+    for field in _COLLECTION_ENVELOPE_FIELDS:
+        if field not in value:
+            continue
+        nested = value.get(field)
+        if isinstance(nested, list):
+            return [item for item in nested if isinstance(item, dict)]
+        if isinstance(nested, dict):
+            entities = _collection_entities(nested)
+            if entities is not None:
+                return entities
+    return None
+
+
+def _singular_resource_token(value: str) -> str:
+    token = _field_key(value)
+    if token.endswith("ies") and len(token) > 3:
+        return token[:-3] + "y"
+    if token.endswith("ses") and len(token) > 3:
+        return token[:-2]
+    if token.endswith("s") and len(token) > 1:
+        return token[:-1]
+    return token
+
+
+def _entity_for_documented_path(
+    *,
+    method: str,
+    path: str,
+    before_body: Any,
+    documented_routes: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any], str]:
+    entities = _collection_entities(before_body)
+    if entities is None:
+        return (dict(before_body), "direct_object") if isinstance(before_body, dict) else ({}, "")
+    bindings = _documented_path_bindings(method, path, documented_routes)
+    if not bindings:
+        return {}, ""
+
+    for param_name, concrete_value, collection_token in reversed(bindings):
+        aliases = {_field_key(alias) for alias in param_field_candidates(param_name)}
+        resource_token = _singular_resource_token(collection_token)
+        if resource_token:
+            aliases.add(resource_token + "id")
+        matches: list[dict[str, Any]] = []
+        for entity in entities:
+            matched = any(
+                _field_key(field) in aliases and _text(value) == concrete_value
+                for field, value in entity.items()
+                if not isinstance(value, (dict, list))
+            )
+            if matched:
+                matches.append(entity)
+        if len(matches) == 1:
+            return dict(matches[0]), f"documented_path_param:{param_name}"
+    return {}, ""
+
+
+def _response_entity(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    for field in ("data", "result", "item", "resource"):
+        nested = value.get(field)
+        if isinstance(nested, dict):
+            return dict(nested)
+    return dict(value)
+
+
+def _restore_payload(
+    *,
+    method: str,
+    path: str,
+    before_body: Any,
+    request_body: Any,
+    write_body: Any,
+    documented_routes: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any], str]:
+    before_entity, identity_source = _entity_for_documented_path(
+        method=method,
+        path=path,
+        before_body=before_body,
+        documented_routes=documented_routes,
+    )
+    if not before_entity:
+        return {}, "before_entity_not_proven"
+
+    request = request_body if isinstance(request_body, dict) else {}
+    response = _response_entity(write_body)
+    direct_fields = {
+        field: before_entity[field]
+        for field in request
+        if field in before_entity and not isinstance(before_entity[field], (dict, list))
+    }
+    if direct_fields:
+        return direct_fields, f"{identity_source}:request_fields"
+
+    # Command-style PATCH endpoints commonly expose the mutated property as
+    # the documented terminal path segment while accepting an operation body
+    # such as ``delta``.  Restore that property only when both snapshots prove
+    # its value changed.
+    terminal_key = _field_key(normalize_path_placeholders(path).split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1])
+    terminal_matches = [
+        field
+        for field in before_entity
+        if _field_key(field) == terminal_key
+        and field in response
+        and not isinstance(before_entity[field], (dict, list))
+        and before_entity[field] != response[field]
+    ]
+    if len(terminal_matches) == 1:
+        field = terminal_matches[0]
+        return {field: before_entity[field]}, f"{identity_source}:terminal_field"
+
+    # A single changed response field is still unambiguous observed evidence.
+    # Multiple changes are not guessed because server-managed fields may be
+    # non-writable.
+    changed_fields = [
+        field
+        for field, value in before_entity.items()
+        if field in response
+        and not isinstance(value, (dict, list))
+        and value != response[field]
+    ]
+    if len(changed_fields) == 1:
+        field = changed_fields[0]
+        return {field: before_entity[field]}, f"{identity_source}:single_observed_diff"
+    return {}, "restore_fields_not_proven"
+
+
 def _cleanup_after_write(
     *,
     method: str,
@@ -1181,6 +1394,7 @@ def _cleanup_after_write(
     base_url: str,
     token: str,
     before_body: Any,
+    request_body: Any = None,
     write_body: Any,
     documented_routes: list[dict[str, Any]] | None = None,
     retry_count: int = 0,
@@ -1247,14 +1461,23 @@ def _cleanup_after_write(
             result["error"] = f"cleanup_{cleanup_method.lower()}_http_{status}"
         return result
     if method in {"PUT", "PATCH"}:
-        if not isinstance(before_body, dict) or not before_body:
+        restore_body, projection = _restore_payload(
+            method=method,
+            path=path,
+            before_body=before_body,
+            request_body=request_body,
+            write_body=write_body,
+            documented_routes=documented_routes,
+        )
+        if not restore_body:
             return {
                 "status": "failed",
                 "strategy": "restore_before_snapshot",
                 "receipt_ref": path,
                 "error": "before_snapshot_not_restorable",
+                "restore_projection": projection,
             }
-        receipt, attempts = _cleanup_request(method, base + path, body=before_body)
+        receipt, attempts = _cleanup_request(method, base + path, body=restore_body)
         status = int(receipt.get("status") or 0)
         ok = 200 <= status < 300
         result = {
@@ -1263,6 +1486,7 @@ def _cleanup_after_write(
             "receipt_ref": path,
             "receipt": {"status": status},
             "attempts": attempts,
+            "restore_projection": projection,
         }
         if not ok:
             result["error"] = f"cleanup_restore_http_{status}"
@@ -1299,6 +1523,13 @@ def _execute_with_per_write_governance(
             path = _text(payload.get("path"))
             if method not in _WRITE_METHODS or not path.startswith("/"):
                 raise RuntimeError(f"invalid_governed_write_event:{method}:{path}")
+            cleanup_block = _write_cleanup_preflight_reason(
+                method,
+                path,
+                documented_routes,
+            )
+            if cleanup_block:
+                raise RuntimeError(cleanup_block)
             identity_block = _protected_runtime_identity_write_block_reason(
                 root=root,
                 project=project,
@@ -1401,10 +1632,16 @@ def _execute_with_per_write_governance(
                 "receipt_ref": event["path"],
                 "error": "write_after_hook_missing",
             }
-        elif not 200 <= status < 300 and observer_proves_unchanged:
+        elif observer_proves_unchanged and (
+            not 200 <= status < 300 or event["method"] in {"PUT", "PATCH"}
+        ):
             cleanup = {
                 "status": "not_required",
-                "strategy": "rejected_write_observer_unchanged",
+                "strategy": (
+                    "accepted_write_observer_unchanged"
+                    if 200 <= status < 300
+                    else "rejected_write_observer_unchanged"
+                ),
                 "receipt_ref": event["path"],
             }
         else:
@@ -1414,6 +1651,7 @@ def _execute_with_per_write_governance(
                 base_url=base_url,
                 token=_text(event.get("token")),
                 before_body=_as_dict(event.get("before")).get("body"),
+                request_body=event.get("request_body"),
                 write_body=event.get("response_body"),
                 documented_routes=documented_routes,
                 retry_count=retry_count,
@@ -1432,6 +1670,7 @@ def _execute_with_per_write_governance(
             "cleanup_strategy": cleanup.get("strategy") or "",
             "cleanup_warning": cleanup.get("warning") or "",
             "cleanup_error": cleanup.get("error") or "",
+            "cleanup_restore_projection": cleanup.get("restore_projection") or "",
             "cleanup_receipt_ref": cleanup.get("receipt_ref") or "",
             "operation_accepted": 200 <= status < 300,
             "campaign_id": campaign_id,
@@ -1601,6 +1840,14 @@ def execute_with_sandbox_write(
             execute_fn=execute_fn,
         )
 
+    cleanup_block = _write_cleanup_preflight_reason(
+        method,
+        path,
+        documented_routes,
+    )
+    if cleanup_block:
+        return _blocked_write_trace(scenario, cleanup_block, write_meta)
+
     base = base_url.rstrip("/")
     observe_path = _documented_observation_path(scenario, path, documented_routes)
     before = (
@@ -1640,10 +1887,16 @@ def execute_with_sandbox_write(
         and 200 <= int(after.get("status") or 0) < 300
         and before.get("body") == after.get("body")
     )
-    if not 200 <= write_status_code < 300 and observer_proves_unchanged:
+    if observer_proves_unchanged and (
+        not 200 <= write_status_code < 300 or method in {"PUT", "PATCH"}
+    ):
         cleanup = {
             "status": "not_required",
-            "strategy": "rejected_write_observer_unchanged",
+            "strategy": (
+                "accepted_write_observer_unchanged"
+                if 200 <= write_status_code < 300
+                else "rejected_write_observer_unchanged"
+            ),
             "receipt_ref": executed_path,
         }
     else:
@@ -1653,6 +1906,7 @@ def execute_with_sandbox_write(
             base_url=base_url,
             token=observation_token,
             before_body=before.get("body"),
+            request_body=_body,
             write_body=write_body,
             documented_routes=documented_routes,
             retry_count=int(get_policy_value("execution", "cleanup_retry_count", 1) or 0),
@@ -1682,6 +1936,7 @@ def execute_with_sandbox_write(
         "cleanup_strategy": cleanup.get("strategy") or "",
         "cleanup_warning": cleanup.get("warning") or "",
         "cleanup_error": cleanup.get("error") or "",
+        "cleanup_restore_projection": cleanup.get("restore_projection") or "",
         "cleanup_receipt_ref": cleanup.get("receipt_ref") or "",
         "campaign_id": campaign_id,
         "slice_id": _text(getattr(scenario, "behavior_slice_id", "") or ""),
@@ -1701,6 +1956,7 @@ def execute_with_sandbox_write(
             cleanup_status == "not_required"
             and cleanup_strategy in {
                 "rejected_write_observer_unchanged",
+                "accepted_write_observer_unchanged",
                 "setup_rejected_observer_unchanged",
                 "action_post_on_existing_resource",
                 "action_post_no_created_resource",

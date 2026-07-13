@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
+import ai_test_asset_center.policy_registry as policy_registry_module
 from ai_test_asset_center.policy_registry import (
+    OBSERVED_COMPARISON_AUTHENTICATION_FIELD,
+    OBSERVED_COMPARISON_FINGERPRINT_FIELD,
     OBSERVED_COMPARISON_SCHEMA,
     PolicyRecord,
     PolicyRegistry,
@@ -14,6 +17,18 @@ from ai_test_asset_center.policy_registry import (
     StrategyBundle,
     _full_strategy_signature,
 )
+from ai_test_asset_center.evaluator_receipt_auth import seal_evaluator_artifact
+
+
+TEST_EVALUATOR_HMAC_KEY = "policy-registry-test-key-0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _evaluator_hmac_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "QUALIBUG_EVALUATOR_RECEIPT_HMAC_KEY",
+        TEST_EVALUATOR_HMAC_KEY,
+    )
 
 
 def _candidate(parent: PolicyRecord) -> PolicyRecord:
@@ -47,6 +62,13 @@ def _attach_observed_comparison(root: Path, policy: PolicyRecord) -> None:
             "reason": "PROMOTE_MEASURED_NON_REGRESSIVE_IMPROVEMENT",
         },
     }
+    comparison = seal_evaluator_artifact(
+        comparison,
+        signing_key=TEST_EVALUATOR_HMAC_KEY,
+        domain=OBSERVED_COMPARISON_SCHEMA,
+        fingerprint_field=OBSERVED_COMPARISON_FINGERPRINT_FIELD,
+        authentication_field=OBSERVED_COMPARISON_AUTHENTICATION_FIELD,
+    )
     path = root / "comparison.json"
     path.write_text(json.dumps(comparison), encoding="utf-8")
     policy.evaluation_summary = {
@@ -61,7 +83,10 @@ def _attach_observed_comparison(root: Path, policy: PolicyRecord) -> None:
     }
 
 
-def test_observed_promotion_persists_lineage_and_rollback_restores_parent_id(tmp_path: Path) -> None:
+def test_observed_promotion_persists_lineage_and_rollback_restores_parent_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     registry_path = tmp_path / "registry.json"
     registry = PolicyRegistry(registry_path)
     parent = registry.get_active()
@@ -69,6 +94,11 @@ def test_observed_promotion_persists_lineage_and_rollback_restores_parent_id(tmp
     candidate = _candidate(parent)
     registry.register(candidate)
     _attach_observed_comparison(tmp_path, candidate)
+    monkeypatch.setattr(
+        policy_registry_module,
+        "validate_authenticated_policy_comparison",
+        lambda comparison, **_: comparison,
+    )
 
     approved = registry.promote(candidate.policy_id, "observed gate passed")
     assert approved.status == "champion"
@@ -103,6 +133,41 @@ def test_promotion_rejects_strategy_mutation_after_observed_evaluation(tmp_path:
 
     with pytest.raises(PolicyRegistryError, match="changed after observed evaluation"):
         registry.promote(candidate.policy_id, "stale evaluation")
+
+
+def test_promotion_rejects_rehashed_but_unauthenticated_comparison_tamper(
+    tmp_path: Path,
+) -> None:
+    registry = PolicyRegistry(tmp_path / "registry.json")
+    parent = registry.get_active()
+    assert parent is not None
+    candidate = _candidate(parent)
+    registry.register(candidate)
+    _attach_observed_comparison(tmp_path, candidate)
+    comparison_path = Path(candidate.evaluation_summary["comparison_ref"])
+    forged = json.loads(comparison_path.read_text(encoding="utf-8"))
+    forged["promotion_decision"]["reason"] = "FORGED"
+    comparison_path.write_text(json.dumps(forged), encoding="utf-8")
+    candidate.evaluation_summary["comparison_file_sha256"] = hashlib.sha256(
+        comparison_path.read_bytes()
+    ).hexdigest()
+
+    with pytest.raises(PolicyRegistryError, match="authentication"):
+        registry.promote(candidate.policy_id, "forged evaluation")
+
+
+def test_promotion_rejects_signed_minimal_comparison_without_four_reports(
+    tmp_path: Path,
+) -> None:
+    registry = PolicyRegistry(tmp_path / "registry.json")
+    parent = registry.get_active()
+    assert parent is not None
+    candidate = _candidate(parent)
+    registry.register(candidate)
+    _attach_observed_comparison(tmp_path, candidate)
+
+    with pytest.raises(PolicyRegistryError, match="strict validation"):
+        registry.promote(candidate.policy_id, "incomplete evaluation")
 
 
 def test_corrupt_registry_fails_fast_instead_of_bootstrapping(tmp_path: Path) -> None:

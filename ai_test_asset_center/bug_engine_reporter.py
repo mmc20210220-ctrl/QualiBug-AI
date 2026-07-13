@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
+from .target_endpoint import resolve_target_base_url
+
 
 _SECRET_KEY_RE = re.compile(
     r"(password|passwd|pwd|secret|token|authorization|cookie|session|apikey|api_key|access[_-]?key|credential)",
@@ -200,7 +202,12 @@ def _pytest_regression(findings: list[dict[str, Any]], base_url: str) -> str:
     return "\n".join(lines)
 
 
-def extract_validated_findings(result: dict[str, Any], *, base_url: str = "http://127.0.0.1:8088") -> list[dict[str, Any]]:
+def extract_validated_findings(
+    result: dict[str, Any],
+    *,
+    base_url: str | None = None,
+) -> list[dict[str, Any]]:
+    target_base_url = resolve_target_base_url(base_url)
     discovery = result.get("discovery_result") if isinstance(result.get("discovery_result"), dict) else result
     findings = discovery.get("findings") if isinstance(discovery.get("findings"), list) else []
     items: list[dict[str, Any]] = []
@@ -247,7 +254,7 @@ def extract_validated_findings(result: dict[str, Any], *, base_url: str = "http:
                     "观察响应状态码和响应结构。",
                     "若返回 HTTP 200 且包含业务数据，而期望为 401/403，则权限边界缺失成立。",
                 ],
-                "powershell": _repro_command(method, path, base_url),
+                "powershell": _repro_command(method, path, target_base_url),
             },
             "suggested_fix": (
                 "在后端路由层强制认证和角色/资源授权校验；默认拒绝匿名请求；避免只依赖前端菜单或页面权限；"
@@ -324,12 +331,13 @@ def build_customer_bug_report(
     output_dir: str | Path,
     *,
     project_id: str = "real_project_demo",
-    base_url: str = "http://127.0.0.1:8088",
+    base_url: str | None = None,
 ) -> dict[str, Any]:
+    target_base_url = resolve_target_base_url(base_url)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     discovery = result.get("discovery_result") if isinstance(result.get("discovery_result"), dict) else result
-    findings = extract_validated_findings(result, base_url=base_url)
+    findings = extract_validated_findings(result, base_url=target_base_url)
     report = {
         "report_version": "phase92f-customer-evidence-v2",
         "generated_at": _now(),
@@ -364,12 +372,12 @@ def build_customer_bug_report(
         ps1.append(cmd)
         ps1.append("")
     ps1_path.write_text("\n".join(ps1), encoding="utf-8")
-    pytest_path.write_text(_pytest_regression(findings, base_url), encoding="utf-8")
+    pytest_path.write_text(_pytest_regression(findings, target_base_url), encoding="utf-8")
 
     # ── Customer Reproduction Pack (5-step: setup→before→target→after→cleanup) ──
     repro_pack_path = output / "customer_reproduction_pack.json"
     repro_pack_md_path = output / "customer_reproduction_pack.md"
-    repro_pack = _build_customer_repro_pack(findings, base_url, report["project_id"])
+    repro_pack = _build_customer_repro_pack(findings, target_base_url, report["project_id"])
     repro_pack_path.write_text(json.dumps(repro_pack, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     repro_pack_md_path.write_text(_repro_pack_markdown(repro_pack), encoding="utf-8")
 

@@ -59,5 +59,9 @@
       "status": "deprecated"
     }
   ],
+  "architecture_budget": {
+    "max_module_count": 430,
+    "max_python_line_count": 245000
+  },
   "oversized_line_threshold": 1500
 }

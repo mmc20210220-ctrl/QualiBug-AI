@@ -7,8 +7,10 @@ actor/fixture/observer/cleanup compensation.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import hashlib
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,11 @@ from .contract_oracles import (
     mark_as_internal_clue,
     validate_contract_oracle_receipt,
 )
-from .customer_delivery_gate import build_customer_delivery_gate_receipt
+from .customer_delivery_gate_v2 import (
+    build_customer_delivery_gate_receipt_v2,
+    build_delivery_execution_receipt,
+    build_reproduction_receipt,
+)
 from .observer_contracts import (
     observe_experiment_requirements,
     validate_observer_declarations,
@@ -44,8 +50,10 @@ from .runtime_binding_materializer import (
     validated_fixture_setup as _validated_fixture_setup,
     validated_runtime_resolvers as _validated_runtime_resolvers,
 )
+from .runtime_binding_graph import declared_effect_observers
 from .sandbox_write_executor import (
     _http_request,
+    _restore_payload,
     execute_governed_control_write,
     sandbox_write_allowed,
 )
@@ -76,6 +84,10 @@ def _canonical_json(value: Any) -> str:
         separators=(",", ":"),
         default=str,
     )
+
+
+def _sha256(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _observation_state(value: Any) -> dict[str, Any]:
@@ -126,6 +138,175 @@ def _resource_identity_candidates(value: Any) -> set[str]:
     return identities
 
 
+def _server_managed_field(value: Any) -> bool:
+    normalized = "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+    return normalized in {
+        "createdat",
+        "updatedat",
+        "createdtime",
+        "updatedtime",
+        "modifiedat",
+        "modifiedtime",
+        "timestamp",
+    }
+
+
+def _without_server_managed_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_server_managed_fields(child)
+            for key, child in sorted(value.items())
+            if not _server_managed_field(key)
+        }
+    if isinstance(value, list):
+        return sorted(
+            (_without_server_managed_fields(child) for child in value),
+            key=_canonical_json,
+        )
+    return value
+
+
+def _meaningful_observation_state(value: Any) -> dict[str, Any]:
+    state = _observation_state(value)
+    return {
+        "status": state.get("status"),
+        "body": _without_server_managed_fields(state.get("body")),
+    }
+
+
+def _entity_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        for key in ("records", "data", "items", "results", "rows"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                return [dict(item) for item in nested if isinstance(item, dict)]
+        return [dict(value)]
+    return []
+
+
+def _entity_matches_identity(entity: dict[str, Any], identities: set[str]) -> bool:
+    if not identities:
+        return True
+    for key, value in entity.items():
+        if isinstance(value, (dict, list)):
+            continue
+        normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+        if (
+            normalized in {"id", "uuid", "key"}
+            or normalized.endswith("id")
+        ) and _text(value) in identities:
+            return True
+    return any(
+        not isinstance(value, (dict, list)) and _text(value) in identities
+        for value in entity.values()
+    )
+
+
+def _single_entity_for_restoration(value: Any, identities: set[str]) -> dict[str, Any]:
+    matches = [
+        row for row in _entity_rows(value)
+        if _entity_matches_identity(row, identities)
+    ]
+    return dict(matches[0]) if len(matches) == 1 else {}
+
+
+def _cleanup_restores_mutated_fields(
+    original: dict[str, Any],
+    cleanup: dict[str, Any],
+) -> bool:
+    original_before = _observation_state(_dict(original).get("before"))
+    cleanup_after = _observation_state(_dict(cleanup).get("after"))
+    if not (
+        200 <= int(original_before.get("status") or 0) < 300
+        and 200 <= int(cleanup_after.get("status") or 0) < 300
+    ):
+        return False
+    write_body = _dict(_dict(original).get("write")).get("body")
+    if not isinstance(write_body, dict):
+        return False
+    identities = _resource_identity_candidates(write_body)
+    before_entity = _single_entity_for_restoration(
+        original_before.get("body"),
+        identities,
+    )
+    after_entity = _single_entity_for_restoration(
+        cleanup_after.get("body"),
+        identities,
+    )
+    if not before_entity or not after_entity:
+        return False
+    mutated_fields = [
+        field
+        for field, value in write_body.items()
+        if field in before_entity
+        and field in after_entity
+        and not _server_managed_field(field)
+        and not isinstance(value, (dict, list))
+        and not isinstance(before_entity.get(field), (dict, list))
+        and before_entity.get(field) != value
+    ]
+    return bool(mutated_fields) and all(
+        after_entity.get(field) == before_entity.get(field)
+        for field in mutated_fields
+    )
+
+
+def _cleanup_compensates_created_resource(
+    original: dict[str, Any],
+    cleanup: dict[str, Any],
+) -> bool:
+    original_row = _dict(original)
+    cleanup_row = _dict(cleanup)
+    if _text(original_row.get("method")).upper() != "POST":
+        return False
+    cleanup_path = _text(cleanup_row.get("path"))
+    created_identities = _resource_identity_candidates(
+        _dict(original_row.get("write")).get("body")
+    )
+    if not created_identities or not any(
+        identity and identity in cleanup_path for identity in created_identities
+    ):
+        return False
+
+    original_before = _observation_state(original_row.get("before"))
+    original_after = _observation_state(original_row.get("after"))
+    cleanup_before = _observation_state(cleanup_row.get("before"))
+    cleanup_after = _observation_state(cleanup_row.get("after"))
+    if not (
+        200 <= int(original_after.get("status") or 0) < 300
+        and 200 <= int(cleanup_before.get("status") or 0) < 300
+        and 200 <= int(cleanup_after.get("status") or 0) < 300
+    ):
+        return False
+    if _single_entity_for_restoration(original_before.get("body"), created_identities):
+        return False
+    if not _single_entity_for_restoration(original_after.get("body"), created_identities):
+        return False
+
+    before_entity = _single_entity_for_restoration(
+        cleanup_before.get("body"),
+        created_identities,
+    )
+    after_entity = _single_entity_for_restoration(
+        cleanup_after.get("body"),
+        created_identities,
+    )
+    if not before_entity or not after_entity:
+        return False
+    changed_business_fields = [
+        field
+        for field in before_entity
+        if field in after_entity
+        and not _server_managed_field(field)
+        and not isinstance(before_entity.get(field), (dict, list))
+        and not isinstance(after_entity.get(field), (dict, list))
+        and before_entity.get(field) != after_entity.get(field)
+    ]
+    return bool(changed_business_fields)
+
+
 def _cleanup_restores_governed_write(
     original: dict[str, Any],
     cleanup: dict[str, Any],
@@ -139,6 +320,10 @@ def _cleanup_restores_governed_write(
     original_before = _observation_state(original_row.get("before"))
     cleanup_after = _observation_state(cleanup_row.get("after"))
     if original_before == cleanup_after:
+        return True
+    if _cleanup_restores_mutated_fields(original_row, cleanup_row):
+        return True
+    if _cleanup_compensates_created_resource(original_row, cleanup_row):
         return True
     original_method = _text(original_row.get("method")).upper()
     cleanup_path = _text(cleanup_row.get("path"))
@@ -178,6 +363,46 @@ def _rejected_writes_left_state_unchanged(
     )
 
 
+def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
+    row = _dict(attempt)
+    if row.get("accepted") is not True:
+        return False
+    before_state = _observation_state(row.get("before"))
+    after_state = _observation_state(row.get("after"))
+    if before_state.get("status") != after_state.get("status"):
+        return True
+
+    write_body = _dict(row.get("write")).get("body")
+    if isinstance(write_body, dict):
+        identities = _resource_identity_candidates(write_body)
+        before_entity = _single_entity_for_restoration(
+            before_state.get("body"),
+            identities,
+        )
+        after_entity = _single_entity_for_restoration(
+            after_state.get("body"),
+            identities,
+        )
+        if before_entity and after_entity:
+            comparable_fields = [
+                field
+                for field in write_body
+                if field in before_entity
+                and field in after_entity
+                and not _server_managed_field(field)
+                and not isinstance(before_entity.get(field), (dict, list))
+                and not isinstance(after_entity.get(field), (dict, list))
+            ]
+            return any(
+                before_entity.get(field) != after_entity.get(field)
+                for field in comparable_fields
+            )
+        if identities and bool(before_entity) != bool(after_entity):
+            return True
+
+    return _meaningful_observation_state(row.get("before")) != _meaningful_observation_state(row.get("after"))
+
+
 def _body_contains_scalar(value: Any, expected: Any) -> bool:
     if isinstance(value, dict):
         return any(_body_contains_scalar(child, expected) for child in value.values())
@@ -192,6 +417,45 @@ def _index_by_id(nodes: list[Any]) -> dict[str, dict[str, Any]]:
         if isinstance(node, dict) and _text(node.get("id")):
             out[_text(node.get("id"))] = node
     return out
+
+
+def _documented_routes(operations: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    routes: list[dict[str, str]] = []
+    for operation in operations.values():
+        if not isinstance(operation, dict):
+            continue
+        method = _text(operation.get("method")).upper()
+        path = normalize_path_placeholders(
+            _text(operation.get("path") or operation.get("raw_path"))
+        )
+        if method and path.startswith("/"):
+            routes.append({"method": method, "path": path})
+    return routes
+
+
+def _inverse_delta_cleanup_body(
+    request_body: Any,
+    *,
+    delta_field: str = "",
+) -> tuple[dict[str, Any], str]:
+    if not isinstance(request_body, dict):
+        return {}, "request_body_missing"
+    target_key = _text(delta_field)
+    matches = [
+        (key, value)
+        for key, value in request_body.items()
+        if (
+            (_text(key) == target_key if target_key else "".join(ch for ch in str(key).lower() if ch.isalnum()) == "delta")
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        )
+    ]
+    if len(matches) != 1:
+        return {}, "delta_field_not_unique"
+    key, value = matches[0]
+    cleanup_body = dict(request_body)
+    cleanup_body[key] = -value
+    return cleanup_body, f"inverse_delta:{key}"
 
 
 def load_actor_tokens(root: Path, project: str) -> dict[str, str]:
@@ -322,25 +586,85 @@ def _resolve_token(actor: dict[str, Any], tokens: dict[str, str]) -> str:
     return tokens.get(secret) or tokens.get(role) or ""
 
 
+def _request_example(operation: dict[str, Any]) -> dict[str, Any]:
+    direct = _dict(operation).get("request_example")
+    if isinstance(direct, dict) and direct:
+        return dict(direct)
+    request_schema = _dict(_dict(operation).get("request_schema"))
+    content = _dict(request_schema.get("content"))
+    for media in content.values():
+        if not isinstance(media, dict):
+            continue
+        example = media.get("example")
+        if isinstance(example, dict) and example:
+            return dict(example)
+        examples = _dict(media.get("examples"))
+        for row in examples.values():
+            value = _dict(row).get("value")
+            if isinstance(value, dict) and value:
+                return dict(value)
+    return {}
+
+
+def _scalar_body_bindings(value: Any) -> dict[str, Any]:
+    bindings: dict[str, Any] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                if isinstance(child, (str, int, float, bool)) and child not in ("", None):
+                    bindings.setdefault(_text(key), child)
+                else:
+                    walk(child)
+            return
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return bindings
+
+
+def _operation_for_observation_path(
+    path: str,
+    operations: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    normalized_path = normalize_path_placeholders(path)
+    for operation in operations.values():
+        if not isinstance(operation, dict):
+            continue
+        candidate = normalize_path_placeholders(
+            _text(operation.get("path") or operation.get("raw_path"))
+        )
+        if candidate == normalized_path:
+            return operation
+    return {"path": path}
+
+
 def _declared_observation_path(
     path: str,
     operations: dict[str, dict[str, Any]],
     *,
     runtime_bindings: dict[str, Any] | None = None,
+    request_body: Any = None,
 ) -> str:
-    """Return an exact source-declared read observer; never invent one."""
-    target = _text(path).split("?", 1)[0].rstrip("/") or "/"
-    for operation in operations.values():
-        method = _text(operation.get("method")).upper()
-        candidate = _text(operation.get("path") or operation.get("raw_path")).split("?", 1)[0].rstrip("/") or "/"
-        if method not in {"GET", "HEAD"}:
-            continue
-        if candidate == target and not path_has_placeholders(candidate):
-            return candidate
-        materialized = candidate
-        for name, value in (runtime_bindings or {}).items():
+    """Return a source-declared effect observer through the shared graph."""
+    operation = _operation_for_observation_path(path, operations)
+    observers = declared_effect_observers(
+        operation,
+        behavior_ir={"operations": list(operations.values())},
+        max_candidates=5,
+    )
+    binding_values = {
+        **_scalar_body_bindings(_request_example(operation)),
+        **_scalar_body_bindings(request_body),
+        **(runtime_bindings or {}),
+    }
+    for observer in observers:
+        materialized = _text(observer.get("path"))
+        for name, value in binding_values.items():
             materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
-        if materialized == target and not path_has_placeholders(materialized):
+        if materialized.startswith("/") and not path_has_placeholders(materialized):
             return materialized
     return ""
 
@@ -409,6 +733,7 @@ def execute_one_experiment(
     actors = _index_by_id(_list(ir.get("actors")))
     ops = _index_by_id(_list(ir.get("operations")))
     steps_out: list[dict[str, Any]] = []
+    request_bodies_for_cleanup: dict[str, Any] = {}
     observations: dict[str, Any] = {
         "observer_ids": [],
         "observer_receipts": [],
@@ -798,13 +1123,53 @@ def execute_one_experiment(
             actor = actors.get(actor_ref) or {}
             op = ops.get(op_ref) or {}
             method = _text(op.get("method") or "GET").upper()
+            path_template = _text(op.get("path") or op.get("raw_path"))
             path = _materialize_path(
-                _text(op.get("path") or op.get("raw_path")),
+                path_template,
                 runtime_bindings,
             )
+            request_body = (
+                step.get("body")
+                if "body" in step
+                else op.get("request_example")
+                if method in {"POST", "PUT", "PATCH", "DELETE"}
+                else None
+            )
+            request_body = _materialize_body_template(
+                request_body,
+                runtime_bindings,
+            )
+            mutation = _dict(step.get("mutation"))
+            mutation_class = _text(
+                mutation.get("class")
+                or mutation.get("constraint")
+                or mutation.get("operator")
+                or step.get("protocol_step")
+                or step.get("intent")
+                or f"{phase}_request"
+            )
+            mutation_selector = _text(
+                mutation.get("json_path")
+                or mutation.get("field_selector")
+                or mutation.get("field")
+            )
+            mutation_operator = _text(
+                mutation.get("operator") or mutation.get("constraint")
+            )
+            request_body_fingerprint = _sha256(request_body)
+            request_semantics_fingerprint = _sha256({
+                "operation_ref": op_ref,
+                "method": method,
+                "path_template": path_template,
+                "mutation_class": mutation_class,
+                "mutation_selector": mutation_selector,
+                "mutation_operator": mutation_operator,
+                "request_body_fingerprint": request_body_fingerprint,
+            })
             token = _resolve_token(actor, tokens)
             is_write = method in {"POST", "PUT", "PATCH", "DELETE"}
             if is_write:
+                request_bodies_for_cleanup[subject_id] = request_body
                 allowed, reason = sandbox_write_allowed(
                     root=root,
                     project=project,
@@ -836,9 +1201,10 @@ def execute_one_experiment(
                     })
                     continue
                 observation_path = _declared_observation_path(
-                    path,
+                    path_template,
                     ops,
                     runtime_bindings=runtime_bindings,
+                    request_body=request_body,
                 )
                 if not observation_path:
                     observations["harness_error"] = True
@@ -874,7 +1240,7 @@ def execute_one_experiment(
                     actor_token=token,
                     method=method,
                     path=path,
-                    body=step.get("body") if "body" in step else op.get("request_example"),
+                    body=request_body,
                     observation_path=observation_path,
                 )
                 write_receipt = _dict(governed.get("write"))
@@ -887,6 +1253,7 @@ def execute_one_experiment(
                     "duration_ms": write_receipt.get("duration_ms"),
                     "error": write_receipt.get("error") or governed.get("reason") or "",
                     "governance_receipt": governed,
+                    "observation_path": observation_path,
                 }
             else:
                 obs = _run_http_step(base_url=base_url, method=method, path=path, token=token)
@@ -894,6 +1261,14 @@ def execute_one_experiment(
             obs["step_id"] = subject_id
             obs["actor_ref"] = actor_ref
             obs["operation_ref"] = op_ref
+            obs["path_template"] = path_template
+            obs["request_body_fingerprint"] = request_body_fingerprint
+            obs["request_semantics_fingerprint"] = (
+                request_semantics_fingerprint
+            )
+            obs["mutation_class"] = mutation_class
+            obs["mutation_selector"] = mutation_selector
+            obs["mutation_operator"] = mutation_operator
             observed_status = int(obs.get("status_code") or 0)
             contract_status = (
                 "OBSERVED"
@@ -917,6 +1292,14 @@ def execute_one_experiment(
                     "path": path,
                     "status_code": observed_status,
                     "operation_ref": op_ref,
+                    "path_template": path_template,
+                    "request_body_fingerprint": request_body_fingerprint,
+                    "request_semantics_fingerprint": (
+                        request_semantics_fingerprint
+                    ),
+                    "mutation_class": mutation_class,
+                    "mutation_selector": mutation_selector,
+                    "mutation_operator": mutation_operator,
                     "response_observed": observed_status > 0,
                     "control_succeeded": (
                         200 <= observed_status < 300
@@ -940,8 +1323,412 @@ def execute_one_experiment(
                 observations["body"] = obs.get("body")
         return results
 
-    steps_out.extend(_exec_plan(_list(exp.get("control_plan")), phase="control"))
-    steps_out.extend(_exec_plan(_list(exp.get("treatment_plan")), phase="treatment"))
+    def _barrier_timeline_event(
+        events: list[dict[str, Any]],
+        *,
+        event: str,
+        participant: str,
+        started_at: float,
+    ) -> None:
+        events.append({
+            "event": event,
+            "participant": participant,
+            "at_ms": int((time.perf_counter() - started_at) * 1000),
+        })
+
+    def _execute_barrier_step(
+        *,
+        step: dict[str, Any],
+        phase: str,
+        subject_id: str,
+        barrier: threading.Barrier,
+        timeline: list[dict[str, Any]],
+        timeline_lock: threading.Lock,
+        started_at: float,
+    ) -> dict[str, Any]:
+        actor_ref = _text(step.get("actor_ref"))
+        op_ref = _text(step.get("operation_ref"))
+        actor = actors.get(actor_ref) or {}
+        op = ops.get(op_ref) or {}
+        method = _text(op.get("method") or "GET").upper()
+        path_template = _text(op.get("path") or op.get("raw_path"))
+        path = _materialize_path(path_template, runtime_bindings)
+        participant = _text(step.get("barrier_participant") or subject_id)
+        request_body = (
+            step.get("body")
+            if "body" in step
+            else op.get("request_example")
+            if method in {"POST", "PUT", "PATCH", "DELETE"}
+            else None
+        )
+        request_body = _materialize_body_template(request_body, runtime_bindings)
+        mutation = _dict(step.get("mutation"))
+        mutation_class = _text(
+            mutation.get("class")
+            or mutation.get("constraint")
+            or mutation.get("operator")
+            or step.get("protocol_step")
+            or step.get("intent")
+            or f"{phase}_request"
+        )
+        mutation_selector = _text(
+            mutation.get("json_path")
+            or mutation.get("field_selector")
+            or mutation.get("field")
+        )
+        mutation_operator = _text(
+            mutation.get("operator") or mutation.get("constraint")
+        )
+        request_body_fingerprint = _sha256(request_body)
+        request_semantics_fingerprint = _sha256({
+            "operation_ref": op_ref,
+            "method": method,
+            "path_template": path_template,
+            "mutation_class": mutation_class,
+            "mutation_selector": mutation_selector,
+            "mutation_operator": mutation_operator,
+            "request_body_fingerprint": request_body_fingerprint,
+        })
+        token = _resolve_token(actor, tokens)
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return {
+                "harness_error": True,
+                "contract_receipt": build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="FAILED",
+                    evidence={"reason_code": "BARRIER_WRITE_REQUIRED"},
+                ),
+                "step": {
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": "BARRIER_WRITE_REQUIRED",
+                    "method": method,
+                    "path": path,
+                },
+            }
+        allowed, reason = sandbox_write_allowed(
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
+            actor_token=token,
+            actor_identity=_text(actor.get("role") or actor_ref),
+        )
+        if not allowed:
+            return {
+                "harness_error": True,
+                "contract_receipt": build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="FAILED",
+                    evidence={"reason_code": _text(reason)},
+                ),
+                "step": {
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": reason,
+                    "method": method,
+                    "path": path,
+                },
+            }
+        observation_path = _declared_observation_path(
+            path_template,
+            ops,
+            runtime_bindings=runtime_bindings,
+            request_body=request_body,
+        )
+        if not observation_path:
+            return {
+                "harness_error": True,
+                "contract_receipt": build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="FAILED",
+                    evidence={"reason_code": "BLOCKED_MISSING_OBSERVER"},
+                ),
+                "step": {
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": "BLOCKED_MISSING_OBSERVER",
+                    "method": method,
+                    "path": path,
+                },
+            }
+        with timeline_lock:
+            _barrier_timeline_event(
+                timeline,
+                event="ready",
+                participant=participant,
+                started_at=started_at,
+            )
+        try:
+            barrier_index = barrier.wait(timeout=10)
+        except threading.BrokenBarrierError:
+            with timeline_lock:
+                _barrier_timeline_event(
+                    timeline,
+                    event="broken",
+                    participant=participant,
+                    started_at=started_at,
+                )
+            return {
+                "harness_error": True,
+                "contract_receipt": build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="FAILED",
+                    evidence={"reason_code": "BARRIER_RELEASE_FAILED"},
+                ),
+                "step": {
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": "BARRIER_RELEASE_FAILED",
+                    "method": method,
+                    "path": path,
+                },
+            }
+        if barrier_index == 0:
+            with timeline_lock:
+                _barrier_timeline_event(
+                    timeline,
+                    event="release",
+                    participant="all",
+                    started_at=started_at,
+                )
+        governed = execute_governed_control_write(
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            operation_phase=f"experiment_{phase}",
+            actor_identity=_text(actor.get("role") or actor_ref),
+            actor_token=token,
+            method=method,
+            path=path,
+            body=request_body,
+            observation_path=observation_path,
+        )
+        with timeline_lock:
+            _barrier_timeline_event(
+                timeline,
+                event="completed",
+                participant=participant,
+                started_at=started_at,
+            )
+        write_receipt = _dict(governed.get("write"))
+        obs = {
+            "method": method,
+            "path": path,
+            "status_code": int(write_receipt.get("status") or 0),
+            "body": write_receipt.get("body"),
+            "headers": write_receipt.get("headers") or {},
+            "duration_ms": write_receipt.get("duration_ms"),
+            "error": write_receipt.get("error") or governed.get("reason") or "",
+            "governance_receipt": governed,
+            "observation_path": observation_path,
+            "phase": phase,
+            "step_id": subject_id,
+            "actor_ref": actor_ref,
+            "operation_ref": op_ref,
+            "path_template": path_template,
+            "request_body_fingerprint": request_body_fingerprint,
+            "request_semantics_fingerprint": request_semantics_fingerprint,
+            "mutation_class": mutation_class,
+            "mutation_selector": mutation_selector,
+            "mutation_operator": mutation_operator,
+            "protocol_step": _text(step.get("protocol_step")),
+            "barrier_group": _text(step.get("barrier_group")),
+            "barrier_participant": participant,
+        }
+        observed_status = int(obs.get("status_code") or 0)
+        contract_status = (
+            "OBSERVED"
+            if phase == "control" and 200 <= observed_status < 300
+            else "BLOCKED"
+            if phase == "control" and observed_status > 0
+            else "OBSERVED"
+            if phase == "treatment" and observed_status > 0
+            else "FAILED"
+        )
+        return {
+            "harness_error": False,
+            "request_body": request_body,
+            "contract_receipt": build_contract_evidence_receipt(
+                kind=phase,
+                experiment_id=eid,
+                obligation_id=oid,
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
+                subject_id=subject_id,
+                status=contract_status,
+                evidence={
+                    "method": method,
+                    "path": path,
+                    "status_code": observed_status,
+                    "operation_ref": op_ref,
+                    "path_template": path_template,
+                    "request_body_fingerprint": request_body_fingerprint,
+                    "request_semantics_fingerprint": request_semantics_fingerprint,
+                    "mutation_class": mutation_class,
+                    "mutation_selector": mutation_selector,
+                    "mutation_operator": mutation_operator,
+                    "response_observed": observed_status > 0,
+                    "control_succeeded": (
+                        200 <= observed_status < 300
+                        if phase == "control"
+                        else None
+                    ),
+                    "barrier_group": _text(step.get("barrier_group")),
+                    "barrier_participant": participant,
+                },
+            ),
+            "step": obs,
+        }
+
+    def _barrier_items(
+        control_plan: list[Any],
+        treatment_plan: list[Any],
+    ) -> tuple[list[dict[str, Any]], set[int]]:
+        items: list[dict[str, Any]] = []
+        consumed: set[int] = set()
+        for phase, plan in (("control", control_plan), ("treatment", treatment_plan)):
+            planned_subjects = activation_requirements.get(phase) or []
+            for index, step in enumerate(plan):
+                if not isinstance(step, dict) or not _text(step.get("barrier_group")):
+                    continue
+                subject_id = (
+                    planned_subjects[index]
+                    if index < len(planned_subjects)
+                    else _text(step.get("step_id"))
+                    or f"{phase}:{index + 1}"
+                )
+                items.append({
+                    "phase": phase,
+                    "index": index,
+                    "step": step,
+                    "subject_id": subject_id,
+                    "barrier_group": _text(step.get("barrier_group")),
+                })
+                consumed.add(id(step))
+        return items, consumed
+
+    def _exec_barrier_groups(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            grouped.setdefault(_text(item.get("barrier_group")), []).append(item)
+        executed_steps: list[dict[str, Any]] = []
+        all_timeline_events: list[dict[str, Any]] = []
+        for group_id, group_items in grouped.items():
+            if len(group_items) < 2:
+                observations["harness_error"] = True
+                continue
+            timeline: list[dict[str, Any]] = []
+            timeline_lock = threading.Lock()
+            release_barrier = threading.Barrier(len(group_items))
+            barrier_started = time.perf_counter()
+            ordered_items = sorted(
+                group_items,
+                key=lambda item: (
+                    0 if _text(item.get("phase")) == "control" else 1,
+                    int(item.get("index") or 0),
+                ),
+            )
+            with ThreadPoolExecutor(max_workers=len(ordered_items)) as pool:
+                futures = [
+                    pool.submit(
+                        _execute_barrier_step,
+                        step=_dict(item.get("step")),
+                        phase=_text(item.get("phase")),
+                        subject_id=_text(item.get("subject_id")),
+                        barrier=release_barrier,
+                        timeline=timeline,
+                        timeline_lock=timeline_lock,
+                        started_at=barrier_started,
+                    )
+                    for item in ordered_items
+                ]
+                completed = [future.result() for future in as_completed(futures)]
+            completed_by_subject = {
+                _text(_dict(row.get("step")).get("step_id")): row
+                for row in completed
+            }
+            for item in ordered_items:
+                row = completed_by_subject.get(_text(item.get("subject_id")))
+                if not row:
+                    observations["harness_error"] = True
+                    continue
+                if row.get("harness_error"):
+                    observations["harness_error"] = True
+                contract_evidence_receipts.append(_dict(row.get("contract_receipt")))
+                step_out = _dict(row.get("step"))
+                executed_steps.append(step_out)
+                if "request_body" in row:
+                    request_bodies_for_cleanup[_text(step_out.get("step_id"))] = row.get("request_body")
+                if _text(step_out.get("phase")) == "control":
+                    observations["control_observation"] = step_out
+                    observations["control_actor_ref"] = _text(step_out.get("actor_ref"))
+                    if 200 <= int(step_out.get("status_code") or 0) < 300:
+                        observations["control_succeeded"] = True
+                        observations["authorized_control"] = True
+                if _text(step_out.get("phase")) == "treatment":
+                    observations["treatment_observation"] = step_out
+                    observations["treatment_result"] = step_out
+                    observations["treatment_actor_ref"] = _text(step_out.get("actor_ref"))
+                    observations["status_code"] = step_out.get("status_code")
+                    observations["body"] = step_out.get("body")
+            for event in timeline:
+                event["barrier_group"] = group_id
+            all_timeline_events.extend(timeline)
+        if all_timeline_events:
+            observations["barrier_timeline"] = [
+                *_list(observations.get("barrier_timeline")),
+                *all_timeline_events,
+            ]
+        return executed_steps
+
+    control_plan = _list(exp.get("control_plan"))
+    treatment_plan = _list(exp.get("treatment_plan"))
+    barrier_plan_items, consumed_barrier_steps = _barrier_items(
+        control_plan,
+        treatment_plan,
+    )
+    if barrier_plan_items:
+        steps_out.extend(_exec_barrier_groups(barrier_plan_items))
+    steps_out.extend(_exec_plan(
+        [
+            step for step in control_plan
+            if not isinstance(step, dict) or id(step) not in consumed_barrier_steps
+        ],
+        phase="control",
+    ))
+    steps_out.extend(_exec_plan(
+        [
+            step for step in treatment_plan
+            if not isinstance(step, dict) or id(step) not in consumed_barrier_steps
+        ],
+        phase="treatment",
+    ))
 
     for pending in reversed(pending_fixture_cleanups):
         cleanup = _dict(pending.get("cleanup"))
@@ -1029,19 +1816,99 @@ def execute_one_experiment(
         for attempt in governed_write_attempts
         if attempt.get("accepted") is True
     ]
+    accepted_governed_writes_requiring_cleanup = [
+        attempt
+        for attempt in accepted_governed_writes
+        if _governed_write_changed_state(attempt)
+    ]
     if (
         safety.get("governed_write")
         and _list(exp.get("cleanup_plan"))
         and not accepted_governed_writes
     ):
-        rejected_state_unchanged = _rejected_writes_left_state_unchanged(
-            governed_write_attempts
-        )
-        rejected_audit_ids = sorted({
+        pre_transport_blocks = [
+            step
+            for step in steps_out
+            if _text(_dict(step).get("phase")) in {"control", "treatment"}
+            and _text(_dict(step).get("status")) == "blocked_write"
+            and not isinstance(_dict(step).get("governance_receipt"), dict)
+        ]
+        if pre_transport_blocks and not governed_write_attempts:
+            block_reasons = sorted({
+                _text(_dict(step).get("reason"))
+                for step in pre_transport_blocks
+                if _text(_dict(step).get("reason"))
+            })
+            for cleanup_subject in activation_requirements["cleanup"]:
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind="cleanup",
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=cleanup_subject,
+                    status="BLOCKED",
+                    evidence={
+                        "accepted_write_count": 0,
+                        "cleanup_write_count": 0,
+                        "write_reached_transport": False,
+                        "state_unchanged": None,
+                        "audit_receipt_ids": [],
+                        "reason_code": "NO_WRITE_REACHED_TRANSPORT",
+                        "write_block_reasons": block_reasons,
+                    },
+                ))
+            observations["cleanup_status"] = "blocked"
+            observations["cleanup_reason"] = "write_blocked_before_transport"
+        else:
+            rejected_state_unchanged = _rejected_writes_left_state_unchanged(
+                governed_write_attempts
+            )
+            rejected_audit_ids = sorted({
+                receipt_id
+                for receipt_id in (
+                    _governance_audit_receipt_id(attempt)
+                    for attempt in governed_write_attempts
+                )
+                if receipt_id
+            })
+            for cleanup_subject in activation_requirements["cleanup"]:
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind="cleanup",
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=cleanup_subject,
+                    status="NOT_REQUIRED" if rejected_state_unchanged else "FAILED",
+                    evidence={
+                        "accepted_write_count": 0,
+                        "cleanup_write_count": 0,
+                        "state_unchanged": rejected_state_unchanged,
+                        "audit_receipt_ids": rejected_audit_ids,
+                        "reason_code": (
+                            "NO_ACCEPTED_WRITE"
+                            if rejected_state_unchanged
+                            else "REJECTED_WRITE_STATE_NOT_PROVEN_UNCHANGED"
+                        ),
+                    },
+                ))
+            observations["cleanup_status"] = (
+                "not_required" if rejected_state_unchanged else "failed"
+            )
+            if not rejected_state_unchanged:
+                cleanup_failures += 1
+    if (
+        safety.get("governed_write")
+        and _list(exp.get("cleanup_plan"))
+        and accepted_governed_writes
+        and not accepted_governed_writes_requiring_cleanup
+    ):
+        accepted_audit_ids = sorted({
             receipt_id
             for receipt_id in (
                 _governance_audit_receipt_id(attempt)
-                for attempt in governed_write_attempts
+                for attempt in accepted_governed_writes
             )
             if receipt_id
         })
@@ -1053,31 +1920,26 @@ def execute_one_experiment(
                 campaign_id=resolved_campaign_id,
                 execution_id=resolved_execution_id,
                 subject_id=cleanup_subject,
-                status="NOT_REQUIRED" if rejected_state_unchanged else "FAILED",
+                status="NOT_REQUIRED",
                 evidence={
-                    "accepted_write_count": 0,
+                    "accepted_write_count": len(accepted_governed_writes),
+                    "cleanup_required_write_count": 0,
                     "cleanup_write_count": 0,
-                    "state_unchanged": rejected_state_unchanged,
-                    "audit_receipt_ids": rejected_audit_ids,
-                    "reason_code": (
-                        "NO_ACCEPTED_WRITE"
-                        if rejected_state_unchanged
-                        else "REJECTED_WRITE_STATE_NOT_PROVEN_UNCHANGED"
-                    ),
+                    "state_unchanged": True,
+                    "audit_receipt_ids": accepted_audit_ids,
+                    "reason_code": "ACCEPTED_WRITE_STATE_UNCHANGED",
                 },
             ))
-        observations["cleanup_status"] = (
-            "not_required" if rejected_state_unchanged else "failed"
-        )
-        if not rejected_state_unchanged:
-            cleanup_failures += 1
+        observations["cleanup_status"] = "not_required"
+        observations["cleanup_reason"] = "accepted_write_state_unchanged"
     if (
         safety.get("governed_write")
         and _list(exp.get("cleanup_plan"))
-        and accepted_governed_writes
+        and accepted_governed_writes_requiring_cleanup
     ):
         cleanup_plan = _list(exp.get("cleanup_plan"))
         cleanup_subjects = activation_requirements.get("cleanup") or []
+        documented_routes = _documented_routes(ops)
         for cleanup_index in reversed(range(len(cleanup_plan))):
             cleanup = cleanup_plan[cleanup_index]
             cleanup_subject_id = (
@@ -1091,6 +1953,269 @@ def execute_one_experiment(
             op = ops.get(op_ref) or {}
             path_template = _text(_dict(cleanup).get("path") or op.get("path") or op.get("raw_path"))
             method = _text(op.get("method") or "").upper()
+            cleanup_action = _text(_dict(cleanup).get("action"))
+            if cleanup_action == "source_declared_compensation":
+                source_operation_ref = _text(
+                    _dict(cleanup).get("compensates_operation_ref")
+                )
+                source_steps = [
+                    step for step in steps_out
+                    if _text(_dict(step).get("phase")) in {"control", "treatment"}
+                    and _text(_dict(step).get("operation_ref")) == source_operation_ref
+                    and isinstance(_dict(step).get("governance_receipt"), dict)
+                    and _governed_write_changed_state(
+                        _dict(step.get("governance_receipt"))
+                    )
+                ]
+                if not source_steps:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = "cleanup_accepted_write_missing"
+                    continue
+                actor_ref = ""
+                for planned_step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
+                    if isinstance(planned_step, dict) and _text(planned_step.get("actor_ref")):
+                        actor_ref = _text(planned_step.get("actor_ref"))
+                        break
+                actor = actors.get(actor_ref) or {}
+                token = _resolve_token(actor, tokens)
+                allowed, reason = sandbox_write_allowed(
+                    root=root,
+                    project=project,
+                    runtime_contract=runtime_contract,
+                    actor_token=token,
+                    actor_identity=_text(actor.get("role") or actor_ref),
+                )
+                if not allowed:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = reason
+                    continue
+                for source_step in reversed(source_steps):
+                    cleanup_targets, missing_bindings = _runtime_cleanup_paths(
+                        path_template,
+                        [source_step],
+                    )
+                    if missing_bindings or len(cleanup_targets) != 1:
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = (
+                            f"cleanup_binding_unresolved:{','.join(missing_bindings)}"
+                            if missing_bindings
+                            else "cleanup_compensation_target_ambiguous"
+                        )
+                        continue
+                    path, target_bindings = cleanup_targets[0]
+                    original_body = request_bodies_for_cleanup.get(
+                        _text(source_step.get("step_id"))
+                    )
+                    if original_body is None:
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = "cleanup_original_request_missing"
+                        continue
+                    cleanup_body = _materialize_body_template(
+                        original_body,
+                        {**runtime_bindings, **target_bindings},
+                    )
+                    observation_path = _text(
+                        _dict(source_step).get("observation_path")
+                    ) or _declared_observation_path(
+                        path_template,
+                        ops,
+                        runtime_bindings={**runtime_bindings, **target_bindings},
+                        request_body=cleanup_body,
+                    )
+                    if (
+                        not path.startswith("/")
+                        or path_has_placeholders(path)
+                        or method not in {"POST", "PUT", "PATCH"}
+                        or not observation_path
+                    ):
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = "cleanup_compensation_unresolved"
+                        continue
+                    governed_cleanup = execute_governed_control_write(
+                        root=root,
+                        project=project,
+                        base_url=base_url,
+                        runtime_contract=runtime_contract,
+                        campaign_id=campaign_id,
+                        operation_phase="experiment_cleanup",
+                        actor_identity=_text(actor.get("role") or actor_ref),
+                        actor_token=token,
+                        method=method,
+                        path=path,
+                        body=cleanup_body,
+                        observation_path=observation_path,
+                    )
+                    cleanup_write = _dict(governed_cleanup.get("write"))
+                    cleanup_observation = {
+                        "method": method,
+                        "path": path,
+                        "status_code": int(cleanup_write.get("status") or 0),
+                        "body": cleanup_write.get("body"),
+                        "headers": cleanup_write.get("headers") or {},
+                        "duration_ms": cleanup_write.get("duration_ms"),
+                        "error": cleanup_write.get("error") or governed_cleanup.get("reason") or "",
+                        "governance_receipt": governed_cleanup,
+                        "phase": "cleanup",
+                        "operation_ref": op_ref,
+                        "cleanup_subject_id": cleanup_subject_id,
+                        "compensates_step_id": _text(source_step.get("step_id")),
+                    }
+                    steps_out.append(cleanup_observation)
+                    if not (200 <= int(cleanup_observation.get("status_code") or 0) < 300):
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                    elif not cleanup_failures:
+                        observations["cleanup_status"] = "completed"
+                continue
+            if cleanup_action in {"restore_before_snapshot", "inverse_delta_compensation"}:
+                actor_ref = ""
+                for step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
+                    if isinstance(step, dict) and _text(step.get("actor_ref")):
+                        actor_ref = _text(step.get("actor_ref"))
+                        break
+                actor = actors.get(actor_ref) or {}
+                token = _resolve_token(actor, tokens)
+                allowed, reason = sandbox_write_allowed(
+                    root=root,
+                    project=project,
+                    runtime_contract=runtime_contract,
+                    actor_token=token,
+                    actor_identity=_text(actor.get("role") or actor_ref),
+                )
+                if not allowed:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = reason
+                    continue
+                restore_steps = [
+                    step for step in steps_out
+                    if _text(_dict(step).get("phase")) in {"control", "treatment"}
+                    and _text(_dict(step).get("operation_ref")) == op_ref
+                    and _text(_dict(step).get("method")).upper() == method
+                    and 200 <= int(_dict(step).get("status_code") or 0) < 300
+                    and isinstance(_dict(step).get("governance_receipt"), dict)
+                    and _governed_write_changed_state(
+                        _dict(step.get("governance_receipt"))
+                    )
+                ]
+                if not restore_steps:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = "cleanup_accepted_write_missing"
+                    continue
+                for step in reversed(restore_steps):
+                    path = _text(_dict(step).get("path"))
+                    if not path.startswith("/") or path_has_placeholders(path) or method not in {"POST", "PUT", "PATCH"}:
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = "cleanup_restore_target_unresolved"
+                        steps_out.append({
+                            "phase": "cleanup",
+                            "cleanup_subject_id": cleanup_subject_id,
+                            "method": method,
+                            "path": path,
+                            "status_code": 0,
+                            "operation_ref": op_ref,
+                            "error": "cleanup_restore_target_unresolved",
+                        })
+                        continue
+                    original = _dict(step.get("governance_receipt"))
+                    if cleanup_action == "inverse_delta_compensation":
+                        restore_body, restore_projection = _inverse_delta_cleanup_body(
+                            request_bodies_for_cleanup.get(_text(step.get("step_id")))
+                            or _dict(cleanup).get("body"),
+                            delta_field=_text(_dict(cleanup).get("delta_field")),
+                        )
+                    else:
+                        original_request_body = (
+                            request_bodies_for_cleanup.get(_text(step.get("step_id")))
+                            or _dict(cleanup).get("body")
+                            or {}
+                        )
+                        restore_body, restore_projection = _restore_payload(
+                            method=method,
+                            path=path,
+                            before_body=_dict(original.get("before")).get("body"),
+                            request_body=original_request_body,
+                            write_body=_dict(original.get("write")).get("body"),
+                            documented_routes=documented_routes,
+                        )
+                    if not restore_body:
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = f"cleanup_restore_unresolved:{restore_projection}"
+                        steps_out.append({
+                            "phase": "cleanup",
+                            "cleanup_subject_id": cleanup_subject_id,
+                            "method": method,
+                            "path": path,
+                            "status_code": 0,
+                            "operation_ref": op_ref,
+                            "error": f"cleanup_restore_unresolved:{restore_projection}",
+                        })
+                        continue
+                    observation_path = _text(_dict(step).get("observation_path")) or _declared_observation_path(
+                        path_template,
+                        ops,
+                        runtime_bindings=runtime_bindings,
+                    )
+                    if not observation_path:
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = "cleanup_observer_unresolved"
+                        steps_out.append({
+                            "phase": "cleanup",
+                            "cleanup_subject_id": cleanup_subject_id,
+                            "method": method,
+                            "path": path,
+                            "status_code": 0,
+                            "operation_ref": op_ref,
+                            "error": "cleanup_observer_unresolved",
+                        })
+                        continue
+                    governed_cleanup = execute_governed_control_write(
+                        root=root,
+                        project=project,
+                        base_url=base_url,
+                        runtime_contract=runtime_contract,
+                        campaign_id=campaign_id,
+                        operation_phase="experiment_cleanup",
+                        actor_identity=_text(actor.get("role") or actor_ref),
+                        actor_token=token,
+                        method=method,
+                        path=path,
+                        body=restore_body,
+                        observation_path=observation_path,
+                    )
+                    cleanup_write = _dict(governed_cleanup.get("write"))
+                    cobs = {
+                        "method": method,
+                        "path": path,
+                        "status_code": int(cleanup_write.get("status") or 0),
+                        "body": cleanup_write.get("body"),
+                        "headers": cleanup_write.get("headers") or {},
+                        "duration_ms": cleanup_write.get("duration_ms"),
+                        "error": cleanup_write.get("error") or governed_cleanup.get("reason") or "",
+                        "governance_receipt": governed_cleanup,
+                        "restore_projection": restore_projection,
+                    }
+                    steps_out.append({
+                        **cobs,
+                        "phase": "cleanup",
+                        "operation_ref": op_ref,
+                        "cleanup_subject_id": cleanup_subject_id,
+                    })
+                    if not (200 <= int(cobs.get("status_code") or 0) < 300):
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                    elif not cleanup_failures:
+                        observations["cleanup_status"] = "completed"
+                continue
             cleanup_targets, missing_bindings = _runtime_cleanup_paths(path_template, steps_out)
             if missing_bindings or not cleanup_targets:
                 cleanup_failures += 1
@@ -1129,7 +2254,7 @@ def execute_one_experiment(
                     observations["cleanup_reason"] = "cleanup_compensation_unresolved"
                     continue
                 observation_path = _declared_observation_path(
-                    path,
+                    path_template,
                     ops,
                     runtime_bindings={**runtime_bindings, **target_bindings},
                 )
@@ -1192,12 +2317,12 @@ def execute_one_experiment(
             for step in matching_steps
             if isinstance(step.get("governance_receipt"), dict)
         ]
-        restoration_verified = bool(accepted_governed_writes) and all(
+        restoration_verified = bool(accepted_governed_writes_requiring_cleanup) and all(
             any(
                 _cleanup_restores_governed_write(original, cleanup)
                 for cleanup in cleanup_governance_receipts
             )
-            for original in accepted_governed_writes
+            for original in accepted_governed_writes_requiring_cleanup
         )
         audit_receipt_ids = sorted({
             receipt_id
@@ -1237,6 +2362,9 @@ def execute_one_experiment(
                     for step in matching_steps
                 ],
                 "accepted_write_count": len(accepted_governed_writes),
+                "cleanup_required_write_count": len(
+                    accepted_governed_writes_requiring_cleanup
+                ),
                 "cleanup_write_count": sum(
                     1
                     for receipt in cleanup_governance_receipts
@@ -1273,6 +2401,18 @@ def execute_one_experiment(
         elif observer_id == "business_effect":
             observations.update(_dict(receipt.get("evidence")))
             observations["business_effect_observer_receipt"] = receipt
+        elif observer_id == "entity_state":
+            observations.update(_dict(receipt.get("evidence")))
+            observations["entity_state_observer_receipt"] = receipt
+        elif observer_id in {"before_state", "after_state", "final_state"}:
+            observations.update(_dict(receipt.get("evidence")))
+            observations[observer_id + "_observer_receipt"] = receipt
+        elif observer_id == "barrier_timeline":
+            observations.update(_dict(receipt.get("evidence")))
+            observations["barrier_timeline_observer_receipt"] = receipt
+        elif observer_id in {"typed_assertion", "source_invariant"}:
+            observations.update(_dict(receipt.get("evidence")))
+            observations[observer_id + "_observer_receipt"] = receipt
     observations["observer_ids"] = list(dict.fromkeys(observed_ids))
     observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
     observations["fixture_receipts"] = list(fixture_receipts)
@@ -1342,6 +2482,21 @@ def execute_one_experiment(
         control_actor = actors.get(_text(control_step.get("actor_ref"))) or {}
         control_role = _text(control_actor.get("role") or control_step.get("actor_ref"))
         assertion_kind = _text(first.get("kind") or "contract")
+        assertion_contract = _dict(
+            next(
+                (
+                    value
+                    for value in _list(exp.get("assertions"))
+                    if isinstance(value, dict)
+                    and _text(value.get("assertion_id"))
+                    == _text(first.get("assertion_id"))
+                ),
+                _dict(_list(exp.get("assertions"))[0])
+                if _list(exp.get("assertions"))
+                else {},
+            )
+        )
+        property_spec = _dict(assertion_contract.get("property"))
         control_observation = _dict(observations.get("control_observation"))
         observed_status = int(treatment_observation.get("status_code") or 0)
         observed_body = treatment_observation.get("body")
@@ -1508,12 +2663,16 @@ def execute_selected_experiments(
     project: str,
     base_url: str,
     runtime_contract: dict[str, Any],
+    mainline_run: dict[str, Any],
     campaign_id: str = "",
 ) -> dict[str, Any]:
     """Execute every selected experiment; each yields EXECUTED or BLOCKED receipt."""
     selected_ids = [_text(_dict(item).get("obligation_id")) for item in selected]
     if not all(selected_ids) or len(selected_ids) != len(set(selected_ids)):
         raise ValueError("selected_obligation_identity_invalid")
+    run_contract = _dict(mainline_run)
+    if not run_contract or _text(run_contract.get("campaign_id")) != _text(campaign_id):
+        raise ValueError("experiment batch mainline campaign identity mismatch")
     tokens = load_actor_tokens(root, project)
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -1668,6 +2827,11 @@ def execute_selected_experiments(
                 "execution_id": execution_id,
                 "evidence_id": evidence_id,
                 "campaign_id": campaign_id,
+                "mainline_run": {
+                    "contract_fingerprint": _text(
+                        run_contract.get("contract_fingerprint")
+                    ),
+                },
             })
             finding_evidence = _dict(finding.get("evidence"))
             finding_evidence["evidence_id"] = evidence_id
@@ -1768,24 +2932,100 @@ def execute_selected_experiments(
                 "operational_receipt": operational_receipt,
             }
         else:
+            delivery_execution_receipt = build_delivery_execution_receipt(
+                mainline_run=run_contract,
+                candidate_id=candidate_id,
+                slice_id=slice_id,
+                obligation_id=oid,
+                experiment_id=eid,
+                execution_id=execution_id,
+                evidence_id=evidence_id,
+                operational_receipt=operational_receipt,
+                observation_receipt_ids=observation_receipt_ids,
+                oracle_receipt_id=oracle_receipt_id,
+                elapsed_ms=outcome.get("elapsed_ms"),
+                cost_coverage_status="UNKNOWN",
+            )
+            reproduction_receipt = build_reproduction_receipt(
+                execution_receipt=delivery_execution_receipt,
+                steps=[
+                    row
+                    for row in _list(outcome.get("steps"))
+                    if isinstance(row, dict)
+                ],
+                oracle_receipt=oracle_verdict,
+                source_refs=[
+                    dict(row)
+                    for row in _list(exp.get("source_refs"))
+                    if isinstance(row, dict)
+                ],
+            )
+            gate_receipt = build_customer_delivery_gate_receipt_v2(
+                finding=(
+                    outcome.get("finding")
+                    if isinstance(outcome.get("finding"), dict)
+                    else None
+                ),
+                execution_receipt=delivery_execution_receipt,
+                contract_evidence_receipts=[
+                    dict(row)
+                    for row in _list(outcome.get("contract_evidence_receipts"))
+                    if isinstance(row, dict)
+                ],
+                observer_receipts=[
+                    dict(row)
+                    for row in _list(outcome.get("observer_receipts"))
+                    if isinstance(row, dict)
+                ],
+                oracle_receipt=oracle_verdict,
+                reproduction_receipt=reproduction_receipt,
+            )
             executed += 1
             execution_results[oid] = {
                 "status": "EXECUTED",
                 "reason_code": "",
                 "experiment_id": eid,
                 "execution_id": execution_id,
-                "receipt_id": execution_id,
+                "receipt_id": _text(delivery_execution_receipt.get("receipt_id")),
+                "output_fingerprint": _text(
+                    delivery_execution_receipt.get("receipt_fingerprint")
+                ),
                 "observation_receipt_ids": observation_receipt_ids,
                 "oracle_receipt_id": oracle_receipt_id,
                 "elapsed_ms": outcome.get("elapsed_ms"),
                 "cost_coverage_status": "UNKNOWN",
                 "operational_receipt": operational_receipt,
+                "delivery_execution_receipt": delivery_execution_receipt,
+                "contract_evidence_receipts": list(
+                    outcome.get("contract_evidence_receipts") or []
+                ),
+                "observer_receipts": list(outcome.get("observer_receipts") or []),
+                "oracle_receipt": oracle_verdict,
+                "reproduction_receipt": reproduction_receipt,
             }
-            gate_results[oid] = build_customer_delivery_gate_receipt(
-                outcome.get("finding") if isinstance(outcome.get("finding"), dict) else None,
-                obligation_id=oid,
-                execution_id=execution_id,
-            )
+            gate_results[oid] = gate_receipt
+            outcome["delivery_execution_receipt"] = delivery_execution_receipt
+            outcome["reproduction_receipt"] = reproduction_receipt
+            outcome["delivery_gate_receipt"] = gate_receipt
+            if isinstance(outcome.get("finding"), dict):
+                finding = outcome["finding"]
+                finding["delivery_gate_receipt"] = gate_receipt
+                finding["delivery_gate_receipt_id"] = _text(
+                    gate_receipt.get("gate_receipt_id")
+                )
+                finding["gate_passed"] = gate_receipt.get("status") == "DELIVERABLE"
+                finding["customer_delivery_status"] = (
+                    "defect"
+                    if gate_receipt.get("status") == "DELIVERABLE"
+                    else "candidate"
+                )
+                finding["customer_visible"] = (
+                    gate_receipt.get("status") == "DELIVERABLE"
+                )
+                finding["customer_delivery_gate_reasons"] = list(
+                    gate_receipt.get("reason_codes") or []
+                )
+                execution_results[oid]["finding"] = dict(finding)
         cleanup_failures += outcome_cleanup_failures
         if status == "EXECUTED" and isinstance(outcome.get("finding"), dict):
             findings.append(outcome["finding"])

@@ -569,9 +569,20 @@ def test_scan_persists_external_validated_candidate_evidence_package_into_bundle
     manifest_path = tmp_path / result["evidence_bundle"]["manifest_ref"]
     findings_artifact = next(item for item in manifest_data["artifacts"] if item["name"] == "findings")
     findings_payload = json.loads((manifest_path.parent / findings_artifact["path"]).read_text(encoding="utf-8"))
+    candidate_artifact = next(
+        item
+        for item in manifest_data["artifacts"]
+        if item["name"] == "candidate_findings"
+    )
+    candidate_payload = json.loads(
+        (manifest_path.parent / candidate_artifact["path"]).read_text(
+            encoding="utf-8"
+        )
+    )
 
-    assert len(findings_payload) == 1
-    persisted = findings_payload[0]
+    assert findings_payload == []
+    assert len(candidate_payload) == 1
+    persisted = candidate_payload[0]
     assert persisted["risk_id"] == "EXT-PKG-1"
     assert persisted["evidence_package"]["engine"] == "runtime_finding_evidence_packager_v1_phase92t"
     assert persisted["delta_summary"]["failed_fields"] == ["status"]

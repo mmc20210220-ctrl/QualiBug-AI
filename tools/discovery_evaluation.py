@@ -9,6 +9,7 @@ in runtime views, receipts, or aggregate reports.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from ai_test_asset_center.discovery_evaluation_contract import (
+    EVALUATION_RUN_ENVELOPE_SCHEMA,
     RECEIPT_SCHEMA,
     REPORT_SCHEMA,
     aggregate_evaluation_receipts,
@@ -31,6 +33,9 @@ from ai_test_asset_center.discovery_evaluation_contract import (
     load_evaluation_manifest,
     persist_evaluation_receipt,
     persist_evaluation_report,
+)
+from ai_test_asset_center.evaluator_receipt_auth import (
+    resolve_evaluator_hmac_keyring,
 )
 
 
@@ -65,15 +70,31 @@ def _command_inspect(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _command_evaluate(args: argparse.Namespace) -> dict[str, Any]:
+    resolve_evaluator_hmac_keyring()
+    signing_key = None
     manifest = load_evaluation_manifest(args.manifest)
     envelope = _load_object(Path(args.run_envelope), "run envelope")
+    if envelope.get("schema_version") != EVALUATION_RUN_ENVELOPE_SCHEMA:
+        raise ValueError(
+            "run envelope must be normalized with the current schema before evaluation"
+        )
+    envelope_policy_id = str(envelope.get("policy_id") or "").strip()
+    if envelope_policy_id and envelope_policy_id != args.policy_id:
+        raise ValueError(
+            "run envelope policy_id does not match evaluator-owned --policy-id"
+        )
     scan_result = envelope.get("scan_result")
     if not isinstance(scan_result, dict):
         raise ValueError("run envelope.scan_result must be an object")
     findings = scan_result.get("findings")
+    delivery_occurrences = scan_result.get("delivery_occurrences")
     candidates = scan_result.get("candidate_findings")
     if not isinstance(findings, list):
         raise ValueError("run envelope.scan_result.findings must be a list")
+    if not isinstance(delivery_occurrences, list):
+        raise ValueError(
+            "run envelope.scan_result.delivery_occurrences must be a list"
+        )
     if candidates is not None and not isinstance(candidates, list):
         raise ValueError("run envelope.scan_result.candidate_findings must be a list when present")
     pipeline_health = envelope.get("pipeline_health")
@@ -85,6 +106,61 @@ def _command_evaluate(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("run envelope.operational_metrics must be an object")
     if fixture_governance is not None and not isinstance(fixture_governance, dict):
         raise ValueError("run envelope.fixture_governance must be an object when present")
+    obligation_attempt_ledger = (
+        scan_result.get("obligation_attempt_ledger")
+        if "obligation_attempt_ledger" in scan_result
+        else envelope.get("obligation_attempt_ledger")
+    )
+    if obligation_attempt_ledger is not None and not isinstance(
+        obligation_attempt_ledger,
+        dict,
+    ):
+        raise ValueError(
+            "obligation_attempt_ledger must be an object when embedded"
+        )
+    mainline_run = scan_result.get("mainline_run") or envelope.get(
+        "mainline_run"
+    )
+    if not isinstance(mainline_run, dict):
+        raise ValueError("mainline_run must be an object in the run envelope")
+    if str(mainline_run.get("policy_version") or "").strip() != (
+        args.policy_version
+    ):
+        raise ValueError(
+            "mainline_run policy_version does not match evaluator-owned "
+            "--policy-version"
+        )
+    strategy_fingerprint = str(args.strategy_fingerprint or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", strategy_fingerprint):
+        raise ValueError("--strategy-fingerprint must be a SHA-256 hex digest")
+    process_boundary = scan_result.get("process_boundary") or envelope.get(
+        "process_boundary"
+    )
+    if process_boundary is not None and not isinstance(process_boundary, dict):
+        raise ValueError("process_boundary must be an object when supplied")
+    execution_attestation = envelope.get("execution_attestation")
+    if execution_attestation is None:
+        execution_attestation = scan_result.get("execution_attestation")
+    if execution_attestation is not None and not isinstance(
+        execution_attestation, dict
+    ):
+        raise ValueError(
+            "execution_attestation must be an object when supplied"
+        )
+    authority_fields: dict[str, dict[str, Any]] = {}
+    for field in (
+        "formal_count_projection",
+        "formal_delivery_authority",
+        "canonical_defect_registry",
+        "defect_identity_consistency",
+    ):
+        value = scan_result.get(field) or envelope.get(field)
+        if not isinstance(value, dict):
+            raise ValueError(f"{field} must be an object in the run envelope")
+        outer = envelope.get(field)
+        if outer is not None and outer != value:
+            raise ValueError(f"scan_result.{field} does not match envelope")
+        authority_fields[field] = value
     trace_ledger: dict[str, Any] | None = None
     if args.trace_ledger:
         trace_ledger = _load_object(Path(args.trace_ledger), "discovery trace ledger")
@@ -99,34 +175,71 @@ def _command_evaluate(args: argparse.Namespace) -> dict[str, Any]:
         manifest,
         args.target_id,
         run_id=str(envelope.get("run_id") or ""),
-        policy_id=str(envelope.get("policy_id") or ""),
+        policy_id=str(args.policy_id or ""),
         evaluation_mode=str(envelope.get("evaluation_mode") or ""),
         findings=findings,
+        delivery_occurrences=delivery_occurrences,
         candidates=candidates or [],
         pipeline_health=pipeline_health,
         operational_metrics=operational_metrics,
         fixture_governance=fixture_governance or {},
         trace_ledger=trace_ledger,
+        obligation_attempt_ledger=obligation_attempt_ledger,
+        mainline_run=mainline_run,
+        formal_count_projection=authority_fields["formal_count_projection"],
+        formal_delivery_authority=authority_fields[
+            "formal_delivery_authority"
+        ],
+        canonical_defect_registry=authority_fields[
+            "canonical_defect_registry"
+        ],
+        defect_identity_consistency=authority_fields[
+            "defect_identity_consistency"
+        ],
+        evaluator_policy_identity={
+            "policy_id": args.policy_id,
+            "policy_version": args.policy_version,
+            "strategy_fingerprint": strategy_fingerprint,
+        },
+        process_boundary=process_boundary,
+        execution_attestation=execution_attestation,
+        receipt_signing_key=signing_key,
     )
-    persisted = persist_evaluation_receipt(receipt, args.output_root)
+    persisted = persist_evaluation_receipt(
+        receipt,
+        args.output_root,
+        receipt_signing_key=signing_key,
+    )
     return {"receipt_path": str(persisted), "receipt": receipt}
 
 
 def _command_aggregate(args: argparse.Namespace) -> dict[str, Any]:
+    resolve_evaluator_hmac_keyring()
+    signing_key = None
     manifest = load_evaluation_manifest(args.manifest)
     receipt_paths = [Path(item) for item in (args.receipt or [])]
     if args.receipt_dir:
         receipt_paths.extend(sorted(Path(args.receipt_dir).rglob("*.json")))
     if not receipt_paths:
         raise ValueError("aggregate requires --receipt or --receipt-dir")
-    report = aggregate_evaluation_receipts(manifest, _load_receipts(receipt_paths))
-    persisted = persist_evaluation_report(report, args.output)
+    report = aggregate_evaluation_receipts(
+        manifest,
+        _load_receipts(receipt_paths),
+        receipt_signing_key=signing_key,
+    )
+    persisted = persist_evaluation_report(
+        report,
+        args.output,
+        receipt_signing_key=signing_key,
+    )
     return {"report_path": str(persisted), "report": report}
 
 
 def _command_goal_status(args: argparse.Namespace) -> dict[str, Any]:
     report = None
+    signing_key = None
     if args.report:
+        resolve_evaluator_hmac_keyring()
         report = _load_object(Path(args.report), "evaluation report")
         if report.get("schema_version") != REPORT_SCHEMA:
             raise ValueError(f"not an evaluation report: {args.report}")
@@ -136,6 +249,7 @@ def _command_goal_status(args: argparse.Namespace) -> dict[str, Any]:
         evaluation_report=report,
         baseline_cost_per_true_positive_usd=baseline,
         consecutive_non_regressive_windows=windows,
+        receipt_signing_key=signing_key,
     )
     if args.output:
         destination = Path(args.output)
@@ -158,6 +272,21 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser = subparsers.add_parser("evaluate", help="score one completed run and persist its receipt")
     evaluate_parser.add_argument("--manifest", required=True, type=Path)
     evaluate_parser.add_argument("--target-id", required=True)
+    evaluate_parser.add_argument(
+        "--policy-id",
+        required=True,
+        help="evaluator-owned policy identity; any envelope copy must match",
+    )
+    evaluate_parser.add_argument(
+        "--policy-version",
+        required=True,
+        help="evaluator-owned policy version; must match the mainline contract",
+    )
+    evaluate_parser.add_argument(
+        "--strategy-fingerprint",
+        required=True,
+        help="evaluator-owned SHA-256 fingerprint of the full strategy bundle",
+    )
     evaluate_parser.add_argument("--run-envelope", required=True, type=Path)
     evaluate_parser.add_argument(
         "--trace-ledger",

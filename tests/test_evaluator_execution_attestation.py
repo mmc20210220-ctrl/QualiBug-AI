@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import copy
+
+import pytest
+
+from ai_test_asset_center.discovery_mainline_contract import (
+    build_mainline_run_contract,
+)
+from ai_test_asset_center.evaluator_execution_attestation import (
+    ExecutionAttestationError,
+    PROCESS_BOUNDARY_SCHEMA,
+    build_execution_attestation,
+    validate_execution_attestation,
+)
+from tests.phase3_gate_support import build_formal_evaluation_scope
+
+
+SIGNING_KEY = "execution-attestation-test-key-0123456789abcdef"
+
+
+def _authority() -> tuple[dict, dict]:
+    mainline = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id="run-attested",
+        campaign_id="campaign-attested",
+        target_id="target-attested",
+        environment_id="http://127.0.0.1:8011",
+        policy_version="v1",
+        evaluation_mode="replay",
+    )
+    _, ledger = build_formal_evaluation_scope(
+        [{"finding_id": "finding-attested"}],
+        run_id=mainline["run_id"],
+        campaign_id=mainline["campaign_id"],
+        target_id=mainline["target_id"],
+        environment_id=mainline["environment_id"],
+        policy_version=mainline["policy_version"],
+        evaluation_mode=mainline["evaluation_mode"],
+    )
+    return mainline, ledger
+
+
+def _inputs() -> dict:
+    mainline, ledger = _authority()
+    attempt = ledger["attempts"][0]
+    operational = attempt["operational_receipt"]
+    return {
+        "mainline_run": mainline,
+        "obligation_attempt_ledger": ledger,
+        "policy_identity": {
+            "policy_id": "policy-1",
+            "policy_version": "v1",
+            "strategy_fingerprint": "a" * 64,
+        },
+        "fixture_governance": {
+            "cleanup_status": "SUCCEEDED",
+            "dirty_environment": False,
+            "prepare_receipt_fingerprint": "prepare-1",
+            "cleanup_receipt_fingerprint": "cleanup-1",
+        },
+        "process_boundary": {
+            "schema_version": PROCESS_BOUNDARY_SCHEMA,
+            "isolation": "isolated_subprocess",
+            "worker_protocol_schema": (
+                "qualibug.observed-product-scan-worker-request.v1"
+            ),
+            "evaluator_secrets_removed": True,
+            "request_fingerprint": "b" * 64,
+            "result_fingerprint": "c" * 64,
+            "exit_code": 0,
+        },
+        "trusted_observations": [{
+            "obligation_id": attempt["obligation_id"],
+            "execution_id": attempt["execution_id"],
+            "source_kind": "evaluator_http_proxy",
+            "source_receipt_id": "proxy-receipt-1",
+            "source_fingerprint": "d" * 64,
+            "target_request_count": operational[
+                "http_request_attempt_count"
+            ],
+            "write_count": operational["accepted_write_count"],
+            "production_request_count": operational[
+                "production_http_request_count"
+            ],
+            "audit_receipt_ids": [],
+        }],
+    }
+
+
+def test_attestation_binds_independent_gateway_to_every_request_attempt() -> None:
+    inputs = _inputs()
+    attestation = build_execution_attestation(
+        **inputs,
+        signing_key=SIGNING_KEY,
+    )
+
+    validated = validate_execution_attestation(
+        attestation,
+        **{
+            key: value
+            for key, value in inputs.items()
+            if key != "trusted_observations"
+        },
+        signing_key=SIGNING_KEY,
+    )
+
+    assert validated["status"] == "VERIFIED"
+    assert validated["target_request_count"] > 0
+    assert validated["trust_boundary"] == "evaluator_owned_io_gateway"
+
+
+def test_runtime_receipts_without_independent_observation_cannot_be_attested() -> None:
+    inputs = _inputs()
+    inputs["trusted_observations"] = []
+
+    with pytest.raises(
+        ExecutionAttestationError,
+        match="trusted_observation_coverage_incomplete",
+    ):
+        build_execution_attestation(**inputs, signing_key=SIGNING_KEY)
+
+
+def test_attestation_tampering_is_rejected() -> None:
+    inputs = _inputs()
+    attestation = build_execution_attestation(
+        **inputs,
+        signing_key=SIGNING_KEY,
+    )
+    tampered = copy.deepcopy(attestation)
+    tampered["target_request_count"] += 1
+
+    with pytest.raises(
+        ExecutionAttestationError,
+        match="authentication_invalid",
+    ):
+        validate_execution_attestation(
+            tampered,
+            **{
+                key: value
+                for key, value in inputs.items()
+                if key != "trusted_observations"
+            },
+            signing_key=SIGNING_KEY,
+        )

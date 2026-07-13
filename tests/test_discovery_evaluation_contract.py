@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -19,7 +20,27 @@ from ai_test_asset_center.discovery_evaluation_contract import (
     persist_evaluation_receipt,
 )
 from ai_test_asset_center.discovery_trace_ledger import build_discovery_trace_ledger_v2
+from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
 from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
+from ai_test_asset_center.operational_receipts import (
+    build_execution_operational_receipt,
+)
+from tests.phase3_gate_support import (
+    build_formal_evaluation_scope,
+    build_formal_scope_contract,
+    build_test_execution_authority,
+)
+
+
+TEST_EVALUATOR_HMAC_KEY = "evaluation-contract-test-key-0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _evaluator_hmac_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "QUALIBUG_EVALUATOR_RECEIPT_HMAC_KEY",
+        TEST_EVALUATOR_HMAC_KEY,
+    )
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -153,15 +174,55 @@ def _receipt(
     findings: list[dict],
     *,
     policy_id: str = "policy-champion",
+    policy_version: str | None = None,
     evaluation_mode: str = "replay",
 ) -> dict:
+    target = manifest.target(target_id)
+    run_id = f"run-{target_id}"
+    frozen_policy_version = policy_version or policy_id
+    formal_findings, attempt_ledger = build_formal_evaluation_scope(
+        findings,
+        run_id=run_id,
+        campaign_id=f"campaign-{target_id}",
+        target_id=target_id,
+        environment_id=target.environment_ref,
+        policy_version=frozen_policy_version,
+        evaluation_mode=evaluation_mode,
+    )
+    mainline_run = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id=run_id,
+        campaign_id=f"campaign-{target_id}",
+        target_id=target_id,
+        environment_id=target.environment_ref,
+        policy_version=frozen_policy_version,
+        evaluation_mode=evaluation_mode,
+    )
+    formal_scope = build_formal_scope_contract(
+        mainline_run=mainline_run,
+        findings=formal_findings,
+        obligation_attempt_ledger=attempt_ledger,
+    )
+    policy_strategy_fingerprint = hashlib.sha256(
+        f"{policy_id}:{frozen_policy_version}".encode("utf-8")
+    ).hexdigest()
+    execution_authority = build_test_execution_authority(
+        mainline_run=mainline_run,
+        obligation_attempt_ledger=attempt_ledger,
+        policy_id=policy_id,
+        strategy_fingerprint=policy_strategy_fingerprint,
+    )
     return evaluate_completed_scan(
         manifest,
         target_id,
-        run_id=f"run-{target_id}",
+        run_id=run_id,
         policy_id=policy_id,
         evaluation_mode=evaluation_mode,
-        findings=findings,
+        findings=list(
+            formal_scope["formal_count_projection"][
+                "canonical_representative_findings"
+            ]
+        ),
         candidates=[],
         pipeline_health={"status": "OK"},
         operational_metrics={
@@ -176,7 +237,85 @@ def _receipt(
             "engine_success_rate": 1.0,
             "duplicate_rate": 0.0,
         },
+        obligation_attempt_ledger=attempt_ledger,
+        mainline_run=mainline_run,
+        evaluator_policy_identity={
+            "policy_id": policy_id,
+            "policy_version": frozen_policy_version,
+            "strategy_fingerprint": policy_strategy_fingerprint,
+        },
+        **execution_authority,
+        **formal_scope,
     )
+
+
+def test_aggregate_rejects_mixed_policy_versions_with_valid_hmac(
+    tmp_path: Path,
+) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    first = _receipt(
+        manifest,
+        "held-in",
+        [_matched_finding("held-in")],
+        policy_id="same-policy",
+        policy_version="version-a",
+    )
+    second = _receipt(
+        manifest,
+        "held-out-fin",
+        [_matched_finding("held-out-fin")],
+        policy_id="same-policy",
+        policy_version="version-b",
+    )
+
+    with pytest.raises(EvaluationContractError, match="one policy identity"):
+        aggregate_evaluation_receipts(manifest, [first, second])
+
+
+def _empty_scope(
+    manifest,
+    target_id: str,
+    *,
+    run_id: str,
+    policy_id: str,
+    evaluation_mode: str,
+) -> dict:
+    target = manifest.target(target_id)
+    mainline = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id=run_id,
+        campaign_id=f"campaign-{run_id}",
+        target_id=target_id,
+        environment_id=target.environment_ref,
+        policy_version=policy_id,
+        evaluation_mode=evaluation_mode,
+    )
+    _, ledger = build_formal_evaluation_scope(
+        [],
+        run_id=run_id,
+        campaign_id=f"campaign-{run_id}",
+        target_id=target_id,
+        environment_id=target.environment_ref,
+        policy_version=policy_id,
+        evaluation_mode=evaluation_mode,
+    )
+    formal_scope = build_formal_scope_contract(
+        mainline_run=mainline,
+        findings=[],
+        obligation_attempt_ledger=ledger,
+    )
+    return {
+        "mainline_run": mainline,
+        "obligation_attempt_ledger": ledger,
+        "evaluator_policy_identity": {
+            "policy_id": policy_id,
+            "policy_version": policy_id,
+            "strategy_fingerprint": hashlib.sha256(
+                f"{policy_id}:{policy_id}".encode("utf-8")
+            ).hexdigest(),
+        },
+        **formal_scope,
+    }
 
 
 def _trace_ledger(
@@ -186,11 +325,31 @@ def _trace_ledger(
     evaluation_mode: str = "replay",
     oracle_failure_votes: int = 0,
     formal_defect_count: int = 0,
-) -> dict:
+) -> tuple[dict, dict, dict]:
     run_id = f"run-{target_id}"
     finding_id = f"finding-{target_id}" if formal_defect_count else ""
+    mainline = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id=run_id,
+        campaign_id=f"campaign-{target_id}",
+        target_id=target_id,
+        environment_id=f"env-{target_id}",
+        policy_version=policy_id,
+        evaluation_mode=evaluation_mode,
+    )
+    operational = build_execution_operational_receipt(
+        receipt_id=f"operational-{target_id}",
+        execution_status="EXECUTED",
+        steps=[{
+            "phase": "treatment",
+            "method": "GET",
+            "path": "/resources/resource-1",
+            "status_code": 403,
+        }],
+        cleanup_failures=0,
+    )
     attempt_ledger = build_obligation_attempt_ledger(
-        mainline_run={"run_id": run_id, "campaign_id": f"campaign-{target_id}"},
+        mainline_run=mainline,
         selected=[{
             "obligation_id": f"obl-{target_id}",
             "risk_family": "authorization_access_control",
@@ -209,6 +368,7 @@ def _trace_ledger(
                 "execution_id": f"exec-{target_id}",
                 "observation_receipt_ids": [f"obs-{target_id}"],
                 "oracle_receipt_id": f"oracle-{target_id}",
+                "operational_receipt": operational,
             }
         },
         gate_results={
@@ -220,11 +380,14 @@ def _trace_ledger(
             }
         },
     )
-    return build_discovery_trace_ledger_v2(
+    trace = build_discovery_trace_ledger_v2(
         {
             "obligation_attempt_ledger": attempt_ledger,
             "formal_count_projection": {
-                "formal_finding_ids": [finding_id] if finding_id else []
+                "delivery_occurrence_finding_ids": (
+                    [finding_id] if finding_id else []
+                ),
+                "canonical_defect_ids": [],
             },
         },
         run_id=run_id,
@@ -234,6 +397,7 @@ def _trace_ledger(
         industry="commerce",
         evaluation_mode=evaluation_mode,
     )
+    return trace, attempt_ledger, mainline
 
 
 def test_runtime_view_never_exposes_evaluator_ground_truth(tmp_path: Path) -> None:
@@ -308,6 +472,13 @@ def test_failed_pipeline_is_not_reported_as_zero_bug_or_zero_false_positive(tmp_
         candidates=[],
         pipeline_health={"status": "FAILED_SAFE"},
         operational_metrics={},
+        **_empty_scope(
+            manifest,
+            "held-in",
+            run_id="failed-run",
+            policy_id="policy-champion",
+            evaluation_mode="replay",
+        ),
     )
     report = aggregate_evaluation_receipts(manifest, [receipt])
 
@@ -317,6 +488,37 @@ def test_failed_pipeline_is_not_reported_as_zero_bug_or_zero_false_positive(tmp_
     assert report["claim_status"] == "NOT_MEASURED"
     assert report["evaluation_complete"] is False
     assert "held-in" in {item["target_id"] for item in report["not_measured_targets"]}
+
+
+def test_runtime_self_hashed_request_receipts_cannot_be_measured_without_attestation(
+    tmp_path: Path,
+) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+
+    receipt = evaluate_completed_scan(
+        manifest,
+        "held-in",
+        run_id="unattested-run",
+        policy_id="policy-unattested",
+        evaluation_mode="replay",
+        findings=[],
+        candidates=[],
+        pipeline_health={"status": "OK"},
+        operational_metrics={},
+        **_empty_scope(
+            manifest,
+            "held-in",
+            run_id="unattested-run",
+            policy_id="policy-unattested",
+            evaluation_mode="replay",
+        ),
+    )
+
+    assert receipt["measurement_status"] == "NOT_MEASURED"
+    assert receipt["not_measured_reason"] == (
+        "evaluator_execution_attestation_missing"
+    )
+    assert receipt["metrics"] == {}
 
 
 def test_not_measured_operational_nulls_remain_unknown_during_aggregation(tmp_path: Path) -> None:
@@ -346,6 +548,13 @@ def test_not_measured_operational_nulls_remain_unknown_during_aggregation(tmp_pa
         candidates=[],
         pipeline_health={"status": "BLOCKED"},
         operational_metrics=operational_metrics,
+        **_empty_scope(
+            manifest,
+            "held-in",
+            run_id="blocked-run",
+            policy_id="policy-candidate",
+            evaluation_mode="shadow",
+        ),
     )
 
     report = aggregate_evaluation_receipts(manifest, [receipt])
@@ -397,6 +606,13 @@ def test_cost_unknown_does_not_erase_independently_observed_operational_totals(
             "cost_measurement_status": "NOT_MEASURED",
             "promotion_blockers": ["COST_NOT_MEASURED"],
         },
+        **_empty_scope(
+            manifest,
+            "held-in",
+            run_id="cost-unknown-run",
+            policy_id="policy-candidate",
+            evaluation_mode="shadow",
+        ),
     )
 
     operational = aggregate_evaluation_receipts(manifest, [receipt])["operational"]
@@ -414,6 +630,21 @@ def test_cost_unknown_does_not_erase_independently_observed_operational_totals(
 
 def test_private_evaluator_reports_per_bug_first_loss_stage(tmp_path: Path) -> None:
     manifest = load_evaluation_manifest(_manifest(tmp_path))
+    trace, attempt_ledger, mainline = _trace_ledger("held-in")
+    formal_scope = build_formal_scope_contract(
+        mainline_run=mainline,
+        findings=[],
+        obligation_attempt_ledger=attempt_ledger,
+    )
+    strategy = hashlib.sha256(
+        b"policy-champion:policy-champion"
+    ).hexdigest()
+    execution_authority = build_test_execution_authority(
+        mainline_run=mainline,
+        obligation_attempt_ledger=attempt_ledger,
+        policy_id="policy-champion",
+        strategy_fingerprint=strategy,
+    )
     receipt = evaluate_completed_scan(
         manifest,
         "held-in",
@@ -424,12 +655,21 @@ def test_private_evaluator_reports_per_bug_first_loss_stage(tmp_path: Path) -> N
         candidates=[],
         pipeline_health={"status": "OK"},
         operational_metrics={},
-        trace_ledger=_trace_ledger("held-in"),
+        trace_ledger=trace,
+        obligation_attempt_ledger=attempt_ledger,
+        mainline_run=mainline,
+        evaluator_policy_identity={
+            "policy_id": "policy-champion",
+            "policy_version": "policy-champion",
+            "strategy_fingerprint": strategy,
+        },
+        **execution_authority,
+        **formal_scope,
     )
 
     diagnostics = receipt["metrics"]["stage_loss_diagnostics"]
     assert receipt["trace_ledger_projection"]["schema_version"] == (
-        "qualibug.discovery-trace-ledger.v2"
+        "qualibug.discovery-trace-ledger.v3"
     )
     assert receipt["trace_ledger_projection"]["trace_count"] == 1
     assert receipt["trace_ledger_projection"]["ledger_fingerprint"]
@@ -456,7 +696,12 @@ def test_private_evaluator_reports_per_bug_first_loss_stage(tmp_path: Path) -> N
 
 def test_trace_ledger_identity_must_match_evaluated_run(tmp_path: Path) -> None:
     manifest = load_evaluation_manifest(_manifest(tmp_path))
-    trace = _trace_ledger("held-in")
+    trace, attempt_ledger, mainline = _trace_ledger("held-in")
+    formal_scope = build_formal_scope_contract(
+        mainline_run=mainline,
+        findings=[],
+        obligation_attempt_ledger=attempt_ledger,
+    )
     trace["run_id"] = "wrong-run"
 
     with pytest.raises(EvaluationContractError, match="trace_ledger.run_id"):
@@ -471,6 +716,16 @@ def test_trace_ledger_identity_must_match_evaluated_run(tmp_path: Path) -> None:
             pipeline_health={"status": "OK"},
             operational_metrics={},
             trace_ledger=trace,
+            obligation_attempt_ledger=attempt_ledger,
+            mainline_run=mainline,
+            evaluator_policy_identity={
+                "policy_id": "policy-champion",
+                "policy_version": "policy-champion",
+                "strategy_fingerprint": hashlib.sha256(
+                    b"policy-champion:policy-champion"
+                ).hexdigest(),
+            },
+            **formal_scope,
         )
 
 
@@ -580,7 +835,7 @@ def test_paired_evidence_rejects_target_fingerprint_drift(tmp_path: Path) -> Non
     challenger_shadow = _policy_report(manifest, "challenger", "shadow")
     challenger_shadow["target_receipts"][0]["input_fingerprint"] = "drifted"
 
-    with pytest.raises(EvaluationContractError, match="target fingerprints differ"):
+    with pytest.raises(EvaluationContractError, match="authentication"):
         build_paired_evaluation_evidence(
             manifest,
             champion_replay=champion_replay,

@@ -834,16 +834,10 @@ def run_regression_suite(project_id: str = "real_project_demo", root: Path | Non
     result["history_size"] = len(history)
 
     # ── Phase 92F: Auto-update Issue Lifecycle Center after regression ──
-    # Acceptance Criterion 12: regression results auto-migrate bug status
-    # (regression_passed → defect stays fixed; regression_failed → defect reopens).
-    # The lifecycle center reads regression_run_result.json and promotes state.
-    try:
-        from .issue_lifecycle_center import build_issue_lifecycle_center
-        lifecycle = build_issue_lifecycle_center(project, root, options={"auto_generate_missing": False, "regression_mode": mode, "dry_run": dry_run})
-        result["lifecycle_ref"] = f"platform_outputs/{project}/issue_lifecycle/issue_lifecycle.json"
-        result["lifecycle_summary"] = lifecycle.get("summary", {})
-    except Exception:
-        result["lifecycle_ref"] = None
+    result["lifecycle_update"] = {
+        "status": "DEFERRED_TO_ORCHESTRATOR",
+        "reason_code": "REGRESSION_RUNNER_HAS_NO_LIFECYCLE_WRITE_AUTHORITY",
+    }
 
     return result
 

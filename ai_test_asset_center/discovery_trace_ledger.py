@@ -14,7 +14,7 @@ from .artifact_redactor import redact_and_validate
 from .obligation_attempt_ledger import validate_obligation_attempt_ledger
 
 
-TRACE_LEDGER_SCHEMA = "qualibug.discovery-trace-ledger.v2"
+TRACE_LEDGER_SCHEMA = "qualibug.discovery-trace-ledger.v3"
 TRACE_LEDGER_V1_SCHEMA = "qualibug.discovery-trace-ledger.v1"
 
 
@@ -318,16 +318,27 @@ def build_discovery_trace_ledger_v2(
     if len({row["obligation_id"] for row in attempts}) != len(attempts):
         raise DiscoveryTraceError("duplicate_obligation_attempt")
     formal_projection = _dict(scan_result.get("formal_count_projection"))
-    if not isinstance(formal_projection.get("formal_finding_ids"), list):
-        raise DiscoveryTraceError("formal_finding_ids_missing")
-    formal_ids = sorted({_text(value) for value in formal_projection["formal_finding_ids"] if _text(value)})
+    if not isinstance(
+        formal_projection.get("delivery_occurrence_finding_ids"), list
+    ):
+        raise DiscoveryTraceError("delivery_occurrence_finding_ids_missing")
+    formal_ids = sorted({
+        _text(value)
+        for value in formal_projection["delivery_occurrence_finding_ids"]
+        if _text(value)
+    })
+    canonical_ids = sorted({
+        _text(value)
+        for value in _list(formal_projection.get("canonical_defect_ids"))
+        if _text(value)
+    })
     deliverable_ids = sorted({
         row["finding_id"]
         for row in attempts
         if row["terminal_status"] == "DELIVERABLE" and row["finding_id"]
     })
     if formal_ids != deliverable_ids:
-        raise DiscoveryTraceError("formal_finding_ids_mismatch")
+        raise DiscoveryTraceError("delivery_occurrence_finding_ids_mismatch")
     signature_counts = Counter(
         signature for row in attempts for signature in row["failure_signatures"]
     )
@@ -350,7 +361,8 @@ def build_discovery_trace_ledger_v2(
         "attempt_ledger_fingerprint": _text(attempt_ledger.get("ledger_fingerprint")),
         "attempt_count": len(attempts),
         "trace_count": len(attempts),
-        "formal_finding_ids": formal_ids,
+        "delivery_occurrence_finding_ids": formal_ids,
+        "canonical_defect_ids": canonical_ids,
         "outcome_counts": dict(sorted(outcome_counts.items())),
         "terminal_status_counts": dict(sorted(terminal_counts.items())),
         "failure_signature_counts": dict(
@@ -411,6 +423,36 @@ def validate_trace_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
         raise DiscoveryTraceError("trace_ledger_obligation_identity_invalid")
     if int(ledger.get("attempt_count") or 0) != len(attempts):
         raise DiscoveryTraceError("trace_ledger_attempt_count_mismatch")
+    occurrence_ids = ledger.get("delivery_occurrence_finding_ids")
+    canonical_ids = ledger.get("canonical_defect_ids")
+    if not isinstance(occurrence_ids, list):
+        raise DiscoveryTraceError(
+            "trace_ledger_delivery_occurrence_finding_ids_missing"
+        )
+    if not isinstance(canonical_ids, list):
+        raise DiscoveryTraceError("trace_ledger_canonical_defect_ids_missing")
+    normalized_occurrence_ids = sorted({
+        _text(value) for value in occurrence_ids if _text(value)
+    })
+    normalized_canonical_ids = sorted({
+        _text(value) for value in canonical_ids if _text(value)
+    })
+    if occurrence_ids != normalized_occurrence_ids:
+        raise DiscoveryTraceError(
+            "trace_ledger_delivery_occurrence_identity_invalid"
+        )
+    if canonical_ids != normalized_canonical_ids:
+        raise DiscoveryTraceError("trace_ledger_canonical_identity_invalid")
+    attempt_occurrence_ids = sorted({
+        _text(_dict(item).get("finding_id"))
+        for item in attempts
+        if _text(_dict(item).get("terminal_status")).upper() == "DELIVERABLE"
+        and _text(_dict(item).get("finding_id"))
+    })
+    if normalized_occurrence_ids != attempt_occurrence_ids:
+        raise DiscoveryTraceError(
+            "trace_ledger_delivery_occurrence_attempt_mismatch"
+        )
     redaction = _dict(ledger.get("redaction_contract"))
     for field in (
         "raw_request_bodies_persisted",
@@ -432,7 +474,7 @@ def validate_trace_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
     return dict(ledger)
 
 
-def migrate_trace_ledger_v1_to_v2(
+def migrate_trace_ledger_v1_to_v3(
     v1: dict[str, Any],
     *,
     obligation_map: dict[str, str],
@@ -534,9 +576,10 @@ def migrate_trace_ledger_v1_to_v2(
         "attempt_ledger_fingerprint": "",
         "attempt_count": len(attempts),
         "trace_count": len(attempts),
-        "formal_finding_ids": sorted({
+        "delivery_occurrence_finding_ids": sorted({
             row["finding_id"] for row in attempts if row["finding_id"]
         }),
+        "canonical_defect_ids": [],
         "outcome_counts": dict(sorted(Counter(row["outcome"] for row in attempts).items())),
         "terminal_status_counts": dict(
             sorted(Counter(row["terminal_status"] for row in attempts).items())

@@ -24,6 +24,10 @@ from urllib.parse import urlparse
 import yaml
 
 from .real_id_resolver import infer_path_params, normalize_path_placeholders, path_has_placeholders
+from .openapi_spec_utils import (
+    load_openapi_from_input,
+    merge_openapi_specs as _merge_openapi_specs,
+)
 
 BLOCKED_INPUT_PART_RE = re.compile(r"(?:oracle|ground[_-]?truth|bug[_-]?matrix|answer|solution|seed)", re.I)
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -63,76 +67,6 @@ def _contains_blocked_path(path: Path, root: Path) -> bool:
         rel = str(path)
     return bool(BLOCKED_INPUT_PART_RE.search(rel))
 
-
-def load_openapi_from_input(input_dir: str | Path | None) -> dict[str, Any]:
-    if not input_dir:
-        return {}
-    root = Path(input_dir).resolve()
-    if not root.exists():
-        return {}
-    # Parse every API-shaped source deterministically and merge complementary
-    # paths.  Returning the first file silently discarded operations documented
-    # in a second OpenAPI/HAR/proto source, which is fatal for multi-source
-    # enterprise onboarding and cleanup planning.
-    supported = {".json", ".yaml", ".yml", ".md", ".har", ".proto", ".graphql", ".gql"}
-    structured = {".json", ".yaml", ".yml"}
-    candidates = [
-        path
-        for path in sorted(root.iterdir(), key=lambda item: item.name.lower())
-        if path.is_file()
-        and path.suffix.lower() in supported
-        and (
-            path.suffix.lower() not in structured | {".md"}
-            or any(token in path.stem.lower() for token in ("openapi", "swagger", "api"))
-        )
-        and not _contains_blocked_path(path, root)
-    ]
-    merged: dict[str, Any] = {}
-    parse_failures: list[dict[str, str]] = []
-    from .universal_api_parser import parse_to_openapi
-
-    for filename in candidates:
-        try:
-            result = parse_to_openapi(filename)
-        except Exception as exc:
-            # One malformed source must not erase valid endpoints parsed from
-            # the customer's other API assets. Preserve a structured,
-            # source-specific diagnostic so the degradation remains visible.
-            parse_failures.append({
-                "source": filename.name,
-                "code": "API_SOURCE_PARSE_FAILED",
-                "error_type": type(exc).__name__,
-            })
-            continue
-        if not isinstance(result, dict):
-            parse_failures.append({
-                "source": filename.name,
-                "code": "API_SOURCE_PARSER_RETURNED_NON_OBJECT",
-                "error_type": type(result).__name__,
-            })
-            continue
-        if isinstance(result.get("paths"), dict) and result.get("paths"):
-            merged = _merge_openapi_specs(merged, result)
-    if parse_failures:
-        diagnostics = merged.setdefault("x-qualibug-diagnostics", {})
-        if isinstance(diagnostics, dict):
-            diagnostics["api_source_parse_failures"] = parse_failures
-    return merged
-
-
-def _merge_openapi_specs(primary: dict[str, Any], supplement: dict[str, Any]) -> dict[str, Any]:
-    """Fill missing OpenAPI facts from another source; primary facts win."""
-    if not isinstance(primary, dict) or not primary:
-        return dict(supplement or {}) if isinstance(supplement, dict) else {}
-    if not isinstance(supplement, dict) or not supplement:
-        return dict(primary)
-    merged: dict[str, Any] = dict(primary)
-    for key, value in supplement.items():
-        if key not in merged or merged[key] in (None, "", [], {}):
-            merged[key] = value
-        elif isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = _merge_openapi_specs(merged[key], value)
-    return merged
 
 def _normalize_openapi_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(spec, dict):

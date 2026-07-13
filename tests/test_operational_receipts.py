@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 def _governed(*, accepted: bool, http_attempts: int = 3) -> dict:
     return {
@@ -116,3 +118,32 @@ def test_aggregate_operational_receipts_preserves_terminal_cleanup_truth() -> No
     assert aggregate["accepted_write_count"] == 1
     assert aggregate["cleanup_failures"] == 1
     assert aggregate["execution_success_rate"] == 0.5
+
+
+def test_operational_receipt_requires_content_fingerprint() -> None:
+    from ai_test_asset_center.operational_receipts import (
+        OperationalReceiptError,
+        validate_execution_operational_receipt,
+    )
+
+    with pytest.raises(
+        OperationalReceiptError,
+        match="operational_receipt_fingerprint_missing",
+    ):
+        validate_execution_operational_receipt({
+            "schema_version": "qualibug.execution-operational-receipt.v1",
+            "receipt_id": "operational-unsigned",
+            "execution_status": "EXECUTED",
+            "scenario_attempt_count": 1,
+            "http_request_attempt_count": 1,
+            "production_http_request_count": 0,
+            "accepted_write_count": 0,
+            "accepted_non_cleanup_write_count": 0,
+            "accepted_cleanup_write_count": 0,
+            "cleanup_outcome": {
+                "status": "NOT_REQUIRED",
+                "attempted_count": 0,
+                "completed_count": 0,
+                "failure_count": 0,
+            },
+        })

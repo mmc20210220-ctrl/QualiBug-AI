@@ -1,28 +1,19 @@
 """Helpers for test doubles that cross the attempt-authoritative V12 boundary."""
 from __future__ import annotations
 
-import hashlib
 from functools import wraps
 from typing import Any
 
 from ai_test_asset_center.customer_delivery_gate import is_customer_deliverable_defect
 from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
-from ai_test_asset_center.discovery_quality_projection import (
-    build_formal_count_projection,
-    build_formal_id_consistency,
-)
-from ai_test_asset_center.obligation_attempt_ledger import (
-    build_obligation_attempt_ledger,
+from tests.phase3_gate_support import (
+    build_formal_evaluation_scope,
+    build_formal_scope_contract,
 )
 
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _stable(prefix: str, *parts: Any) -> str:
-    material = "|".join(_text(value) for value in parts)
-    return f"{prefix}_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:24]}"
 
 
 def attach_attempt_authority(
@@ -63,101 +54,44 @@ def attach_attempt_authority(
         result["candidate_findings"] = candidates
 
     formal_findings = [row for row in findings if is_customer_deliverable_defect(row)]
-    selected: list[dict[str, Any]] = []
-    compile_results: dict[str, dict[str, Any]] = {}
-    execution_results: dict[str, dict[str, Any]] = {}
-    gate_results: dict[str, dict[str, Any]] = {}
-    for index, finding in enumerate(formal_findings):
-        finding_id = _text(
-            finding.get("finding_id") or finding.get("id") or finding.get("bug_id")
-        )
-        if not finding_id:
-            raise ValueError("formal mocked finding requires finding_id")
-        obligation_id = _stable("obligation", campaign_id, finding_id, index)
-        experiment_id = _stable("experiment", obligation_id)
-        execution_id = _stable("execution", obligation_id)
-        selected.append({
-            "obligation_id": obligation_id,
-            "experiment_id": experiment_id,
-            "candidate_id": _text(finding.get("candidate_id")),
-        })
-        compile_results[obligation_id] = {
-            "status": "COMPILED",
-            "experiment_id": experiment_id,
-            "cost_coverage_status": "MEASURED",
-        }
-        execution_results[obligation_id] = {
-            "status": "EXECUTED",
-            "experiment_id": experiment_id,
-            "execution_id": execution_id,
-            "observation_receipt_ids": [_stable("observation", execution_id)],
-            "oracle_receipt_id": _stable("oracle", execution_id),
-            "cost_coverage_status": "MEASURED",
-        }
-        gate_results[obligation_id] = {
-            "status": "DELIVERABLE",
-            "finding_id": finding_id,
-            "gate_receipt_id": _stable("gate", execution_id),
-            "cost_coverage_status": "MEASURED",
-        }
-
-    phase_execution = (
-        result.get("phases", {}).get("execution", {})
-        if isinstance(result.get("phases"), dict)
-        else {}
+    formal_occurrences, ledger = build_formal_evaluation_scope(
+        formal_findings,
+        run_id=contract["run_id"],
+        campaign_id=contract["campaign_id"],
+        target_id=contract["target_id"],
+        environment_id=contract["environment_id"],
+        policy_version=contract["policy_version"],
+        evaluation_mode=contract["evaluation_mode"],
+        mainline_authority=contract["mainline_authority"],
     )
-    if not selected and (
-        _text(phase_execution.get("status")).lower() == "completed"
-        and int(phase_execution.get("executed") or 0) > 0
-    ):
-        obligation_id = _stable("obligation", campaign_id, "no_internal_finding")
-        experiment_id = _stable("experiment", obligation_id)
-        execution_id = _stable("execution", obligation_id)
-        selected.append({
-            "obligation_id": obligation_id,
-            "experiment_id": experiment_id,
-        })
-        compile_results[obligation_id] = {
-            "status": "COMPILED",
-            "experiment_id": experiment_id,
-            "cost_coverage_status": "MEASURED",
-        }
-        execution_results[obligation_id] = {
-            "status": "EXECUTED",
-            "experiment_id": experiment_id,
-            "execution_id": execution_id,
-            "observation_receipt_ids": [_stable("observation", execution_id)],
-            "oracle_receipt_id": _stable("oracle", execution_id),
-            "cost_coverage_status": "MEASURED",
-        }
-        gate_results[obligation_id] = {
-            "status": "REJECTED",
-            "reason_code": "ORACLE_NOT_VIOLATED",
-            "gate_receipt_id": _stable("gate", execution_id),
-            "cost_coverage_status": "MEASURED",
-        }
-
-    ledger = build_obligation_attempt_ledger(
+    formal_scope = build_formal_scope_contract(
         mainline_run=contract,
-        selected=selected,
-        compile_results=compile_results,
-        execution_results=execution_results,
-        gate_results=gate_results,
+        findings=formal_occurrences,
+        obligation_attempt_ledger=ledger,
     )
-    formal = build_formal_count_projection(
-        findings=formal_findings,
-        candidate_findings=candidates,
+    canonical_findings = list(
+        formal_scope["formal_count_projection"][
+            "canonical_representative_findings"
+        ]
     )
-    formal_ids = list(formal["formal_finding_ids"])
+    non_formal = [
+        row for row in findings if not is_customer_deliverable_defect(row)
+    ]
     result.update({
         "mainline_run": contract,
         "obligation_attempt_ledger": ledger,
-        "formal_count_projection": formal,
-        "formal_id_consistency": build_formal_id_consistency(
-            delivery_gate_ids=formal_ids,
-            formal_projection_ids=formal_ids,
-            product_projection_ids=formal_ids,
+        "findings": (
+            canonical_findings
+            if contract["customer_outputs_published"]
+            else []
         ),
+        "evaluator_canonical_findings": (
+            canonical_findings
+            if contract["private_evaluator_observation_allowed"]
+            else []
+        ),
+        "candidate_findings": [*candidates, *non_formal],
+        **formal_scope,
     })
     return result
 

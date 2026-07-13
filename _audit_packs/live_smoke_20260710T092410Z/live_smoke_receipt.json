@@ -1,0 +1,222 @@
+{
+  "schema_version": "qualibug.live-smoke-receipt.v1",
+  "elapsed_seconds": 72.199,
+  "success": true,
+  "execution_status": "blocked",
+  "pipeline_health": {
+    "status": "BLOCKED",
+    "empty_findings_means_no_bugs": false,
+    "execution_status": "blocked",
+    "execution_reason": "preflight_not_ready",
+    "observability_status": "ok",
+    "observability_gaps": [],
+    "failed_stages": {},
+    "stage_failures": [],
+    "result_error": "",
+    "no_real_traffic": true,
+    "cleanup_failure_count": 0,
+    "usage_cost_unknown": false,
+    "secret_scan_failed": false,
+    "missing_phases": [],
+    "unexecuted_candidate_signal": {
+      "stop_reason": "selected_final_unattempted_slice_batch",
+      "pending_slice_count": 0,
+      "binding_or_precondition_blocks": 9,
+      "skip_reason_counts": {
+        "missing_runtime_path_binding": 8
+      }
+    },
+    "operator_note": "产品级执行未产生完整运行时收据；空 findings 不能解释为目标无缺陷。 execution_status=blocked, preflight_errors=0.",
+    "preflight": {
+      "present": true,
+      "ready": true,
+      "all_checks_passed": false,
+      "errors": 0,
+      "warnings": 1
+    }
+  },
+  "external_evaluation": {
+    "schema_version": "qualibug.discovery-quality-projection.v1",
+    "measurement_status": "NOT_MEASURED",
+    "claim_status": "NOT_MEASURED",
+    "reason": "external_evaluator_receipt_required",
+    "commercial_promotion_evidence": false,
+    "formal_customer_deliverable_count": 0,
+    "quality_score": null,
+    "recall": null,
+    "precision": null,
+    "f1": null,
+    "display": {
+      "quality_label": "尚未完成外部质量评测",
+      "suppress_quality_score": true,
+      "suppress_recall_precision": true
+    }
+  },
+  "formal_count_projection": {
+    "schema_version": "qualibug.discovery-quality-projection.v1",
+    "formal_customer_deliverable_count": 0,
+    "executed_clue_count": 1,
+    "confirmation_receipt_count": 1,
+    "candidate_count": 0,
+    "funnel_validated_bug_count": 0,
+    "count_consistency": {
+      "formal_equals_funnel_validated": true,
+      "note": "formal_customer_deliverable_count is the only commercial defect count; confirmation_receipt_count and funnel diagnostics are internal only."
+    }
+  },
+  "behavior_ir": {
+    "summary": {
+      "schema_version": "qualibug.behavior-ir.v1",
+      "model_id": "bir_model_b701c5ed129445a5beb80ee9",
+      "project_id": "benchmark_mall",
+      "counts": {
+        "sources": 0,
+        "entities": 0,
+        "operations": 0,
+        "actors": 0,
+        "states": 0,
+        "relations": 0,
+        "invariants": 0,
+        "observation_surfaces": 3,
+        "capabilities": 1,
+        "conflicts": 0,
+        "coverage_gaps": 2
+      },
+      "validation_errors": []
+    },
+    "model_id": "bir_model_b701c5ed129445a5beb80ee9",
+    "schema_version": "qualibug.behavior-ir.v1",
+    "coverage_gaps": [
+      {
+        "id": "bir_3a48529739addd32",
+        "gap_type": "missing_operations",
+        "description": "No operations derived from sources",
+        "source_refs": [],
+        "confidence": 1.0,
+        "derivation": "explicit",
+        "status": "unsupported"
+      },
+      {
+        "id": "bir_01537d7b15cdd7d3",
+        "gap_type": "missing_actors",
+        "description": "No actors/roles derived from sources",
+        "source_refs": [],
+        "confidence": 1.0,
+        "derivation": "explicit",
+        "status": "unsupported"
+      }
+    ]
+  },
+  "test_obligations": {
+    "count": 0,
+    "by_family": {
+      "authorization": "<REDACTED>",
+      "isolation": 0,
+      "state": 0,
+      "conservation": 0,
+      "idempotency": 0,
+      "concurrency": 0,
+      "validation": 0,
+      "visibility": 0,
+      "temporal": 0,
+      "privacy": 0
+    },
+    "obligations": []
+  },
+  "experiment_compile": {
+    "compiled_count": 0,
+    "blocked_count": 0,
+    "block_reason_counts": {},
+    "experiments": [],
+    "blocked_experiments": []
+  },
+  "obligation_plan": {
+    "schema_version": "qualibug.adaptive-obligation-plan.v1",
+    "budget": 15,
+    "selected": [],
+    "pending_next_round": [],
+    "selected_count": 0,
+    "pending_count": 0,
+    "family_coverage": {},
+    "stop_condition": "in_scope_obligations_scheduled"
+  },
+  "phases_behavior_ir": {
+    "status": "completed",
+    "model_id": "bir_model_b701c5ed129445a5beb80ee9",
+    "obligation_count": 0,
+    "compiled_experiments": 0,
+    "blocked_experiments": 0
+  },
+  "prep": {
+    "target_db_reset": {
+      "status": "ok",
+      "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+      "exit_code": 0
+    },
+    "token_refresh": {
+      "status": "ok",
+      "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+      "exit_code": 0
+    },
+    "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+    "reset_receipt": {
+      "schema_version": "benchmark_target_reset.v1",
+      "receipt_id": "reset_3edfd2d63fa64152",
+      "project": "benchmark_mall",
+      "target_base_url": "http://localhost:8080",
+      "status": "completed",
+      "reset_at_utc": "2026-07-10T09:24:21Z",
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      }
+    }
+  },
+  "post_run_cleanup": {
+    "target_db_reset": {
+      "status": "ok",
+      "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+      "exit_code": 0
+    },
+    "token_refresh": {
+      "status": "ok",
+      "script": "D:\\QualiBug-AI\\QualiBug-AI-main\\_refresh_tokens.py",
+      "exit_code": 0
+    },
+    "reset_receipt_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_mall_target_reset_receipt.json",
+    "reset_receipt": {
+      "schema_version": "benchmark_target_reset.v1",
+      "receipt_id": "reset_b277b6e083674d44",
+      "project": "benchmark_mall",
+      "target_base_url": "http://localhost:8080",
+      "status": "completed",
+      "reset_at_utc": "2026-07-10T09:25:47Z",
+      "target_db_reset": {
+        "status": "ok",
+        "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
+        "exit_code": 0
+      }
+    }
+  },
+  "post_run_cleanliness": {
+    "status": "clean_reset_receipt_verified",
+    "write_count": 4,
+    "incomplete_cleanup_count": 2,
+    "reset_receipt_id": "reset_b277b6e083674d44",
+    "archived_audit": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260710T092547Z_sandbox_write_audit.jsonl",
+    "archived_audit_sha256": "c4cbb5642f44ebe213b64299089ca00c61555da5dc01e147a21b882f99f94437",
+    "archived_receipt": "D:\\QualiBug-AI\\QualiBug-AI-main\\_funnel_runs\\benchmark_audit_archive\\benchmark_mall_20260710T092547Z_target_reset_receipt.json"
+  },
+  "pre_cleanliness": {
+    "status": "clean_no_prior_write_audit",
+    "audit_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\platform_workspace\\benchmark_mall\\defect_discovery\\sandbox_write_audit.jsonl"
+  },
+  "total_findings": 1,
+  "score_semantics": {
+    "score_field": "internal_evidence_strength_only",
+    "commercial_quality_score": null,
+    "note": "score is not recall/precision/commercial capability while external_evaluation is NOT_MEASURED"
+  },
+  "commercial_quality_score": null
+}

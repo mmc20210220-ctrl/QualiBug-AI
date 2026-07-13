@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .full_spectrum_bug_engine import SpectrumFinding, SpectrumResult
+from .defect_signal_schema import SpectrumFinding, SpectrumResult
 
 
 # ══════════════════════════════════════════════════════════════════════════

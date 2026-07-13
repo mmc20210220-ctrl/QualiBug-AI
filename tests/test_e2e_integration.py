@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_asset_center.benchmark_bug_factory import (
+from benchmark_evaluator.benchmark_bug_factory import (
     BenchmarkBugFactory,
     prepare_industry_benchmark,
     validate_ground_truth_integrity,

@@ -14,7 +14,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ai_test_asset_center.canonical_defect_registry import (
+    CANONICAL_DEFECT_REGISTRY_SCHEMA,
+)
 from ai_test_asset_center.version import PRODUCT_VERSION
+
+
+class CustomerReportAuthorityError(ValueError):
+    """Customer report defect scope does not match the canonical registry."""
 
 MOJIBAKE_MARKERS = ("鎵", "鐢", "鍒", "椤", "鏃", "瑕", "绉", "娴", "缃", "搴", "", "€")
 PRODUCT_BOUNDARY_TEXT = "QualiBug-AI 只提供缺陷事实、可核验证据链、客户处理后的回归验证和发布状态；不作根因承诺。"
@@ -64,16 +71,53 @@ def safe_bool(value: Any) -> bool:
 
 
 def report_findings(report: dict[str, Any]) -> list[dict[str, Any]]:
+    nested = report.get("v12") if isinstance(report.get("v12"), dict) else {}
+    registry = report.get("canonical_defect_registry")
+    if not isinstance(registry, dict):
+        registry = nested.get("canonical_defect_registry")
+    if not isinstance(registry, dict) or not registry:
+        return []
+    if (
+        registry.get("schema_version")
+        != CANONICAL_DEFECT_REGISTRY_SCHEMA
+        or registry.get("status") != "VERIFIED"
+    ):
+        raise CustomerReportAuthorityError("canonical_defect_registry_invalid")
+    canonical_ids = [
+        str(value or "").strip()
+        for value in registry.get("canonical_defect_ids", [])
+    ] if isinstance(registry.get("canonical_defect_ids"), list) else []
+    if (
+        not all(canonical_ids)
+        or len(canonical_ids) != len(set(canonical_ids))
+        or int(registry.get("canonical_defect_count") or 0)
+        != len(canonical_ids)
+    ):
+        raise CustomerReportAuthorityError("canonical_defect_ids_invalid")
     candidates = [
         report.get("real_findings"),
         report.get("findings"),
+        nested.get("findings"),
         report.get("bug_scores"),
         (report.get("stage2_discovery") or {}).get("findings") if isinstance(report.get("stage2_discovery"), dict) else None,
     ]
+    by_id: dict[str, dict[str, Any]] = {}
     for value in candidates:
         if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                canonical_id = str(item.get("canonical_defect_id") or "").strip()
+                if not canonical_id:
+                    continue
+                if canonical_id in by_id and by_id[canonical_id] != item:
+                    raise CustomerReportAuthorityError(
+                        f"canonical_defect_duplicate_conflict:{canonical_id}"
+                    )
+                by_id[canonical_id] = dict(item)
+    if set(by_id) != set(canonical_ids):
+        raise CustomerReportAuthorityError("canonical_finding_scope_mismatch")
+    return [by_id[canonical_id] for canonical_id in canonical_ids]
 
 
 def normalize_release_check(value: Any) -> dict[str, Any] | None:

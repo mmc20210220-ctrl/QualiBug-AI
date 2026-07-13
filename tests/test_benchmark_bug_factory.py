@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_asset_center.benchmark_bug_factory import (
+from benchmark_evaluator.benchmark_bug_factory import (
     BenchmarkBugFactory,
     IndustryProfile,
     BugTemplate,

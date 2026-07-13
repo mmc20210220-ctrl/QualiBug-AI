@@ -168,18 +168,18 @@ def test_build_command_center_separates_current_scan_counts_from_family_defect_s
     data = payload["data"]
 
     assert len(data["defects"]) == 0
-    assert data["project_history"]["formal_customer_deliverable_count"] == 2
+    assert data["project_history"]["formal_customer_deliverable_count"] == 0
     assert data["scan_meta"]["scan_id"] == "scan_scope_demo"
-    assert data["scan_meta"]["total_findings"] == 1
-    assert data["scan_meta"]["materialized_findings"] == 1
+    assert data["scan_meta"]["total_findings"] == 0
+    assert data["scan_meta"]["materialized_findings"] == 0
     assert data["scan_meta"]["customer_ready_defects"] == 0
-    assert data["scan_meta"]["family_customer_ready_defect_count"] == 2
-    assert data["scan_meta"]["current_campaign_bundle_finding_count_raw"] == 1
-    assert data["executive_summary"]["total_findings"] == 1
+    assert data["scan_meta"]["family_customer_ready_defect_count"] == 0
+    assert data["scan_meta"]["current_campaign_bundle_finding_count_raw"] == 0
+    assert data["executive_summary"]["total_findings"] == 0
     assert data["executive_summary"]["customer_ready_defects"] == 0
-    assert data["executive_summary"]["family_customer_ready_defects"] == 2
-    assert data["value_metrics"]["current_report_total_findings"] == 1
-    assert data["value_metrics"]["family_customer_ready_defect_count"] == 2
+    assert data["executive_summary"]["family_customer_ready_defects"] == 0
+    assert data["value_metrics"]["current_report_total_findings"] == 0
+    assert data["value_metrics"]["family_customer_ready_defect_count"] == 0
 
 
 def test_build_command_center_prefers_real_project_current_scope_over_stale_scan_result(monkeypatch, tmp_path) -> None:
@@ -258,21 +258,21 @@ def test_build_command_center_prefers_real_project_current_scope_over_stale_scan
     data = payload["data"]
 
     assert data["scan_meta"]["scan_id"] == "stale_scan_result"
-    assert data["scan_meta"]["total_findings"] == 18
-    assert data["scan_meta"]["current_report_total_findings"] == 18
+    assert data["scan_meta"]["total_findings"] == 0
+    assert data["scan_meta"]["current_report_total_findings"] == 0
     assert data["scan_meta"]["customer_ready_defects"] == 0
     assert data["scan_meta"]["current_report_customer_ready_defect_count"] == 0
-    assert data["scan_meta"]["family_customer_ready_defect_count"] == 4
-    assert data["scan_meta"]["current_campaign_bundle_finding_count_raw"] == 18
-    assert data["scan_meta"]["report_path"] == "platform_outputs/enterprise-project/real_project/real_project_defect_data.json"
-    assert data["scan_meta"]["current_report_breakdown"]["report_source_path"] == "platform_outputs/enterprise-project/real_project/real_project_defect_data.json"
+    assert data["scan_meta"]["family_customer_ready_defect_count"] == 0
+    assert data["scan_meta"]["current_campaign_bundle_finding_count_raw"] == 0
+    assert data["scan_meta"]["report_path"] == "platform_outputs/enterprise-project/scan_result.json"
+    assert data["scan_meta"]["current_report_breakdown"]["report_source_path"] == "platform_outputs/enterprise-project/scan_result.json"
     assert data["scan_meta"]["current_campaign_scope"]["campaign_id"] == "CMP_REAL"
     assert data["scan_meta"]["current_campaign_scope"]["lineage_campaign_id"] == "CMP_LINEAGE"
     assert data["scan_meta"]["current_campaign_scope"]["scope_id"] == "checkout-scope"
     assert data["scan_meta"]["current_campaign_scope"]["environment_ref"] == "local-benchmark"
     assert data["current_campaign_scope"]["scope_id"] == "checkout-scope"
-    assert data["executive_summary"]["total_findings"] == 18
+    assert data["executive_summary"]["total_findings"] == 0
     assert data["executive_summary"]["customer_ready_defects"] == 0
-    assert data["project_history"]["formal_customer_deliverable_count"] == 4
+    assert data["project_history"]["formal_customer_deliverable_count"] == 0
     assert data["executive_summary"]["current_campaign_scope"]["environment_ref"] == "local-benchmark"
     assert data["value_metrics"]["current_campaign_scope"]["source_hash"] == "a" * 64

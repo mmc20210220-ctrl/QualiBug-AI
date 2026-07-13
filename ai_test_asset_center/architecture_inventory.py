@@ -237,6 +237,26 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise ArchitectureInventoryError(
             "architecture_oversized_line_threshold_invalid"
         )
+    budget = value.get("architecture_budget")
+    if budget is not None:
+        if not isinstance(budget, dict):
+            raise ArchitectureInventoryError("architecture_budget_invalid")
+        for field in ("max_module_count", "max_python_line_count"):
+            budget_value = budget.get(field)
+            if isinstance(budget_value, bool):
+                raise ArchitectureInventoryError(
+                    f"architecture_budget_invalid:{field}"
+                )
+            try:
+                numeric = int(budget_value)
+            except (TypeError, ValueError) as exc:
+                raise ArchitectureInventoryError(
+                    f"architecture_budget_invalid:{field}"
+                ) from exc
+            if numeric <= 0:
+                raise ArchitectureInventoryError(
+                    f"architecture_budget_invalid:{field}"
+                )
     entrypoints_value = value.get("discovery_entrypoints")
     if not isinstance(entrypoints_value, list) or not entrypoints_value:
         raise ArchitectureInventoryError("architecture_entrypoints_invalid")
@@ -492,9 +512,11 @@ def _parse_module(
                     if target:
                         edges.add(target)
                         dynamic_literals.add(target)
-                    else:
+                    elif resolved.split(".", 1)[0] in {
+                        item.split(".", 1)[0] for item in known_modules
+                    }:
                         dynamic_uncertain.append({
-                            "kind": "unresolved_literal_dynamic_import",
+                            "kind": "unresolved_project_literal_dynamic_import",
                             "line": int(getattr(node, "lineno", 0) or 0),
                             "call": name,
                             "literal": literal,
@@ -684,6 +706,8 @@ def _runtime_trace(
         return {
             "status": "NOT_PROVIDED",
             "coverage_status": "NOT_PROVIDED",
+            "trusted_for_deletion": False,
+            "authentication": {"status": "NOT_PROVIDED"},
             "covered_roots": [],
             "missing_required_roots": sorted(required_roots),
             "modules": [],
@@ -794,8 +818,17 @@ def _runtime_trace(
             f"runtime_trace_root_module_missing:{missing_root_modules[0]}"
         )
     return {
-        "status": "VERIFIED_COMPLETE" if coverage == "COMPLETE" else "VERIFIED_PARTIAL",
+        "status": (
+            "UNAUTHENTICATED_COMPLETE"
+            if coverage == "COMPLETE"
+            else "UNAUTHENTICATED_PARTIAL"
+        ),
         "coverage_status": coverage,
+        "trusted_for_deletion": False,
+        "authentication": {
+            "status": "NOT_PROVIDED",
+            "reason_code": "authenticated_import_trace_collector_required",
+        },
         "source_fingerprint": source_fingerprint,
         "config_fingerprint": config_fingerprint,
         "project_scripts_fingerprint": project_scripts_fingerprint,
@@ -848,11 +881,154 @@ def _removal_gate(
         return "BLOCKED_DYNAMIC_IMPORT_REVIEW_REQUIRED"
     if runtime_trace["status"] == "NOT_PROVIDED":
         return "BLOCKED_RUNTIME_TRACE_REQUIRED"
+    if runtime_trace.get("trusted_for_deletion") is not True:
+        return "BLOCKED_RUNTIME_TRACE_AUTHENTICATION_REQUIRED"
     if runtime_trace["coverage_status"] != "COMPLETE":
         return "BLOCKED_RUNTIME_TRACE_INCOMPLETE"
     if runtime_observed:
         return "BLOCKED_RUNTIME_OBSERVED"
     return "MANUAL_DELETION_REVIEW_REQUIRED"
+
+
+def _cyclic_components(
+    graph: dict[str, set[str]],
+    modules: set[str],
+) -> list[list[str]]:
+    """Return deterministic strongly connected components that contain cycles."""
+
+    visited: set[str] = set()
+    finish_order: list[str] = []
+
+    def visit(node: str) -> None:
+        if node in visited:
+            return
+        visited.add(node)
+        for target in sorted(graph.get(node, set()).intersection(modules)):
+            visit(target)
+        finish_order.append(node)
+
+    for module in sorted(modules):
+        visit(module)
+
+    reverse: dict[str, set[str]] = {module: set() for module in modules}
+    for source in modules:
+        for target in graph.get(source, set()).intersection(modules):
+            reverse[target].add(source)
+
+    assigned: set[str] = set()
+    components: list[list[str]] = []
+
+    def collect(node: str, component: list[str]) -> None:
+        if node in assigned:
+            return
+        assigned.add(node)
+        component.append(node)
+        for source in sorted(reverse.get(node, set())):
+            collect(source, component)
+
+    for module in reversed(finish_order):
+        if module in assigned:
+            continue
+        component: list[str] = []
+        collect(module, component)
+        component.sort()
+        if len(component) > 1 or (
+            len(component) == 1 and component[0] in graph.get(component[0], set())
+        ):
+            components.append(component)
+    return sorted(components, key=lambda item: (-len(item), item))
+
+
+def _dependency_graph_diagnostics(
+    *,
+    graph: dict[str, set[str]],
+    module_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    module_classes = {
+        _text(row.get("module")): _text(row.get("responsibility"))
+        for row in module_rows
+    }
+    modules = set(module_classes)
+    fan_out = {
+        module: len(graph.get(module, set()).intersection(modules))
+        for module in modules
+    }
+    fan_in = {module: 0 for module in modules}
+    for source in modules:
+        for target in graph.get(source, set()).intersection(modules):
+            fan_in[target] += 1
+    cyclic = _cyclic_components(graph, modules)
+    forbidden_targets = {
+        "core": {"adapter", "compatibility", "diagnostic"},
+        "adapter": {"compatibility", "diagnostic"},
+        "compatibility": {"adapter", "compatibility", "diagnostic"},
+        "diagnostic": {"adapter", "compatibility"},
+    }
+    violations: list[dict[str, str]] = []
+    for source in sorted(modules):
+        source_class = module_classes[source]
+        for target in sorted(graph.get(source, set()).intersection(modules)):
+            target_class = module_classes[target]
+            if target_class in forbidden_targets.get(source_class, set()):
+                violations.append({
+                    "source": source,
+                    "source_responsibility": source_class,
+                    "target": target,
+                    "target_responsibility": target_class,
+                    "reason_code": "dependency_direction_forbidden",
+                })
+
+    def hubs(values: dict[str, int]) -> list[dict[str, Any]]:
+        return [
+            {"module": module, "count": count}
+            for module, count in sorted(
+                values.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+            if count > 0
+        ][:25]
+
+    return {
+        "cyclic_scc_count": len(cyclic),
+        "modules_in_cycles": sum(len(component) for component in cyclic),
+        "largest_cyclic_scc_size": max((len(component) for component in cyclic), default=0),
+        "cyclic_sccs": [
+            {"size": len(component), "modules": component}
+            for component in cyclic
+        ],
+        "fan_in_hubs": hubs(fan_in),
+        "fan_out_hubs": hubs(fan_out),
+        "forbidden_dependency_direction_count": len(violations),
+        "forbidden_dependency_directions": violations,
+    }
+
+
+def _architecture_budget(
+    config: dict[str, Any],
+    *,
+    module_count: int,
+    python_line_count: int,
+) -> dict[str, Any]:
+    configured = _dict(config.get("architecture_budget"))
+    if not configured:
+        return {"status": "NOT_CONFIGURED"}
+    max_modules = int(configured["max_module_count"])
+    max_lines = int(configured["max_python_line_count"])
+    exceeded = [
+        name
+        for name, value, limit in (
+            ("module_count", module_count, max_modules),
+            ("python_line_count", python_line_count, max_lines),
+        )
+        if value > limit
+    ]
+    return {
+        "status": "OVER_BUDGET" if exceeded else "WITHIN_BUDGET",
+        "max_module_count": max_modules,
+        "max_python_line_count": max_lines,
+        "exceeded_metrics": exceeded,
+        "policy": "non_growth_ceiling",
+    }
 
 
 def build_architecture_inventory(
@@ -1111,6 +1287,17 @@ def build_architecture_inventory(
     responsibility_counts = dict(
         sorted(Counter(row["responsibility"] for row in module_rows).items())
     )
+    module_count = len(module_rows)
+    python_line_count = sum(int(row["line_count"]) for row in module_rows)
+    dependency_graph = _dependency_graph_diagnostics(
+        graph=graph,
+        module_rows=module_rows,
+    )
+    architecture_budget = _architecture_budget(
+        config,
+        module_count=module_count,
+        python_line_count=python_line_count,
+    )
     inventory = {
         "schema_version": INVENTORY_SCHEMA,
         "package": package,
@@ -1136,9 +1323,11 @@ def build_architecture_inventory(
                 else "none"
             ),
         },
+        "dependency_graph": dependency_graph,
         "diagnostics": {
-            "module_count": len(module_rows),
-            "python_line_count": sum(int(row["line_count"]) for row in module_rows),
+            "module_count": module_count,
+            "python_line_count": python_line_count,
+            "architecture_budget": architecture_budget,
             "responsibility_counts": responsibility_counts,
             "retirement_candidate_count": int(
                 responsibility_counts.get("retirement_candidate") or 0

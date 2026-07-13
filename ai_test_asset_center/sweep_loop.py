@@ -19,12 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
-from .scenario_runner import ScenarioRunner
 from .db_verifier import DBVerifier
+from .target_endpoint import resolve_target_base_url
 
 # ── 心跳 (供 Loop Watchdog 读取) ──────────────────────────
 DEFAULT_PROJECT_ID = os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project")
-DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8088")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HEARTBEAT_FILE_TEMPLATE = "platform_outputs/{project_id}/.loop_heartbeat.json"
 _ACTIVE_PROJECT_ID = DEFAULT_PROJECT_ID
@@ -108,7 +107,7 @@ class DiscoverySweep:
     STAGNATION_LIMIT = 3
 
     def __init__(self, prd_path: str = None, api_path: str = None,
-                 base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID):
+                 base_url: str | None = None, *, project_id: str = DEFAULT_PROJECT_ID):
         # Load inputs
         global _ACTIVE_PROJECT_ID
         self.project_id = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
@@ -126,9 +125,8 @@ class DiscoverySweep:
 
         self.prd = _read_optional_text(prd_path)
         self.api = _read_optional_text(api_path)
-        self.base_url = str(base_url or DEFAULT_BASE_URL)
+        self.base_url = resolve_target_base_url(base_url)
         self.engine = AutonomousDiscoveryEngine(base_url=self.base_url, project_id=self.project_id)
-        self.scenarios = ScenarioRunner(base_url=self.base_url)
         self.db = DBVerifier(project_id=self.project_id)
         self.rounds: list[SweepRound] = []
 
@@ -148,21 +146,10 @@ class DiscoverySweep:
         v = result.get("stages", {}).get("verifier", {})
         hypotheses = result.get("stages", {}).get("reasoner", {}).get("hypotheses", 0)
 
-        # Stage 4.5: Augment with scenario runner for inconclusive
+        # Scenario execution is owned by the source-grounded V12 experiment
+        # pipeline.  The retired MES-specific runner must not manufacture
+        # cross-industry evidence here.
         scenario_bugs = 0
-        for f in self.engine.findings:
-            if f.verdict == "inconclusive" and f.severity in ("P0", "P1"):
-                _tick("scenario", f"Round {round_num}: running scenario runner...", round_num)
-                # Try scenario runner for high-severity inconclusive
-                try:
-                    self.scenarios.run_all()
-                    s = self.scenarios.summary()
-                    scenario_bugs = s.get("total_bugs_found", 0)
-                    _tick("scenario", f"Round {round_num}: scenario runner found {scenario_bugs} bugs", round_num)
-                except Exception:
-                    _tick("scenario", f"Round {round_num}: scenario runner failed", round_num)
-                    pass
-                break  # Only run once per round
 
         # Stage 4.6: DB verification
         db_bugs = 0
@@ -285,7 +272,7 @@ class DiscoverySweep:
 
 
 def run_sweep(prd_path: str = None, api_path: str = None,
-              base_url: str = DEFAULT_BASE_URL, *, project_id: str = DEFAULT_PROJECT_ID) -> SweepResult:
+              base_url: str | None = None, *, project_id: str = DEFAULT_PROJECT_ID) -> SweepResult:
     """Convenience entry point"""
     sweeper = DiscoverySweep(prd_path, api_path, base_url, project_id=project_id)
     return sweeper.sweep()

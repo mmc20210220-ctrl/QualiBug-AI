@@ -43,6 +43,10 @@ from .enterprise_project_config import (
     match_production_data_exclusion,
     _load_execution_safety_boundary,
 )
+from .disposable_identity_materializer import (
+    disposable_identity_nonce,
+    materialize_disposable_identity_fields,
+)
 from .target_policy import build_target_policy_decision
 
 _v12_har_entries: list[dict[str, Any]] = []
@@ -334,6 +338,169 @@ def _read_only_runtime_token(base_url: str, catalog: list[dict[str, Any]], proje
     if _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=api_doc):
         return str(getattr(fuzzer, "_token", "") or "")
     return ""
+
+
+def _runtime_contract_allows_parameter_fuzzer_writes(runtime_contract: dict[str, Any]) -> bool:
+    rc = _dict(runtime_contract)
+    if str(rc.get("status") or "") != "approved":
+        return False
+    if not str(rc.get("approved_base_url") or "").strip():
+        return False
+    return str(rc.get("execution_mode") or "").strip() in {
+        "approved_sandbox_write",
+        "approved_test_write",
+    }
+
+
+def _prepare_parameter_fuzzer_catalog(
+    catalog: list[dict[str, Any]],
+    *,
+    selected_paths: set[str],
+    api_doc: str,
+    runtime_contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Attach source-derived write bodies and sandbox metadata for fuzzer routes."""
+
+    writes_allowed = _runtime_contract_allows_parameter_fuzzer_writes(runtime_contract)
+    prepared: list[dict[str, Any]] = []
+    selected = {str(path or "") for path in selected_paths if str(path or "")}
+    for route in catalog or []:
+        if not isinstance(route, dict):
+            continue
+        path = str(route.get("path") or "")
+        if selected and path not in selected:
+            continue
+        item = dict(route)
+        method = str(item.get("method") or "GET").upper()
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and writes_allowed:
+            template = item.get("request_template")
+            provenance = str(item.get("body_template_provenance") or "")
+            if not isinstance(template, dict) or not template:
+                try:
+                    from .auto_test_data_factory import build_source_grounded_request_body
+
+                    built = build_source_grounded_request_body(api_doc, method, path)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"parameter_fuzzer_body_materialization_failed:{method}:{path}:{type(exc).__name__}"
+                    ) from exc
+                template = built.get("body") if isinstance(built, dict) else {}
+                provenance = str((built or {}).get("provenance") or "")
+            if isinstance(template, dict) and template:
+                item["request_template"] = dict(template)
+                item["body_template_provenance"] = provenance or "source_grounded"
+                if not isinstance(item.get("body_properties"), dict) or not item.get("body_properties"):
+                    item["body_properties"] = {str(key): {} for key in template.keys() if str(key)}
+                item["execution_policy"] = "disposable_sandbox_required"
+                item["disposable_sandbox"] = {"approved": True}
+        prepared.append(item)
+    return prepared
+
+
+def _parameter_fuzzer_trace_result(trace: dict[str, Any], method: str, path: str) -> tuple[int, Any]:
+    for step in trace.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("method") or "").upper() != method:
+            continue
+        if str(step.get("path") or "") != path:
+            continue
+        response = _dict(step.get("response"))
+        try:
+            status = int(response.get("status_code") or response.get("status") or step.get("status") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        return status, response.get("body") if "body" in response else {}
+    sandbox = _dict(trace.get("sandbox_write"))
+    return 0, {"error": str(sandbox.get("reason") or trace.get("errors") or "governed_write_no_step")}
+
+
+def _build_parameter_fuzzer_governed_write_executor(
+    *,
+    approved_base_url: str,
+    root: Path,
+    project: str,
+    runtime_contract: dict[str, Any],
+    campaign_id: str,
+    round_number: int,
+    documented_routes: list[dict[str, Any]],
+    safety_boundary: dict[str, Any] | None,
+    selected_slice_by_path: dict[str, dict[str, Any]],
+):
+    def execute_governed_parameter_write(
+        *,
+        method: str,
+        path: str,
+        body: dict[str, Any],
+        route: dict[str, Any],
+        token: str,
+    ) -> dict[str, Any]:
+        from .sandbox_write_executor import execute_with_sandbox_write
+        from .semantic_scenario_generator import ExecutableScenario, ScenarioStep
+
+        route_source_refs = route.get("source_refs") or route.get("document_refs") or []
+        slice_info = selected_slice_by_path.get(path) or selected_slice_by_path.get(normalize_path_placeholders(path)) or {}
+        body_digest = hashlib.sha256(
+            json.dumps(body, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()[:12]
+        scenario = ExecutableScenario(
+            id=f"parameter_fuzzer:{method}:{normalize_path_placeholders(path)}:{body_digest}",
+            title=f"Source-bound parameter mutation {method} {path}",
+            description="Parameter fuzzer mutation routed through governed sandbox write executor.",
+            category="input_validation",
+            severity="P1",
+            entity=str(route.get("entity") or ""),
+            actors=[str(runtime_contract.get("actor_identity") or "")] if str(runtime_contract.get("actor_identity") or "") else [],
+            steps=[
+                ScenarioStep(
+                    order=1,
+                    action="parameter_fuzzer_mutation",
+                    api_method=method,
+                    api_path=path,
+                    body_template=dict(body),
+                    expected_status=0,
+                    body_provenance=str(route.get("body_template_provenance") or ""),
+                )
+            ],
+            oracle_rules=["HttpStatusOracle.server_error_is_defect"],
+            actor_token=str(token or ""),
+            execution_policy="approved_sandbox_write",
+            source_refs=list(route_source_refs) if isinstance(route_source_refs, list) else [],
+            behavior_slice_id=str(slice_info.get("slice_id") or ""),
+            behavior_slice_kind=str(slice_info.get("kind") or ""),
+            discovery_round=int(round_number or 1),
+            selection_origin="parameter_fuzzer",
+            runtime_hints={"parameter_fuzzer": True},
+        )
+        trace = execute_with_sandbox_write(
+            scenario,
+            approved_base_url,
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            safety_boundary=safety_boundary,
+            observer_token=str(token or ""),
+            documented_routes=documented_routes,
+            execute_fn=lambda sc, bu, safety_boundary=None, write_observer=None: _execute_scenario(
+                sc,
+                bu,
+                max_retries=0,
+                safety_boundary=safety_boundary,
+                write_observer=write_observer,
+            ),
+        )
+        status, response = _parameter_fuzzer_trace_result(trace, method, path)
+        sandbox = _dict(trace.get("sandbox_write"))
+        return {
+            "status": status,
+            "response": response,
+            "duration_ms": trace.get("duration_ms") or 0,
+            "audit_path": str(sandbox.get("audit_path") or ""),
+            "trace": trace,
+        }
+
+    return execute_governed_parameter_write
 
 
 def _profile_database_dsn(profile: dict[str, Any]) -> str:
@@ -933,10 +1100,24 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         or ""
     ).strip().lower()
     execution_mode = str(context.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
+    scenario_gap_codes: list[str] = []
+    if context.get("runtime_scenario_contract"):
+        from .runtime_scenario_contract_gate import runtime_scenario_contract_gaps
+
+        scenario_gap_codes = [
+            str(item.get("code") or "")
+            for item in runtime_scenario_contract_gaps(context)
+            if str(item.get("code") or "")
+        ]
     if not base_url:
         return {
-            "status": "plan_only",
-            "reason": "runtime_target_missing",
+            "status": "blocked" if scenario_gap_codes else "plan_only",
+            "reason": (
+                "runtime_scenario_contract_blocked"
+                if scenario_gap_codes
+                else "runtime_target_missing"
+            ),
+            "missing_requirements": sorted(set(scenario_gap_codes)),
             "approved_base_url": "",
             "environment_ref": environment_ref,
             "environment_kind": environment_kind,
@@ -944,7 +1125,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "source_manifest": manifest,
             "source_issues": source_issues,
         }
-    missing = list(source_issues)
+    missing = list(source_issues) + scenario_gap_codes
     if not str(context.get("scope_id") or "").strip():
         missing.append("CAMPAIGN_SCOPE_MISSING")
     if not environment_ref:
@@ -971,7 +1152,11 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
     if missing:
         return {
             "status": "blocked",
-            "reason": "runtime_contract_missing",
+            "reason": (
+                "runtime_scenario_contract_blocked"
+                if scenario_gap_codes
+                else "runtime_contract_missing"
+            ),
             "missing_requirements": sorted(set(missing)),
             "approved_base_url": "",
             "environment_ref": environment_ref,
@@ -992,6 +1177,33 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         "source_manifest": manifest,
         "target_policy_decision": decision,
     }
+
+
+def _append_runtime_contract_scenarios(
+    generated: list[Any],
+    context: dict[str, Any],
+    *,
+    discovery_round: int,
+) -> list[Any]:
+    from .runtime_scenario_contract_gate import compile_runtime_scenarios
+
+    runtime_scenarios = compile_runtime_scenarios(
+        context,
+        discovery_round=discovery_round,
+    )
+    combined = list(generated)
+    seen = {
+        f"{getattr(item, 'behavior_slice_id', '')}|{getattr(item, 'id', '')}"
+        for item in combined
+    }
+    for item in runtime_scenarios:
+        identity = (
+            f"{getattr(item, 'behavior_slice_id', '')}|{getattr(item, 'id', '')}"
+        )
+        if identity not in seen:
+            combined.append(item)
+            seen.add(identity)
+    return combined
 
 
 def _execution_approval_contract(context: dict[str, Any], campaign: EnterpriseCampaign, base_url: str, root: Path) -> dict[str, Any]:
@@ -1464,7 +1676,7 @@ def _slice_is_pool_protected(item: dict[str, Any]) -> bool:
     return False
 
 
-def _slice_route_collapse_key(item: dict[str, Any]) -> tuple[str, str, str] | None:
+def _slice_route_collapse_key(item: dict[str, Any]) -> tuple[str, str, str, str] | None:
     kind = str(item.get("kind") or "").strip().lower()
     if kind not in _POOL_COLLAPSE_KINDS:
         return None
@@ -1484,7 +1696,32 @@ def _slice_route_collapse_key(item: dict[str, Any]) -> tuple[str, str, str] | No
                 break
     if not path:
         return None
-    return (kind, method, path)
+    if kind == "permission":
+        actor_contract = "|".join(
+            [
+                str(item.get("_permission_actor") or item.get("_default_actor") or "").strip().lower(),
+                str(item.get("_permission_email") or item.get("_default_email") or "").strip().lower(),
+                ",".join(
+                    sorted(
+                        str(value or "").strip().upper()
+                        for value in (item.get("_permission_expected_permitted") or [])
+                        if str(value or "").strip()
+                    )
+                ),
+            ]
+        )
+    else:
+        actor_contract = "|".join(
+            [
+                str(item.get("_isolation_owner_role") or "").strip().lower(),
+                str(item.get("_isolation_owner_email") or "").strip().lower(),
+                str(item.get("_isolation_viewer_role") or "").strip().lower(),
+                str(item.get("_isolation_viewer_email") or "").strip().lower(),
+                str(item.get("_isolation_mode") or "path").strip().lower(),
+                str(item.get("_isolation_query_param") or "").strip().lower(),
+            ]
+        )
+    return (kind, method, path, actor_contract)
 
 
 def _slice_llm_invariant_collapse_key(item: dict[str, Any]) -> tuple[str, str, tuple[str, ...], str] | None:
@@ -1542,12 +1779,14 @@ def _slice_pool_keep_score(item: dict[str, Any]) -> tuple[int, int, int, float, 
 def _optimize_behavior_slice_pool(slices: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collapse redundant LLM permission/isolation and invariant duplicates.
 
-    Multi-role execution already exercises each route from every actor; keeping
-    hundreds of near-identical LLM permission slices starves money, concurrency,
-    and historical-bug coverage within the auto-scaled round budget.
+    Permission/isolation slices are redundant only when route and actor contract
+    are both identical. Distinct actors or expected permissions must survive:
+    native-login scenarios execute their declared actor, not every configured
+    account. Exact duplicates are still collapsed so they cannot starve money,
+    concurrency, and historical-bug coverage within the round budget.
     """
     protected: list[dict[str, Any]] = []
-    route_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    route_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     invariant_groups: dict[tuple[str, str, tuple[str, ...]], list[dict[str, Any]]] = {}
     passthrough: list[dict[str, Any]] = []
     stats = {
@@ -2801,6 +3040,7 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
         # test_accounts.json (or test_accounts.md fallback).
         try:
             from .supplementary_behavior_slices import generate_supplementary_slices
+            from .historical_behavior_slices import generate_historical_behavior_slices
 
             graph_api_doc = submitted_api_spec_text if str(submitted_api_spec_text or "").strip() else api_spec_text
             try:
@@ -2817,11 +3057,18 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 graph_api_doc,
                 permission_matrix=_permission_matrix,
             )
-            if supp:
-                ranked_behavior_slices = list(ranked_behavior_slices) + supp
+            historical = generate_historical_behavior_slices(
+                root,
+                project,
+                graph_api_doc,
+            )
+            additional_slices = [*supp, *historical]
+            if additional_slices:
+                ranked_behavior_slices = list(ranked_behavior_slices) + additional_slices
                 behavior_contract["slices"] = ranked_behavior_slices
                 behavior_contract["summary"]["total_slices"] = len(ranked_behavior_slices)
                 behavior_contract["summary"]["supplementary_slices"] = len(supp)
+                behavior_contract["summary"]["historical_slices"] = len(historical)
         except Exception as _supp_exc:
             result["phases"]["supplementary_behavior_slices"] = {
                 "status": "FAILED",
@@ -2939,6 +3186,11 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 allow_source_runtime=True,
                 root=root,
                 project=project,
+            )
+            preview_scenarios = _append_runtime_contract_scenarios(
+                preview_scenarios,
+                context,
+                discovery_round=settings["round_number"],
             )
             ranked_behavior_slices = _rank_behavior_slices_for_selection(behavior_contract["slices"], preview_scenarios)
             behavior_contract["slices"] = ranked_behavior_slices
@@ -3066,6 +3318,7 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
         selected_paths = {str(path) for item in selection["selected"] for path in item.get("endpoints", []) if str(path)}
         attempted_slice_ids: set[str] = set()
         catalog: list[dict[str, Any]] = []
+        catalog_source_for_fuzzer = str(api_spec_text or submitted_api_spec_text or "")
         if approved_base_url and (api_spec_text or submitted_api_spec_text):
             try:
                 from .api_doc_assets import enrich_api_spec_text
@@ -3079,6 +3332,7 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                     catalog_source = enrich_api_spec_text(root, project, catalog_source) or catalog_source
                 except Exception:
                     pass
+                catalog_source_for_fuzzer = catalog_source
                 catalog = [
                     entry.to_dict()
                     for entry in RouteCatalogBuilder().build(
@@ -3093,12 +3347,55 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
         fuzzer_findings: list[dict[str, Any]] = []
         fuzzer_execution_receipts: list[dict[str, Any]] = []
         fuzzer_error = ""
+        fuzzer_governed_write_routes = 0
         if approved_base_url and selected_paths and selection["status"] == "planned":
             try:
                 from .parameter_fuzzer import ParameterFuzzer
-                scoped_catalog = [entry for entry in catalog if str(entry.get("path") or "") in selected_paths]
-                fuzzer = ParameterFuzzer(approved_base_url, allow_write=False)
-                _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=api_spec_text)
+
+                selected_slice_by_path: dict[str, dict[str, Any]] = {}
+                for item in selection["selected"]:
+                    if not isinstance(item, dict):
+                        continue
+                    for endpoint in item.get("endpoints", []) or []:
+                        endpoint_text = str(endpoint or "")
+                        if not endpoint_text:
+                            continue
+                        selected_slice_by_path[endpoint_text] = item
+                        selected_slice_by_path[normalize_path_placeholders(endpoint_text)] = item
+                scoped_catalog = _prepare_parameter_fuzzer_catalog(
+                    catalog,
+                    selected_paths=selected_paths,
+                    api_doc=catalog_source_for_fuzzer,
+                    runtime_contract=runtime_contract,
+                )
+                fuzzer_governed_write_routes = len([
+                    entry for entry in scoped_catalog
+                    if isinstance(entry, dict)
+                    and str(entry.get("method") or "").upper() in {"POST", "PUT", "PATCH", "DELETE"}
+                    and isinstance(entry.get("request_template"), dict)
+                    and str(entry.get("execution_policy") or "") == "disposable_sandbox_required"
+                ])
+                governed_write_executor = (
+                    _build_parameter_fuzzer_governed_write_executor(
+                        approved_base_url=approved_base_url,
+                        root=root,
+                        project=project,
+                        runtime_contract=runtime_contract,
+                        campaign_id=str(campaign.campaign_id or ""),
+                        round_number=int(settings["round_number"]),
+                        documented_routes=catalog,
+                        safety_boundary=_load_execution_safety_boundary(project, root),
+                        selected_slice_by_path=selected_slice_by_path,
+                    )
+                    if fuzzer_governed_write_routes
+                    else None
+                )
+                fuzzer = ParameterFuzzer(
+                    approved_base_url,
+                    allow_write=bool(fuzzer_governed_write_routes),
+                    governed_write_executor=governed_write_executor,
+                )
+                _login_parameter_fuzzer(fuzzer, catalog, project, root, api_doc=catalog_source_for_fuzzer)
                 fuzzer_findings = fuzzer.fuzz_all(scoped_catalog, max_variants=6)
                 fuzzer_execution_receipts = list(fuzzer.execution_receipts)
                 fuzzer_receipt_paths = {
@@ -3125,7 +3422,9 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 )
         result["findings"].extend(fuzzer_findings)
         fuzzer_reason = fuzzer_error or (
-            "selected_source_bound_read_routes_only"
+            "selected_source_bound_routes_with_governed_writes"
+            if fuzzer_governed_write_routes
+            else "selected_source_bound_read_routes_only"
             if selected_paths and approved_base_url
             else (runtime_contract.get("reason") or "no_selected_source_bound_read_routes")
         )
@@ -3142,7 +3441,12 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 for receipt in fuzzer_execution_receipts
                 if isinstance(receipt, dict) and int(receipt.get("status") or 0) > 0
             ]),
-            "execution_policy": "documented_read_only_only",
+            "execution_policy": (
+                "documented_routes_governed_sandbox_write"
+                if fuzzer_governed_write_routes
+                else "documented_read_only_only"
+            ),
+            "governed_write_routes": fuzzer_governed_write_routes,
             "slice_scoped": True,
             "duration_ms": int((time.time() - fuzz_started) * 1000),
         }
@@ -3158,6 +3462,11 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
             allow_source_runtime=runtime_contract.get("status") == "approved",
             root=root,
             project=project,
+        )
+        scenarios = _append_runtime_contract_scenarios(
+            scenarios,
+            context,
+            discovery_round=settings["round_number"],
         )
         _enrich_coupon_validation_scenarios(scenarios, _runtime_db_dsn(project, root, db_schema_text))
         executable = [scenario for scenario in scenarios if _scenario_executable(scenario)]
@@ -4106,6 +4415,31 @@ def _is_money_control_step(scenario: Any, action_name: str) -> bool:
     category = str(getattr(scenario, "category", "") or "").strip().lower()
     if "money" in category or "financial" in category or "conservation" in category:
         return True
+    semantic_text = " ".join([
+        str(action_name or ""),
+        str(getattr(scenario, "entity", "") or ""),
+        " ".join(str(item or "") for item in (getattr(scenario, "oracle_rules", []) or [])),
+    ]).lower()
+    semantic_tokens = set(re.findall(r"[a-z][a-z0-9_]*", semantic_text))
+    financial_tokens = {
+        "amount",
+        "billing",
+        "capture",
+        "charge",
+        "checkout",
+        "invoice",
+        "money",
+        "pay",
+        "payment",
+        "payout",
+        "refund",
+        "remittance",
+        "settle",
+        "settlement",
+        "transaction",
+    }
+    if semantic_tokens.intersection(financial_tokens):
+        return True
     action = str(action_name or "").lower()
     return any(
         token in action
@@ -4146,6 +4480,26 @@ def _bind_runtime_amount_controls(body: Any, bindings: dict[str, Any], scenario:
     return out
 
 
+def _disposable_fixture_nonce(scenario: Any, step: Any, action_name: str) -> str:
+    return disposable_identity_nonce(
+        getattr(scenario, "id", "") or "",
+        getattr(step, "order", "") or "",
+        action_name,
+    )
+
+
+def _materialize_disposable_identity_fixture_body(value: Any, nonce: str, prefix: str = "") -> tuple[Any, list[str]]:
+    """Replace identity-create fixture literals/placeholders with one-run values.
+
+    This is intentionally scoped to ``bootstrap_create_*`` runtime steps. Login
+    bodies and business mutation bodies keep their documented values; only the
+    disposable fixture create request gets unique identity fields so repeated
+    probes do not reuse demo accounts or collide with previous non-production
+    writes.
+    """
+    return materialize_disposable_identity_fields(value, nonce, prefix=prefix)
+
+
 def __execute_scenario_once(
     scenario: Any,
     base_url: str,
@@ -4158,6 +4512,7 @@ def __execute_scenario_once(
     # before authentication: those bypass the scenario evidence chain and make
     # the executor industry-specific.
     bindings: dict[str, Any] = {}
+    resolved_fixture_binding_names: set[str] = set()
     actor_tokens: dict[str, str] = {}
 
     # ── DB evidence: snapshot the data layer before/after write scenarios ──
@@ -4308,6 +4663,42 @@ def __execute_scenario_once(
                 # Append ?_limit=1 or &limit=1 as safety net
                 sep = "&" if "?" in path else "?"
                 path = f"{path}{sep}_qualibug_safe_limit=1"
+        raw_action_name = str(getattr(step, "action", "") or "").strip()
+        action_name = raw_action_name.lower()
+        if action_name.startswith("bootstrap_create_") and method in {"POST", "PUT"}:
+            binding_name = raw_action_name[len("bootstrap_create_"):].strip()
+            resolved_binding = _binding_value_for_key(binding_name, bindings)
+            if (
+                binding_name
+                and binding_name.lower() in resolved_fixture_binding_names
+                and resolved_binding not in (None, "", [], {})
+            ):
+                binding_value = str(resolved_binding)
+                bindings[binding_name] = binding_value
+                for alias in param_field_candidates(binding_name):
+                    bindings.setdefault(alias, binding_value)
+                trace.setdefault("runtime_binding_events", []).append({
+                    "source": "existing_runtime_binding",
+                    "step": str(getattr(step, "action", "") or ""),
+                    "binding": binding_name,
+                    "value_fingerprint": hashlib.sha256(
+                        binding_value.encode("utf-8")
+                    ).hexdigest(),
+                })
+                continue
+        if (
+            action_name.startswith("bootstrap_create_")
+            and method in {"POST", "PUT"}
+            and isinstance(body, dict)
+        ):
+            nonce = _disposable_fixture_nonce(scenario, step, action_name)
+            body, materialized_fields = _materialize_disposable_identity_fixture_body(body, nonce)
+            if materialized_fields:
+                trace.setdefault("runtime_binding_events", []).append({
+                    "source": "disposable_identity_fixture_materialization",
+                    "step": str(getattr(step, "action", "") or ""),
+                    "fields": materialized_fields,
+                })
         unbound_body_fields = _body_has_unbound_placeholders(body) if body and method not in {"GET", "HEAD"} else []
         if unbound_body_fields:
             reason = f"missing_runtime_body_binding:{','.join(unbound_body_fields)}"
@@ -4329,7 +4720,6 @@ def __execute_scenario_once(
                 "skipped_reason": reason,
             })
             break
-        action_name = str(getattr(step, "action", "") or "").strip().lower()
         if method in {"POST", "PUT", "PATCH", "DELETE"} and body:
             body = _bind_runtime_amount_controls(body, bindings, scenario, action_name)
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body and method not in {"GET", "HEAD"} else None
@@ -4545,6 +4935,15 @@ def __execute_scenario_once(
         ):
             for key, value in bind_entity_fields(response_body, path).items():
                 bindings.setdefault(key, value)
+            if action_name.startswith("resolve_body_"):
+                binding_name = raw_action_name[len("resolve_body_"):].strip()
+                resolved_binding = _binding_value_for_key(binding_name, bindings)
+                if binding_name and resolved_binding not in (None, "", [], {}):
+                    binding_value = str(resolved_binding)
+                    bindings[binding_name] = binding_value
+                    for alias in param_field_candidates(binding_name):
+                        bindings.setdefault(alias, binding_value)
+                    resolved_fixture_binding_names.add(binding_name.lower())
         if action_name == "login" and actor and bindings.get("token"):
             actor_tokens[actor] = str(bindings["token"])
         # ── Auto-extract: POST responses that create resources ──

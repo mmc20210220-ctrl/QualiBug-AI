@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 OPENAPI_TEXT = """
 openapi: 3.0.0
@@ -91,18 +93,141 @@ def test_scan_entry_blocks_write_contract_before_runtime_traffic(tmp_path: Path)
 
 
 def test_runtime_contract_is_injected_into_generator_for_current_scan() -> None:
-    import ai_test_asset_center  # noqa: F401 - package import installs the patch
-    from ai_test_asset_center.scan_runtime_gate_patch import _RUNTIME_CONTRACT
-    from ai_test_asset_center.semantic_scenario_generator import SemanticScenarioGenerator
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
 
-    token = _RUNTIME_CONTRACT.set(_read_contract())
-    try:
-        scenarios = SemanticScenarioGenerator().generate({})
-    finally:
-        _RUNTIME_CONTRACT.reset(token)
+    scenarios = compile_runtime_scenarios(
+        {"runtime_scenario_contract": _read_contract()},
+        discovery_round=2,
+    )
 
     assert any(item.id == "read-orders" for item in scenarios)
     scenario = next(item for item in scenarios if item.id == "read-orders")
     assert scenario.execution_policy == "safe_read_only"
     assert scenario.behavior_slice_kind == "runtime_contract"
     assert scenario.steps[0].api_method == "GET"
+    assert scenario.discovery_round == 2
+
+
+def test_runtime_contract_rejects_empty_scenario_actor() -> None:
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
+
+    contract = _read_contract()
+    contract.pop("actor")
+    contract["scenarios"][0]["actors"] = [{}]
+
+    with pytest.raises(
+        ValueError,
+        match="RUNTIME_SCENARIO_ACTOR_MISSING",
+    ):
+        compile_runtime_scenarios({"runtime_scenario_contract": contract})
+
+
+def test_runtime_contract_rejects_explicit_empty_step_actor() -> None:
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
+
+    contract = _read_contract()
+    contract["scenarios"][0]["steps"][0]["actor"] = {}
+
+    with pytest.raises(ValueError, match="STEP_ACTOR_ID_MISSING"):
+        compile_runtime_scenarios({"runtime_scenario_contract": contract})
+
+
+def test_runtime_contract_rejects_any_anonymous_or_duplicate_scenario_actor() -> None:
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
+
+    anonymous = _read_contract()
+    anonymous["scenarios"][0]["actors"] = [{"id": "admin"}, {}]
+    with pytest.raises(ValueError, match="SCENARIO_ACTOR_ID_MISSING"):
+        compile_runtime_scenarios({"runtime_scenario_contract": anonymous})
+
+    duplicate = _read_contract()
+    duplicate["scenarios"][0]["actors"] = ["admin", {"id": "admin"}]
+    with pytest.raises(ValueError, match="SCENARIO_ACTOR_DUPLICATE"):
+        compile_runtime_scenarios({"runtime_scenario_contract": duplicate})
+
+
+def test_runtime_contract_requires_an_actor_for_each_scenario() -> None:
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
+
+    contract = _read_contract()
+    contract.pop("actor")
+    contract["scenarios"] = [
+        {
+            "id": "with-actor",
+            "actors": [{"id": "buyer"}],
+            "steps": [{"method": "GET", "path": "/api/orders"}],
+        },
+        {
+            "id": "anonymous",
+            "steps": [{"method": "GET", "path": "/api/orders"}],
+        },
+    ]
+
+    with pytest.raises(ValueError, match="SCENARIO_ACTOR_MISSING"):
+        compile_runtime_scenarios({"runtime_scenario_contract": contract})
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("expected_status", True, "STEP_EXPECTED_STATUS_INVALID"),
+        ("expected_status", "200", "STEP_EXPECTED_STATUS_INVALID"),
+        ("expected_status", 99, "STEP_EXPECTED_STATUS_INVALID"),
+        ("expected_status", 600, "STEP_EXPECTED_STATUS_INVALID"),
+        ("order", True, "STEP_ORDER_INVALID"),
+        ("order", 0, "STEP_ORDER_INVALID"),
+        ("order", -1, "STEP_ORDER_INVALID"),
+    ],
+)
+def test_runtime_contract_rejects_invalid_step_scalar_contracts(
+    field: str,
+    value: object,
+    code: str,
+) -> None:
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
+
+    contract = _read_contract()
+    contract["scenarios"][0]["steps"][0][field] = value
+
+    with pytest.raises(ValueError, match=code):
+        compile_runtime_scenarios({"runtime_scenario_contract": contract})
+
+
+def test_runtime_contract_rejects_duplicate_step_order() -> None:
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
+
+    contract = _read_contract()
+    contract["scenarios"][0]["steps"] = [
+        {"order": 1, "method": "GET", "path": "/api/orders"},
+        {"order": 1, "method": "GET", "path": "/api/orders"},
+    ]
+
+    with pytest.raises(ValueError, match="STEP_ORDER_DUPLICATE"):
+        compile_runtime_scenarios({"runtime_scenario_contract": contract})
+
+
+@pytest.mark.parametrize("confidence", [True, "0.9", -0.1, 1.1, float("inf"), float("nan")])
+def test_runtime_contract_rejects_invalid_confidence(confidence: object) -> None:
+    from ai_test_asset_center.runtime_scenario_contract_gate import (
+        compile_runtime_scenarios,
+    )
+
+    contract = _read_contract()
+    contract["scenarios"][0]["confidence"] = confidence
+
+    with pytest.raises(ValueError, match="SCENARIO_CONFIDENCE_INVALID"):
+        compile_runtime_scenarios({"runtime_scenario_contract": contract})

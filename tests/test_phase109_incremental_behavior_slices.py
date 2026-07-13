@@ -858,6 +858,69 @@ def test_optimize_behavior_slice_pool_collapses_llm_permission_duplicates():
     assert "BHV_perm_b" in kept_ids
 
 
+def test_optimize_behavior_slice_pool_preserves_distinct_actor_contracts():
+    slices = [
+        {
+            "slice_id": "BHV_buyer_read",
+            "entity": "resource",
+            "kind": "permission",
+            "priority": 0.8,
+            "_hypothesis_origin": "llm_reasoner",
+            "_permission_actor": "buyer",
+            "_permission_method": "GET",
+            "_permission_path": "/api/resources",
+            "_permission_expected_permitted": ["GET"],
+            "endpoints": ["/api/resources"],
+        },
+        {
+            "slice_id": "BHV_auditor_read",
+            "entity": "resource",
+            "kind": "permission",
+            "priority": 0.7,
+            "_hypothesis_origin": "llm_reasoner",
+            "_permission_actor": "auditor",
+            "_permission_method": "GET",
+            "_permission_path": "/api/resources",
+            "_permission_expected_permitted": [],
+            "endpoints": ["/api/resources"],
+        },
+        {
+            "slice_id": "BHV_owner_detail",
+            "entity": "resource",
+            "kind": "isolation",
+            "priority": 0.9,
+            "_hypothesis_origin": "llm_reasoner",
+            "_isolation_owner_role": "owner",
+            "_isolation_viewer_role": "viewer_a",
+            "_isolation_mode": "path",
+            "_isolation_path": "/api/resources/{id}",
+            "endpoints": ["/api/resources/{id}"],
+        },
+        {
+            "slice_id": "BHV_owner_detail_other_viewer",
+            "entity": "resource",
+            "kind": "isolation",
+            "priority": 0.8,
+            "_hypothesis_origin": "llm_reasoner",
+            "_isolation_owner_role": "owner",
+            "_isolation_viewer_role": "viewer_b",
+            "_isolation_mode": "path",
+            "_isolation_path": "/api/resources/{id}",
+            "endpoints": ["/api/resources/{id}"],
+        },
+    ]
+
+    optimized, stats = _optimize_behavior_slice_pool(slices)
+
+    assert stats["collapsed_permission_isolation"] == 0
+    assert {item["slice_id"] for item in optimized} == {
+        "BHV_buyer_read",
+        "BHV_auditor_read",
+        "BHV_owner_detail",
+        "BHV_owner_detail_other_viewer",
+    }
+
+
 def test_optimize_behavior_slice_pool_preserves_distinct_llm_invariants_on_same_route():
     """A shared endpoint must not erase independent business assertions."""
     slices = [

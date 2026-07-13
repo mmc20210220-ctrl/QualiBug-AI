@@ -1134,12 +1134,6 @@ def generate_supplementary_slices(
             endpoints, default_actor, login_path, login_body=login_body_template,
             actors=actors, permission_matrix=permission_matrix,
         ))
-    try:
-        from .historical_behavior_slices import generate_historical_behavior_slices
-
-        all_slices.extend(generate_historical_behavior_slices(root, project, api_spec_text))
-    except Exception:
-        pass
     return all_slices
 
 

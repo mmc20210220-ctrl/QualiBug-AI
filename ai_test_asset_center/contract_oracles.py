@@ -1,8 +1,9 @@
 """Contract-based oracles with explicit activation requirements.
 
-Business oracles may only fire when control, treatment, fixtures, and observers
-required by the experiment contract are present. Heuristic-only signals are
-downgraded to internal clues and must not enter customer-delivery.
+Business oracles may only fire when the treatment path plus the controls,
+fixtures, and observers required by the typed experiment contract are present.
+Heuristic-only signals are downgraded to internal clues and must not enter
+customer-delivery.
 """
 from __future__ import annotations
 
@@ -11,7 +12,11 @@ import json
 import re
 from typing import Any
 
-from .assertion_dsl import evaluate_assertion, validate_assertion_receipt
+from .assertion_dsl import (
+    evaluate_assertion,
+    materialize_assertion,
+    validate_assertion_receipt,
+)
 from .observer_contracts import validate_observer_receipt
 
 
@@ -158,6 +163,19 @@ def _plan_subjects(experiment: dict[str, Any], key: str, prefix: str) -> list[st
     return list(dict.fromkeys(subjects))
 
 
+def _assertions_require_control(experiment: dict[str, Any]) -> bool:
+    for raw in _list(experiment.get("assertions")):
+        if not isinstance(raw, dict):
+            continue
+        assertion = materialize_assertion(raw)
+        kind = _text(assertion.get("kind") or assertion.get("type"))
+        if kind == "owner_tenant_visibility":
+            return True
+        if assertion.get("require_control") is True:
+            return True
+    return False
+
+
 def contract_activation_requirements(
     experiment: dict[str, Any],
 ) -> dict[str, list[str]]:
@@ -231,7 +249,7 @@ def build_contract_oracle_activation_receipt(
     ]
     if not source_refs:
         blockers.append("SOURCE_REFS_MISSING")
-    if not required["control"]:
+    if _assertions_require_control(exp) and not required["control"]:
         blockers.append("CONTROL_PLAN_MISSING")
     if not required["treatment"]:
         blockers.append("TREATMENT_PLAN_MISSING")
@@ -479,8 +497,7 @@ def validate_contract_oracle_activation_receipt(
         or (
             status == "ACTIVE"
             and (
-                not required["control"]
-                or not required["treatment"]
+                not required["treatment"]
                 or not row.get("source_refs")
                 or any(
                     len(verified[key]) != len(required[key])

@@ -290,13 +290,12 @@ def is_destructive_operation(operation_name: str) -> bool:
 
 def get_project_environment(project_id: str, root: Path | None = None) -> str:
     """Read the declared environment from project config."""
-    try:
-        from .real_project_onboarding import load_real_project_config, _safe_project_id
-        project = _safe_project_id(project_id)
-        cfg = load_real_project_config(project, root)
-        return str(cfg.get("environment", "")).strip().lower()
-    except Exception:
-        return ""
+    from .project_runtime_config import load_real_project_config
+    from .project_runtime_primitives import safe_project_id
+
+    project = safe_project_id(project_id)
+    cfg = load_real_project_config(project, root)
+    return str(cfg.get("environment", "")).strip().lower()
 
 
 def ensure_test_environment(project_id: str, base_url: str = "", root: Path | None = None) -> None:

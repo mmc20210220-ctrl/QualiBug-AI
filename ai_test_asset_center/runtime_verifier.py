@@ -9,7 +9,6 @@ QualiBug Runtime Verifier — 自动化运行时探测引擎
 这是三层架构中 Verifier 层的运行时代码实现。
 """
 
-import base64
 import json
 import os
 import time
@@ -18,6 +17,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from .target_endpoint import resolve_target_base_url
 
 # ---------------------------------------------------------------------------
 # 探针定义
@@ -34,36 +35,22 @@ class ProbeResult:
     blocked_reason: str = ""
 
 
-DEFAULT_BASE_URL = os.environ.get("QUALIBUG_DEFAULT_BASE_URL", "http://127.0.0.1:8088")
-
-
 def _default_role_tokens() -> dict[str, str]:
-    return {
-        "admin": base64.b64encode(b"admin:ADMIN").decode(),
-        "planner": base64.b64encode(b"planner:PLANNER").decode(),
-        "operator": base64.b64encode(b"operator:OPERATOR").decode(),
-        "warehouse": base64.b64encode(b"warehouse:WAREHOUSE").decode(),
-        "quality": base64.b64encode(b"quality:QUALITY").decode(),
-        "maintenance": base64.b64encode(b"maint:MAINT").decode(),
-        "viewer": base64.b64encode(b"viewer:VIEWER").decode(),
-        "forged": base64.b64encode(b"viewer:ADMIN").decode(),
-    }
+    return {}
 
 
 def _load_role_tokens(overrides: dict[str, str] | None = None) -> dict[str, str]:
     tokens = _default_role_tokens()
     env_payload = os.environ.get("QUALIBUG_RUNTIME_TOKENS", "").strip()
     if env_payload:
-        try:
-            loaded = json.loads(env_payload)
-        except Exception:
-            loaded = {}
-        if isinstance(loaded, dict):
-            for role, token in loaded.items():
-                role_name = str(role or "").strip()
-                token_value = str(token or "").strip()
-                if role_name and token_value:
-                    tokens[role_name] = token_value
+        loaded = json.loads(env_payload)
+        if not isinstance(loaded, dict):
+            raise ValueError("runtime_tokens_must_be_object")
+        for role, token in loaded.items():
+            role_name = str(role or "").strip()
+            token_value = str(token or "").strip()
+            if role_name and token_value:
+                tokens[role_name] = token_value
     if isinstance(overrides, dict):
         for role, token in overrides.items():
             role_name = str(role or "").strip()
@@ -76,8 +63,8 @@ def _load_role_tokens(overrides: dict[str, str] | None = None) -> dict[str, str]
 class RuntimeVerifier:
     """运行时验证器，默认加载外部注入的角色凭证配置。"""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, *, role_tokens: dict[str, str] | None = None):
-        self.base_url = str(base_url or DEFAULT_BASE_URL)
+    def __init__(self, base_url: str | None = None, *, role_tokens: dict[str, str] | None = None):
+        self.base_url = resolve_target_base_url(base_url)
         self.results: list[ProbeResult] = []
 
         # Legacy benchmark tokens remain as a compatibility fallback only.
@@ -94,8 +81,11 @@ class RuntimeVerifier:
         headers = {"Content-Type": "application/json"}
         if extra_headers:
             headers.update(extra_headers)
-        if not no_auth and role in self.tokens:
-            headers["Authorization"] = f"Bearer {self.tokens[role]}"
+        if not no_auth:
+            token = str(self.tokens.get(role) or "").strip()
+            if not token:
+                return {"_http": 0, "_error": f"role_token_missing:{role}", "_blocked": True}
+            headers["Authorization"] = f"Bearer {token}"
 
         body = json.dumps(data).encode() if data else None
         req = urllib.request.Request(url, data=body, headers=headers, method=method)

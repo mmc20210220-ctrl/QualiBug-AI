@@ -19,13 +19,74 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .benchmark_compute import compute_benchmark, compute_stage_loss_matrix
-from .customer_delivery_gate import is_customer_deliverable_defect
+from benchmark_evaluator.benchmark_compute import (
+    compute_benchmark,
+    compute_stage_loss_matrix,
+)
+from .canonical_defect_registry import (
+    CanonicalDefectRegistryError,
+    canonical_representative_findings,
+    validate_canonical_defect_registry,
+    validate_defect_identity_consistency,
+)
+from .discovery_mainline_contract import (
+    MainlineContractError,
+    validate_mainline_run_contract,
+)
+from .discovery_quality_projection import (
+    SCHEMA_VERSION as QUALITY_PROJECTION_SCHEMA,
+    formal_customer_deliverable_findings,
+    validated_delivery_gate_finding_ids,
+)
+from .obligation_attempt_ledger import (
+    ObligationAttemptLedgerError,
+    derive_campaign_terminal_status,
+    validate_obligation_attempt_ledger,
+)
+from .formal_delivery_authority import (
+    FormalDeliveryAuthorityError,
+    build_formal_delivery_authority_receipt,
+    validate_formal_delivery_authority_receipt,
+)
+from .evaluator_receipt_auth import (
+    EvaluatorReceiptAuthError,
+    seal_evaluator_artifact,
+    verify_evaluator_artifact,
+)
+from .evaluator_execution_attestation import (
+    ATTESTATION_AUTHENTICATION_FIELD,
+    ATTESTATION_FINGERPRINT_FIELD,
+    EXECUTION_ATTESTATION_SCHEMA,
+    ExecutionAttestationError,
+    validate_execution_attestation,
+)
+from .policy_evaluation_gate import PolicyPromotionGate
 
 
 MANIFEST_SCHEMA = "qualibug.discovery-evaluation-dataset.v1"
-RECEIPT_SCHEMA = "qualibug.discovery-evaluation-receipt.v1"
-REPORT_SCHEMA = "qualibug.discovery-evaluation-report.v1"
+RECEIPT_SCHEMA = "qualibug.discovery-evaluation-receipt.v3"
+RECEIPT_V2_SCHEMA = "qualibug.discovery-evaluation-receipt.v2"
+RECEIPT_V1_SCHEMA = "qualibug.discovery-evaluation-receipt.v1"
+REPORT_SCHEMA = "qualibug.discovery-evaluation-report.v2"
+REPORT_V1_SCHEMA = "qualibug.discovery-evaluation-report.v1"
+RECEIPT_AUTHENTICATION_FIELD = "receipt_authentication"
+REPORT_AUTHENTICATION_FIELD = "report_authentication"
+RECEIPT_FINGERPRINT_FIELD = "receipt_fingerprint"
+REPORT_FINGERPRINT_FIELD = "report_fingerprint"
+EVALUATION_RUN_ENVELOPE_SCHEMA = (
+    "qualibug.discovery-evaluation-run-envelope.v2"
+)
+POLICY_COMPARISON_SCHEMA = "qualibug.discovery-policy-comparison.v3"
+POLICY_COMPARISON_FINGERPRINT_FIELD = "comparison_fingerprint"
+POLICY_COMPARISON_AUTHENTICATION_FIELD = "comparison_authentication"
+POLICY_COMPARISON_REPORT_KEYS = frozenset(
+    {
+        "champion_replay",
+        "challenger_replay",
+        "champion_shadow",
+        "challenger_shadow",
+    }
+)
 
 NON_PRODUCTION_ENVIRONMENTS = {
     "local",
@@ -43,7 +104,7 @@ NON_PRODUCTION_ENVIRONMENTS = {
 }
 VALID_SPLITS = {"held_in", "held_out"}
 VALID_EXPECTATIONS = {"seeded_defects", "clean"}
-VALID_EVALUATION_MODES = {"replay", "shadow"}
+VALID_EVALUATION_MODES = {"operational", "replay", "shadow"}
 
 
 class EvaluationContractError(ValueError):
@@ -413,6 +474,91 @@ def _validate_trace_ledger(
         ) from exc
 
 
+def _validated_formal_evaluation_scope(
+    delivery_occurrences: list[dict[str, Any]],
+    *,
+    obligation_attempt_ledger: dict[str, Any] | None,
+    run_id: str,
+    target: EvaluationTarget,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Validate the evaluator's exact Gate-v2 + ledger input boundary."""
+
+    if not isinstance(delivery_occurrences, list):
+        raise EvaluationContractError("delivery_occurrences must be a list")
+    if any(not isinstance(item, dict) for item in delivery_occurrences):
+        raise EvaluationContractError(
+            "delivery_occurrences must contain objects only"
+        )
+    if obligation_attempt_ledger is None:
+        raise EvaluationContractError(
+            "obligation_attempt_ledger_required_for_completed_evaluation"
+        )
+
+    validated_ledger: dict[str, Any] | None = None
+    if obligation_attempt_ledger is not None:
+        try:
+            validated_ledger = validate_obligation_attempt_ledger(
+                obligation_attempt_ledger
+            )
+        except ObligationAttemptLedgerError as exc:
+            raise EvaluationContractError(
+                f"obligation_attempt_ledger_invalid:{exc}"
+            ) from exc
+        if str(validated_ledger.get("run_id") or "").strip() != run_id:
+            raise EvaluationContractError(
+                "obligation_attempt_ledger_run_id_mismatch"
+            )
+
+    try:
+        deliverable = formal_customer_deliverable_findings(
+            delivery_occurrences,
+            obligation_attempt_ledger=validated_ledger,
+        )
+        gate_ids = validated_delivery_gate_finding_ids(validated_ledger)
+    except MainlineContractError as exc:
+        raise EvaluationContractError(
+            f"formal_delivery_scope_invalid:{exc}"
+        ) from exc
+
+    finding_ids = [
+        str(
+            item.get("finding_id")
+            or item.get("id")
+            or item.get("bug_id")
+            or ""
+        ).strip()
+        for item in delivery_occurrences
+    ]
+    if not all(finding_ids):
+        raise EvaluationContractError("formal_evaluation_finding_id_missing")
+    if len(finding_ids) != len(set(finding_ids)):
+        raise EvaluationContractError("formal_evaluation_finding_id_duplicate")
+    if (
+        sorted(finding_ids) != gate_ids
+        or len(deliverable) != len(delivery_occurrences)
+    ):
+        raise EvaluationContractError(
+            "evaluation_findings_not_exact_formal_gate_scope"
+        )
+
+    for finding in deliverable:
+        identity = dict(
+            dict(finding.get("delivery_gate_receipt") or {}).get("identity")
+            or {}
+        )
+        expected = {
+            "run_id": run_id,
+            "target_id": target.target_id,
+            "environment_id": target.environment_ref,
+        }
+        for field, value in expected.items():
+            if str(identity.get(field) or "").strip() != value:
+                raise EvaluationContractError(
+                    f"formal_delivery_{field}_mismatch"
+                )
+    return deliverable, validated_ledger
+
+
 def evaluate_completed_scan(
     manifest: EvaluationManifest,
     target_id: str,
@@ -421,11 +567,22 @@ def evaluate_completed_scan(
     policy_id: str,
     evaluation_mode: str,
     findings: list[dict[str, Any]],
+    delivery_occurrences: list[dict[str, Any]] | None = None,
     candidates: list[dict[str, Any]] | None,
     pipeline_health: dict[str, Any],
     operational_metrics: dict[str, Any],
     fixture_governance: dict[str, Any] | None = None,
     trace_ledger: dict[str, Any] | None = None,
+    obligation_attempt_ledger: dict[str, Any] | None = None,
+    mainline_run: dict[str, Any] | None = None,
+    formal_count_projection: dict[str, Any] | None = None,
+    formal_delivery_authority: dict[str, Any] | None = None,
+    canonical_defect_registry: dict[str, Any] | None = None,
+    defect_identity_consistency: dict[str, Any] | None = None,
+    evaluator_policy_identity: dict[str, Any] | None = None,
+    process_boundary: dict[str, Any] | None = None,
+    execution_attestation: dict[str, Any] | None = None,
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Evaluate one completed scan without exposing hidden answers to runtime."""
 
@@ -437,6 +594,62 @@ def evaluate_completed_scan(
             f"evaluation_mode must be one of {sorted(VALID_EVALUATION_MODES)}"
         )
     target = manifest.target(target_id)
+    try:
+        validated_mainline = validate_mainline_run_contract(
+            dict(mainline_run or {})
+        )
+    except (MainlineContractError, TypeError, ValueError) as exc:
+        raise EvaluationContractError(
+            f"mainline_run_invalid:{exc}"
+        ) from exc
+    expected_mainline_identity = {
+        "run_id": run_id,
+        "target_id": target.target_id,
+        "environment_id": target.environment_ref,
+        "evaluation_mode": evaluation_mode,
+    }
+    for field, value in expected_mainline_identity.items():
+        if str(validated_mainline.get(field) or "").strip() != value:
+            raise EvaluationContractError(f"mainline_run_{field}_mismatch")
+    if evaluator_policy_identity is None:
+        raise EvaluationContractError("evaluator_policy_identity required")
+    identity = _as_dict(
+        evaluator_policy_identity, "evaluator_policy_identity"
+    )
+    if set(identity) != {
+        "policy_id",
+        "policy_version",
+        "strategy_fingerprint",
+    }:
+        raise EvaluationContractError(
+            "evaluator_policy_identity fields invalid"
+        )
+    if _required_text(
+        identity.get("policy_id"), "evaluator_policy_identity.policy_id"
+    ) != policy_id:
+        raise EvaluationContractError(
+            "evaluator_policy_identity policy_id mismatch"
+        )
+    if _required_text(
+        identity.get("policy_version"),
+        "evaluator_policy_identity.policy_version",
+    ) != validated_mainline["policy_version"]:
+        raise EvaluationContractError(
+            "evaluator_policy_identity policy_version mismatch"
+        )
+    policy_strategy_fingerprint = _required_text(
+        identity.get("strategy_fingerprint"),
+        "evaluator_policy_identity.strategy_fingerprint",
+    ).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", policy_strategy_fingerprint):
+        raise EvaluationContractError(
+            "evaluator_policy_identity strategy_fingerprint invalid"
+        )
+    validated_policy_identity = {
+        "policy_id": policy_id,
+        "policy_version": validated_mainline["policy_version"],
+        "strategy_fingerprint": policy_strategy_fingerprint,
+    }
     measurement_status, not_measured_reason = _pipeline_health_status(pipeline_health)
     fingerprints = manifest.target_fingerprints[target_id]
     validated_trace_ledger = _validate_trace_ledger(
@@ -446,18 +659,214 @@ def evaluate_completed_scan(
         policy_id=policy_id,
         evaluation_mode=evaluation_mode,
     )
+    deliverable_occurrences, validated_attempt_ledger = (
+        _validated_formal_evaluation_scope(
+            delivery_occurrences if delivery_occurrences is not None else [],
+            obligation_attempt_ledger=obligation_attempt_ledger,
+            run_id=run_id,
+            target=target,
+        )
+    )
+    assert validated_attempt_ledger is not None
+    campaign_terminal_status = derive_campaign_terminal_status(
+        validated_attempt_ledger
+    )
+    observed_request_receipt_count = sum(
+        1
+        for raw_attempt in validated_attempt_ledger.get("attempts") or []
+        if int(
+            dict(raw_attempt.get("operational_receipt") or {}).get(
+                "http_request_attempt_count"
+            )
+            or 0
+        )
+        > 0
+    )
+    if (
+        measurement_status == "MEASURED"
+        and campaign_terminal_status != "completed"
+    ):
+        measurement_status = "NOT_MEASURED"
+        not_measured_reason = (
+            f"obligation_campaign_{campaign_terminal_status}"
+        )
+    elif measurement_status == "MEASURED" and observed_request_receipt_count == 0:
+        measurement_status = "NOT_MEASURED"
+        not_measured_reason = "target_request_receipts_missing"
+    validated_execution_attestation: dict[str, Any]
+    if execution_attestation is None:
+        validated_execution_attestation = {
+            "schema_version": EXECUTION_ATTESTATION_SCHEMA,
+            "status": "NOT_PROVIDED",
+            "reason": "evaluator_owned_io_attestation_required",
+        }
+        if measurement_status == "MEASURED":
+            measurement_status = "NOT_MEASURED"
+            not_measured_reason = "evaluator_execution_attestation_missing"
+    else:
+        if not isinstance(process_boundary, dict):
+            raise EvaluationContractError(
+                "process_boundary_required_for_execution_attestation"
+            )
+        try:
+            validated_execution_attestation = validate_execution_attestation(
+                dict(execution_attestation),
+                mainline_run=validated_mainline,
+                obligation_attempt_ledger=validated_attempt_ledger,
+                policy_identity=validated_policy_identity,
+                fixture_governance=dict(fixture_governance or {}),
+                process_boundary=dict(process_boundary),
+                signing_key=receipt_signing_key,
+            )
+        except ExecutionAttestationError as exc:
+            raise EvaluationContractError(
+                f"execution_attestation_invalid:{exc}"
+            ) from exc
+    try:
+        validated_formal_authority = build_formal_delivery_authority_receipt(
+            mainline_run=validated_mainline,
+            findings=deliverable_occurrences,
+            obligation_attempt_ledger=validated_attempt_ledger,
+        )
+    except FormalDeliveryAuthorityError as exc:
+        raise EvaluationContractError(
+            f"formal_delivery_authority_invalid:{exc}"
+        ) from exc
+    try:
+        submitted_authority = validate_formal_delivery_authority_receipt(
+            dict(formal_delivery_authority or {})
+        )
+    except FormalDeliveryAuthorityError as exc:
+        raise EvaluationContractError(
+            f"submitted_formal_delivery_authority_invalid:{exc}"
+        ) from exc
+    if submitted_authority != validated_formal_authority:
+        raise EvaluationContractError(
+            "submitted_formal_delivery_authority_mismatch"
+        )
+    try:
+        validated_canonical_registry = validate_canonical_defect_registry(
+            dict(canonical_defect_registry or {}),
+            mainline_run=validated_mainline,
+            deliverable_occurrences=deliverable_occurrences,
+            obligation_attempt_ledger=validated_attempt_ledger,
+        )
+        canonical_findings = canonical_representative_findings(
+            validated_canonical_registry,
+            deliverable_occurrences=deliverable_occurrences,
+        )
+    except CanonicalDefectRegistryError as exc:
+        raise EvaluationContractError(
+            f"canonical_defect_registry_invalid:{exc}"
+        ) from exc
+    if findings != canonical_findings:
+        raise EvaluationContractError(
+            "evaluation_findings_not_exact_canonical_scope"
+        )
+    projection = (
+        formal_count_projection
+        if isinstance(formal_count_projection, dict)
+        else {}
+    )
+    if (
+        projection.get("schema_version")
+        != QUALITY_PROJECTION_SCHEMA
+        or projection.get("authority_status") != "VERIFIED"
+        or projection.get("canonical_defect_ids")
+        != validated_canonical_registry["canonical_defect_ids"]
+        or projection.get("delivery_occurrence_finding_ids")
+        != validated_formal_authority["delivery_occurrence_finding_ids"]
+        or int(projection.get("formal_customer_deliverable_count") or 0)
+        != validated_canonical_registry["canonical_defect_count"]
+        or int(projection.get("delivery_occurrence_count") or 0)
+        != validated_formal_authority["delivery_occurrence_count"]
+    ):
+        raise EvaluationContractError(
+            "formal_count_projection_mismatch"
+        )
+    try:
+        validated_identity_consistency = validate_defect_identity_consistency(
+            dict(defect_identity_consistency or {}),
+            required_occurrence_scopes={
+                "delivery_gate_ids",
+                "formal_authority_occurrence_ids",
+                "registry_occurrence_ids",
+                "evaluator_submission_occurrence_ids",
+            },
+            required_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+                "evaluator_submission_ids",
+            },
+            allowed_occurrence_scopes={
+                "delivery_gate_ids",
+                "formal_authority_occurrence_ids",
+                "registry_occurrence_ids",
+                "formal_projection_occurrence_ids",
+                "product_projection_occurrence_ids",
+                "evaluator_submission_occurrence_ids",
+                "trace_ledger_occurrence_ids",
+            },
+            allowed_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+                "product_projection_ids",
+                "evaluator_projection_ids",
+                "evaluator_submission_ids",
+            },
+        )
+    except CanonicalDefectRegistryError as exc:
+        raise EvaluationContractError(
+            f"defect_identity_consistency_invalid:{exc}"
+        ) from exc
+    occurrence_scope = validated_identity_consistency["occurrence_scopes"]
+    canonical_scope = validated_identity_consistency["canonical_scopes"]
+    if any(
+        ids != validated_formal_authority["delivery_occurrence_finding_ids"]
+        for ids in occurrence_scope.values()
+    ):
+        raise EvaluationContractError(
+            "defect_identity_occurrence_scope_mismatch"
+        )
+    if any(
+        ids != validated_canonical_registry["canonical_defect_ids"]
+        for ids in canonical_scope.values()
+    ):
+        raise EvaluationContractError(
+            "defect_identity_canonical_scope_mismatch"
+        )
+    if validated_trace_ledger is not None:
+        trace_expected = {
+            "campaign_id": validated_attempt_ledger["campaign_id"],
+            "attempt_ledger_fingerprint": validated_attempt_ledger[
+                "ledger_fingerprint"
+            ],
+        }
+        for field, value in trace_expected.items():
+            if str(validated_trace_ledger.get(field) or "").strip() != value:
+                raise EvaluationContractError(
+                    f"trace_ledger_{field}_mismatch"
+                )
+        trace_occurrence_ids = sorted(
+            str(value or "").strip()
+            for value in validated_trace_ledger.get(
+                "delivery_occurrence_finding_ids"
+            ) or []
+            if str(value or "").strip()
+        )
+        if trace_occurrence_ids != validated_formal_authority[
+            "delivery_occurrence_finding_ids"
+        ]:
+            raise EvaluationContractError(
+                "trace_ledger_delivery_occurrence_ids_mismatch"
+            )
 
     metrics: dict[str, Any] = {}
     if measurement_status == "MEASURED" and target.expectation == "seeded_defects":
         ground_truth_path = _resolve_ref(target.ground_truth_ref, manifest.manifest_path)
-        deliverable_findings = [
-            item
-            for item in findings
-            if isinstance(item, dict) and is_customer_deliverable_defect(item)
-        ]
         metrics = compute_benchmark(
             target.project_id,
-            deliverable_findings,
+            canonical_findings,
             # Candidates and internal clues are intentionally excluded. Only
             # defects that passed the formal customer-delivery gate may become
             # a true or false positive in the commercial quality score.
@@ -468,6 +877,7 @@ def evaluate_completed_scan(
         if metrics.get("benchmark_active") is not True:
             measurement_status = "NOT_MEASURED"
             not_measured_reason = str(metrics.get("reason") or "benchmark_not_active")
+        matched_bug_ids = list(metrics.get("matched_bug_ids") or [])
         metrics.pop("ground_truth_source", None)
         # Isolate hidden ground truth: receipts expose aggregate counts only.
         for _leak_key in (
@@ -481,14 +891,15 @@ def evaluate_completed_scan(
             metrics.pop(_leak_key, None)
         metrics["ground_truth_fingerprint"] = fingerprints.get("ground_truth_fingerprint", "")
         metrics["ground_truth_bug_count"] = int(metrics.get("ground_truth_bug_count") or 0)
-        metrics["formal_findings_evaluated"] = len(deliverable_findings)
-        metrics["non_delivery_findings_excluded"] = max(0, len(findings) - len(deliverable_findings))
+        metrics["canonical_defects_evaluated"] = len(canonical_findings)
+        metrics["delivery_occurrences_verified"] = len(deliverable_occurrences)
+        metrics["non_delivery_findings_excluded"] = 0
         if validated_trace_ledger is not None and metrics.get("benchmark_active") is True:
             metrics["stage_loss_diagnostics"] = compute_stage_loss_matrix(
                 ground_truth_path=ground_truth_path,
                 candidates=candidates or [],
                 trace_ledger=validated_trace_ledger,
-                delivered_bug_ids=metrics.get("matched_bug_ids") or [],
+                delivered_bug_ids=matched_bug_ids,
             )
         else:
             metrics["stage_loss_diagnostics"] = {
@@ -503,17 +914,16 @@ def evaluate_completed_scan(
             }
         metrics["aggregate_only"] = True
     elif measurement_status == "MEASURED":
-        deliverable = [item for item in findings if isinstance(item, dict) and is_customer_deliverable_defect(item)]
         high_value = [
             item
-            for item in deliverable
+            for item in canonical_findings
             if str(item.get("severity") or "").strip().lower() in {"p0", "p1", "critical", "high"}
         ]
         metrics = {
             "benchmark_active": False,
             "ground_truth_available": False,
             "clean_evaluation_active": True,
-            "customer_deliverable_false_positives": len(deliverable),
+            "customer_deliverable_false_positives": len(canonical_findings),
             "critical_high_false_positives": len(high_value),
         }
 
@@ -529,7 +939,7 @@ def evaluate_completed_scan(
         }
         if validated_trace_ledger is not None
         else {
-            "schema_version": "qualibug.discovery-trace-ledger.v2",
+            "schema_version": "qualibug.discovery-trace-ledger.v3",
             "status": "NOT_PROVIDED",
             "ledger_fingerprint": "",
             "trace_count": 0,
@@ -554,7 +964,16 @@ def evaluate_completed_scan(
         "fixture_fingerprint": fingerprints["fixture_fingerprint"],
         "context_fingerprint": fingerprints["context_fingerprint"],
         "run_id": run_id,
+        "campaign_id": validated_mainline["campaign_id"],
         "policy_id": policy_id,
+        "policy_identity": {
+            "policy_id": policy_id,
+            "policy_version": validated_mainline["policy_version"],
+            "strategy_fingerprint": policy_strategy_fingerprint,
+            "mainline_contract_fingerprint": validated_mainline[
+                "contract_fingerprint"
+            ],
+        },
         "evaluation_mode": evaluation_mode,
         "measurement_status": measurement_status,
         "not_measured_reason": not_measured_reason,
@@ -562,20 +981,149 @@ def evaluate_completed_scan(
         "metrics": metrics,
         "operational_metrics": dict(operational_metrics),
         "fixture_governance": dict(fixture_governance or {}),
+        "execution_attestation": validated_execution_attestation,
         "trace_ledger_projection": trace_ledger_projection,
+        "formal_delivery_authority": validated_formal_authority,
+        "canonical_defect_registry": validated_canonical_registry,
+        "defect_identity_consistency": validated_identity_consistency,
     }
-    receipt["receipt_fingerprint"] = _sha256_bytes(_canonical_json(receipt))
-    return receipt
-
-
-def _assert_receipt_integrity(receipt: dict[str, Any], *, target_id: str) -> None:
-    claimed = _required_text(receipt.get("receipt_fingerprint"), f"{target_id}.receipt_fingerprint")
-    unsigned = {key: value for key, value in receipt.items() if key != "receipt_fingerprint"}
-    actual = _sha256_bytes(_canonical_json(unsigned))
-    if claimed != actual:
-        raise EvaluationContractError(
-            f"target fingerprints differ or receipt integrity failed for target: {target_id}"
+    try:
+        return seal_evaluator_artifact(
+            receipt,
+            signing_key=receipt_signing_key,
+            domain=RECEIPT_SCHEMA,
+            fingerprint_field=RECEIPT_FINGERPRINT_FIELD,
+            authentication_field=RECEIPT_AUTHENTICATION_FIELD,
         )
+    except EvaluatorReceiptAuthError as exc:
+        raise EvaluationContractError(
+            f"evaluation receipt authentication failed: {exc}"
+        ) from exc
+
+
+def _assert_receipt_integrity(
+    receipt: dict[str, Any],
+    *,
+    target_id: str,
+    receipt_signing_key: str | bytes | bytearray | None = None,
+) -> None:
+    try:
+        verify_evaluator_artifact(
+            receipt,
+            signing_key=receipt_signing_key,
+            domain=RECEIPT_SCHEMA,
+            fingerprint_field=RECEIPT_FINGERPRINT_FIELD,
+            authentication_field=RECEIPT_AUTHENTICATION_FIELD,
+        )
+    except EvaluatorReceiptAuthError as exc:
+        raise EvaluationContractError(
+            f"evaluation receipt authentication failed for target {target_id}: {exc}"
+        ) from exc
+    try:
+        authority = validate_formal_delivery_authority_receipt(
+            dict(receipt.get("formal_delivery_authority") or {})
+        )
+    except FormalDeliveryAuthorityError as exc:
+        raise EvaluationContractError(
+            f"formal delivery authority invalid for target {target_id}: {exc}"
+        ) from exc
+    expected_authority_identity = {
+        "run_id": _required_text(receipt.get("run_id"), f"{target_id}.run_id"),
+        "campaign_id": _required_text(
+            receipt.get("campaign_id"),
+            f"{target_id}.campaign_id",
+        ),
+        "target_id": target_id,
+    }
+    for field, value in expected_authority_identity.items():
+        if authority.get(field) != value:
+            raise EvaluationContractError(
+                f"formal delivery authority {field} mismatch for target: {target_id}"
+            )
+    policy_identity = receipt.get("policy_identity")
+    policy_identity_fields = {
+        "policy_id",
+        "policy_version",
+        "strategy_fingerprint",
+        "mainline_contract_fingerprint",
+    }
+    if not isinstance(policy_identity, dict) or set(policy_identity) != (
+        policy_identity_fields
+    ):
+        raise EvaluationContractError(
+            f"evaluation receipt policy identity invalid for target: {target_id}"
+        )
+    expected_policy_identity = {
+        "policy_id": _required_text(
+            receipt.get("policy_id"), f"{target_id}.policy_id"
+        ),
+        "policy_version": authority["policy_version"],
+        "mainline_contract_fingerprint": authority[
+            "mainline_contract_fingerprint"
+        ],
+    }
+    strategy_fingerprint = str(
+        policy_identity.get("strategy_fingerprint") or ""
+    ).strip().lower()
+    expected_policy_identity["strategy_fingerprint"] = strategy_fingerprint
+    if policy_identity != expected_policy_identity:
+        raise EvaluationContractError(
+            f"evaluation receipt policy identity mismatch for target: {target_id}"
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", strategy_fingerprint):
+        raise EvaluationContractError(
+            "evaluation receipt strategy fingerprint invalid for target: "
+            f"{target_id}"
+        )
+    attestation = receipt.get("execution_attestation")
+    if not isinstance(attestation, dict) or attestation.get(
+        "schema_version"
+    ) != EXECUTION_ATTESTATION_SCHEMA:
+        raise EvaluationContractError(
+            f"evaluation receipt execution attestation invalid: {target_id}"
+        )
+    attestation_status = str(attestation.get("status") or "").strip()
+    if receipt.get("measurement_status") == "MEASURED" and (
+        attestation_status != "VERIFIED"
+    ):
+        raise EvaluationContractError(
+            f"measured receipt lacks verified execution attestation: {target_id}"
+        )
+    if attestation_status == "VERIFIED":
+        try:
+            verify_evaluator_artifact(
+                attestation,
+                signing_key=receipt_signing_key,
+                domain=EXECUTION_ATTESTATION_SCHEMA,
+                fingerprint_field=ATTESTATION_FINGERPRINT_FIELD,
+                authentication_field=ATTESTATION_AUTHENTICATION_FIELD,
+            )
+        except EvaluatorReceiptAuthError as exc:
+            raise EvaluationContractError(
+                f"execution attestation authentication failed for target "
+                f"{target_id}: {exc}"
+            ) from exc
+        expected_attestation_identity = {
+            "run_id": expected_authority_identity["run_id"],
+            "campaign_id": expected_authority_identity["campaign_id"],
+            "target_id": target_id,
+            "policy_identity": {
+                "policy_id": expected_policy_identity["policy_id"],
+                "policy_version": expected_policy_identity["policy_version"],
+                "strategy_fingerprint": expected_policy_identity[
+                    "strategy_fingerprint"
+                ],
+            },
+            "mainline_contract_fingerprint": expected_policy_identity[
+                "mainline_contract_fingerprint"
+            ],
+        }
+        for field, value in expected_attestation_identity.items():
+            if attestation.get(field) != value:
+                raise EvaluationContractError(
+                    f"execution attestation {field} mismatch for target: "
+                    f"{target_id}"
+                )
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -787,6 +1335,8 @@ def _aggregate_evidence_quality(receipts: list[dict[str, Any]]) -> dict[str, Any
 def aggregate_evaluation_receipts(
     manifest: EvaluationManifest,
     receipts: list[dict[str, Any]],
+    *,
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Build the single promotion/reporting metric source for one policy."""
 
@@ -803,6 +1353,8 @@ def aggregate_evaluation_receipts(
     }
     if "" in evaluation_modes or len(evaluation_modes) > 1:
         raise EvaluationContractError("all evaluation receipts in one report must use one evaluation_mode")
+    policy_identities: set[tuple[str, str, str]] = set()
+    target_mainline_contract_fingerprints: dict[str, str] = {}
     for receipt in receipts:
         if not isinstance(receipt, dict) or receipt.get("schema_version") != RECEIPT_SCHEMA:
             raise EvaluationContractError("all evaluation receipts must use the current receipt schema")
@@ -811,7 +1363,29 @@ def aggregate_evaluation_receipts(
         if receipt.get("dataset_manifest_fingerprint") != manifest.manifest_fingerprint:
             raise EvaluationContractError("evaluation receipt manifest fingerprint does not match frozen manifest")
         target_id = _required_text(receipt.get("target_id"), "receipt.target_id")
-        _assert_receipt_integrity(receipt, target_id=target_id)
+        _assert_receipt_integrity(
+            receipt,
+            target_id=target_id,
+            receipt_signing_key=receipt_signing_key,
+        )
+        policy_identity = dict(receipt.get("policy_identity") or {})
+        policy_identities.add((
+            _required_text(
+                policy_identity.get("policy_id"),
+                f"{target_id}.policy_identity.policy_id",
+            ),
+            _required_text(
+                policy_identity.get("policy_version"),
+                f"{target_id}.policy_identity.policy_version",
+            ),
+            str(
+                policy_identity.get("strategy_fingerprint") or ""
+            ).strip().lower(),
+        ))
+        target_mainline_contract_fingerprints[target_id] = _required_text(
+            policy_identity.get("mainline_contract_fingerprint"),
+            f"{target_id}.policy_identity.mainline_contract_fingerprint",
+        )
         if target_id in by_target:
             raise EvaluationContractError(f"duplicate evaluation receipt for target: {target_id}")
         target = manifest.target(target_id)
@@ -828,7 +1402,20 @@ def aggregate_evaluation_receipts(
             raise EvaluationContractError(f"environment_ref drift for target: {target_id}")
         if receipt.get("environment_type") != target.environment_type:
             raise EvaluationContractError(f"environment_type drift for target: {target_id}")
+        for field in ("project_id", "industry", "split", "expectation"):
+            if receipt.get(field) != getattr(target, field):
+                raise EvaluationContractError(
+                    f"{field} drift for target: {target_id}"
+                )
         by_target[target_id] = receipt
+
+    if len(policy_identities) > 1:
+        raise EvaluationContractError(
+            "all evaluation receipts in one report must use one policy identity"
+        )
+    report_policy_identity = next(
+        iter(policy_identities), ("", "", "")
+    )
 
     missing_target_ids = [item.target_id for item in manifest.targets if item.target_id not in by_target]
     not_measured = [
@@ -879,12 +1466,20 @@ def aggregate_evaluation_receipts(
         int((item.get("metrics") or {}).get("critical_high_false_positives") or 0)
         for item in clean
     )
-    return {
+    report = {
         "schema_version": REPORT_SCHEMA,
         "dataset_id": manifest.dataset_id,
         "dataset_version": manifest.dataset_version,
         "dataset_manifest_fingerprint": manifest.manifest_fingerprint,
         "policy_id": next(iter(policy_ids), ""),
+        "policy_identity": {
+            "policy_id": report_policy_identity[0],
+            "policy_version": report_policy_identity[1],
+            "strategy_fingerprint": report_policy_identity[2],
+            "target_mainline_contract_fingerprints": dict(
+                sorted(target_mainline_contract_fingerprints.items())
+            ),
+        },
         "evaluation_mode": next(iter(evaluation_modes), ""),
         "claim_status": "MEASURED" if evaluation_complete else "NOT_MEASURED",
         "evaluation_complete": evaluation_complete,
@@ -913,6 +1508,39 @@ def aggregate_evaluation_receipts(
         "run_ids": [str(item.get("run_id") or "") for item in receipts],
         "target_receipts": receipts,
     }
+    try:
+        return seal_evaluator_artifact(
+            report,
+            signing_key=receipt_signing_key,
+            domain=REPORT_SCHEMA,
+            fingerprint_field=REPORT_FINGERPRINT_FIELD,
+            authentication_field=REPORT_AUTHENTICATION_FIELD,
+        )
+    except EvaluatorReceiptAuthError as exc:
+        raise EvaluationContractError(
+            f"evaluation report authentication failed: {exc}"
+        ) from exc
+
+
+def _assert_report_authentication(
+    report: dict[str, Any],
+    *,
+    receipt_signing_key: str | bytes | bytearray | None = None,
+) -> None:
+    if not isinstance(report, dict) or report.get("schema_version") != REPORT_SCHEMA:
+        raise EvaluationContractError("evaluation report uses an unsupported schema")
+    try:
+        verify_evaluator_artifact(
+            report,
+            signing_key=receipt_signing_key,
+            domain=REPORT_SCHEMA,
+            fingerprint_field=REPORT_FINGERPRINT_FIELD,
+            authentication_field=REPORT_AUTHENTICATION_FIELD,
+        )
+    except EvaluatorReceiptAuthError as exc:
+        raise EvaluationContractError(
+            f"evaluation report authentication failed: {exc}"
+        ) from exc
 
 
 def _assert_report(
@@ -920,9 +1548,12 @@ def _assert_report(
     report: dict[str, Any],
     *,
     evaluation_mode: str,
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> None:
-    if not isinstance(report, dict) or report.get("schema_version") != REPORT_SCHEMA:
-        raise EvaluationContractError("paired evaluation requires current-schema reports")
+    _assert_report_authentication(
+        report,
+        receipt_signing_key=receipt_signing_key,
+    )
     if report.get("dataset_id") != manifest.dataset_id or report.get("dataset_version") != manifest.dataset_version:
         raise EvaluationContractError("paired evaluation report dataset identity mismatch")
     if report.get("dataset_manifest_fingerprint") != manifest.manifest_fingerprint:
@@ -933,15 +1564,47 @@ def _assert_report(
         )
     if report.get("evaluation_complete") is not True:
         raise EvaluationContractError(f"{evaluation_mode} evaluation report is incomplete")
+    receipts = report.get("target_receipts")
+    if not isinstance(receipts, list):
+        raise EvaluationContractError(
+            f"{evaluation_mode} evaluation report target receipts missing"
+        )
+    rebuilt = aggregate_evaluation_receipts(
+        manifest,
+        receipts,
+        receipt_signing_key=receipt_signing_key,
+    )
+    rebuilt_without_authentication = {
+        key: value
+        for key, value in rebuilt.items()
+        if key != REPORT_AUTHENTICATION_FIELD
+    }
+    report_without_authentication = {
+        key: value
+        for key, value in report.items()
+        if key != REPORT_AUTHENTICATION_FIELD
+    }
+    if rebuilt_without_authentication != report_without_authentication:
+        raise EvaluationContractError(
+            f"{evaluation_mode} evaluation report rebuild mismatch"
+        )
 
 
-def _report_target_fingerprints(report: dict[str, Any]) -> dict[str, tuple[str, str, str, str]]:
+def _report_target_fingerprints(
+    report: dict[str, Any],
+    *,
+    receipt_signing_key: str | bytes | bytearray | None = None,
+) -> dict[str, tuple[str, str, str, str]]:
     result: dict[str, tuple[str, str, str, str]] = {}
     for receipt in report.get("target_receipts") or []:
         if not isinstance(receipt, dict):
             raise EvaluationContractError("target receipt must be an object")
         target_id = _required_text(receipt.get("target_id"), "target_receipt.target_id")
-        _assert_receipt_integrity(receipt, target_id=target_id)
+        _assert_receipt_integrity(
+            receipt,
+            target_id=target_id,
+            receipt_signing_key=receipt_signing_key,
+        )
         result[target_id] = (
             _required_text(receipt.get("runtime_fingerprint"), f"{target_id}.runtime_fingerprint"),
             _required_text(receipt.get("input_fingerprint"), f"{target_id}.input_fingerprint"),
@@ -958,6 +1621,7 @@ def build_paired_evaluation_evidence(
     challenger_replay: dict[str, Any],
     champion_shadow: dict[str, Any],
     challenger_shadow: dict[str, Any],
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Prove four real, dataset-identical runs before policy promotion."""
 
@@ -968,7 +1632,12 @@ def build_paired_evaluation_evidence(
         (challenger_shadow, "shadow"),
     )
     for report, mode in reports:
-        _assert_report(manifest, report, evaluation_mode=mode)
+        _assert_report(
+            manifest,
+            report,
+            evaluation_mode=mode,
+            receipt_signing_key=receipt_signing_key,
+        )
         if report.get("commercial_promotion_evidence_ready") is not True:
             raise EvaluationContractError(f"{mode} report lacks commercial promotion evidence")
 
@@ -980,8 +1649,62 @@ def build_paired_evaluation_evidence(
         raise EvaluationContractError("challenger replay and shadow reports must use one policy_id")
     if champion_policy_ids == challenger_policy_ids:
         raise EvaluationContractError("champion and challenger policy_id values must differ")
+    champion_policy_versions = {
+        str(dict(report.get("policy_identity") or {}).get("policy_version") or "").strip()
+        for report in (champion_replay, champion_shadow)
+    }
+    challenger_policy_versions = {
+        str(dict(report.get("policy_identity") or {}).get("policy_version") or "").strip()
+        for report in (challenger_replay, challenger_shadow)
+    }
+    if len(champion_policy_versions) != 1 or "" in champion_policy_versions:
+        raise EvaluationContractError(
+            "champion replay and shadow reports must use one policy version"
+        )
+    if len(challenger_policy_versions) != 1 or "" in challenger_policy_versions:
+        raise EvaluationContractError(
+            "challenger replay and shadow reports must use one policy version"
+        )
+    champion_strategy_fingerprints = {
+        str(
+            dict(report.get("policy_identity") or {}).get(
+                "strategy_fingerprint"
+            )
+            or ""
+        ).strip()
+        for report in (champion_replay, champion_shadow)
+    }
+    challenger_strategy_fingerprints = {
+        str(
+            dict(report.get("policy_identity") or {}).get(
+                "strategy_fingerprint"
+            )
+            or ""
+        ).strip()
+        for report in (challenger_replay, challenger_shadow)
+    }
+    if (
+        len(champion_strategy_fingerprints) != 1
+        or "" in champion_strategy_fingerprints
+    ):
+        raise EvaluationContractError(
+            "champion replay and shadow reports must bind one strategy"
+        )
+    if (
+        len(challenger_strategy_fingerprints) != 1
+        or "" in challenger_strategy_fingerprints
+    ):
+        raise EvaluationContractError(
+            "challenger replay and shadow reports must bind one strategy"
+        )
 
-    fingerprints = [_report_target_fingerprints(report) for report, _ in reports]
+    fingerprints = [
+        _report_target_fingerprints(
+            report,
+            receipt_signing_key=receipt_signing_key,
+        )
+        for report, _ in reports
+    ]
     if any(item != fingerprints[0] for item in fingerprints[1:]):
         raise EvaluationContractError("champion/challenger replay/shadow target fingerprints differ")
     expected_target_ids = {item.target_id for item in manifest.targets}
@@ -1044,13 +1767,30 @@ def build_paired_evaluation_evidence(
 def policy_metrics_from_evaluation_reports(
     replay_report: dict[str, Any],
     shadow_report: dict[str, Any],
+    *,
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Flatten the SSOT reports into the strict policy-promotion metric schema."""
 
+    _assert_report_authentication(
+        replay_report,
+        receipt_signing_key=receipt_signing_key,
+    )
+    _assert_report_authentication(
+        shadow_report,
+        receipt_signing_key=receipt_signing_key,
+    )
     if replay_report.get("evaluation_mode") != "replay" or shadow_report.get("evaluation_mode") != "shadow":
         raise EvaluationContractError("policy metrics require one replay and one shadow report")
     if replay_report.get("policy_id") != shadow_report.get("policy_id"):
         raise EvaluationContractError("replay and shadow reports must belong to the same policy")
+    replay_policy_identity = dict(replay_report.get("policy_identity") or {})
+    shadow_policy_identity = dict(shadow_report.get("policy_identity") or {})
+    for field in ("policy_id", "policy_version", "strategy_fingerprint"):
+        if replay_policy_identity.get(field) != shadow_policy_identity.get(field):
+            raise EvaluationContractError(
+                f"replay and shadow reports must use the same policy {field}"
+            )
     if replay_report.get("dataset_manifest_fingerprint") != shadow_report.get("dataset_manifest_fingerprint"):
         raise EvaluationContractError("replay and shadow reports must use the same frozen dataset")
 
@@ -1154,6 +1894,403 @@ def policy_metrics_from_evaluation_reports(
     }
 
 
+def _authenticated_report_validation_manifest(
+    comparison: dict[str, Any],
+    report: dict[str, Any],
+) -> EvaluationManifest:
+    """Reconstruct only the GT-free facts needed to revalidate signed reports."""
+
+    receipts = report.get("target_receipts")
+    if not isinstance(receipts, list) or not receipts:
+        raise EvaluationContractError(
+            "authenticated comparison report target receipts missing"
+        )
+    targets: list[EvaluationTarget] = []
+    target_fingerprints: dict[str, dict[str, str]] = {}
+    seen_target_ids: set[str] = set()
+    for index, raw_receipt in enumerate(receipts):
+        receipt = _as_dict(
+            raw_receipt,
+            f"comparison.target_receipts[{index}]",
+        )
+        target_id = _required_text(
+            receipt.get("target_id"),
+            f"comparison.target_receipts[{index}].target_id",
+        )
+        if target_id in seen_target_ids:
+            raise EvaluationContractError(
+                f"duplicate authenticated comparison target: {target_id}"
+            )
+        seen_target_ids.add(target_id)
+        split = _required_text(
+            receipt.get("split"), f"{target_id}.split"
+        ).lower()
+        expectation = _required_text(
+            receipt.get("expectation"), f"{target_id}.expectation"
+        ).lower()
+        environment_type = _required_text(
+            receipt.get("environment_type"),
+            f"{target_id}.environment_type",
+        ).lower()
+        if split not in VALID_SPLITS:
+            raise EvaluationContractError(
+                f"authenticated comparison target split invalid: {target_id}"
+            )
+        if expectation not in VALID_EXPECTATIONS:
+            raise EvaluationContractError(
+                "authenticated comparison target expectation invalid: "
+                f"{target_id}"
+            )
+        if environment_type not in NON_PRODUCTION_ENVIRONMENTS:
+            raise EvaluationContractError(
+                "authenticated comparison target is not explicitly "
+                f"non-production: {target_id}"
+            )
+        targets.append(
+            EvaluationTarget(
+                target_id=target_id,
+                project_id=_required_text(
+                    receipt.get("project_id"), f"{target_id}.project_id"
+                ),
+                industry=_required_text(
+                    receipt.get("industry"), f"{target_id}.industry"
+                ),
+                split=split,
+                expectation=expectation,
+                environment_ref=_required_text(
+                    receipt.get("environment_ref"),
+                    f"{target_id}.environment_ref",
+                ),
+                environment_type=environment_type,
+                # Report validation never opens runtime or hidden-GT artifacts.
+                input_bundle_ref="authenticated-report-only",
+                fixture_snapshot_ref="authenticated-report-only",
+                context_artifact_ref="authenticated-report-only",
+                ground_truth_ref="",
+            )
+        )
+        target_fingerprints[target_id] = {
+            field: _required_text(receipt.get(field), f"{target_id}.{field}")
+            for field in (
+                "runtime_fingerprint",
+                "input_fingerprint",
+                "fixture_fingerprint",
+                "context_fingerprint",
+            )
+        }
+    return EvaluationManifest(
+        dataset_id=_required_text(
+            comparison.get("dataset_id"), "comparison.dataset_id"
+        ),
+        dataset_version=_required_text(
+            comparison.get("dataset_version"),
+            "comparison.dataset_version",
+        ),
+        targets=tuple(targets),
+        manifest_path=Path("<authenticated-report-validation>"),
+        manifest_fingerprint=_required_text(
+            comparison.get("dataset_manifest_fingerprint"),
+            "comparison.dataset_manifest_fingerprint",
+        ),
+        target_fingerprints=target_fingerprints,
+    )
+
+
+def _validated_comparison_policy_identity(
+    raw: Any,
+    *,
+    role: str,
+) -> dict[str, str]:
+    identity = _as_dict(raw, f"comparison.{role}")
+    expected_fields = {
+        "policy_id",
+        "policy_version",
+        "parent_policy_version",
+        "strategy_fingerprint",
+    }
+    if set(identity) != expected_fields:
+        raise EvaluationContractError(
+            f"comparison {role} policy identity fields invalid"
+        )
+    normalized = {
+        "policy_id": _required_text(
+            identity.get("policy_id"), f"comparison.{role}.policy_id"
+        ),
+        "policy_version": _required_text(
+            identity.get("policy_version"),
+            f"comparison.{role}.policy_version",
+        ),
+        "parent_policy_version": str(
+            identity.get("parent_policy_version") or ""
+        ).strip(),
+        "strategy_fingerprint": _required_text(
+            identity.get("strategy_fingerprint"),
+            f"comparison.{role}.strategy_fingerprint",
+        ).lower(),
+    }
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized["strategy_fingerprint"]):
+        raise EvaluationContractError(
+            f"comparison {role} strategy fingerprint invalid"
+        )
+    return normalized
+
+
+def _assert_canonical_rebuild(
+    actual: Any,
+    expected: Any,
+    *,
+    field: str,
+) -> None:
+    if _canonical_json(actual) != _canonical_json(expected):
+        raise EvaluationContractError(f"comparison {field} rebuild mismatch")
+
+
+def validate_authenticated_policy_comparison(
+    comparison: dict[str, Any],
+    *,
+    receipt_signing_key: str | bytes | bytearray | None = None,
+    expected_champion_identity: dict[str, Any] | None = None,
+    expected_challenger_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Revalidate every signed input and recompute the promotion decision.
+
+    This validator deliberately reconstructs a GT-free manifest projection
+    from authenticated target receipts. Policy activation therefore never
+    needs to open evaluator-private ground truth, while still refusing a
+    comparison whose reports, metrics, evidence, or gate decision drifted.
+    """
+
+    if not isinstance(comparison, dict):
+        raise EvaluationContractError("policy comparison must be an object")
+    expected_fields = {
+        "schema_version",
+        "created_at_utc",
+        "evaluation_id",
+        "dataset_id",
+        "dataset_version",
+        "dataset_manifest_fingerprint",
+        "champion",
+        "challenger",
+        "observed_execution",
+        "estimated_metrics_used",
+        "report_refs",
+        "report_fingerprints",
+        "evaluation_evidence",
+        "champion_metrics",
+        "challenger_metrics",
+        "promotion_decision",
+        "activation_performed",
+        POLICY_COMPARISON_FINGERPRINT_FIELD,
+        POLICY_COMPARISON_AUTHENTICATION_FIELD,
+    }
+    if comparison.get("schema_version") != POLICY_COMPARISON_SCHEMA:
+        raise EvaluationContractError(
+            "policy comparison uses an unsupported strict schema"
+        )
+    try:
+        verify_evaluator_artifact(
+            comparison,
+            signing_key=receipt_signing_key,
+            domain=POLICY_COMPARISON_SCHEMA,
+            fingerprint_field=POLICY_COMPARISON_FINGERPRINT_FIELD,
+            authentication_field=POLICY_COMPARISON_AUTHENTICATION_FIELD,
+        )
+    except EvaluatorReceiptAuthError as exc:
+        raise EvaluationContractError(
+            f"policy comparison authentication failed: {exc}"
+        ) from exc
+    if set(comparison) != expected_fields:
+        raise EvaluationContractError(
+            "policy comparison fields do not match the strict schema"
+        )
+    for field in (
+        "created_at_utc",
+        "evaluation_id",
+        "dataset_id",
+        "dataset_version",
+        "dataset_manifest_fingerprint",
+    ):
+        _required_text(comparison.get(field), f"comparison.{field}")
+    if comparison.get("observed_execution") is not True:
+        raise EvaluationContractError(
+            "policy comparison is not observed execution evidence"
+        )
+    if comparison.get("estimated_metrics_used") is not False:
+        raise EvaluationContractError(
+            "policy comparison contains estimated metrics"
+        )
+    if comparison.get("activation_performed") is not False:
+        raise EvaluationContractError(
+            "policy comparison must be validated before activation"
+        )
+
+    champion_identity = _validated_comparison_policy_identity(
+        comparison.get("champion"), role="champion"
+    )
+    challenger_identity = _validated_comparison_policy_identity(
+        comparison.get("challenger"), role="challenger"
+    )
+    if champion_identity["policy_id"] == challenger_identity["policy_id"]:
+        raise EvaluationContractError(
+            "comparison champion and challenger policy identities must differ"
+        )
+    if (
+        challenger_identity["parent_policy_version"]
+        != champion_identity["policy_version"]
+    ):
+        raise EvaluationContractError(
+            "comparison challenger parent policy version mismatch"
+        )
+    for role, actual, expected in (
+        ("champion", champion_identity, expected_champion_identity),
+        ("challenger", challenger_identity, expected_challenger_identity),
+    ):
+        if expected is not None:
+            _assert_canonical_rebuild(
+                actual,
+                _validated_comparison_policy_identity(expected, role=role),
+                field=f"{role} policy identity",
+            )
+
+    report_refs = _as_dict(
+        comparison.get("report_refs"), "comparison.report_refs"
+    )
+    report_fingerprints = _as_dict(
+        comparison.get("report_fingerprints"),
+        "comparison.report_fingerprints",
+    )
+    if (
+        set(report_refs) != POLICY_COMPARISON_REPORT_KEYS
+        or set(report_fingerprints) != POLICY_COMPARISON_REPORT_KEYS
+    ):
+        raise EvaluationContractError(
+            "policy comparison requires all four authenticated reports"
+        )
+
+    reports: dict[str, dict[str, Any]] = {}
+    resolved_report_paths: set[Path] = set()
+    for name in sorted(POLICY_COMPARISON_REPORT_KEYS):
+        report_path = Path(
+            _required_text(
+                report_refs.get(name), f"comparison.report_refs.{name}"
+            )
+        )
+        if not report_path.is_absolute():
+            raise EvaluationContractError(
+                f"comparison report reference must be absolute: {name}"
+            )
+        report_path = report_path.resolve()
+        if report_path in resolved_report_paths:
+            raise EvaluationContractError(
+                "comparison report references must identify four files"
+            )
+        resolved_report_paths.add(report_path)
+        if not report_path.is_file():
+            raise EvaluationContractError(
+                f"comparison report reference missing: {name}"
+            )
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise EvaluationContractError(
+                f"comparison report is invalid JSON: {name}"
+            ) from exc
+        if not isinstance(report, dict):
+            raise EvaluationContractError(
+                f"comparison report must be an object: {name}"
+            )
+        _assert_report_authentication(
+            report,
+            receipt_signing_key=receipt_signing_key,
+        )
+        actual_fingerprint = _sha256_bytes(_canonical_json(report))
+        claimed_fingerprint = _required_text(
+            report_fingerprints.get(name),
+            f"comparison.report_fingerprints.{name}",
+        ).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", claimed_fingerprint):
+            raise EvaluationContractError(
+                f"comparison report fingerprint invalid: {name}"
+            )
+        if actual_fingerprint != claimed_fingerprint:
+            raise EvaluationContractError(
+                f"comparison report fingerprint mismatch: {name}"
+            )
+        reports[name] = report
+
+    validation_manifest = _authenticated_report_validation_manifest(
+        comparison,
+        reports["champion_replay"],
+    )
+    for name, report in reports.items():
+        mode = "replay" if name.endswith("_replay") else "shadow"
+        _assert_report(
+            validation_manifest,
+            report,
+            evaluation_mode=mode,
+            receipt_signing_key=receipt_signing_key,
+        )
+        role = "champion" if name.startswith("champion_") else "challenger"
+        expected_identity = (
+            champion_identity if role == "champion" else challenger_identity
+        )
+        report_identity = _as_dict(
+            report.get("policy_identity"), f"{name}.policy_identity"
+        )
+        if report_identity.get("policy_id") != expected_identity["policy_id"]:
+            raise EvaluationContractError(
+                f"comparison {role} report policy identity mismatch"
+            )
+        if (
+            report_identity.get("policy_version")
+            != expected_identity["policy_version"]
+        ):
+            raise EvaluationContractError(
+                f"comparison {role} report policy version mismatch"
+            )
+        if (
+            report_identity.get("strategy_fingerprint")
+            != expected_identity["strategy_fingerprint"]
+        ):
+            raise EvaluationContractError(
+                f"comparison {role} report strategy fingerprint mismatch"
+            )
+
+    rebuilt_evidence = build_paired_evaluation_evidence(
+        validation_manifest,
+        champion_replay=reports["champion_replay"],
+        challenger_replay=reports["challenger_replay"],
+        champion_shadow=reports["champion_shadow"],
+        challenger_shadow=reports["challenger_shadow"],
+        receipt_signing_key=receipt_signing_key,
+    )
+    rebuilt_champion_metrics = policy_metrics_from_evaluation_reports(
+        reports["champion_replay"],
+        reports["champion_shadow"],
+        receipt_signing_key=receipt_signing_key,
+    )
+    rebuilt_challenger_metrics = policy_metrics_from_evaluation_reports(
+        reports["challenger_replay"],
+        reports["challenger_shadow"],
+        receipt_signing_key=receipt_signing_key,
+    )
+    rebuilt_decision = PolicyPromotionGate().evaluate(
+        rebuilt_champion_metrics,
+        rebuilt_challenger_metrics,
+        rebuilt_evidence,
+    )
+    for field, expected in (
+        ("evaluation_evidence", rebuilt_evidence),
+        ("champion_metrics", rebuilt_champion_metrics),
+        ("challenger_metrics", rebuilt_challenger_metrics),
+        ("promotion_decision", rebuilt_decision),
+    ):
+        _assert_canonical_rebuild(
+            comparison.get(field), expected, field=field
+        )
+    return dict(comparison)
+
+
 def _atomic_write_json(destination: Path, payload: dict[str, Any]) -> None:
     """Atomically write JSON without extending the final Windows path name."""
 
@@ -1180,7 +2317,12 @@ def _atomic_write_json(destination: Path, payload: dict[str, Any]) -> None:
             temporary.unlink()
 
 
-def persist_evaluation_receipt(receipt: dict[str, Any], output_root: Path | str) -> Path:
+def persist_evaluation_receipt(
+    receipt: dict[str, Any],
+    output_root: Path | str,
+    *,
+    receipt_signing_key: str | bytes | bytearray | None = None,
+) -> Path:
     """Persist an immutable receipt using an atomic replace."""
 
     if receipt.get("schema_version") != RECEIPT_SCHEMA:
@@ -1197,12 +2339,27 @@ def persist_evaluation_receipt(receipt: dict[str, Any], output_root: Path | str)
         existing = json.loads(path.read_text(encoding="utf-8"))
         if _canonical_json(existing) != _canonical_json(receipt):
             raise EvaluationContractError(f"immutable evaluation receipt already exists with different content: {path}")
+        _assert_receipt_integrity(
+            receipt,
+            target_id=target,
+            receipt_signing_key=receipt_signing_key,
+        )
         return path
+    _assert_receipt_integrity(
+        receipt,
+        target_id=target,
+        receipt_signing_key=receipt_signing_key,
+    )
     _atomic_write_json(path, receipt)
     return path
 
 
-def persist_evaluation_report(report: dict[str, Any], path: Path | str) -> Path:
+def persist_evaluation_report(
+    report: dict[str, Any],
+    path: Path | str,
+    *,
+    receipt_signing_key: str | bytes | bytearray | None = None,
+) -> Path:
     """Persist an immutable aggregate report at an evaluator-owned path."""
 
     if report.get("schema_version") != REPORT_SCHEMA:
@@ -1215,7 +2372,15 @@ def persist_evaluation_report(report: dict[str, Any], path: Path | str) -> Path:
             raise EvaluationContractError(
                 f"immutable evaluation report already exists with different content: {destination}"
             )
+        _assert_report_authentication(
+            report,
+            receipt_signing_key=receipt_signing_key,
+        )
         return destination
+    _assert_report_authentication(
+        report,
+        receipt_signing_key=receipt_signing_key,
+    )
     _atomic_write_json(destination, report)
     return destination
 
@@ -1324,9 +2489,10 @@ def assess_implementation_stage_gates() -> dict[str, Any]:
         {
             "name": "customer_delivery_gate",
             "passed": _module_export_present(
-                "ai_test_asset_center.customer_delivery_gate", "is_customer_deliverable_defect"
+                "ai_test_asset_center.customer_delivery_gate_v2",
+                "validate_customer_delivery_gate_bundle",
             ),
-            "detail": "formal evidence threshold is frozen and independent of harness proposals",
+            "detail": "formal delivery requires immutable Gate-v2 evidence plus the attempt ledger",
         },
         {
             "name": "sandbox_write_fail_closed",
@@ -1464,6 +2630,7 @@ def assess_measured_capability_gate(
     gate_id: str,
     thresholds: dict[str, float | int],
     baseline_cost_per_true_positive_usd: float | None = None,
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Score one absolute commercial gate from a MEASURED aggregate report.
 
@@ -1488,10 +2655,10 @@ def assess_measured_capability_gate(
             "checks": [],
             "thresholds": dict(thresholds),
         }
-    if evaluation_report.get("schema_version") != REPORT_SCHEMA:
-        raise EvaluationContractError(
-            f"goal gate {gate_id} requires current evaluation report schema"
-        )
+    _assert_report_authentication(
+        evaluation_report,
+        receipt_signing_key=receipt_signing_key,
+    )
     if evaluation_report.get("claim_status") != "MEASURED":
         return {
             "gate_id": gate_id,
@@ -1659,6 +2826,7 @@ def assess_discovery_goal_status(
     evaluation_report: dict[str, Any] | None = None,
     baseline_cost_per_true_positive_usd: float | None = None,
     consecutive_non_regressive_windows: int | None = None,
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Single machine-checkable status for the commercial discovery Goal.
 
@@ -1673,18 +2841,21 @@ def assess_discovery_goal_status(
         gate_id="D",
         thresholds=CAPABILITY_BREAKTHROUGH_THRESHOLDS,
         baseline_cost_per_true_positive_usd=baseline_cost_per_true_positive_usd,
+        receipt_signing_key=receipt_signing_key,
     )
     gate_pilot = assess_measured_capability_gate(
         evaluation_report,
         gate_id="PILOT",
         thresholds=CONTROLLED_COMMERCIAL_PILOT_THRESHOLDS,
         baseline_cost_per_true_positive_usd=None,
+        receipt_signing_key=receipt_signing_key,
     )
     gate_ga = assess_measured_capability_gate(
         evaluation_report,
         gate_id="GA",
         thresholds=FULL_AUTONOMY_GA_THRESHOLDS,
         baseline_cost_per_true_positive_usd=None,
+        receipt_signing_key=receipt_signing_key,
     )
     if consecutive_non_regressive_windows is None:
         ga_window_check = {

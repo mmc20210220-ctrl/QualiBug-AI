@@ -593,7 +593,7 @@ def test_command_center_envelope_filters_summary_only_entries() -> None:
     assert data["clues"] == []
 
 
-def test_load_v12_report_falls_back_to_same_snapshot_non_empty_evidence_bundle(tmp_path) -> None:
+def test_load_v12_report_does_not_restore_history_bundle_into_current_scope(tmp_path) -> None:
     handler = PrivatePilotHandler.__new__(PrivatePilotHandler)
     project = "demo_project"
     scan_dir = tmp_path / "platform_outputs" / project
@@ -665,12 +665,14 @@ def test_load_v12_report_falls_back_to_same_snapshot_non_empty_evidence_bundle(t
 
     report = handler._load_v12_report(project, tmp_path)
 
-    assert report["report_source_path"].endswith("evidence_bundles\\evb_demo\\findings.json") or report["report_source_path"].endswith("evidence_bundles/evb_demo/findings.json")
-    assert len(report["real_findings"]) == 1
-    assert report["real_findings"][0]["risk_id"] == "BUG-1"
+    assert report["report_source_path"].endswith(
+        "platform_outputs/demo_project/scan_result.json"
+    )
+    assert report["real_findings"] == []
+    assert report["total_findings"] == 0
 
 
-def test_load_v12_report_aggregates_current_report_with_related_evidence_bundle(tmp_path) -> None:
+def test_load_v12_report_does_not_union_current_report_with_history_bundle(tmp_path) -> None:
     handler = PrivatePilotHandler.__new__(PrivatePilotHandler)
     project = "demo_project"
     scan_dir = tmp_path / "platform_outputs" / project
@@ -759,9 +761,11 @@ def test_load_v12_report_aggregates_current_report_with_related_evidence_bundle(
 
     report = handler._load_v12_report(project, tmp_path)
 
-    assert report["report_source_path"].startswith("aggregated:")
-    assert len(report["real_findings"]) == 2
-    assert {item["risk_id"] for item in report["real_findings"]} == {"BUG-CURRENT", "BUG-HISTORY"}
+    assert report["report_source_path"].endswith(
+        "platform_outputs/demo_project/intelligence_report.json"
+    )
+    assert len(report["real_findings"]) == 1
+    assert report["real_findings"][0]["risk_id"] == "BUG-CURRENT"
 
 
 def test_formatter_does_not_collapse_distinct_uppercase_status_tokens_as_ids() -> None:

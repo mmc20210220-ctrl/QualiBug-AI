@@ -3,9 +3,35 @@ from __future__ import annotations
 """Normalization helpers for full-spectrum defect signals."""
 
 import hashlib
+from dataclasses import dataclass, field
 from typing import Any
 
 from .defect_family_registry import resolve_defect_family
+
+
+@dataclass
+class SpectrumFinding:
+    capability: str
+    bug_id: str
+    title: str
+    severity: str
+    confidence: float
+    endpoint: str = ""
+    method: str = ""
+    expected: str = ""
+    actual: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
+    reproduction: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SpectrumResult:
+    capability: str
+    status: str
+    findings: list[SpectrumFinding]
+    duration_ms: int
+    checks_run: int
+    summary: str
 
 
 def build_signal_id(payload: dict[str, Any]) -> str:
@@ -61,4 +87,3 @@ def normalize_defect_signal(
         "issue_id": source.get("issue_id"),
     }
     return signal
-

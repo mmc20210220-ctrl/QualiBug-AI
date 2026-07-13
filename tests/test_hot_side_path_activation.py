@@ -153,6 +153,23 @@ def test_reasoner_parser_handles_content_parts_and_string_items() -> None:
     assert hypotheses == [{"title": "string risk", "source_format": "string_hypothesis"}]
 
 
+def test_reasoner_parser_rejects_outer_and_choice_shape_with_stable_codes() -> None:
+    from ai_test_asset_center.stage_reason_all_v2 import _parse_engine_content
+
+    cases = [
+        ('[{"unexpected":"list-root"}]', "outer_response_not_object"),
+        ('{"choices":"not-a-list"}', "invalid_choices_shape"),
+        ('{"choices":["not-an-object"]}', "invalid_choice_item"),
+        ('{"choices":[{"message":"not-an-object"}]}', "invalid_message_shape"),
+    ]
+
+    for raw, expected_code in cases:
+        hypotheses, status, degradation = _parse_engine_content(raw)
+        assert hypotheses is None
+        assert status == "failed"
+        assert degradation == expected_code
+
+
 def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) -> None:
     from ai_test_asset_center.llm_reasoning import ReasoningConfig
     from ai_test_asset_center.stage_reason_all_v2 import _run_reasoner_engine
@@ -166,6 +183,16 @@ def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) ->
 
         def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
             return '{"choices":[{"message":{"content":"{\\"hypotheses\\":[{\\"title\\":\\"ok\\"}]}"}}]}'
+
+        def usage_snapshot(self) -> dict[str, float]:
+            return {
+                "request_count": 1,
+                "prompt_tokens": 12,
+                "completion_tokens": 5,
+                "total_tokens": 17,
+                "cost_usd": 0.02,
+                "responses_with_cost": 1,
+            }
 
     import ai_test_asset_center.llm_reasoning as llm_reasoning
 
@@ -192,6 +219,8 @@ def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) ->
     assert captured["max_tokens"] == 32768
     assert result["status"] == "success"
     assert len(result["hypotheses"]) == 1
+    assert result["model_usage"]["request_count"] == 1
+    assert result["model_usage"]["total_tokens"] == 17
 
 
 def test_reasoner_worker_allows_enterprise_max_tokens(monkeypatch) -> None:
@@ -230,6 +259,122 @@ def test_reasoner_worker_allows_enterprise_max_tokens(monkeypatch) -> None:
     assert result["status"] == "success"
 
 
+def test_reasoner_worker_retries_tls_eof_and_emits_secret_free_attempt_events(monkeypatch) -> None:
+    import json
+
+    import ai_test_asset_center.llm_reasoning as llm_reasoning
+    import ai_test_asset_center.stage_reason_all_v2 as stage
+    from ai_test_asset_center.llm_reasoning import ReasoningConfig
+
+    class FakeReasoningClient:
+        calls = 0
+
+        def __init__(self, config: ReasoningConfig) -> None:
+            self.config = config
+
+        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+            type(self).calls += 1
+            if type(self).calls == 1:
+                raise RuntimeError("TLS unexpected EOF while using sk-do-not-persist")
+            return '{"choices":[{"message":{"content":"{\\"hypotheses\\":[{\\"title\\":\\"ok\\"}]}"}}]}'
+
+    monkeypatch.setattr(llm_reasoning, "ReasoningClient", FakeReasoningClient)
+    monkeypatch.setattr(stage.time, "sleep", lambda _: None)
+    result = stage._run_reasoner_engine(
+        "smoke",
+        "",
+        "prompt",
+        "system",
+        ReasoningConfig(base_url="https://example.invalid/v1", api_key="test", model="test-model"),
+        retry_count=1,
+        retry_delay_seconds=0,
+    )
+
+    assert result["status"] == "success"
+    assert result["attempts"] == 2
+    assert result["model_attempt_count"] == 2
+    assert result["model_response_count"] == 1
+    first_event = result["attempt_events"][0]
+    assert first_event["attempt"] == 1
+    assert first_event["status"] == "failed"
+    assert first_event["category"] == "network"
+    assert first_event["code"] == "tls_eof"
+    assert first_event["retry_scheduled"] is True
+    assert first_event["duration_seconds"] >= 0
+    assert "sk-do-not-persist" not in json.dumps(result["attempt_events"])
+
+
+def test_reasoner_worker_retries_response_shape_failure(monkeypatch) -> None:
+    import ai_test_asset_center.llm_reasoning as llm_reasoning
+    import ai_test_asset_center.stage_reason_all_v2 as stage
+    from ai_test_asset_center.llm_reasoning import ReasoningConfig
+
+    class FakeReasoningClient:
+        calls = 0
+
+        def __init__(self, config: ReasoningConfig) -> None:
+            self.config = config
+
+        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+            type(self).calls += 1
+            if type(self).calls == 1:
+                return '{"choices":[{"message":{"content":"{\\"unexpected\\":[]}"}}]}'
+            return '{"choices":[{"message":{"content":"{\\"hypotheses\\":[{\\"title\\":\\"ok\\"}]}"}}]}'
+
+    monkeypatch.setattr(llm_reasoning, "ReasoningClient", FakeReasoningClient)
+    monkeypatch.setattr(stage.time, "sleep", lambda _: None)
+    result = stage._run_reasoner_engine(
+        "smoke",
+        "",
+        "prompt",
+        "system",
+        ReasoningConfig(base_url="https://example.invalid/v1", api_key="test", model="test-model"),
+        retry_count=1,
+        retry_delay_seconds=0,
+    )
+
+    assert result["status"] == "success"
+    assert result["model_attempt_count"] == 2
+    assert result["model_response_count"] == 2
+    assert result["attempt_events"][0]["category"] == "response_parse"
+    assert result["attempt_events"][0]["code"] == "missing_hypotheses_array"
+    assert result["attempt_events"][0]["retry_scheduled"] is True
+
+
+def test_reasoner_worker_does_not_retry_authentication_failure(monkeypatch) -> None:
+    import ai_test_asset_center.llm_reasoning as llm_reasoning
+    import ai_test_asset_center.stage_reason_all_v2 as stage
+    from ai_test_asset_center.llm_reasoning import ReasoningConfig
+
+    class FakeReasoningClient:
+        calls = 0
+
+        def __init__(self, config: ReasoningConfig) -> None:
+            self.config = config
+
+        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+            type(self).calls += 1
+            raise RuntimeError("HTTP 401 Unauthorized sk-do-not-persist")
+
+    monkeypatch.setattr(llm_reasoning, "ReasoningClient", FakeReasoningClient)
+    result = stage._run_reasoner_engine(
+        "smoke",
+        "",
+        "prompt",
+        "system",
+        ReasoningConfig(base_url="https://example.invalid/v1", api_key="test", model="test-model"),
+        retry_count=1,
+        retry_delay_seconds=0,
+    )
+
+    assert FakeReasoningClient.calls == 1
+    assert result["model_attempt_count"] == 1
+    assert result["model_response_count"] == 0
+    assert result["error_class"] == "authentication_or_authorization"
+    assert result["error_code"] == "http_401"
+    assert result["attempt_events"][0]["retry_scheduled"] is False
+
+
 def test_stage_reasoner_reports_env_max_tokens(monkeypatch) -> None:
     import ai_test_asset_center.policy_wiring as policy_wiring
     import ai_test_asset_center.stage_reason_all_v2 as stage
@@ -255,6 +400,14 @@ def test_stage_reasoner_reports_env_max_tokens(monkeypatch) -> None:
             "duration_seconds": 0.0,
             "error": "",
             "degradation_reason": "",
+            "model_usage": {
+                "request_count": 1,
+                "prompt_tokens": 10,
+                "completion_tokens": 4,
+                "total_tokens": 14,
+                "cost_usd": 0.01,
+                "responses_with_cost": 1,
+            },
         }
 
     def patched_policy(section: str, key: str, default=None):
@@ -273,3 +426,112 @@ def test_stage_reasoner_reports_env_max_tokens(monkeypatch) -> None:
 
     assert any(str(item.get("title") or "") == "causality" for item in hypotheses)
     assert dummy._last_engine_report["max_tokens"] == 100000
+    assert dummy._last_engine_report["model_usage"]["request_count"] == 1
+    assert dummy._last_engine_report["model_usage"]["total_tokens"] == 14
+
+
+def test_collect_reasoner_hypotheses_exposes_redacted_failure_classes(monkeypatch) -> None:
+    import ai_test_asset_center.stage_reason_all_v2 as stage
+
+    monkeypatch.setenv("LLM_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("LLM_API_KEY", "not-a-real-secret")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+
+    def fake_stage(host, prd_text, api_spec, reader_output, prior_findings):
+        host._last_engine_report = {
+            "total_engines": 3,
+            "successful_engines": ["invariant"],
+            "failed_engines": ["causality"],
+            "degraded_engines": ["static_analyzer"],
+            "engine_attempts": {"causality": 2, "invariant": 1, "static_analyzer": 1},
+            "model_attempt_count": 3,
+            "model_response_count": 2,
+            "engine_errors": {
+                "causality": "LLM network error: TLS handshake failed with sk-sensitive-value"
+            },
+            "engine_error_codes": {"causality": "tls_error"},
+            "engine_error_classes": {"causality": "network"},
+            "model_usage": {"request_count": 1, "total_tokens": 9},
+        }
+        return [{"title": "source-grounded hypothesis"}]
+
+    monkeypatch.setattr(stage, "_stage_reason_all_v2", fake_stage)
+
+    _, meta = stage.collect_reasoner_hypotheses("prd", "api")
+
+    assert meta["failed_engine_names"] == ["causality"]
+    assert meta["engine_error_classes"] == {"causality": "network"}
+    assert meta["engine_error_class_counts"] == {"network": 1}
+    assert meta["engine_error_codes"] == {"causality": "tls_error"}
+    assert meta["observed_model_request_count"] == 3
+    assert meta["observed_model_response_count"] == 2
+    assert "engine_errors" not in meta
+
+
+def test_reasoner_campaign_aggregate_preserves_all_round_failures_and_usage() -> None:
+    from ai_test_asset_center.stage_reason_all_v2 import aggregate_reasoner_round_meta
+
+    aggregate = aggregate_reasoner_round_meta([
+        {
+            "status": "degraded",
+            "observed_model_request_count": 3,
+            "observed_model_response_count": 2,
+            "model_usage": {
+                "request_count": 2,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "cost_usd": 0.01,
+                "responses_with_cost": 1,
+            },
+            "successful_engine_names": ["invariant"],
+            "failed_engine_names": ["causality"],
+            "degraded_engine_names": [],
+            "engine_error_classes": {"causality": "network"},
+            "engine_error_codes": {"causality": "tls_eof"},
+            "engine_error_class_counts": {"network": 1},
+            "input": 5,
+            "bound": 2,
+        },
+        {
+            "status": "ok",
+            "observed_model_request_count": 2,
+            "observed_model_response_count": 2,
+            "model_usage": {
+                "request_count": 2,
+                "prompt_tokens": 80,
+                "completion_tokens": 15,
+                "total_tokens": 95,
+                "cost_usd": 0.02,
+                "responses_with_cost": 2,
+            },
+            "successful_engine_names": ["causality", "invariant"],
+            "failed_engine_names": [],
+            "degraded_engine_names": [],
+            "engine_error_classes": {},
+            "engine_error_codes": {},
+            "engine_error_class_counts": {},
+            "input": 7,
+            "bound": 4,
+        },
+    ])
+
+    assert aggregate["status"] == "degraded"
+    assert aggregate["round_count"] == 2
+    assert aggregate["observed_model_request_count"] == 5
+    assert aggregate["observed_model_response_count"] == 4
+    assert aggregate["model_usage"] == {
+        "request_count": 4,
+        "prompt_tokens": 180,
+        "completion_tokens": 35,
+        "total_tokens": 215,
+        "cost_usd": 0.03,
+        "responses_with_cost": 3,
+    }
+    assert aggregate["failed_engine_names"] == ["causality"]
+    assert aggregate["failed_engine_round_occurrences"] == 1
+    assert aggregate["engine_error_class_counts"] == {"network": 1}
+    assert aggregate["engine_error_code_counts"] == {"tls_eof": 1}
+    assert aggregate["latest_round"]["status"] == "ok"
+    assert aggregate["input"] == 7
+    assert aggregate["bound"] == 4

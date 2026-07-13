@@ -36,7 +36,14 @@ def test_rule_to_interface_relationship_becomes_exact_ir_relation() -> None:
         }],
     }
 
-    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="project")
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="project",
+        runtime_actors=[
+            {"role": "operator", "account_ref": "operator_a", "secret_ref": "secret_ref:test_accounts:operator_a"},
+            {"role": "reader", "account_ref": "reader_a", "secret_ref": "secret_ref:test_accounts:reader_a"},
+        ],
+    )
     invariant_ref = ir["invariants"][0]["id"]
     operation_ref = _operation_ref(ir, "create_transfer")
 
@@ -76,7 +83,14 @@ def test_dangling_rule_to_interface_relationship_is_a_typed_gap() -> None:
         }],
     }
 
-    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="project")
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="project",
+        runtime_actors=[
+            {"role": "operator", "account_ref": "operator_a", "secret_ref": "secret_ref:test_accounts:operator_a"},
+            {"role": "reader", "account_ref": "reader_a", "secret_ref": "secret_ref:test_accounts:reader_a"},
+        ],
+    )
 
     gap = next(
         row
@@ -87,6 +101,56 @@ def test_dangling_rule_to_interface_relationship_is_a_typed_gap() -> None:
     assert gap["source_rule_ref"] == "rule-one"
     assert gap["source_operation_ref"] == "api:GET:/missing"
     assert gap["operation_match_count"] == 0
+
+
+def test_token_overlap_rule_to_interface_candidate_is_gap_not_compiled() -> None:
+    asset = {
+        "rule_library": [{
+            "rule_id": "rule-cart-quantity",
+            "statement": "Cart quantity must be conserved.",
+            "kind": "conservation",
+        }],
+        "interfaces": [{
+            "interface_id": "api:POST:/cart/items",
+            "operation_id": "add_cart_item",
+            "method": "POST",
+            "path": "/cart/items",
+        }],
+        "relationships": [{
+            "edge_id": "edge-token-overlap-only",
+            "from": "rule-cart-quantity",
+            "to": "api:POST:/cart/items",
+            "relation": "rule_to_interface",
+            "confidence": 0.71,
+            "status": "candidate",
+            "derivation": "token_overlap",
+            "evidence_gate": "token_overlap_only_requires_explicit_source_relation",
+            "evidence": {"token_overlap": ["cart", "quantity"]},
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="project")
+    operation_ref = _operation_ref(ir, "add_cart_item")
+
+    assert not any(
+        relation.get("source_relationship_ref") == "edge-token-overlap-only"
+        and relation.get("operation_ref") == operation_ref
+        for relation in ir["relations"]
+    )
+    gap = next(
+        row
+        for row in ir["coverage_gaps"]
+        if row.get("gap_type") == "source_relationship_candidate_only"
+    )
+    assert gap["relationship_id"] == "edge-token-overlap-only"
+    assert gap["candidate_reason"] == "token_overlap_only_requires_explicit_source_relation"
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+    assert not any(
+        obligation["risk_family"] == "conservation"
+        and obligation["property"].get("operation_ref") == operation_ref
+        for obligation in compiled["obligations"]
+    )
 
 
 def test_missing_permission_action_is_unknown_not_deny() -> None:
@@ -146,7 +210,14 @@ def test_explicit_permission_deny_generates_authorization_obligation() -> None:
         }],
     }
 
-    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="project")
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="project",
+        runtime_actors=[
+            {"role": "operator", "account_ref": "operator_a", "secret_ref": "secret_ref:test_accounts:operator_a"},
+            {"role": "reader", "account_ref": "reader_a", "secret_ref": "secret_ref:test_accounts:reader_a"},
+        ],
+    )
     operation_ref = _operation_ref(ir, "update_resource")
     reader = next(actor for actor in ir["actors"] if actor["role"] == "reader")
     assert reader["allowed_actions"] == []

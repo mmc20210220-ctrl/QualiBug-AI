@@ -58,14 +58,92 @@ SIDE_PATH_REASONER_ENGINES = (
     ("consistency_isolation", "consistency"),
 )
 
-# Errors that warrant one retry
-RETRYABLE_ERRORS = (
-    "empty", "ValueError", "JSONDecodeError", "Unterminated string",
-    "Expecting delimiter", "timeout", "Remote end closed",
-    "URLError", "Connection", "connection", "502", "503", "504",
-    "Expecting value", "not_list_or_dict", "failed", "corrupted",
-    "reset", "refused", "timed out", "Read timed out",
+_RESPONSE_PARSE_FAILURE_CODES = (
+    "empty_raw_response",
+    "outer_json_corrupted",
+    "empty_choices",
+    "empty_content",
+    "outer_response_not_object",
+    "invalid_choices_shape",
+    "invalid_choice_item",
+    "invalid_message_shape",
+    "missing_hypotheses_array",
+    "empty_hypotheses",
+    "parse_error",
+    "not_list_or_dict",
 )
+
+
+def _reasoner_failure_metadata(value: Any, *, exception_type: str = "") -> dict[str, Any]:
+    """Map a failure to one secret-free code used by retry and telemetry.
+
+    Raw provider errors remain internal to the worker. Public reports consume
+    only the stable category/code pair returned here, so credentials, request
+    payloads, and provider response bodies cannot leak through diagnostics.
+    """
+
+    text = str(value or "")
+    low = text.lower()
+    exc_low = str(exception_type or "").strip().lower()
+
+    category = "unknown"
+    code = "unknown_failure"
+    retryable = False
+
+    if any(token in low for token in ("http 401", "status 401", "unauthorized", "authentication")):
+        category, code = "authentication_or_authorization", "http_401"
+    elif any(token in low for token in ("http 403", "status 403", "forbidden", "authorization")):
+        category, code = "authentication_or_authorization", "http_403"
+    elif "http 429" in low or "status 429" in low or "rate limit" in low or "too many requests" in low:
+        category, code, retryable = "rate_limit", "http_429", True
+    elif any(token in low for token in ("timeout", "timed out", "deadline exceeded")):
+        category, code, retryable = "timeout", "timeout", True
+    elif "not configured" in low or "unconfigured" in low:
+        category, code = "unconfigured", "provider_unconfigured"
+    elif ("tls" in low or "ssl" in low) and "eof" in low:
+        category, code, retryable = "network", "tls_eof", True
+    elif "tls" in low:
+        category, code, retryable = "network", "tls_error", True
+    elif "ssl" in low or exc_low.startswith("ssl"):
+        category, code, retryable = "network", "ssl_error", True
+    elif "eof" in low or "remote end closed" in low:
+        category, code, retryable = "network", "unexpected_eof", True
+    elif "connection reset" in low:
+        category, code, retryable = "network", "connection_reset", True
+    elif "connection refused" in low or "refused" in low:
+        category, code, retryable = "network", "connection_refused", True
+    elif any(token in low for token in ("urlerror", "connection", "network", "name resolution", "dns")):
+        category, code, retryable = "network", "network_error", True
+    else:
+        http_match = re.search(r"(?:http|status)\s*[:=]?\s*(\d{3})", low)
+        if http_match:
+            status_code = int(http_match.group(1))
+            category = "provider_response"
+            code = f"http_{status_code}"
+            retryable = status_code >= 500
+        else:
+            matched_parse_code = next(
+                (candidate for candidate in _RESPONSE_PARSE_FAILURE_CODES if candidate in low),
+                "",
+            )
+            if matched_parse_code:
+                category, code, retryable = "response_parse", matched_parse_code, True
+            elif any(token in low for token in (
+                "json",
+                "parse",
+                "response shape",
+                "content",
+                "unterminated string",
+                "expecting delimiter",
+                "expecting value",
+                "extra data",
+            )) or "jsondecode" in exc_low:
+                category, code, retryable = "response_parse", "response_parse_error", True
+            elif exc_low:
+                safe_type = re.sub(r"[^a-z0-9]+", "_", exc_low).strip("_")
+                code = safe_type[:80] or "unknown_failure"
+
+    return {"category": category, "code": code, "retryable": retryable}
 
 
 def _effective_timeout_seconds(*values: Any) -> int:
@@ -345,11 +423,20 @@ def _parse_engine_content(raw: str) -> tuple[list[dict] | None, str, str]:
     except json.JSONDecodeError:
         return None, "failed", "outer_json_corrupted"
 
+    if not isinstance(outer, dict):
+        return None, "failed", "outer_response_not_object"
     choices = outer.get("choices", [{}])
+    if not isinstance(choices, list):
+        return None, "failed", "invalid_choices_shape"
     if not choices:
         return None, "failed", "empty_choices"
+    if not isinstance(choices[0], dict):
+        return None, "failed", "invalid_choice_item"
+    message = choices[0].get("message", {})
+    if not isinstance(message, dict):
+        return None, "failed", "invalid_message_shape"
 
-    content = _message_content_to_text(choices[0].get("message", {}).get("content", ""))
+    content = _message_content_to_text(message.get("content", ""))
     if not content or len(content.strip()) < 10:
         return None, "failed", "empty_content"
 
@@ -629,12 +716,26 @@ def _run_reasoner_engine(
         "hypotheses": [],
         "status": "failed",
         "attempts": 0,
+        "model_attempt_count": 0,
+        "model_response_count": 0,
         "retry_used": False,
+        "attempt_events": [],
         "raw_chars": 0,
         "content_chars": 0,
         "duration_seconds": 0.0,
         "error": "",
+        "error_class": "",
+        "error_code": "",
+        "last_exception_type": "",
         "degradation_reason": "",
+        "model_usage": {
+            "request_count": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "responses_with_cost": 0,
+        },
     }
 
     t0 = time.time()
@@ -648,6 +749,7 @@ def _run_reasoner_engine(
             time.sleep(max(0.0, float(retry_delay_seconds or 0.0)) + jitter)
 
         try:
+            attempt_started = time.time()
             # Build a fresh independent client for each attempt
             from ai_test_asset_center.llm_reasoning import ReasoningClient
             worker_config = copy.deepcopy(client_config)
@@ -667,7 +769,14 @@ def _run_reasoner_engine(
                 worker_config.response_format = "json_object"
             worker_client = ReasoningClient(config=worker_config)
 
+            result["model_attempt_count"] += 1
             raw = worker_client._chat(prompt, system_prompt=system_prompt)
+            result["model_response_count"] += 1
+            usage_snapshot = getattr(worker_client, "usage_snapshot", None)
+            if callable(usage_snapshot):
+                for key, value in dict(usage_snapshot() or {}).items():
+                    if key in result["model_usage"]:
+                        result["model_usage"][key] += value or 0
             result["raw_chars"] = len(str(raw)) if raw else 0
             result["duration_seconds"] = time.time() - t0
 
@@ -702,23 +811,55 @@ def _run_reasoner_engine(
                 result["content_chars"] = sum(
                     len(str(h)) for h in hypotheses
                 ) if hypotheses else 0
+                result["error"] = ""
+                result["error_class"] = ""
+                result["error_code"] = ""
+                result["attempt_events"].append({
+                    "attempt": attempt + 1,
+                    "status": status,
+                    "category": "",
+                    "code": "",
+                    "retry_scheduled": False,
+                    "duration_seconds": round(max(0.0, time.time() - attempt_started), 3),
+                })
                 return result
 
             # No hypotheses parsed — check if retryable
             error_hint = degradation or status
-            if any(kw in error_hint for kw in RETRYABLE_ERRORS) and attempt == 0:
-                result["error"] = error_hint[:200]
+            failure = _reasoner_failure_metadata(error_hint)
+            retry_scheduled = bool(failure["retryable"] and attempt + 1 < attempts_allowed)
+            result["error"] = str(failure["code"])
+            result["error_class"] = str(failure["category"])
+            result["error_code"] = str(failure["code"])
+            result["attempt_events"].append({
+                "attempt": attempt + 1,
+                "status": "failed",
+                "category": str(failure["category"]),
+                "code": str(failure["code"]),
+                "retry_scheduled": retry_scheduled,
+                "duration_seconds": round(max(0.0, time.time() - attempt_started), 3),
+            })
+            if retry_scheduled:
                 continue
-            else:
-                result["error"] = error_hint[:200]
-                return result
+            return result
 
         except Exception as e:
-            error_str = str(e)[:200]
-            result["error"] = error_str
+            failure = _reasoner_failure_metadata(e, exception_type=type(e).__name__)
+            retry_scheduled = bool(failure["retryable"] and attempt + 1 < attempts_allowed)
+            result["error"] = str(failure["code"])
+            result["error_class"] = str(failure["category"])
+            result["error_code"] = str(failure["code"])
+            result["last_exception_type"] = type(e).__name__
             result["duration_seconds"] = time.time() - t0
-
-            if any(kw in error_str for kw in RETRYABLE_ERRORS) and attempt == 0:
+            result["attempt_events"].append({
+                "attempt": attempt + 1,
+                "status": "failed",
+                "category": str(failure["category"]),
+                "code": str(failure["code"]),
+                "retry_scheduled": retry_scheduled,
+                "duration_seconds": round(max(0.0, time.time() - attempt_started), 3),
+            })
+            if retry_scheduled:
                 continue
             return result
 
@@ -862,9 +1003,23 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             "engine_attempts": {"local_bootstrap": 1},
             "engine_durations_seconds": {"local_bootstrap": 0.0},
             "engine_errors": {"local_bootstrap": bootstrap_error} if bootstrap_error else {},
+            "engine_error_classes": {},
+            "engine_error_codes": {},
+            "engine_attempt_events": {},
+            "model_attempt_count": 0,
+            "model_response_count": 0,
+            "model_usage": {
+                "request_count": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "responses_with_cost": 0,
+            },
             "total_hypotheses": len(local_hypotheses),
             "max_workers": 0,
             "enabled_engines": ["local_bootstrap"],
+            "llm_engines": [],
             "engine_weights": {},
             "retry_count": 0,
             "timeout_seconds": 0,
@@ -996,11 +1151,18 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             try:
                 results_by_engine[engine_name] = future.result()
             except Exception as exc:
+                failure = _reasoner_failure_metadata(exc, exception_type=type(exc).__name__)
                 results_by_engine[engine_name] = {
                     "engine_name": engine_name, "hypotheses": [],
-                    "status": "failed", "attempts": 0, "retry_used": False,
+                    "status": "failed", "attempts": 0,
+                    "model_attempt_count": 0, "model_response_count": 0,
+                    "retry_used": False, "attempt_events": [],
                     "raw_chars": 0, "content_chars": 0, "duration_seconds": 0.0,
-                    "error": str(exc)[:200], "degradation_reason": "",
+                    "error": str(failure["code"]),
+                    "error_class": str(failure["category"]),
+                    "error_code": str(failure["code"]),
+                    "last_exception_type": type(exc).__name__,
+                    "degradation_reason": "worker_future_failed",
                 }
 
     # ── Aggregate in original engine order ──
@@ -1010,7 +1172,14 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         if hyps:
             all_hypotheses.extend(hyps)
         status_label = "[OK]" if r.get("status") == "success" else ("[WARN]" if r.get("status") == "degraded" else "[FAIL]")
-        print(f"    {status_label} [{engine_name}] {len(hyps)} hypotheses ({r.get('status', '?')})", flush=True)
+        failure_suffix = ""
+        if r.get("status") == "failed":
+            failure_suffix = f" class={r.get('error_class') or 'unknown'} code={r.get('error_code') or 'unknown_failure'} attempts={int(r.get('model_attempt_count') or 0)}"
+        print(
+            f"    {status_label} [{engine_name}] {len(hyps)} hypotheses "
+            f"({r.get('status', '?')}){failure_suffix}",
+            flush=True,
+        )
 
     # ── Local bootstrap fallback ──
     # If every live LLM lens fails or the model is not configured, keep the
@@ -1182,8 +1351,56 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         engine_names_for_report,
         all_hypotheses,
     )
-    usage_snapshot_fn = getattr(getattr(self, "client", None), "usage_snapshot", None)
-    model_usage = usage_snapshot_fn() if callable(usage_snapshot_fn) else {}
+    model_usage: dict[str, float] = {
+        "request_count": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "responses_with_cost": 0,
+    }
+    llm_engine_names = [name for name, _ in engines]
+    for engine_name in llm_engine_names:
+        engine_result = results_by_engine.get(engine_name, {})
+        for key, value in dict(engine_result.get("model_usage") or {}).items():
+            if key in model_usage:
+                model_usage[key] += value or 0
+    model_attempt_count = sum(
+        int(
+            results_by_engine.get(name, {}).get(
+                "model_attempt_count",
+                results_by_engine.get(name, {}).get("attempts", 0),
+            )
+            or 0
+        )
+        for name in llm_engine_names
+    )
+    model_response_count = sum(
+        int(
+            results_by_engine.get(name, {}).get(
+                "model_response_count",
+                dict(results_by_engine.get(name, {}).get("model_usage") or {}).get("request_count", 0),
+            )
+            or 0
+        )
+        for name in llm_engine_names
+    )
+    engine_error_classes = {
+        name: str(
+            results_by_engine.get(name, {}).get("error_class")
+            or _reasoner_failure_metadata(results_by_engine.get(name, {}).get("error"))["category"]
+        )
+        for name in llm_engine_names
+        if results_by_engine.get(name, {}).get("status") == "failed"
+    }
+    engine_error_codes = {
+        name: str(
+            results_by_engine.get(name, {}).get("error_code")
+            or _reasoner_failure_metadata(results_by_engine.get(name, {}).get("error"))["code"]
+        )
+        for name in llm_engine_names
+        if results_by_engine.get(name, {}).get("status") == "failed"
+    }
     self._last_engine_report = {
         "total_engines": len(engine_names_for_report),
         "successful_engines": [e for e in engine_names_for_report if results_by_engine.get(e, {}).get("status") == "success"],
@@ -1202,10 +1419,20 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "engine_durations_seconds": {e: round(results_by_engine.get(e, {}).get("duration_seconds", 0), 1) for e in engine_names_for_report},
         "engine_errors": {e: results_by_engine.get(e, {}).get("error", "")[:100] for e in engine_names_for_report
                          if results_by_engine.get(e, {}).get("error")},
+        "engine_error_classes": engine_error_classes,
+        "engine_error_codes": engine_error_codes,
+        "engine_attempt_events": {
+            name: [dict(item) for item in (results_by_engine.get(name, {}).get("attempt_events") or [])]
+            for name in llm_engine_names
+            if results_by_engine.get(name, {}).get("attempt_events")
+        },
+        "model_attempt_count": model_attempt_count,
+        "model_response_count": model_response_count,
         "model_usage": model_usage,
         "total_hypotheses": len(all_hypotheses),
         "max_workers": max_workers,
         "enabled_engines": engine_names_for_report,
+        "llm_engines": llm_engine_names,
         "engine_weights": {name: float((engine_weights or {}).get(name, 1.0) or 0.0) for name, _ in engines},
         "retry_count": retry_count,
         "timeout_seconds": _effective_timeout_seconds(timeout_seconds),
@@ -1270,28 +1497,201 @@ def collect_reasoner_hypotheses(
             prior_findings,
         )
     except Exception as exc:
+        failure = _reasoner_failure_metadata(exc, exception_type=type(exc).__name__)
         return [], {
             "status": "provider_unavailable",
-            "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+            "reason": str(failure["code"]),
+            "error_class": str(failure["category"]),
+            "error_code": str(failure["code"]),
+            "exception_type": type(exc).__name__,
         }
 
     if not isinstance(hypotheses, list):
         hypotheses = []
     report = dict(getattr(host, "_last_engine_report", {}) or {})
+    failed_engine_names = [str(item) for item in (report.get("failed_engines") or [])]
+    reported_error_classes = dict(report.get("engine_error_classes") or {})
+    reported_error_codes = dict(report.get("engine_error_codes") or {})
+    raw_engine_errors = dict(report.get("engine_errors") or {})
+    engine_error_classes = {
+        engine: str(
+            reported_error_classes.get(engine)
+            or _reasoner_failure_metadata(raw_engine_errors.get(engine))["category"]
+        )
+        for engine in failed_engine_names
+    }
+    engine_error_codes = {
+        engine: str(
+            reported_error_codes.get(engine)
+            or _reasoner_failure_metadata(raw_engine_errors.get(engine))["code"]
+        )
+        for engine in failed_engine_names
+    }
+    engine_error_class_counts: dict[str, int] = {}
+    for error_class in engine_error_classes.values():
+        engine_error_class_counts[error_class] = engine_error_class_counts.get(error_class, 0) + 1
     meta = {
-        "status": "ok" if hypotheses else "empty",
+        "status": "degraded" if failed_engine_names else ("ok" if hypotheses else "empty"),
         "total_hypotheses": len(hypotheses),
         "total_engines": int(report.get("total_engines") or 0),
         "successful_engine_count": len(report.get("successful_engines") or []),
+        "successful_engine_names": [str(item) for item in (report.get("successful_engines") or []) if str(item)],
         "failed_engine_count": len(report.get("failed_engines") or []),
         "degraded_engine_count": len(report.get("degraded_engines") or []),
-        "observed_model_request_count": sum(
-            int(value or 0) for value in (report.get("engine_attempts") or {}).values()
+        "degraded_engine_names": [str(item) for item in (report.get("degraded_engines") or []) if str(item)],
+        "observed_model_request_count": int(
+            report.get("model_attempt_count")
+            if report.get("model_attempt_count") is not None
+            else sum(
+                int(dict(report.get("engine_attempts") or {}).get(name) or 0)
+                for name in (
+                    report.get("llm_engines")
+                    or list(dict(report.get("engine_attempts") or {}).keys())
+                )
+            )
         ),
+        "observed_model_response_count": int(report.get("model_response_count") or 0),
         "model_usage": dict(report.get("model_usage") or {}),
+        "failed_engine_names": failed_engine_names,
+        "engine_error_classes": engine_error_classes,
+        "engine_error_codes": engine_error_codes,
+        "engine_error_class_counts": engine_error_class_counts,
+        "engine_attempt_events": {
+            str(engine): [dict(item) for item in events if isinstance(item, dict)]
+            for engine, events in dict(report.get("engine_attempt_events") or {}).items()
+            if str(engine) and isinstance(events, list)
+        },
         "max_workers": report.get("max_workers", MAX_REASONER_WORKERS),
         "max_hypotheses_per_engine": report.get("max_hypotheses_per_engine", MAX_HYPOTHESES),
         "timeout_seconds": report.get("timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS),
         "max_tokens": report.get("max_tokens", MIN_REASONER_MAX_TOKENS),
     }
     return hypotheses, meta
+
+
+def _classify_reasoner_error(value: Any) -> str:
+    """Return a secret-free operational category for a reasoner failure."""
+    return str(_reasoner_failure_metadata(value)["category"])
+
+
+def aggregate_reasoner_round_meta(round_meta: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate operational Reasoner telemetry across bounded scan rounds.
+
+    Funnel quality fields (``input``/``bound``) remain the latest round's
+    snapshot; requests, responses, tokens, failures, and safe error codes are
+    campaign totals. This prevents a healthy final round from hiding earlier
+    provider instability or model traffic.
+    """
+
+    rounds = [dict(item) for item in (round_meta or []) if isinstance(item, dict) and item]
+    if not rounds:
+        return {}
+
+    usage_keys = (
+        "request_count",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "cost_usd",
+        "responses_with_cost",
+    )
+    model_usage: dict[str, float] = {key: 0 for key in usage_keys}
+    failed_names: set[str] = set()
+    successful_names: set[str] = set()
+    degraded_names: set[str] = set()
+    failure_occurrences = 0
+    error_class_counts: dict[str, int] = {}
+    error_code_counts: dict[str, int] = {}
+    latest_error_class_by_engine: dict[str, str] = {}
+    latest_error_code_by_engine: dict[str, str] = {}
+    observed_attempts = 0
+    observed_responses = 0
+    per_round: list[dict[str, Any]] = []
+
+    for index, item in enumerate(rounds, start=1):
+        observed_attempts += int(item.get("observed_model_request_count") or 0)
+        observed_responses += int(item.get("observed_model_response_count") or 0)
+        usage = dict(item.get("model_usage") or {})
+        for key in usage_keys:
+            model_usage[key] += usage.get(key) or 0
+
+        round_failed = [str(name) for name in (item.get("failed_engine_names") or []) if str(name)]
+        round_successful = [str(name) for name in (item.get("successful_engine_names") or []) if str(name)]
+        round_degraded = [str(name) for name in (item.get("degraded_engine_names") or []) if str(name)]
+        failed_names.update(round_failed)
+        successful_names.update(round_successful)
+        degraded_names.update(round_degraded)
+        failure_occurrences += len(round_failed)
+
+        round_error_classes = {
+            str(engine): str(category)
+            for engine, category in dict(item.get("engine_error_classes") or {}).items()
+            if str(engine) and str(category)
+        }
+        round_error_codes = {
+            str(engine): str(code)
+            for engine, code in dict(item.get("engine_error_codes") or {}).items()
+            if str(engine) and str(code)
+        }
+        latest_error_class_by_engine.update(round_error_classes)
+        latest_error_code_by_engine.update(round_error_codes)
+        provided_class_counts = dict(item.get("engine_error_class_counts") or {})
+        if provided_class_counts:
+            for category, count in provided_class_counts.items():
+                if str(category):
+                    error_class_counts[str(category)] = error_class_counts.get(str(category), 0) + int(count or 0)
+        else:
+            for category in round_error_classes.values():
+                error_class_counts[category] = error_class_counts.get(category, 0) + 1
+        for code in round_error_codes.values():
+            error_code_counts[code] = error_code_counts.get(code, 0) + 1
+
+        per_round.append({
+            "round": index,
+            "status": str(item.get("status") or "unknown"),
+            "observed_model_request_count": int(item.get("observed_model_request_count") or 0),
+            "observed_model_response_count": int(item.get("observed_model_response_count") or 0),
+            "model_usage": usage,
+            "failed_engine_names": round_failed,
+            "engine_error_classes": round_error_classes,
+            "engine_error_codes": round_error_codes,
+            "engine_attempt_events": dict(item.get("engine_attempt_events") or {}),
+        })
+
+    statuses = {str(item.get("status") or "").strip().lower() for item in rounds}
+    if statuses.intersection({"degraded", "failed", "provider_unavailable"}) or failed_names:
+        campaign_status = "degraded"
+    elif "ok" in statuses:
+        campaign_status = "ok"
+    else:
+        campaign_status = "empty"
+
+    model_usage["cost_usd"] = round(float(model_usage["cost_usd"] or 0.0), 12)
+    latest_round = {
+        key: value
+        for key, value in rounds[-1].items()
+        if key not in {"rounds", "latest_round"}
+    }
+    aggregate = dict(latest_round)
+    aggregate.update({
+        "status": campaign_status,
+        "round_count": len(rounds),
+        "rounds": per_round,
+        "latest_round": latest_round,
+        "observed_model_request_count": observed_attempts,
+        "observed_model_response_count": observed_responses,
+        "model_usage": model_usage,
+        "model_cost_coverage_complete": int(model_usage.get("responses_with_cost") or 0) == observed_attempts,
+        "successful_engine_names": sorted(successful_names),
+        "successful_engine_count": len(successful_names),
+        "failed_engine_names": sorted(failed_names),
+        "failed_engine_count": len(failed_names),
+        "failed_engine_round_occurrences": failure_occurrences,
+        "degraded_engine_names": sorted(degraded_names),
+        "degraded_engine_count": len(degraded_names),
+        "engine_error_classes": latest_error_class_by_engine,
+        "engine_error_codes": latest_error_code_by_engine,
+        "engine_error_class_counts": error_class_counts,
+        "engine_error_code_counts": error_code_counts,
+    })
+    return aggregate

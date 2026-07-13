@@ -12,7 +12,10 @@ from ai_test_asset_center.discovery_funnel import (
     effective_execution_status,
 )
 from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
-from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
+from ai_test_asset_center.obligation_attempt_ledger import (
+    ObligationAttemptLedgerError,
+    build_obligation_attempt_ledger,
+)
 
 
 REQUIRED_STAGES = [
@@ -97,9 +100,13 @@ def _result(*, harness_failed: bool = False) -> dict:
     return {
         "obligation_attempt_ledger": ledger,
         "formal_count_projection": {
-            "schema_version": "qualibug.discovery-quality-projection.v1",
+            "schema_version": "qualibug.discovery-quality-projection.v2",
+            "authority_status": "VERIFIED",
             "formal_customer_deliverable_count": 0,
-            "formal_finding_ids": [],
+            "canonical_defect_count": 0,
+            "canonical_defect_ids": [],
+            "delivery_occurrence_count": 0,
+            "delivery_occurrence_finding_ids": [],
         },
         # Conflicting legacy counters must have no authority.
         "phases": {"execution": {"status": "completed", "executed": 999}},
@@ -134,15 +141,20 @@ def test_pipeline_health_requires_formal_projection_receipt() -> None:
 def test_pipeline_health_rejects_formal_ids_not_backed_by_attempts() -> None:
     result = _result()
     result["formal_count_projection"] = {
+        "schema_version": "qualibug.discovery-quality-projection.v2",
+        "authority_status": "VERIFIED",
         "formal_customer_deliverable_count": 1,
-        "formal_finding_ids": ["finding-without-attempt"],
+        "canonical_defect_count": 1,
+        "canonical_defect_ids": ["cdef-without-attempt"],
+        "delivery_occurrence_count": 1,
+        "delivery_occurrence_finding_ids": ["finding-without-attempt"],
     }
 
     with pytest.raises(DiscoveryFunnelError, match="formal_projection_attempt_id_mismatch"):
         build_pipeline_health(result)
 
 
-def test_shadow_attempt_deliverables_stay_out_of_formal_product_scope() -> None:
+def test_shadow_attempt_cannot_use_legacy_deliverable_gate() -> None:
     contract = build_mainline_run_contract(
         mainline_authority="experiment_candidate",
         run_id="RUN-SHADOW",
@@ -152,37 +164,29 @@ def test_shadow_attempt_deliverables_stay_out_of_formal_product_scope() -> None:
         policy_version="policy-shadow",
         evaluation_mode="shadow",
     )
-    ledger = build_obligation_attempt_ledger(
-        mainline_run=contract,
-        selected=[{"obligation_id": "obl-shadow"}],
-        compile_results={"obl-shadow": {"status": "COMPILED"}},
-        execution_results={
-            "obl-shadow": {
-                "status": "EXECUTED",
-                "observation_receipt_ids": ["obs-shadow"],
-                "oracle_receipt_id": "oracle-shadow",
-            }
-        },
-        gate_results={
-            "obl-shadow": {
-                "status": "DELIVERABLE",
-                "finding_id": "finding-shadow",
-                "gate_receipt_id": "gate-shadow",
-            }
-        },
-    )
-
-    health = build_pipeline_health({
-        "mainline_run": contract,
-        "obligation_attempt_ledger": ledger,
-        "formal_count_projection": {
-            "formal_customer_deliverable_count": 0,
-            "formal_finding_ids": [],
-        },
-    })
-
-    assert health["formal_customer_deliverable_count"] == 0
-    assert health["shadow_attempt_deliverable_count"] == 1
+    with pytest.raises(
+        ObligationAttemptLedgerError,
+        match="formal_gate_v2_required:obl-shadow",
+    ):
+        build_obligation_attempt_ledger(
+            mainline_run=contract,
+            selected=[{"obligation_id": "obl-shadow"}],
+            compile_results={"obl-shadow": {"status": "COMPILED"}},
+            execution_results={
+                "obl-shadow": {
+                    "status": "EXECUTED",
+                    "observation_receipt_ids": ["obs-shadow"],
+                    "oracle_receipt_id": "oracle-shadow",
+                }
+            },
+            gate_results={
+                "obl-shadow": {
+                    "status": "DELIVERABLE",
+                    "finding_id": "finding-shadow",
+                    "gate_receipt_id": "gate-shadow",
+                }
+            },
+        )
 
 
 def test_zero_selected_obligations_cannot_claim_no_bugs() -> None:
@@ -197,8 +201,13 @@ def test_zero_selected_obligations_cannot_claim_no_bugs() -> None:
     health = build_pipeline_health({
         "obligation_attempt_ledger": ledger,
         "formal_count_projection": {
+            "schema_version": "qualibug.discovery-quality-projection.v2",
+            "authority_status": "VERIFIED",
             "formal_customer_deliverable_count": 0,
-            "formal_finding_ids": [],
+            "canonical_defect_count": 0,
+            "canonical_defect_ids": [],
+            "delivery_occurrence_count": 0,
+            "delivery_occurrence_finding_ids": [],
         },
     })
 
@@ -263,7 +272,7 @@ def test_funnel_exposes_required_stage_receipt_metrics_and_does_not_mutate_forma
     assert compile_stage["dimensions"]["actor"] == {"actor-admin": 1}
     assert compile_stage["dimensions"]["round"] == {"1": 1, "2": 1}
     assert funnel["validated_bug_count"] == 0
-    assert funnel["formal_finding_ids"] == []
+    assert funnel["canonical_defect_ids"] == []
     assert result["formal_count_projection"] == before
 
 

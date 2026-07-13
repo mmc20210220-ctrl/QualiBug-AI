@@ -43,6 +43,7 @@ from .real_id_resolver import (
     extract_first_entity_id,
     resolve_real_id_from_documented_list,
 )
+from .target_endpoint import resolve_target_base_url
 
 
 @dataclass
@@ -459,7 +460,7 @@ class AutonomousDiscoveryEngine:
         project_id: str | None = None,
         root: Path | str | None = None,
     ):
-        self.base = str(base_url or os.environ.get("QUALIBUG_DEFAULT_BASE_URL") or "http://127.0.0.1:8088")
+        self.base = resolve_target_base_url(base_url)
         self._project = str(
             project_id
             or os.environ.get("QUALIBUG_PROJECT_ID")

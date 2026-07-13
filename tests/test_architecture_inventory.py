@@ -47,13 +47,27 @@ def _config(root: Path) -> Path:
     return path
 
 
-def _sample_repo(tmp_path: Path, *, dynamic_import: bool = False) -> Path:
+def _sample_repo(
+    tmp_path: Path,
+    *,
+    dynamic_import: bool = False,
+    external_literal_import: bool = False,
+    dependency_cycle: bool = False,
+    forbidden_direction: bool = False,
+) -> Path:
     _write(tmp_path / "samplepkg" / "__init__.py", "")
     dynamic = (
         "\nimport importlib as loader\n\ndef load(name):\n    return loader.import_module(name)\n"
         if dynamic_import
         else ""
     )
+    if external_literal_import:
+        dynamic += (
+            "\nimport importlib as external_loader\n"
+            "EXTERNAL_JSON = external_loader.import_module('json')\n"
+        )
+    if forbidden_direction:
+        dynamic += "\nfrom . import adapter_bridge as forbidden_adapter\n"
     _write(
         tmp_path / "samplepkg" / "main.py",
         (
@@ -63,14 +77,23 @@ def _sample_repo(tmp_path: Path, *, dynamic_import: bool = False) -> Path:
             + dynamic
         ),
     )
-    _write(tmp_path / "samplepkg" / "used.py", "VALUE = 1\n")
+    _write(
+        tmp_path / "samplepkg" / "used.py",
+        "from . import adapter_bridge\nVALUE = 1\n"
+        if dependency_cycle
+        else "VALUE = 1\n",
+    )
     _write(
         tmp_path / "samplepkg" / "evaluation.py",
         "from .adapter_bridge import evaluate\n",
     )
     _write(
         tmp_path / "samplepkg" / "adapter_bridge.py",
-        "def evaluate():\n    return True\n",
+        (
+            "from . import used\n\ndef evaluate():\n    return used.VALUE\n"
+            if dependency_cycle
+            else "def evaluate():\n    return True\n"
+        ),
     )
     _write(tmp_path / "samplepkg" / "test_only.py", "VALUE = 2\n")
     _write(tmp_path / "samplepkg" / "dead_module.py", "VALUE = 3\n")
@@ -218,9 +241,12 @@ def test_complete_runtime_trace_advances_but_never_auto_approves_deletion(
     )
     dead = _by_module(inventory)["samplepkg.dead_module"]
 
-    assert inventory["runtime_trace"]["status"] == "VERIFIED_COMPLETE"
+    assert inventory["runtime_trace"]["status"] == "UNAUTHENTICATED_COMPLETE"
+    assert inventory["runtime_trace"]["trusted_for_deletion"] is False
     assert dead["runtime_observed"] is False
-    assert dead["removal_gate"] == "MANUAL_DELETION_REVIEW_REQUIRED"
+    assert dead["removal_gate"] == (
+        "BLOCKED_RUNTIME_TRACE_AUTHENTICATION_REQUIRED"
+    )
     assert inventory["auto_delete_performed"] is False
 
 
@@ -259,6 +285,57 @@ def test_dynamic_import_uncertainty_blocks_retirement_even_with_complete_trace(
     assert _by_module(inventory)["samplepkg.dead_module"]["removal_gate"] == (
         "BLOCKED_DYNAMIC_IMPORT_REVIEW_REQUIRED"
     )
+
+
+def test_literal_external_import_does_not_create_project_deletion_uncertainty(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path, external_literal_import=True)
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+
+    assert inventory["dynamic_import_uncertainty"]["present"] is False
+    assert _by_module(inventory)["samplepkg.main"][
+        "dynamic_import_uncertainty"
+    ] == []
+
+
+def test_inventory_reports_cycles_hubs_and_forbidden_dependency_directions(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(
+        tmp_path,
+        dependency_cycle=True,
+        forbidden_direction=True,
+    )
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+    graph = inventory["dependency_graph"]
+
+    assert graph["cyclic_scc_count"] == 1
+    assert graph["largest_cyclic_scc_size"] == 2
+    assert graph["cyclic_sccs"][0]["modules"] == [
+        "samplepkg.adapter_bridge",
+        "samplepkg.used",
+    ]
+    assert any(
+        row["source"] == "samplepkg.main"
+        and row["target"] == "samplepkg.adapter_bridge"
+        for row in graph["forbidden_dependency_directions"]
+    )
+    assert graph["fan_out_hubs"][0]["count"] >= 1
 
 
 def test_complete_runtime_trace_fails_closed_without_exact_root_and_source_proof(
@@ -474,11 +551,26 @@ def test_repository_inventory_reports_architecture_metrics_not_quality() -> None
     )
 
     diagnostics = inventory["diagnostics"]
-    assert diagnostics["module_count"] >= 400
-    assert diagnostics["python_line_count"] >= 200_000
+    assert diagnostics["module_count"] > 0
+    assert diagnostics["python_line_count"] > 0
+    assert diagnostics["architecture_budget"]["status"] == "WITHIN_BUDGET"
+    assert diagnostics["module_count"] <= diagnostics["architecture_budget"][
+        "max_module_count"
+    ]
+    assert diagnostics["python_line_count"] <= diagnostics[
+        "architecture_budget"
+    ]["max_python_line_count"]
     assert diagnostics["discovery_entrypoint_count"] >= 1
     assert "duplicate_discovery_entrypoint_count" in diagnostics
     assert "monkeypatch_authority_count" in diagnostics
     assert "oversized_boundary_count" in diagnostics
+    assert inventory["dependency_graph"]["largest_cyclic_scc_size"] < 64
+    assert not any(
+        {
+            "ai_test_asset_center.__main__",
+            "ai_test_asset_center.private_pilot_service",
+        }.issubset(set(component["modules"]))
+        for component in inventory["dependency_graph"]["cyclic_sccs"]
+    )
     assert inventory["auto_delete_performed"] is False
     assert inventory["external_discovery_quality"] == "NOT_MEASURED"

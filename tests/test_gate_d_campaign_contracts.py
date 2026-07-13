@@ -154,44 +154,36 @@ def test_campaign_creation_requires_explicit_environment_identity_and_exact_url(
     assert "UNKNOWN_ENVIRONMENT" in unknown["blocking_codes"]
 
 
-def test_campaign_view_uses_formal_gate_and_exposes_complete_identity_trace(tmp_path: Path) -> None:
+def test_campaign_view_rejects_flags_only_formal_claim_and_keeps_identity_trace(tmp_path: Path) -> None:
     _write_scan(tmp_path)
     view = build_campaign_view(tmp_path, "project-a", "cmp-source-derived")
     assert view["status"] == "partial"
     assert view["pipeline_health"] == "DEGRADED"
     assert view["execution_status"] == "completed"
-    assert view["formal_count_projection"]["formal_customer_deliverable_count"] == 1
+    assert view["formal_count_projection"]["formal_customer_deliverable_count"] == 0
     assert view["finding_classification"]["counts"] == {
-        "deliverable": 1,
+        "deliverable": 0,
         "candidate": 1,
-        "rejected": 1,
+        "rejected": 2,
         "shadow": 0,
     }
     assert view["every_selected_experiment_has_receipt"] is True
     assert view["complete_identity_trace_count"] == 1
 
 
-def test_evaluation_submission_is_ground_truth_free_authority_scoped_and_not_measured(
+def test_evaluation_submission_rejects_flags_only_scope_without_attempt_ledger(
     tmp_path: Path,
 ) -> None:
     _write_scan(tmp_path)
-    submission = build_evaluation_submission(
-        tmp_path,
-        "project-a",
-        {"evaluation_mode": "operational"},
-    )
-    assert submission["ground_truth_included"] is False
-    assert submission["measurement_status"] == "NOT_MEASURED"
-    assert [row["finding_id"] for row in submission["scan_result"]["findings"]] == [
-        "finding-source-derived"
-    ]
-    assert submission["scan_result"]["candidate_findings"] == []
-    assert submission["formal_id_consistency"]["consistent"] is True
-    persisted = json.loads(Path(submission["artifact_ref"]).read_text(encoding="utf-8"))
-    serialized = json.dumps(persisted).lower()
-    assert "ground_truth_ref" not in serialized
-    assert persisted["ground_truth_included"] is False
-    assert persisted["operational_metrics"]["wall_clock_seconds"] == 1.2
+    with pytest.raises(
+        CampaignContractError,
+        match="formal_delivery_attempt_ledger_missing",
+    ):
+        build_evaluation_submission(
+            tmp_path,
+            "project-a",
+            {"evaluation_mode": "operational"},
+        )
 
 
 def test_product_submission_rejects_shadow_run(tmp_path: Path) -> None:

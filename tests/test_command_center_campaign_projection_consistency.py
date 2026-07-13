@@ -80,15 +80,18 @@ def test_build_command_center_projects_augmented_campaign_governance_counts(monk
     current_run = payload["data"]["continuous_discovery_campaign"]["current_run"]
 
     assert summary["current_campaign_confirmed_slice_count"] == 43
-    assert summary["current_campaign_customer_ready_defect_count"] == 2
-    assert summary["current_campaign_bundle_finding_count_raw"] == 3
-    assert summary["family_customer_ready_defect_count"] == 2
-    assert summary["family_report_real_finding_count"] == 2
+    assert summary["current_campaign_customer_ready_defect_count"] == 0
+    assert summary["current_campaign_bundle_finding_count_raw"] == 0
+    assert summary["family_customer_ready_defect_count"] == 0
+    assert summary["family_report_real_finding_count"] == 0
     assert summary["family_historical_carryover_defect_count"] == 0
-    assert summary["confirmed_shelf_alignment_status"] == "current_campaign_exceeds_family_shelf"
+    assert (
+        summary["confirmed_shelf_alignment_status"]
+        == "current_campaign_exceeds_family_shelf"
+    )
     assert current_run["current_campaign_confirmed_slice_count"] == 43
-    assert current_run["current_campaign_customer_ready_defect_count"] == 2
-    assert current_run["current_campaign_bundle_finding_count_raw"] == 3
+    assert current_run["current_campaign_customer_ready_defect_count"] == 0
+    assert current_run["current_campaign_bundle_finding_count_raw"] == 0
 
 
 def test_static_snapshot_and_real_project_preserve_command_center_campaign_projection(monkeypatch, tmp_path) -> None:

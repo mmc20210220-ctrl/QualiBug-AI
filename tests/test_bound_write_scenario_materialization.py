@@ -130,3 +130,55 @@ def test_non_lifecycle_bound_write_keeps_documented_mutation_method() -> None:
     assert target_steps
     assert target_steps[-1].api_method == "POST"
     assert target_steps[-1].action == "execute_bound_write"
+
+
+def test_identity_mutation_bound_write_uses_documented_identity_create_fixture() -> None:
+    api_doc = """
+### GET /api/users/admin/search
+Search users.
+
+### POST /api/auth/register
+Register a disposable user.
+
+Request:
+```json
+{"email": "<email>", "password": "<password>", "displayName": "Disposable User"}
+```
+
+### POST /api/auth/admin/users/:id/status
+Change user status.
+
+Request:
+```json
+{"status": "DISABLED"}
+```
+"""
+    scenario = SemanticScenarioGenerator()._fallback_active_slice(
+        {
+            "slice_id": "BHV_identity_status",
+            "entity": "user",
+            "kind": "invariant",
+            "endpoints": ["/api/auth/admin/users/:id/status"],
+            "priority": 0.8,
+            "source_refs": [{"kind": "hypothesis:llm_reasoner", "quote": "status mutation must be governed"}],
+            "_bound_method": "POST",
+            "_bound_path": "/api/auth/admin/users/:id/status",
+            "_hypothesis_family": "state_machine",
+            "_invariant_text": "status mutation must be governed",
+        },
+        discovery_round=1,
+        api_doc=api_doc,
+        allow_source_runtime=True,
+    )
+
+    assert scenario is not None
+    assert scenario.execution_policy == "approved_sandbox_write"
+    actions = [step.action for step in scenario.steps]
+    assert "bootstrap_create_id" in actions
+    assert "execute_bound_write" in actions
+    assert actions.index("bootstrap_create_id") < actions.index("execute_bound_write")
+    bootstrap = next(step for step in scenario.steps if step.action == "bootstrap_create_id")
+    assert bootstrap.api_method == "POST"
+    assert bootstrap.api_path == "/api/auth/register"
+    write = next(step for step in scenario.steps if step.action == "execute_bound_write")
+    assert write.api_path == "/api/auth/admin/users/{id}/status"

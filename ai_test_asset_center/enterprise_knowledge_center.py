@@ -1840,6 +1840,34 @@ def _dedupe_by_id(rows: Iterable[dict[str, Any]], id_field: str) -> list[dict[st
     return result
 
 
+TOKEN_OVERLAP_RELATION_GATE = "token_overlap_only_requires_explicit_source_relation"
+_NON_AUTHORITATIVE_RELATION_STATUSES = {"candidate", "proposed", "unknown", "unsupported", "rejected"}
+
+
+def _relationship_is_authoritative(edge: dict[str, Any]) -> bool:
+    """Return True only when a relationship is backed by explicit source evidence.
+
+    Token overlap is useful for diagnostics and operator review, but it is not
+    a semantic join that may drive executable probes or Behavior IR obligations.
+    """
+
+    if not isinstance(edge, dict):
+        return False
+    status = str(edge.get("status") or "accepted").strip().lower()
+    if status in _NON_AUTHORITATIVE_RELATION_STATUSES:
+        return False
+    evidence_gate = str(edge.get("evidence_gate") or "").strip()
+    derivation = str(edge.get("derivation") or "").strip().lower().replace("-", "_")
+    evidence = edge.get("evidence") if isinstance(edge.get("evidence"), dict) else {}
+    if evidence_gate == TOKEN_OVERLAP_RELATION_GATE:
+        return False
+    if derivation == "token_overlap":
+        return False
+    if evidence and set(evidence) <= {"token_overlap"}:
+        return False
+    return True
+
+
 def _links_by_overlap(left: Iterable[dict[str, Any]], right: Iterable[dict[str, Any]], left_id: str, right_id: str, min_overlap: int = 1, relation: str = "related_to") -> list[dict[str, Any]]:
     edges: list[dict[str, Any]] = []
     for a in left:
@@ -1853,7 +1881,17 @@ def _links_by_overlap(left: Iterable[dict[str, Any]], right: Iterable[dict[str, 
             if overlap >= min_overlap:
                 best.append((overlap, b))
         for overlap, b in sorted(best, key=lambda x: (-x[0], str(x[1].get(right_id))))[:3]:
-            edges.append({"edge_id": f"edge:{_short_hash({'a': a.get(left_id), 'b': b.get(right_id), 'relation': relation})}", "from": a.get(left_id), "to": b.get(right_id), "relation": relation, "confidence": round(min(0.95, 0.45 + overlap * 0.13), 3), "evidence": {"token_overlap": sorted(at & set(b.get("tokens") or _tokens(str(b))))[:10]}})
+            edges.append({
+                "edge_id": f"edge:{_short_hash({'a': a.get(left_id), 'b': b.get(right_id), 'relation': relation})}",
+                "from": a.get(left_id),
+                "to": b.get(right_id),
+                "relation": relation,
+                "confidence": round(min(0.95, 0.45 + overlap * 0.13), 3),
+                "status": "candidate",
+                "derivation": "token_overlap",
+                "evidence_gate": TOKEN_OVERLAP_RELATION_GATE,
+                "evidence": {"token_overlap": sorted(at & set(b.get("tokens") or _tokens(str(b))))[:10]},
+            })
     return _dedupe_by_id(edges, "edge_id")
 
 
@@ -1989,6 +2027,8 @@ def _oracle_library(rules: list[dict[str, Any]], industry_oracles: list[dict[str
     related_interfaces: dict[str, list[str]] = defaultdict(list)
     related_tables: dict[str, list[str]] = defaultdict(list)
     for edge in relation_edges:
+        if not _relationship_is_authoritative(edge):
+            continue
         if edge.get("relation") == "rule_to_interface":
             related_interfaces[str(edge.get("from"))].append(str(edge.get("to")))
         elif edge.get("relation") == "rule_to_table":
@@ -2008,7 +2048,11 @@ def _probes_from_asset(asset: dict[str, Any], max_count: int = 140) -> list[dict
     interfaces = {str(row.get("interface_id")): row for row in asset.get("interfaces") or [] if isinstance(row, dict)}
     interface_edges: dict[str, list[str]] = defaultdict(list)
     for edge in asset.get("relationships") or []:
-        if isinstance(edge, dict) and edge.get("relation") == "rule_to_interface":
+        if (
+            isinstance(edge, dict)
+            and edge.get("relation") == "rule_to_interface"
+            and _relationship_is_authoritative(edge)
+        ):
             interface_edges[str(edge.get("from"))].append(str(edge.get("to")))
     probes: list[dict[str, Any]] = []
     for risk in asset.get("risk_domains") or []:

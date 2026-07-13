@@ -371,7 +371,7 @@ def test_customer_regression_verification_report():
 # ── Benchmark Corrected Recall (P6) ──
 def test_p6_corrected_recall_unique_bug_types():
     """P6: corrected_recall uses unique bug-type dedup, avoiding recall > 1.0."""
-    from ai_test_asset_center.p3_seed_bug_benchmark import _normalize_bug_type
+    from benchmark_evaluator.p3_seed_bug_benchmark import _normalize_bug_type
 
     # Same bug type detected by 3 different oracles → should count as 1 unique
     assert _normalize_bug_type("privilege_escalation") == "authorization"

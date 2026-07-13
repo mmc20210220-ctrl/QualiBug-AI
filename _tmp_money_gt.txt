@@ -1,0 +1,61 @@
+﻿candidate count 60
+CART-003 | 购物车数量允许为 0 或负数 | None
+CART-007 | 结算预览相信客户端传入价格 | ['POST /api/cart/checkout-preview items price=0.01']
+CART-011 | 价格同步接口可同步他人购物车价格快照 | ['buyer01 POST /api/cart/price-sync userId=buyer02']
+COUPON-001 | 过期优惠券仍可校验通过 | ['login buyer01', 'POST /api/coupons/validate code=EXPIRED50']
+COUPON-002 | 停用优惠券仍可使用 | None
+COUPON-003 | 优惠券不校验最低订单金额 | None
+COUPON-004 | 优惠券不校验用户使用次数 | None
+COUPON-005 | 优惠券不校验全局使用次数 | None
+COUPON-006 | 类目券未校验 category_scope | None
+COUPON-007 | 折扣券未应用 max_discount 封顶 | None
+COUPON-008 | 创建优惠券接口未校验管理员角色 | ['buyer POST /api/coupons/admin/create amount=9999']
+COUPON-009 | 批量校验优惠券可叠加多张互斥优惠 | ['POST /api/coupons/batch-validate codes=[NEW100,ELEC20]']
+COUPON-011 | 优惠券状态接口普通用户可停用优惠券 | ['buyer POST /api/coupons/admin/NEW100/status status=DISABLED']
+COUPON-012 | 优惠券详情接口返回停用和过期券完整规则 | ['GET /api/coupons/code/DISABLED30']
+COUPON-013 | 折扣模拟接口允许折扣大于订单金额产生负应付 | ['POST /api/coupons/simulate-discount amount=100 fixed=200']
+INV-001 | 库存锁定未使用事务行锁导致并发超卖 | ['login buyer01', 'send parallel POST /api/inventory/reserve for SKU-LAPTOP-002 qty=1 delayMs=200']
+INV-002 | 释放库存可按 SKU 批量释放其他订单锁 | None
+INV-003 | 释放库存未校验 locked_qty 足够导致负锁定库存 | None
+INV-004 | 消耗库存未校验 locked_qty 足够 | None
+INV-005 | 库存调整接口未限制 warehouse/admin 角色 | None
+INV-006 | 库存调整允许 available_qty 调成负数 | None
+INV-007 | 库存锁列表接口任意登录可查看所有订单锁 | ['buyer GET /api/inventory/locks/list']
+INV-008 | 调拨接口允许负数导致库存方向反转 | ['POST /api/inventory/transfer qty=-10']
+INV-009 | 批量锁库存部分失败不回滚 | ['bulk-reserve 包含一个有效 SKU 和一个无效 SKU']
+INV-010 | 库存直接设置接口未校验仓库角色 | ['buyer POST /api/inventory/admin/set availableQty=99999']
+INV-011 | 库存锁状态接口可任意修改锁状态 | ['buyer POST /api/inventory/locks/:id/status status=CONSUMED']
+INV-012 | 重算锁库存把已释放和已消耗锁也计入 locked_qty | ['POST /api/inventory/recount/:sku']
+ORDER-003 | 下单数量允许负数导致金额和库存异常 | None
+ORDER-004 | 固定优惠券计算顺序错误 | None
+ORDER-008 | 已支付订单仍可取消 | None
+ORDER-009 | 已取消订单可重复取消导致库存重复释放 | None
+ORDER-011 | 未支付订单可发货 | None
+ORDER-015 | 订单改价接口无财务权限且可改成负应付 | ['buyer POST /api/orders/:id/price-adjust delta=-99999']
+PAY-001 | 已取消订单仍可支付 | ['login buyer01', 'create order', 'cancel order', 'POST /api/payments/pay with cancelled order id']
+PAY-002 | 支付金额大于应付金额也成功 | None
+PAY-003 | 重复支付未做幂等 | None
+PAY-004 | 同一 idempotencyKey 可重复生成支付流水 | None
+PAY-005 | 用户可支付他人订单 | None
+PAY-006 | 手工置支付成功接口未校验财务/admin 角色 | None
+PAY-007 | 支付后库存消耗失败不回滚支付状态 | None
+PAY-008 | 支付回调接口无签名校验可伪造支付成功 | ['POST /api/payments/callback/mock orderId=... status=SUCCESS']
+PAY-009 | 余额支付不校验用户余额是否足够 | ['buyer02 余额 300 支付 8999 订单']
+PAY-010 | 退款到余额接口可给任意用户加钱或扣钱 | ['buyer POST /api/payments/refund-to-balance userId=buyer01 amount=99999']
+PAY-011 | 重放支付成功接口可复制历史支付流水 | ['POST /api/payments/admin/replay-success paymentId=已有支付']
+PAY-012 | 支付导出接口普通用户可查看全站支付流水 | ['buyer GET /api/payments/admin/export']
+PAY-013 | 支付通道测试接口泄露模拟密钥 | ['POST /api/payments/channel-test']
+PRODUCT-005 | 商品价格可被修改为负数 | None
+PRODUCT-011 | 批量导入商品接口允许指定 sellerId 和异常库存 | ['buyer POST /api/products/admin/import 指定 sellerId/stock=-10']
+PRODUCT-012 | 批量调价接口未校验角色且可生成负价格 | ['buyer POST /api/products/admin/bulk-price deltaPercent=-200']
+REFUND-001 | 未支付订单可申请退款 | None
+REFUND-002 | 退款金额可超过实付金额 | None
+REFUND-003 | 用户可给他人订单申请退款 | None
+REFUND-004 | 退款审批未校验 finance/admin 角色 | None
+REFUND-005 | 重复审批退款单会重复执行退款状态 | None
+REFUND-006 | 驳回退款未恢复订单原状态 | None
+REFUND-007 | 退款全量列表普通用户可查看所有退款单 | ['buyer GET /api/refunds/admin/all']
+REFUND-008 | 退款金额修改接口无权限且允许负数 | ['buyer POST /api/refunds/:id/amount amount=-100']
+REFUND-010 | 快速退款接口可绕过审批直接 REFUNDED | ['buyer POST /api/refunds/quick-refund orderId=... amount=1000']
+REFUND-011 | 关闭退款接口可关闭他人退款单 | ['buyer01 POST /api/refunds/:buyer02RefundId/close']
+REFUND-012 | 按订单查退款接口未校验订单归属 | ['buyer01 GET /api/refunds/by-order/:buyer02OrderId']

@@ -1,13 +1,6 @@
-"""AI Defect Discovery Platform core package."""
+"""AI Defect Discovery Platform core package.
 
-try:
-    from .scan_runtime_gate_patch import install_scan_runtime_gate
-    install_scan_runtime_gate()
-except Exception:
-    pass
-
-try:
-    from .p3_benchmark_scan_patch import install_p3_benchmark_scan_patch
-    install_p3_benchmark_scan_patch()
-except Exception:
-    pass
+Importing the package is intentionally side-effect free. Runtime composition is
+owned by explicit entrypoints; package import must never monkeypatch discovery
+functions or install evaluator behavior into the product process.
+"""

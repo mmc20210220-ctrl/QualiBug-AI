@@ -6,6 +6,10 @@ from ai_test_asset_center.discovery_mainline_contract import (
     MainlineContractError,
     build_mainline_run_contract,
 )
+from tests.phase3_gate_support import (
+    build_formal_evaluation_scope,
+    build_formal_scope_contract,
+)
 
 
 def _contract(mode: str = "shadow") -> dict:
@@ -69,13 +73,34 @@ def test_private_evaluator_projection_scores_only_semantic_deliverable_shadow() 
     )
 
     contract = _contract()
-    deliverable = _shadow(contract, "finding-deliverable", "DELIVERABLE")
+    formal, ledger = build_formal_evaluation_scope(
+        [{"finding_id": "finding-deliverable"}],
+        run_id=contract["run_id"],
+        campaign_id=contract["campaign_id"],
+        target_id=contract["target_id"],
+        environment_id=contract["environment_id"],
+        policy_version=contract["policy_version"],
+        evaluation_mode=contract["evaluation_mode"],
+    )
+    deliverable = formal[0]
+    scope = build_formal_scope_contract(
+        mainline_run=contract,
+        findings=formal,
+        obligation_attempt_ledger=ledger,
+    )
     rejected = _shadow(contract, "finding-rejected", "REJECTED")
     scan_result = {
         "mainline_run": contract,
         "findings": [],
         "candidate_findings": [],
         "shadow_findings": [deliverable, rejected],
+        "obligation_attempt_ledger": ledger,
+        "evaluator_canonical_findings": list(
+            scope["formal_count_projection"][
+                "canonical_representative_findings"
+            ]
+        ),
+        **scope,
     }
 
     projection = build_evaluator_only_projection(scan_result)
@@ -112,8 +137,22 @@ def test_private_evaluator_projection_rejects_shadow_authority_mismatch() -> Non
     )
 
     contract = _contract()
-    finding = _shadow(contract, "finding-1", "DELIVERABLE")
+    formal, ledger = build_formal_evaluation_scope(
+        [{"finding_id": "finding-deliverable"}],
+        run_id=contract["run_id"],
+        campaign_id=contract["campaign_id"],
+        target_id=contract["target_id"],
+        environment_id=contract["environment_id"],
+        policy_version=contract["policy_version"],
+        evaluation_mode=contract["evaluation_mode"],
+    )
+    finding = _shadow(contract, "finding-1", "REJECTED")
     finding["mainline_run"]["contract_fingerprint"] = "wrong"
+    scope = build_formal_scope_contract(
+        mainline_run=contract,
+        findings=formal,
+        obligation_attempt_ledger=ledger,
+    )
 
     with pytest.raises(
         MainlineContractError,
@@ -121,5 +160,12 @@ def test_private_evaluator_projection_rejects_shadow_authority_mismatch() -> Non
     ):
         build_evaluator_only_projection({
             "mainline_run": contract,
-            "shadow_findings": [finding],
+            "shadow_findings": [formal[0], finding],
+            "obligation_attempt_ledger": ledger,
+            "evaluator_canonical_findings": list(
+                scope["formal_count_projection"][
+                    "canonical_representative_findings"
+                ]
+            ),
+            **scope,
         })

@@ -4,7 +4,7 @@ Verifies that:
 - ``compute_benchmark`` returns empty when no ground truth exists
 - With ground truth, computes recall/precision/FPR/FNR correctly
 - ``_method_path_key`` normalizes path params for matching
-- ``persist_benchmark_result`` writes and the command center can read it back
+- evaluator scoring exposes no unsigned generic persistence API
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ai_test_asset_center.benchmark_compute import (
+from benchmark_evaluator import benchmark_compute as benchmark_compute_module
+from benchmark_evaluator.benchmark_compute import (
     _extract_api_paths,
     _method_path_key,
     compute_benchmark,
-    persist_benchmark_result,
 )
 
 
@@ -144,18 +144,8 @@ def test_api_path_matching_preserves_unicode_segments_without_prefix_collisions(
     assert _extract_api_paths("POST /api/v1/ecommerce/库存/deduct") == {"/api/v1/ecommerce/库存/deduct"}
 
 
-def test_persist_and_read_back(tmp_path: Path) -> None:
-    metrics = {
-        "benchmark_active": True,
-        "recall": 0.8,
-        "precision": 0.9,
-        "f1_score": 0.85,
-    }
-    path = persist_benchmark_result("test_project", metrics, root=tmp_path)
-    assert path.exists()
-    read_back = json.loads(path.read_text(encoding="utf-8"))
-    assert read_back.get("recall") == 0.8
-    assert read_back.get("precision") == 0.9
+def test_evaluator_scoring_has_no_unsigned_generic_persistence_api() -> None:
+    assert not hasattr(benchmark_compute_module, "persist_benchmark_result")
 
 
 def test_compute_benchmark_no_false_fabrication(tmp_path: Path) -> None:

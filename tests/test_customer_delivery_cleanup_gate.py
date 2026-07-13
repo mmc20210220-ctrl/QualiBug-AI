@@ -207,7 +207,7 @@ def test_rejected_write_with_observer_unchanged_proof_allows_not_required() -> N
     assert is_customer_deliverable_defect(finding) is True
 
 
-def test_governed_campaign_reset_readjudicates_only_cleanup_only_finding() -> None:
+def test_governed_campaign_reset_does_not_readjudicate_cleanup_failure() -> None:
     finding = _valid_finding()
     finding["evidence"] = {"cleanup": {"status": "failed", "receipt_ref": ""}}
     defects, clues = apply_governed_campaign_cleanup(
@@ -220,13 +220,15 @@ def test_governed_campaign_reset_readjudicates_only_cleanup_only_finding() -> No
         },
     )
 
-    assert len(defects) == 1
-    assert clues == []
-    assert defects[0]["evidence"]["cleanup"]["receipt_ref"] == "campaign-cleanup-audit-1"
-    assert defects[0]["evidence"]["scenario_cleanup_before_campaign_reset"]["status"] == "failed"
+    assert defects == []
+    assert len(clues) == 1
+    assert clues[0]["evidence"]["cleanup"] == {
+        "status": "failed",
+        "receipt_ref": "",
+    }
 
 
-def test_governed_campaign_reset_restores_upstream_cleanup_only_candidate() -> None:
+def test_governed_campaign_reset_preserves_upstream_cleanup_terminal() -> None:
     finding = _valid_finding()
     finding["evidence"] = {"cleanup": {"status": "not_reversible", "receipt_ref": "/api/resources/{id}"}}
     demoted = deepcopy(finding)
@@ -245,15 +247,16 @@ def test_governed_campaign_reset_restores_upstream_cleanup_only_candidate() -> N
         },
     )
 
-    assert len(defects) == 1
-    assert clues == []
-    assert defects[0]["gate_passed"] is True
-    assert defects[0]["customer_delivery_status"] == "defect"
-    assert defects[0]["customer_delivery_gate_reasons"] == []
-    assert defects[0]["customer_delivery_gate_reasons_before_campaign_cleanup"] == ["CLEANUP_NOT_SUCCEEDED"]
+    assert defects == []
+    assert len(clues) == 1
+    assert clues[0]["gate_passed"] is False
+    assert clues[0]["customer_delivery_status"] == "candidate"
+    assert clues[0]["customer_delivery_gate_reasons"] == [
+        "CLEANUP_NOT_SUCCEEDED"
+    ]
 
 
-def test_campaign_cleanup_readjudication_updates_formal_projection() -> None:
+def test_campaign_cleanup_cannot_update_formal_projection() -> None:
     finding = _valid_finding()
     finding["evidence"] = {"cleanup": {"status": "not_reversible", "receipt_ref": "/api/resources/{id}"}}
     demoted = deepcopy(finding)
@@ -288,15 +291,15 @@ def test_campaign_cleanup_readjudication_updates_formal_projection() -> None:
         }
     )
 
-    assert projected["formal_count_projection"]["formal_customer_deliverable_count"] == 1
+    assert projected["formal_count_projection"]["formal_customer_deliverable_count"] == 0
     assert projected["discovery_funnel"]["validated_bug_count"] == 0
-    assert projected["discovery_funnel"]["formal_count_projection"]["formal_customer_deliverable_count"] == 1
+    assert projected["discovery_funnel"]["formal_count_projection"]["formal_customer_deliverable_count"] == 0
     assert projected["discovery_funnel"]["formal_count_projection"]["funnel_validated_bug_count"] == 0
     assert (
         projected["discovery_funnel"]["formal_count_projection"]["count_consistency"][
             "formal_equals_funnel_validated"
         ]
-        is False
+        is True
     )
 
 
@@ -316,4 +319,7 @@ def test_governed_campaign_reset_does_not_promote_other_evidence_gaps() -> None:
 
     assert defects == []
     assert len(clues) == 1
-    assert "EVIDENCE_QUALITY_NOT_VALIDATED" in clues[0]["customer_delivery_gate_reasons"]
+    assert clues[0]["evidence_quality"]["score"] == 20
+    assert "EVIDENCE_QUALITY_NOT_VALIDATED" in customer_delivery_rejection_reasons(
+        clues[0]
+    )

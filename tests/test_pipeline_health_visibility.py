@@ -83,8 +83,13 @@ def _attempt_result(
     return {
         "obligation_attempt_ledger": ledger,
         "formal_count_projection": {
+            "schema_version": "qualibug.discovery-quality-projection.v2",
+            "authority_status": "VERIFIED",
             "formal_customer_deliverable_count": 0,
-            "formal_finding_ids": [],
+            "canonical_defect_count": 0,
+            "canonical_defect_ids": [],
+            "delivery_occurrence_count": 0,
+            "delivery_occurrence_finding_ids": [],
         },
     }
 
@@ -412,7 +417,10 @@ def test_successful_execution_without_violation_remains_in_trace_ledger() -> Non
     )
     v12_result = {
         "obligation_attempt_ledger": attempt_ledger,
-        "formal_count_projection": {"formal_finding_ids": []},
+        "formal_count_projection": {
+            "delivery_occurrence_finding_ids": [],
+            "canonical_defect_ids": [],
+        },
         "execution_trace_summaries": [summary],
     }
 

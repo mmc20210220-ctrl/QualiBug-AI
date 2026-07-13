@@ -18,9 +18,11 @@ from ai_test_asset_center.autonomous_evolution_orchestrator import EvolutionOrch
 from ai_test_asset_center.discovery_harness_proposer import apply_bounded_harness_edit  # noqa: E402
 from ai_test_asset_center.discovery_policy_evaluation_runner import DiscoveryPolicyEvaluationRunner  # noqa: E402
 from ai_test_asset_center.evaluation_fixture_controller import GovernedHttpResetFixtureController  # noqa: E402
+from ai_test_asset_center.evaluator_receipt_auth import resolve_evaluator_hmac_keyring  # noqa: E402
 from ai_test_asset_center.observed_product_scan_executor import ObservedProductScanExecutor  # noqa: E402
 from ai_test_asset_center.policy_registry import PolicyRecord, PolicyRegistry  # noqa: E402
 from ai_test_asset_center.scan_operational_metrics import collect_observed_scan_operational_metrics  # noqa: E402
+from ai_test_asset_center.trusted_execution_observation_provider import TrustedObservationDirectoryProvider  # noqa: E402
 
 
 def _edit(args: argparse.Namespace) -> dict[str, Any]:
@@ -66,6 +68,14 @@ def main() -> int:
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--registry", required=True)
     parser.add_argument("--workspace-root", default=str(REPO_ROOT))
+    parser.add_argument(
+        "--trusted-observation-root",
+        required=True,
+        help=(
+            "evaluator-owned gateway observation directory outside the "
+            "product workspace"
+        ),
+    )
     parser.add_argument("--evaluation-id")
     parser.add_argument("--edit-path", required=True)
     parser.add_argument("--edit-operation", choices=("append_unique", "set_integer"), required=True)
@@ -73,6 +83,9 @@ def main() -> int:
     parser.add_argument("--activate", action="store_true")
     args = parser.parse_args()
 
+    # Authentication is a precondition for the workflow, not a late report
+    # concern. Fail before PolicyRegistry.register can persist a candidate.
+    resolve_evaluator_hmac_keyring()
     workspace_root = Path(args.workspace_root).resolve()
     registry = PolicyRegistry(Path(args.registry).resolve())
     champion, challenger = _candidate(registry, _edit(args))
@@ -80,6 +93,10 @@ def main() -> int:
     executor = ObservedProductScanExecutor(
         workspace_root=workspace_root,
         operational_metrics_collector=collect_observed_scan_operational_metrics,
+    )
+    trusted_provider = TrustedObservationDirectoryProvider(
+        observation_root=Path(args.trusted_observation_root).resolve(),
+        product_workspace_root=workspace_root,
     )
     if args.activate:
         orchestrator = EvolutionOrchestrator.__new__(EvolutionOrchestrator)
@@ -90,6 +107,7 @@ def main() -> int:
             output_root=str(Path(args.output_root).resolve()),
             fixture_controller=controller,
             scan_executor=executor,
+            trusted_observation_provider=trusted_provider,
             evaluation_id=args.evaluation_id,
         )
     else:
@@ -98,6 +116,7 @@ def main() -> int:
             output_root=Path(args.output_root).resolve(),
             fixture_controller=controller,
             scan_executor=executor,
+            trusted_observation_provider=trusted_provider,
         ).run(
             champion=champion,
             challenger=challenger,

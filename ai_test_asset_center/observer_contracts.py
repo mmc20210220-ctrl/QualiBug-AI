@@ -182,35 +182,40 @@ OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
         "adapter": "http_api",
         "implemented": True,
     },
+    "entity_state": {
+        "surface": "business_state",
+        "adapter": "http_api",
+        "implemented": True,
+    },
     "before_state": {
         "surface": "business_state",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
     "after_state": {
         "surface": "business_state",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
     "final_state": {
         "surface": "business_state",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
     "barrier_timeline": {
         "surface": "concurrency_barrier",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
     "typed_assertion": {
         "surface": "contract_assertion",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
     "source_invariant": {
         "surface": "source_contract",
         "adapter": "http_api",
-        "implemented": False,
+        "implemented": True,
     },
 }
 
@@ -363,6 +368,107 @@ def _identity_fingerprints(value: Any) -> set[str]:
     return result
 
 
+def _server_managed_field(value: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+    return normalized in {
+        "createdat",
+        "updatedat",
+        "createdtime",
+        "updatedtime",
+        "modifiedat",
+        "modifiedtime",
+        "timestamp",
+    }
+
+
+def _without_server_managed_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_server_managed_fields(child)
+            for key, child in sorted(value.items())
+            if not _server_managed_field(key)
+        }
+    if isinstance(value, list):
+        return sorted(
+            (_without_server_managed_fields(child) for child in value),
+            key=_canonical,
+        )
+    return value
+
+
+def _entity_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        for key in ("records", "data", "items", "results", "rows"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                return [dict(item) for item in nested if isinstance(item, dict)]
+        return [dict(value)]
+    return []
+
+
+def _entity_identity_key(entity: dict[str, Any]) -> str:
+    scalar_identities: list[tuple[str, Any]] = []
+    for key, child in entity.items():
+        normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+        if isinstance(child, (str, int, float)) and str(child).strip():
+            if normalized_key in {"id", "uuid", "key"}:
+                scalar_identities.append((normalized_key, child))
+    if not scalar_identities:
+        fallback_identities = []
+        for key, child in entity.items():
+            normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+            if (
+                normalized_key.endswith("_id")
+                and isinstance(child, (str, int, float))
+                and str(child).strip()
+            ):
+                fallback_identities.append((normalized_key, child))
+        if len(fallback_identities) == 1:
+            scalar_identities = fallback_identities
+    if not scalar_identities:
+        return ""
+    key, child = sorted(
+        scalar_identities,
+        key=lambda item: ({"id": 0, "uuid": 1, "key": 2}.get(item[0], 3), item[0]),
+    )[0]
+    return _fingerprint({"key": key, "value": child})
+
+
+def _business_field_change_count(before_body: Any, after_body: Any) -> int:
+    before_rows = {
+        key: _without_server_managed_fields(row)
+        for row in _entity_rows(before_body)
+        for key in [_entity_identity_key(row)]
+        if key
+    }
+    after_rows = {
+        key: _without_server_managed_fields(row)
+        for row in _entity_rows(after_body)
+        for key in [_entity_identity_key(row)]
+        if key
+    }
+    shared_keys = set(before_rows).intersection(after_rows)
+    if shared_keys:
+        return sum(
+            1
+            for key in shared_keys
+            if _canonical(before_rows[key]) != _canonical(after_rows[key])
+        )
+    before_clean = _without_server_managed_fields(before_body)
+    after_clean = _without_server_managed_fields(after_body)
+    if (
+        not before_rows
+        and not after_rows
+        and isinstance(before_clean, (dict, list))
+        and isinstance(after_clean, (dict, list))
+        and _canonical(before_clean) != _canonical(after_clean)
+    ):
+        return 1
+    return 0
+
+
 def observe_authorization_comparison(
     *,
     control: dict[str, Any],
@@ -431,6 +537,21 @@ def observe_authorization_comparison(
             base_evidence.update({
                 "owner_can_access": True,
                 "viewer_can_access": False,
+                "leak_detected": False,
+            })
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="OBSERVED",
+                evidence=base_evidence,
+            )
+        if _is_success(treatment_row) and int(treatment_effect or 0) == 0:
+            base_evidence.update({
+                "same_resource_proven": True,
+                "resource_match_basis": "source_grounded_business_effect_absence",
+                "owner_can_access": True,
+                "viewer_can_access": False,
+                "viewer_request_accepted": True,
+                "viewer_business_effect_observed": False,
                 "leak_detected": False,
             })
             return _receipt(
@@ -636,10 +757,17 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
         return {}, "BUSINESS_EFFECT_BODY_UNSUPPORTED"
     before_ids = _identity_fingerprints(before.get("body"))
     after_ids = _identity_fingerprints(after.get("body"))
+    identity_effect_count = len(after_ids - before_ids)
+    business_field_change_count = _business_field_change_count(
+        before.get("body"),
+        after.get("body"),
+    )
     return {
         "before_identity_count": len(before_ids),
         "after_identity_count": len(after_ids),
-        "effect_count": len(after_ids - before_ids),
+        "identity_effect_count": identity_effect_count,
+        "business_field_change_count": business_field_change_count,
+        "effect_count": identity_effect_count + business_field_change_count,
         "before_fingerprint": _fingerprint(before.get("body")),
         "after_fingerprint": _fingerprint(after.get("body")),
     }, ""
@@ -711,6 +839,8 @@ def _observe_business_effect(
         )
     evidence.update({
         "effect_count": selected["effect_count"],
+        "identity_effect_count": selected["identity_effect_count"],
+        "business_field_change_count": selected["business_field_change_count"],
         "before_identity_count": selected["before_identity_count"],
         "after_identity_count": selected["after_identity_count"],
         "before_fingerprint": selected["before_fingerprint"],
@@ -719,6 +849,425 @@ def _observe_business_effect(
     })
     return _receipt(
         observer_id="business_effect",
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
+def _observe_entity_state(execution_steps: list[dict[str, Any]]) -> dict[str, Any]:
+    write_steps = [
+        step
+        for step in execution_steps
+        if isinstance(step, dict)
+        and _text(step.get("phase")) in {"control", "treatment"}
+        and _text(step.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and _dict(step.get("governance_receipt"))
+    ]
+    evidence: dict[str, Any] = {
+        "http_statuses": [_response_status(step) for step in write_steps],
+        "entity_state_observed": False,
+        "state_change_count": 0,
+    }
+    if not write_steps:
+        return _receipt(
+            observer_id="entity_state",
+            status="INDETERMINATE",
+            reason_code="ENTITY_STATE_WRITE_MISSING",
+            evidence=evidence,
+        )
+
+    state_windows: list[dict[str, Any]] = []
+    for step in write_steps:
+        window, reason = _effect_window([step])
+        if reason:
+            return _receipt(
+                observer_id="entity_state",
+                status="INDETERMINATE",
+                reason_code=reason.replace("BUSINESS_EFFECT", "ENTITY_STATE"),
+                evidence=evidence,
+            )
+        state_changed = window["before_fingerprint"] != window["after_fingerprint"]
+        state_windows.append({
+            "phase": _text(step.get("phase")),
+            "step_id": _text(step.get("step_id")),
+            "before_identity_count": window["before_identity_count"],
+            "after_identity_count": window["after_identity_count"],
+            "effect_count": window["effect_count"],
+            "before_fingerprint": window["before_fingerprint"],
+            "after_fingerprint": window["after_fingerprint"],
+            "state_changed": state_changed,
+        })
+
+    evidence.update({
+        "entity_state_observed": True,
+        "state_change_count": sum(1 for row in state_windows if row["state_changed"]),
+        "effect_count": sum(int(row["effect_count"]) for row in state_windows),
+        "state_windows": state_windows,
+    })
+    return _receipt(
+        observer_id="entity_state",
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
+_STATE_FIELD_NAMES = {
+    "state",
+    "status",
+    "stage",
+    "phase",
+    "lifecycle_state",
+    "workflow_state",
+    "order_state",
+    "order_status",
+    "payment_state",
+    "payment_status",
+    "resource_state",
+    "resource_status",
+}
+
+
+def _normalized_field_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", _text(value).lower()).strip("_")
+
+
+def _state_field_priority(field_name: str) -> int:
+    normalized = _normalized_field_name(field_name)
+    if normalized in _STATE_FIELD_NAMES:
+        return 0
+    if normalized.endswith("_state") or normalized.endswith("_status"):
+        return 1
+    return 2
+
+
+def _extract_state_value(value: Any) -> tuple[str, str]:
+    candidates: list[tuple[int, str, str]] = []
+    for row in _entity_rows(value):
+        for key, child in row.items():
+            normalized_key = _normalized_field_name(key)
+            if normalized_key not in _STATE_FIELD_NAMES and not (
+                normalized_key.endswith("_state")
+                or normalized_key.endswith("_status")
+            ):
+                continue
+            if isinstance(child, (str, int, float, bool)) and _text(child):
+                candidates.append((_state_field_priority(str(key)), str(key), _text(child)))
+    if not candidates:
+        return "", ""
+    selected = sorted(candidates, key=lambda item: (item[0], item[1], item[2]))[0]
+    same_field_values = {
+        value
+        for priority, field, value in candidates
+        if priority == selected[0] and field == selected[1]
+    }
+    if len(same_field_values) != 1:
+        return "", selected[1]
+    return selected[2], selected[1]
+
+
+def _main_governed_write_steps(execution_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        step
+        for step in execution_steps
+        if isinstance(step, dict)
+        and _text(step.get("phase")) in {"control", "treatment"}
+        and _text(step.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and _dict(step.get("governance_receipt"))
+    ]
+
+
+def _state_snapshot_evidence(
+    step: dict[str, Any],
+    *,
+    snapshot_key: str,
+    state_key: str,
+) -> tuple[dict[str, Any], str]:
+    governance = _dict(step.get("governance_receipt"))
+    snapshot = _dict(governance.get(snapshot_key))
+    evidence: dict[str, Any] = {
+        "snapshot_phase": snapshot_key,
+        "source_step_id": _text(step.get("step_id")),
+        "source_phase": _text(step.get("phase")),
+        "source_operation_ref": _text(step.get("operation_ref")),
+        "snapshot_http_status": _raw_http_status(snapshot),
+        "snapshot_body_fingerprint": _fingerprint(snapshot.get("body")),
+        "snapshot_identity_count": len(_identity_fingerprints(snapshot.get("body"))),
+    }
+    if not (200 <= _raw_http_status(snapshot) < 300):
+        return evidence, "STATE_SNAPSHOT_OBSERVATION_FAILED"
+    if not isinstance(snapshot.get("body"), (dict, list)):
+        return evidence, "STATE_SNAPSHOT_BODY_UNSUPPORTED"
+    state_value, state_field = _extract_state_value(snapshot.get("body"))
+    evidence["state_field"] = state_field
+    evidence[state_key] = state_value
+    if not state_value:
+        return evidence, "STATE_VALUE_MISSING"
+    return evidence, ""
+
+
+def _observe_state_snapshot(
+    observer_id: str,
+    execution_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    main_steps = _main_governed_write_steps(execution_steps)
+    if not main_steps:
+        return _receipt(
+            observer_id=observer_id,
+            status="INDETERMINATE",
+            reason_code="STATE_SNAPSHOT_WRITE_MISSING",
+            evidence={"write_step_count": 0},
+        )
+    if observer_id == "before_state":
+        step = main_steps[0]
+        snapshot_key = "before"
+        state_key = "before_state"
+    elif observer_id == "after_state":
+        step = main_steps[-1]
+        snapshot_key = "after"
+        state_key = "after_state"
+    elif observer_id == "final_state":
+        step = main_steps[-1]
+        snapshot_key = "after"
+        state_key = "final_state"
+    else:
+        raise ValueError(f"state_snapshot_observer_invalid:{observer_id}")
+    evidence, reason = _state_snapshot_evidence(
+        step,
+        snapshot_key=snapshot_key,
+        state_key=state_key,
+    )
+    evidence["write_step_count"] = len(main_steps)
+    evidence["cleanup_phase_excluded"] = True
+    if reason:
+        return _receipt(
+            observer_id=observer_id,
+            status="INDETERMINATE",
+            reason_code=reason,
+            evidence=evidence,
+        )
+    return _receipt(
+        observer_id=observer_id,
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
+def _raw_barrier_events(observations: dict[str, Any]) -> list[Any]:
+    for key in ("barrier_timeline", "barrier_events", "concurrency_timeline"):
+        value = observations.get(key)
+        if value is not None:
+            return _list(value)
+    return []
+
+
+def _event_time_ms(event: dict[str, Any], index: int) -> int:
+    for key in ("at_ms", "timestamp_ms", "offset_ms", "elapsed_ms"):
+        value = event.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return index
+    return index
+
+
+def _normalize_barrier_timeline(events: list[Any]) -> tuple[list[dict[str, Any]], str]:
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(events):
+        if not isinstance(raw, dict):
+            return [], "BARRIER_EVENT_INVALID"
+        event_name = _text(raw.get("event") or raw.get("phase") or raw.get("kind")).lower()
+        participant = _text(
+            raw.get("participant")
+            or raw.get("slot")
+            or raw.get("actor_ref")
+            or raw.get("request_id")
+        )
+        if not event_name:
+            return [], "BARRIER_EVENT_INVALID"
+        normalized.append({
+            "event": event_name,
+            "participant": participant,
+            "at_ms": _event_time_ms(raw, index),
+        })
+    if not normalized:
+        return [], "BARRIER_TIMELINE_MISSING"
+    return sorted(normalized, key=lambda item: (int(item["at_ms"]), item["event"], item["participant"])), ""
+
+
+def _observe_barrier_timeline(observations: dict[str, Any]) -> dict[str, Any]:
+    raw_events = _raw_barrier_events(observations)
+    events, reason = _normalize_barrier_timeline(raw_events)
+    if reason:
+        return _receipt(
+            observer_id="barrier_timeline",
+            status="INDETERMINATE",
+            reason_code=reason,
+            evidence={"event_count": 0},
+        )
+
+    release_events = [
+        event
+        for event in events
+        if event["event"] in {"release", "barrier_release", "start", "released"}
+    ]
+    participants = sorted({
+        event["participant"]
+        for event in events
+        if event["participant"] and event["participant"].lower() != "all"
+    })
+    evidence = {
+        "event_count": len(events),
+        "release_event_count": len(release_events),
+        "participant_count": len(participants),
+        "barrier_released": bool(release_events),
+        "timeline_fingerprint": _fingerprint(events),
+        "participants_fingerprint": _fingerprint(participants),
+        "first_event": dict(events[0]),
+        "last_event": dict(events[-1]),
+    }
+    if not release_events:
+        return _receipt(
+            observer_id="barrier_timeline",
+            status="INDETERMINATE",
+            reason_code="BARRIER_RELEASE_MISSING",
+            evidence=evidence,
+        )
+    if len(participants) < 2:
+        return _receipt(
+            observer_id="barrier_timeline",
+            status="INDETERMINATE",
+            reason_code="BARRIER_PARTICIPANT_COUNT_INSUFFICIENT",
+            evidence=evidence,
+        )
+    return _receipt(
+        observer_id="barrier_timeline",
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
+_TYPED_ASSERTION_KINDS = {
+    "authorization",
+    "cardinality",
+    "concurrency",
+    "concurrency_final_invariant",
+    "conservation",
+    "cross_surface_consistency",
+    "delta",
+    "equality",
+    "eventual_consistency",
+    "http_status",
+    "http_status_class",
+    "idempotency",
+    "idempotency_effect",
+    "isolation",
+    "json_path_compare",
+    "json_path_exists",
+    "json_path_type",
+    "owner_tenant_visibility",
+    "privacy",
+    "state",
+    "state_transition",
+    "temporal",
+    "validation",
+    "visibility",
+}
+
+
+def _primary_assertion(experiment: dict[str, Any]) -> dict[str, Any]:
+    return _dict(
+        _list(_dict(experiment).get("assertions"))[0]
+        if _list(_dict(experiment).get("assertions"))
+        else {}
+    )
+
+
+def _observe_typed_assertion(experiment: dict[str, Any]) -> dict[str, Any]:
+    assertion = _primary_assertion(experiment)
+    kind = _text(assertion.get("kind") or assertion.get("type"))
+    assertion_id = _text(assertion.get("assertion_id") or assertion.get("id"))
+    evidence = {
+        "assertion_id": assertion_id,
+        "assertion_kind": kind,
+        "typed_assertion": False,
+        "property_fingerprint": _fingerprint(_dict(assertion.get("property"))),
+        "expected_from": _text(assertion.get("expected_from")),
+    }
+    if not assertion:
+        return _receipt(
+            observer_id="typed_assertion",
+            status="INDETERMINATE",
+            reason_code="TYPED_ASSERTION_MISSING",
+            evidence=evidence,
+        )
+    if kind not in _TYPED_ASSERTION_KINDS:
+        return _receipt(
+            observer_id="typed_assertion",
+            status="INDETERMINATE",
+            reason_code="TYPED_ASSERTION_UNSUPPORTED",
+            evidence=evidence,
+        )
+    evidence["typed_assertion"] = True
+    return _receipt(
+        observer_id="typed_assertion",
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
+def _source_refs_from_experiment(experiment: dict[str, Any], assertion: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = [
+        dict(item)
+        for item in _list(_dict(experiment).get("source_refs"))
+        if isinstance(item, dict)
+    ]
+    refs.extend(
+        dict(item)
+        for item in _list(_dict(assertion).get("source_refs"))
+        if isinstance(item, dict)
+    )
+    deduped: dict[str, dict[str, Any]] = {}
+    for ref in refs:
+        key = _fingerprint(ref)
+        deduped.setdefault(key, ref)
+    return list(deduped.values())
+
+
+def _observe_source_invariant(experiment: dict[str, Any]) -> dict[str, Any]:
+    assertion = _primary_assertion(experiment)
+    prop = _dict(assertion.get("property"))
+    invariant_ref = _text(
+        prop.get("invariant_ref")
+        or assertion.get("invariant_ref")
+        or prop.get("rule_ref")
+        or assertion.get("rule_ref")
+    )
+    expression = prop.get("expression") or assertion.get("expression")
+    source_refs = _source_refs_from_experiment(experiment, assertion)
+    evidence = {
+        "invariant_ref": invariant_ref,
+        "expression_fingerprint": _fingerprint(expression),
+        "source_ref_count": len(source_refs),
+        "source_ref_fingerprints": [_fingerprint(ref) for ref in source_refs],
+    }
+    if not invariant_ref and not expression:
+        return _receipt(
+            observer_id="source_invariant",
+            status="INDETERMINATE",
+            reason_code="SOURCE_INVARIANT_REF_MISSING",
+            evidence=evidence,
+        )
+    if not source_refs:
+        return _receipt(
+            observer_id="source_invariant",
+            status="INDETERMINATE",
+            reason_code="SOURCE_INVARIANT_SOURCE_REF_MISSING",
+            evidence=evidence,
+        )
+    return _receipt(
+        observer_id="source_invariant",
         status="OBSERVED",
         evidence=evidence,
     )
@@ -796,6 +1345,29 @@ def observe_experiment_requirements(
             )
         elif observer_id == "business_effect":
             receipt = business_effect_receipt
+        elif observer_id == "entity_state":
+            receipt = _observe_entity_state(
+                [
+                    step
+                    for step in _list(evidence.get("execution_steps"))
+                    if isinstance(step, dict)
+                ],
+            )
+        elif observer_id in {"before_state", "after_state", "final_state"}:
+            receipt = _observe_state_snapshot(
+                observer_id,
+                [
+                    step
+                    for step in _list(evidence.get("execution_steps"))
+                    if isinstance(step, dict)
+                ],
+            )
+        elif observer_id == "barrier_timeline":
+            receipt = _observe_barrier_timeline(evidence)
+        elif observer_id == "typed_assertion":
+            receipt = _observe_typed_assertion(exp)
+        elif observer_id == "source_invariant":
+            receipt = _observe_source_invariant(exp)
         else:
             receipt = _receipt(
                 observer_id=observer_id,

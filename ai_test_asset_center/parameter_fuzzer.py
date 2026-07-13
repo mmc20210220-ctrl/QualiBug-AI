@@ -12,8 +12,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
+from .disposable_identity_materializer import (
+    disposable_identity_nonce,
+    has_disposable_identity_anchor,
+    materialize_disposable_identity_fields,
+)
 from .real_id_resolver import (
     QUALIBUG_UNRESOLVED_ID,
     extract_first_entity_id,
@@ -24,6 +29,11 @@ from .real_id_resolver import (
 
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_SENSITIVE_FIELD_TOKENS = ("password", "token", "secret", "credential", "authorization", "cookie", "api_key", "apikey")
+
+
+def _as_response_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 class ParameterFuzzer:
@@ -37,9 +47,16 @@ class ParameterFuzzer:
         "amount": ["-1", "0", "-0.01"],
     }
 
-    def __init__(self, base_url: str, *, allow_write: bool = False) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        allow_write: bool = False,
+        governed_write_executor: Callable[..., dict[str, Any]] | None = None,
+    ) -> None:
         self.base_url = str(base_url or "").rstrip("/")
         self.allow_write = bool(allow_write)
+        self._governed_write_executor = governed_write_executor
         self._token = ""
         self._tokens: dict[str, str] = {}
         self._real_ids: dict[tuple[str, str], str] = {}
@@ -147,7 +164,10 @@ class ParameterFuzzer:
         if not isinstance(template, dict) or not template:
             return []
         path = str(route.get("path") or "")
+        if self._governed_write_executor is None:
+            raise RuntimeError("governed_write_executor_required")
         findings: list[dict[str, Any]] = []
+        method = str(route.get("method") or "POST").upper()
         for name in self._declared_params(route, query_only=False)[:3]:
             if name not in template:
                 continue
@@ -160,10 +180,118 @@ class ParameterFuzzer:
             for value in variants[:max(1, max_variants)]:
                 body = dict(template)
                 body[name] = value
-                status, response, elapsed = self._call(str(route.get("method") or "POST").upper(), path, body, token=self._token)
+                materialized_fields: list[str] = []
+                if has_disposable_identity_anchor(body):
+                    nonce = disposable_identity_nonce("parameter_fuzzer", method, path, name, value)
+                    body, materialized_fields = materialize_disposable_identity_fields(
+                        body,
+                        nonce,
+                        skip_keys={name},
+                    )
+                status, response, elapsed, trace = self._governed_write_call(method, path, body, route)
                 if status >= 500:
-                    findings.append(self._finding(str(route.get("method") or "POST").upper(), path, status, response, elapsed, "server_error_under_disposable_sandbox_mutation", route))
+                    finding = self._finding(
+                        method,
+                        path,
+                        status,
+                        response,
+                        elapsed,
+                        "server_error_under_disposable_sandbox_mutation",
+                        route,
+                        request_body=body,
+                        trace=trace,
+                    )
+                    sandbox_write = trace.get("sandbox_write") if isinstance(trace, dict) else {}
+                    if isinstance(sandbox_write, dict) and sandbox_write:
+                        finding["evidence"]["sandbox_write"] = sandbox_write
+                    audit_path = str((sandbox_write or {}).get("audit_path") or trace.get("audit_path") or "")
+                    if audit_path:
+                        finding["evidence"]["audit_path"] = audit_path
+                    if materialized_fields:
+                        finding["evidence"]["disposable_identity_materialization"] = {
+                            "mutated_field": name,
+                            "materialized_fields": materialized_fields,
+                        }
+                    findings.append(finding)
         return findings
+
+    def _governed_write_call(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any],
+        route: dict[str, Any],
+    ) -> tuple[int, Any, float, dict[str, Any]]:
+        if self._governed_write_executor is None:
+            raise RuntimeError("governed_write_executor_required")
+        started = time.perf_counter()
+        result = self._governed_write_executor(
+            method=method,
+            path=path,
+            body=dict(body),
+            route=dict(route),
+            token=self._token,
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("governed_write_executor_invalid_result")
+        trace = result.get("trace") if isinstance(result.get("trace"), dict) else result
+        status = self._governed_status(result, trace)
+        response = result.get("response")
+        if response in (None, {}) and isinstance(trace, dict):
+            response = self._governed_response(trace, method, path)
+        elapsed = float(result.get("duration_ms") or ((time.perf_counter() - started) * 1000))
+        sandbox_write = trace.get("sandbox_write") if isinstance(trace, dict) else {}
+        audit_path = str(result.get("audit_path") or (sandbox_write or {}).get("audit_path") or "")
+        self.execution_receipts.append({
+            "method": method,
+            "path": path,
+            "status": int(status),
+            "duration_ms": elapsed,
+            "governed": True,
+            "audit_path": audit_path,
+            "sandbox_status": str((sandbox_write or {}).get("status") or ""),
+        })
+        return int(status), response if response is not None else {}, elapsed, trace if isinstance(trace, dict) else {}
+
+    @staticmethod
+    def _governed_status(result: dict[str, Any], trace: dict[str, Any]) -> int:
+        for value in (
+            result.get("status"),
+            _as_response_dict(result.get("response")).get("status_code"),
+            _as_response_dict(result.get("response")).get("status"),
+        ):
+            try:
+                status = int(value or 0)
+            except (TypeError, ValueError):
+                status = 0
+            if status:
+                return status
+        for step in trace.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            response = _as_response_dict(step.get("response"))
+            for value in (response.get("status_code"), response.get("status"), step.get("status")):
+                try:
+                    status = int(value or 0)
+                except (TypeError, ValueError):
+                    status = 0
+                if status:
+                    return status
+        return 0
+
+    @staticmethod
+    def _governed_response(trace: dict[str, Any], method: str, path: str) -> Any:
+        for step in trace.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("method") or "").upper() != method:
+                continue
+            if str(step.get("path") or "") != path:
+                continue
+            response = _as_response_dict(step.get("response"))
+            if "body" in response:
+                return response.get("body")
+        return {}
 
     def _write_allowed(self, route: dict[str, Any]) -> bool:
         policy = str(route.get("execution_policy") or "")
@@ -254,17 +382,78 @@ class ParameterFuzzer:
             return value[:5000]
 
     @staticmethod
-    def _finding(method: str, path: str, status: int, body: Any, elapsed: float, rule: str, route: dict[str, Any]) -> dict[str, Any]:
+    def _finding(
+        method: str,
+        path: str,
+        status: int,
+        body: Any,
+        elapsed: float,
+        rule: str,
+        route: dict[str, Any],
+        *,
+        request_body: dict[str, Any] | None = None,
+        trace: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        request_raw: dict[str, Any] = {"method": method, "path": path}
+        if request_body is not None:
+            request_raw["body"] = _redact_sensitive_payload(request_body)
+        response_raw = {"status_code": int(status), "body": _redact_sensitive_payload(body)}
+        trace_payload = trace if isinstance(trace, dict) else {}
+        sandbox_write = trace_payload.get("sandbox_write") if isinstance(trace_payload.get("sandbox_write"), dict) else {}
+        reproduction_steps = [f"{method} {path} -> HTTP {int(status)}"]
+        raw_evidence: dict[str, Any] = {
+            "has_real_evidence": True,
+            "timestamp": timestamp,
+            "request_raw": request_raw,
+            "response_raw": response_raw,
+            "execution_source": "parameter_fuzzer",
+        }
+        if sandbox_write:
+            raw_evidence["sandbox_write"] = sandbox_write
         return {
             "severity": "P1", "title": f"[参数探测] {method} {path} returned HTTP {status}",
             "category": "input_validation", "source": "parameter_fuzzer",
             "description": rule, "confidence_score": 0.7,
             "method": method, "path": path,
+            "timestamp": timestamp,
+            "execution_status": "executed",
+            "confirmation_status": "candidate",
+            "bug_status": "suspected",
+            "gate_passed": False,
+            "customer_delivery_status": "candidate",
             "evidence": {
                 "source_refs": route.get("source_refs") or route.get("document_refs") or [],
                 "calls": [{"call": f"{method} {path}", "results": {"execution": {"status": status, "body": body}}}],
                 "verifier_rule": rule,
                 "duration_ms": elapsed,
+            },
+            "raw_evidence": raw_evidence,
+            "reproduction": {
+                "method": method,
+                "path": path,
+                "is_synthetic": False,
+                "request_body": request_raw.get("body", {}),
+                "har_evidence": {
+                    "status_code": int(status),
+                    "response_body": response_raw["body"],
+                },
+                "reproduction_steps": reproduction_steps,
+            },
+            "reproduction_steps": reproduction_steps,
+            "evidence_quality": {
+                "level": "needs_evidence",
+                "score": 40,
+                "can_reproduce": False,
+            },
+            "evidence_status": {
+                "semantic_verdict": "SEMANTIC_CANDIDATE",
+                "business_evidence_status": "PENDING_EVIDENCE",
+                "final_review_status": "NEEDS_MORE_EVIDENCE",
+                "missing_requirements": [
+                    "BUSINESS_ASSERTION_REQUIRED",
+                    "CONTROL_OR_ORACLE_CONFIRMATION_REQUIRED",
+                ],
             },
         }
 
@@ -273,3 +462,18 @@ class ParameterFuzzer:
         finding["category"] = str(category or finding["category"])
         finding["severity"] = str(severity or finding["severity"])
         return finding
+
+
+def _redact_sensitive_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        rendered: dict[str, Any] = {}
+        for key, child in value.items():
+            key_l = re.sub(r"[^a-z0-9]+", "", str(key or "").lower())
+            if any(token in key_l for token in _SENSITIVE_FIELD_TOKENS):
+                rendered[str(key)] = "<REDACTED>"
+            else:
+                rendered[str(key)] = _redact_sensitive_payload(child)
+        return rendered
+    if isinstance(value, list):
+        return [_redact_sensitive_payload(child) for child in value]
+    return value

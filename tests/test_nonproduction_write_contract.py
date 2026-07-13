@@ -187,6 +187,11 @@ def test_nonproduction_write_executes_once_and_records_cleanup(tmp_path: Path, m
         project="project",
         runtime_contract=_runtime("pre-release"),
         campaign_id="campaign-1",
+        documented_routes=[
+            {"method": "GET", "path": "/source-derived-resources"},
+            {"method": "POST", "path": "/source-derived-resources"},
+            {"method": "DELETE", "path": "/source-derived-resources/{id}"},
+        ],
         execute_fn=execute,
     )
 
@@ -301,8 +306,8 @@ def test_empty_body_password_reset_probe_does_not_require_disposable_fixture(tmp
     assert concrete == "identity_mutation_requires_disposable_fixture"
 
 
-def test_documented_demo_account_password_reset_is_scrubbed_not_hard_blocked(tmp_path: Path) -> None:
-    """Demo-account examples in API docs must not permanently block authz probes."""
+def test_password_reset_scrubs_protected_identity_then_blocks_without_compensation(tmp_path: Path) -> None:
+    """Protected examples are scrubbed, but irreversible writes still fail closed."""
     accounts = tmp_path / "platform_inputs" / "project"
     accounts.mkdir(parents=True)
     (accounts / "test_accounts.json").write_text(
@@ -360,10 +365,10 @@ def test_documented_demo_account_password_reset_is_scrubbed_not_hard_blocked(tmp
         execute_fn=_execute,
     )
 
-    assert calls, result
-    assert "buyer01@example.com" not in json.dumps(calls[0]["body"])
-    assert result.get("sandbox_write", {}).get("status") != "blocked"
-    assert result["steps"][0]["status"] == 200
+    assert calls == []
+    assert "buyer01@example.com" not in json.dumps(scenario.steps[0].body_template)
+    assert result["sandbox_write"]["status"] == "blocked"
+    assert result["sandbox_write"]["reason"] == "write_cleanup_operation_not_declared"
 
 
 def test_created_resource_identity_uses_source_path_and_generic_id_suffix() -> None:
@@ -599,6 +604,136 @@ def test_post_cleanup_uses_documented_compensate_action_when_delete_missing(monk
     assert calls == [("POST", "https://target.invalid/api/orders/ord-42/cancel")]
 
 
+def test_patch_cleanup_restores_only_mutated_fields_from_collection_snapshot(monkeypatch) -> None:
+    from ai_test_asset_center.sandbox_write_executor import _cleanup_after_write
+
+    calls: list[dict[str, object]] = []
+
+    def request(method: str, url: str, **kwargs):
+        calls.append({"method": method, "url": url, "body": kwargs.get("body")})
+        return {"status": 200, "body": {"id": "item-1", "qty": 2}, "headers": {}}
+
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor._http_request", request)
+
+    result = _cleanup_after_write(
+        method="PATCH",
+        path="/api/cart/items/item-1",
+        base_url="https://target.invalid",
+        token="test-token",
+        before_body=[
+            {"id": "item-1", "qty": 2, "title": "keep"},
+            {"id": "item-2", "qty": 9, "title": "other"},
+        ],
+        request_body={"qty": 7},
+        write_body={"id": "item-1", "qty": 7, "title": "keep"},
+        documented_routes=[
+            {"method": "GET", "path": "/api/cart/items"},
+            {"method": "PATCH", "path": "/api/cart/items/{id}"},
+        ],
+    )
+
+    assert result["status"] == "completed"
+    assert result["strategy"] == "restore_before_snapshot"
+    assert calls == [{
+        "method": "PATCH",
+        "url": "https://target.invalid/api/cart/items/item-1",
+        "body": {"qty": 2},
+    }]
+
+
+def test_patch_cleanup_uses_documented_nested_identity_and_observed_diff(monkeypatch) -> None:
+    from ai_test_asset_center.sandbox_write_executor import _cleanup_after_write
+
+    calls: list[dict[str, object]] = []
+
+    def request(method: str, url: str, **kwargs):
+        calls.append({"method": method, "url": url, "body": kwargs.get("body")})
+        return {"status": 200, "body": {"id": "user-1", "balance": "25.00"}, "headers": {}}
+
+    monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor._http_request", request)
+
+    result = _cleanup_after_write(
+        method="PATCH",
+        path="/api/users/admin/users/user-1/balance",
+        base_url="https://target.invalid",
+        token="test-token",
+        before_body={"records": [
+            {"id": "user-1", "balance": "25.00", "email": "one@example.invalid"},
+            {"id": "user-2", "balance": "90.00", "email": "two@example.invalid"},
+        ]},
+        request_body={"delta": 100, "reason": "source-declared adjustment"},
+        write_body={"id": "user-1", "balance": "125.00", "email": "one@example.invalid"},
+        documented_routes=[
+            {"method": "GET", "path": "/api/users/admin/search"},
+            {"method": "PATCH", "path": "/api/users/admin/users/{id}/balance"},
+        ],
+    )
+
+    assert result["status"] == "completed"
+    assert calls == [{
+        "method": "PATCH",
+        "url": "https://target.invalid/api/users/admin/users/user-1/balance",
+        "body": {"balance": "25.00"},
+    }]
+
+
+def test_accepted_patch_with_unchanged_observer_needs_no_restore(tmp_path: Path, monkeypatch) -> None:
+    observed = {"records": [{"id": "item-1", "qty": 2}]}
+    cleanup_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        lambda *args, **kwargs: {"status": 200, "body": observed, "headers": {}},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._cleanup_after_write",
+        lambda **kwargs: cleanup_calls.append(dict(kwargs)) or {"status": "failed"},
+    )
+    scenario = SimpleNamespace(
+        id="accepted-noop-patch",
+        actor_token="test-token",
+        actor_role="tester",
+        behavior_slice_id="slice-accepted-noop-patch",
+        execution_policy="approved_sandbox_write",
+        steps=[SimpleNamespace(
+            action="patch",
+            api_method="PATCH",
+            api_path="/api/items/item-1",
+            body_template={},
+        )],
+    )
+
+    result = execute_with_sandbox_write(
+        scenario,
+        "https://target.invalid",
+        root=tmp_path,
+        project="project",
+        runtime_contract=_runtime("qa"),
+        documented_routes=[
+            {"method": "GET", "path": "/api/items"},
+            {"method": "PATCH", "path": "/api/items/{id}"},
+        ],
+        execute_fn=lambda *args, **kwargs: {
+            "steps": [{
+                "action": "patch",
+                "method": "PATCH",
+                "path": "/api/items/item-1",
+                "status": 200,
+                "response": {"status": 200, "body": {"id": "item-1", "qty": 2}},
+            }],
+            "errors": [],
+        },
+    )
+
+    assert cleanup_calls == []
+    assert result["sandbox_write"]["status"] == "completed"
+    assert result["sandbox_write"]["cleanup"] == {
+        "status": "not_required",
+        "strategy": "accepted_write_observer_unchanged",
+        "receipt_ref": "/api/items/item-1",
+    }
+
+
 def test_verb_terminal_post_is_action_style_not_create_without_identity() -> None:
     from ai_test_asset_center.sandbox_write_executor import _cleanup_after_write
 
@@ -616,12 +751,13 @@ def test_verb_terminal_post_is_action_style_not_create_without_identity() -> Non
     assert result["warning"] == "action_style_write_no_created_resource"
 
 
-def test_non_reversible_cleanup_never_reports_completed_lifecycle(tmp_path: Path, monkeypatch) -> None:
+def test_post_without_documented_compensation_is_blocked_before_transport(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         "ai_test_asset_center.sandbox_write_executor._http_request",
         lambda *args, **kwargs: {"status": 200, "body": {}, "headers": {}},
     )
     scenario = _scenario()
+    calls: list[str] = []
     result = execute_with_sandbox_write(
         scenario,
         "https://target.invalid",
@@ -632,7 +768,7 @@ def test_non_reversible_cleanup_never_reports_completed_lifecycle(tmp_path: Path
             {"method": "GET", "path": "/source-derived-resources"},
             {"method": "POST", "path": "/source-derived-resources"},
         ],
-        execute_fn=lambda *args, **kwargs: {
+        execute_fn=lambda *args, **kwargs: calls.append("transport") or {
             "steps": [
                 {
                     "method": "POST",
@@ -645,8 +781,10 @@ def test_non_reversible_cleanup_never_reports_completed_lifecycle(tmp_path: Path
         },
     )
 
-    assert result["sandbox_write"]["cleanup"]["status"] == "not_reversible"
-    assert result["sandbox_write"]["status"] == "cleanup_incomplete"
+    assert calls == []
+    assert result["sandbox_write"]["status"] == "blocked"
+    assert result["sandbox_write"]["reason"] == "write_cleanup_operation_not_declared"
+    assert result["steps"][0]["execution_blocked"] is True
 
 
 def test_native_login_write_uses_governed_observer_token_for_snapshots_and_cleanup(
@@ -689,6 +827,7 @@ def test_native_login_write_uses_governed_observer_token_for_snapshots_and_clean
         documented_routes=[
             {"method": "GET", "path": "/api/resources"},
             {"method": "POST", "path": "/api/resources"},
+            {"method": "DELETE", "path": "/api/resources/{id}"},
         ],
         execute_fn=lambda *args, **kwargs: {
             "steps": [
@@ -1017,3 +1156,85 @@ def test_v12_executor_emits_before_and_after_hooks_for_each_runtime_write(monkey
     assert [phase for phase, _ in events] == ["before", "after", "before", "after"]
     assert events[2][1]["path"] == "/api/resources/resource-1"
     assert events[3][1]["status"] == 200
+
+
+def test_v12_bootstrap_create_materializes_disposable_identity_fields(monkeypatch) -> None:
+    import json
+    import ai_test_asset_center.v12_pipeline as v12_pipeline
+
+    class Response:
+        def __init__(self, status: int, body: dict):
+            self.status = status
+            self._body = body
+            self.headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, limit: int) -> bytes:
+            return json.dumps(self._body).encode("utf-8")
+
+    responses = [
+        Response(200, [{"id": "protected-seeded-user"}]),
+        Response(201, {"id": "disposable-user-1"}),
+        Response(200, {"id": "disposable-user-1", "status": "DISABLED"}),
+    ]
+    monkeypatch.setattr(v12_pipeline.urllib.request, "urlopen", lambda *args, **kwargs: responses.pop(0))
+    scenario = SimpleNamespace(
+        id="identity-fixture-materialization",
+        actor_token="test-token",
+        steps=[
+            SimpleNamespace(
+                action="resolve_entity_id",
+                api_method="GET",
+                api_path="/api/users/admin/search",
+                body_template={},
+                extract_from_response=["id"],
+            ),
+            SimpleNamespace(
+                action="bootstrap_create_id",
+                api_method="POST",
+                api_path="/api/auth/register",
+                body_template={
+                    "email": "new@example.com",
+                    "password": "Test@123456",
+                    "phone": "13900000000",
+                    "displayName": "Disposable User",
+                },
+                extract_from_response=["id"],
+            ),
+            SimpleNamespace(
+                action="execute_bound_write",
+                api_method="PATCH",
+                api_path="/api/auth/admin/users/{id}/status",
+                body_template={"status": "DISABLED"},
+                extract_from_response=[],
+            ),
+        ],
+    )
+    events: list[tuple[str, dict]] = []
+
+    def observer(phase: str, payload: dict):
+        events.append((phase, dict(payload)))
+        if phase == "before":
+            return sum(1 for observed_phase, _ in events if observed_phase == "before") - 1
+        return None
+
+    result = v12_pipeline._execute_scenario(
+        scenario,
+        "https://target.invalid",
+        max_retries=0,
+        write_observer=observer,
+    )
+
+    assert result["errors"] == []
+    bootstrap_body = events[0][1]["body"]
+    assert bootstrap_body["email"] != "new@example.com"
+    assert bootstrap_body["email"].startswith("qb-auto-")
+    assert bootstrap_body["email"].endswith("@qualibug.local")
+    assert bootstrap_body["phone"] != "13900000000"
+    assert str(bootstrap_body["displayName"]).startswith("qb_auto_")
+    assert events[2][1]["path"] == "/api/auth/admin/users/disposable-user-1/status"

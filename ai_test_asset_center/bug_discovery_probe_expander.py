@@ -11,7 +11,7 @@ any finding is validated.
 from pathlib import Path
 from typing import Any
 
-from .auto_test_data_factory import load_openapi_from_input
+from .openapi_spec_utils import load_openapi_from_input
 from .business_state_machine_explorer import generate_illegal_state_path_probes
 from .business_flow_combo_executor import generate_flow_probe_surrogates, compose_multistep_business_flows
 from .high_value_business_mutation_probe_generator import generate_high_value_mutation_probes

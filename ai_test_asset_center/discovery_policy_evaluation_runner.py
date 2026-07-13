@@ -17,9 +17,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Protocol
 
+from .artifact_redactor import write_json_redacted
 from .discovery_evaluation_contract import (
     EvaluationContractError,
-    EvaluationManifest,
+    POLICY_COMPARISON_AUTHENTICATION_FIELD,
+    POLICY_COMPARISON_FINGERPRINT_FIELD,
+    POLICY_COMPARISON_SCHEMA,
     aggregate_evaluation_receipts,
     assess_commercial_dataset_shape,
     build_paired_evaluation_evidence,
@@ -29,10 +32,20 @@ from .discovery_evaluation_contract import (
     persist_evaluation_receipt,
     persist_evaluation_report,
     policy_metrics_from_evaluation_reports,
+    validate_authenticated_policy_comparison,
 )
 from .discovery_mainline_contract import (
     MainlineContractError,
     validate_mainline_run_contract,
+)
+from .evaluator_receipt_auth import (
+    EvaluatorReceiptAuthError,
+    resolve_evaluator_hmac_keyring,
+    seal_evaluator_artifact,
+)
+from .evaluator_execution_attestation import (
+    ExecutionAttestationError,
+    build_execution_attestation,
 )
 from .policy_evaluation_gate import PolicyPromotionGate
 from .policy_registry import PolicyRecord, StrategyBundle
@@ -42,7 +55,9 @@ from .policy_wiring import policy_strategy_override
 SCAN_RESULT_SCHEMA = "qualibug.discovery-evaluation-scan-result.v1"
 FIXTURE_PREPARE_SCHEMA = "qualibug.governed-evaluation-fixture-prepare.v1"
 FIXTURE_CLEANUP_SCHEMA = "qualibug.governed-evaluation-fixture-cleanup.v1"
-COMPARISON_SCHEMA = "qualibug.discovery-policy-comparison.v1"
+COMPARISON_SCHEMA = POLICY_COMPARISON_SCHEMA
+COMPARISON_FINGERPRINT_FIELD = POLICY_COMPARISON_FINGERPRINT_FIELD
+COMPARISON_AUTHENTICATION_FIELD = POLICY_COMPARISON_AUTHENTICATION_FIELD
 
 
 class PolicyEvaluationRunnerError(RuntimeError):
@@ -84,6 +99,21 @@ class ObservedScanExecutor(Protocol):
         evaluation_mode: str,
         fixture_preparation_receipt: dict[str, Any],
     ) -> dict[str, Any]: ...
+
+
+class TrustedExecutionObservationProvider(Protocol):
+    def __call__(
+        self,
+        *,
+        runtime_view: dict[str, Any],
+        campaign_id: str,
+        policy_id: str,
+        policy_version: str,
+        evaluation_mode: str,
+        scan_output: dict[str, Any],
+        fixture_preparation_receipt: dict[str, Any],
+        fixture_cleanup_receipt: dict[str, Any],
+    ) -> list[dict[str, Any]]: ...
 
 
 def strategy_fingerprint(strategy: StrategyBundle) -> str:
@@ -145,11 +175,28 @@ class DiscoveryPolicyEvaluationRunner:
         output_root: Path | str,
         fixture_controller: GovernedFixtureController,
         scan_executor: ObservedScanExecutor,
+        trusted_observation_provider: TrustedExecutionObservationProvider,
+        receipt_signing_key: str | bytes | bytearray | None = None,
     ) -> None:
         self.manifest_path = Path(manifest_path).resolve()
         self.output_root = Path(output_root).resolve()
         self.fixture_controller = fixture_controller
         self.scan_executor = scan_executor
+        if not callable(trusted_observation_provider):
+            raise PolicyEvaluationRunnerError(
+                "evaluator-owned trusted observation provider is required"
+            )
+        self.trusted_observation_provider = trusted_observation_provider
+        try:
+            resolve_evaluator_hmac_keyring(receipt_signing_key)
+        except EvaluatorReceiptAuthError as exc:
+            raise PolicyEvaluationRunnerError(
+                f"evaluator receipt authentication unavailable: {exc}"
+            ) from exc
+        # Preserve ``None`` so verification can consult the full active+retired
+        # keyring. Collapsing it to the active key makes historical artifacts
+        # unverifiable immediately after rotation.
+        self.receipt_signing_key = receipt_signing_key
         self.manifest = load_evaluation_manifest(self.manifest_path)
         shape = assess_commercial_dataset_shape(self.manifest)
         if shape.get("commercial_shape_ready") is not True:
@@ -216,19 +263,24 @@ class DiscoveryPolicyEvaluationRunner:
             challenger_replay=reports["challenger_replay"],
             champion_shadow=reports["champion_shadow"],
             challenger_shadow=reports["challenger_shadow"],
+            receipt_signing_key=self.receipt_signing_key,
         )
         champion_metrics = policy_metrics_from_evaluation_reports(
-            reports["champion_replay"], reports["champion_shadow"]
+            reports["champion_replay"],
+            reports["champion_shadow"],
+            receipt_signing_key=self.receipt_signing_key,
         )
         challenger_metrics = policy_metrics_from_evaluation_reports(
-            reports["challenger_replay"], reports["challenger_shadow"]
+            reports["challenger_replay"],
+            reports["challenger_shadow"],
+            receipt_signing_key=self.receipt_signing_key,
         )
         decision = PolicyPromotionGate().evaluate(champion_metrics, challenger_metrics, evidence)
         report_refs = {
             name: str(self._report_path(evaluation_id, report))
             for name, report in reports.items()
         }
-        comparison = {
+        comparison_payload = {
             "schema_version": COMPARISON_SCHEMA,
             "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "evaluation_id": evaluation_id,
@@ -249,6 +301,18 @@ class DiscoveryPolicyEvaluationRunner:
             "promotion_decision": decision,
             "activation_performed": False,
         }
+        try:
+            comparison = seal_evaluator_artifact(
+                comparison_payload,
+                signing_key=self.receipt_signing_key,
+                domain=COMPARISON_SCHEMA,
+                fingerprint_field=COMPARISON_FINGERPRINT_FIELD,
+                authentication_field=COMPARISON_AUTHENTICATION_FIELD,
+            )
+        except EvaluatorReceiptAuthError as exc:
+            raise PolicyEvaluationRunnerError(
+                f"policy comparison authentication failed: {exc}"
+            ) from exc
         comparison_path = self._persist_comparison(comparison)
         return {**comparison, "comparison_ref": str(comparison_path)}
 
@@ -393,6 +457,46 @@ class DiscoveryPolicyEvaluationRunner:
                 "cleanup_status": "SUCCEEDED",
                 "dirty_environment": False,
             }
+            try:
+                trusted_observations = self.trusted_observation_provider(
+                    runtime_view=runtime_view,
+                    campaign_id=campaign_id,
+                    policy_id=policy.policy_id,
+                    policy_version=policy.policy_version,
+                    evaluation_mode=evaluation_mode,
+                    scan_output=scan_output,
+                    fixture_preparation_receipt=preparation,
+                    fixture_cleanup_receipt=cleanup,
+                )
+                if not isinstance(trusted_observations, list) or any(
+                    not isinstance(item, dict)
+                    for item in trusted_observations
+                ):
+                    raise PolicyEvaluationRunnerError(
+                        "trusted observation provider returned invalid data"
+                    )
+                execution_attestation = build_execution_attestation(
+                    mainline_run=dict(scan_output["mainline_run"]),
+                    obligation_attempt_ledger=dict(
+                        scan_output["obligation_attempt_ledger"]
+                    ),
+                    policy_identity={
+                        "policy_id": policy.policy_id,
+                        "policy_version": policy.policy_version,
+                        "strategy_fingerprint": strategy_fingerprint(
+                            policy.strategy
+                        ),
+                    },
+                    fixture_governance=governance,
+                    process_boundary=dict(scan_output["process_boundary"]),
+                    trusted_observations=trusted_observations,
+                    signing_key=self.receipt_signing_key,
+                )
+            except ExecutionAttestationError as exc:
+                raise PolicyEvaluationRunnerError(
+                    f"trusted execution attestation failed for "
+                    f"{target.target_id}: {exc}"
+                ) from exc
             receipt = evaluate_completed_scan(
                 self.manifest,
                 target.target_id,
@@ -400,6 +504,7 @@ class DiscoveryPolicyEvaluationRunner:
                 policy_id=policy.policy_id,
                 evaluation_mode=evaluation_mode,
                 findings=list(scan_output["findings"]),
+                delivery_occurrences=list(scan_output["delivery_occurrences"]),
                 candidates=list(scan_output["candidates"]),
                 pipeline_health=dict(scan_output["pipeline_health"]),
                 operational_metrics=dict(scan_output["operational_metrics"]),
@@ -409,16 +514,56 @@ class DiscoveryPolicyEvaluationRunner:
                     if isinstance(scan_output.get("trace_ledger"), dict)
                     else None
                 ),
+                obligation_attempt_ledger=(
+                    dict(scan_output["obligation_attempt_ledger"])
+                    if isinstance(
+                        scan_output.get("obligation_attempt_ledger"),
+                        dict,
+                    )
+                    else None
+                ),
+                mainline_run=dict(scan_output["mainline_run"]),
+                formal_count_projection=dict(
+                    scan_output["formal_count_projection"]
+                ),
+                formal_delivery_authority=dict(
+                    scan_output["formal_delivery_authority"]
+                ),
+                canonical_defect_registry=dict(
+                    scan_output["canonical_defect_registry"]
+                ),
+                defect_identity_consistency=dict(
+                    scan_output["defect_identity_consistency"]
+                ),
+                evaluator_policy_identity={
+                    "policy_id": policy.policy_id,
+                    "policy_version": policy.policy_version,
+                    "strategy_fingerprint": strategy_fingerprint(
+                        policy.strategy
+                    ),
+                },
+                process_boundary=dict(scan_output["process_boundary"]),
+                execution_attestation=execution_attestation,
+                receipt_signing_key=self.receipt_signing_key,
             )
             persist_evaluation_receipt(
                 receipt,
                 self.output_root / evaluation_id / "receipts",
+                receipt_signing_key=self.receipt_signing_key,
             )
             receipts.append(receipt)
 
-        report = aggregate_evaluation_receipts(self.manifest, receipts)
+        report = aggregate_evaluation_receipts(
+            self.manifest,
+            receipts,
+            receipt_signing_key=self.receipt_signing_key,
+        )
         path = self._report_path(evaluation_id, report)
-        persist_evaluation_report(report, path)
+        persist_evaluation_report(
+            report,
+            path,
+            receipt_signing_key=self.receipt_signing_key,
+        )
         return report
 
     def _validate_policy_pair(self, champion: PolicyRecord, challenger: PolicyRecord) -> None:
@@ -568,6 +713,33 @@ class DiscoveryPolicyEvaluationRunner:
         for field in ("findings", "candidates"):
             if not isinstance(output.get(field), list):
                 raise PolicyEvaluationRunnerError(f"scan output {field} must be a list")
+        attempt_ledger = output.get("obligation_attempt_ledger")
+        if attempt_ledger is not None and not isinstance(attempt_ledger, dict):
+            raise PolicyEvaluationRunnerError(
+                "scan output obligation_attempt_ledger must be an object"
+            )
+        if output.get("findings") and not isinstance(attempt_ledger, dict):
+            raise PolicyEvaluationRunnerError(
+                "scan output formal findings require obligation_attempt_ledger"
+            )
+        for field in (
+            "formal_count_projection",
+            "formal_delivery_authority",
+            "canonical_defect_registry",
+            "defect_identity_consistency",
+        ):
+            if not isinstance(output.get(field), dict):
+                raise PolicyEvaluationRunnerError(
+                    f"scan output {field} must be an object"
+                )
+        if not isinstance(output.get("delivery_occurrences"), list):
+            raise PolicyEvaluationRunnerError(
+                "scan output delivery_occurrences must be a list"
+            )
+        if not isinstance(output.get("process_boundary"), dict):
+            raise PolicyEvaluationRunnerError(
+                "scan output process_boundary must be an object"
+            )
         for field in ("pipeline_health", "operational_metrics"):
             if not isinstance(output.get(field), dict):
                 raise PolicyEvaluationRunnerError(f"scan output {field} must be an object")
@@ -603,6 +775,15 @@ class DiscoveryPolicyEvaluationRunner:
     def _persist_comparison(self, comparison: dict[str, Any]) -> Path:
         if comparison.get("schema_version") != COMPARISON_SCHEMA:
             raise PolicyEvaluationRunnerError("cannot persist unsupported policy comparison schema")
+        try:
+            validate_authenticated_policy_comparison(
+                comparison,
+                receipt_signing_key=self.receipt_signing_key,
+            )
+        except EvaluationContractError as exc:
+            raise PolicyEvaluationRunnerError(
+                f"policy comparison strict validation failed: {exc}"
+            ) from exc
         evaluation_id = _required_text(comparison.get("evaluation_id"), "comparison.evaluation_id")
         path = self.output_root / evaluation_id / "comparison.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -628,6 +809,7 @@ class DiscoveryPolicyEvaluationRunner:
         error: Exception,
     ) -> Path:
         created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        raw_error = str(error)
         payload = {
             "schema_version": "qualibug.discovery-policy-evaluation-failure.v1",
             "created_at_utc": created_at,
@@ -639,17 +821,18 @@ class DiscoveryPolicyEvaluationRunner:
             "challenger": self._policy_identity(challenger),
             "status": "FAILED_SAFE",
             "activation_performed": False,
+            "error_code": "POLICY_EVALUATION_FAILED",
             "error_type": type(error).__name__,
-            "error": str(error)[:1000],
+            "error": raw_error[:1000],
+            "diagnostic_fingerprint": hashlib.sha256(
+                raw_error.encode("utf-8", errors="replace")
+            ).hexdigest(),
         }
         suffix = hashlib.sha256(
             f"{time.time_ns()}:{type(error).__name__}:{error}".encode("utf-8")
         ).hexdigest()[:16]
         path = self.output_root / evaluation_id / "failures" / f"failure-{suffix}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temporary, path)
+        write_json_redacted(path, payload)
         return path
 
 
@@ -659,13 +842,17 @@ def run_observed_policy_evaluation(
     output_root: Path | str,
     fixture_controller: GovernedFixtureController,
     scan_executor: ObservedScanExecutor,
+    trusted_observation_provider: TrustedExecutionObservationProvider,
     champion: PolicyRecord,
     challenger: PolicyRecord,
     evaluation_id: str | None = None,
+    receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     return DiscoveryPolicyEvaluationRunner(
         manifest_path,
         output_root=output_root,
         fixture_controller=fixture_controller,
         scan_executor=scan_executor,
+        trusted_observation_provider=trusted_observation_provider,
+        receipt_signing_key=receipt_signing_key,
     ).run(champion=champion, challenger=challenger, evaluation_id=evaluation_id)

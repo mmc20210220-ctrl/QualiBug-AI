@@ -42,7 +42,11 @@ from .enterprise_testops_control_plane import (
     load_environment_config,
 )
 from .real_project_defect_discovery import run_real_project_discovery
-from .real_project_onboarding import ROOT, _safe_project_id, _write_json as _project_write_json
+from .project_runtime_primitives import (
+    PROJECT_ROOT as ROOT,
+    safe_project_id as _safe_project_id,
+    write_json_artifact as _project_write_json,
+)
 from .release_risk_dashboard import build_release_risk_dashboard
 from .product_ui import _icon, callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
 

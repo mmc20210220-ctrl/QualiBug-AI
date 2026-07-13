@@ -7,11 +7,14 @@ import pytest
 from ai_test_asset_center.discovery_trace_ledger import (
     DiscoveryTraceError,
     build_discovery_trace_ledger_v2,
-    migrate_trace_ledger_v1_to_v2,
+    migrate_trace_ledger_v1_to_v3,
     validate_trace_ledger,
 )
 from ai_test_asset_center.discovery_weakness_miner import mine_discovery_weaknesses
-from ai_test_asset_center.obligation_attempt_ledger import build_obligation_attempt_ledger
+from ai_test_asset_center.obligation_attempt_ledger import (
+    ObligationAttemptLedgerError,
+    build_obligation_attempt_ledger,
+)
 
 
 def _attempt_result(
@@ -72,7 +75,10 @@ def _attempt_result(
     return {
         "obligation_attempt_ledger": ledger,
         "formal_count_projection": {
-            "formal_finding_ids": [finding_id] if terminal_status == "DELIVERABLE" else [],
+            "delivery_occurrence_finding_ids": (
+                [finding_id] if terminal_status == "DELIVERABLE" else []
+            ),
+            "canonical_defect_ids": [],
         },
         "private_payload": {
             "request_body": "must-not-persist",
@@ -96,7 +102,7 @@ def _trace(result: dict, *, run_id: str = "RUN-1", target_id: str = "TARGET-1") 
 def test_trace_v2_has_one_row_per_obligation_attempt_without_raw_payloads() -> None:
     ledger = _trace(_attempt_result())
 
-    assert ledger["schema_version"] == "qualibug.discovery-trace-ledger.v2"
+    assert ledger["schema_version"] == "qualibug.discovery-trace-ledger.v3"
     assert ledger["attempt_count"] == 1
     assert {row["obligation_id"] for row in ledger["attempts"]} == {"obl-1"}
     attempt = ledger["attempts"][0]
@@ -110,7 +116,7 @@ def test_trace_v2_has_one_row_per_obligation_attempt_without_raw_payloads() -> N
     assert attempt["gate_reason_code"] == "ORACLE_NOT_VIOLATED"
     assert attempt["terminal_status"] == "REJECTED"
     assert attempt["outcome"] == "valid_success_control"
-    assert ledger["formal_finding_ids"] == []
+    assert ledger["delivery_occurrence_finding_ids"] == []
     assert ledger["redaction_contract"]["ground_truth_persisted"] is False
     serialized = json.dumps(ledger, ensure_ascii=False)
     assert "must-not-persist" not in serialized
@@ -153,13 +159,13 @@ def test_v1_migration_requires_complete_operator_mapping() -> None:
         DiscoveryTraceError,
         match="v1_migration_obligation_map_incomplete:BHV-1",
     ):
-        migrate_trace_ledger_v1_to_v2(v1, obligation_map={})
+        migrate_trace_ledger_v1_to_v3(v1, obligation_map={})
 
-    migrated = migrate_trace_ledger_v1_to_v2(
+    migrated = migrate_trace_ledger_v1_to_v3(
         v1,
         obligation_map={"BHV-1": "obl-1"},
     )
-    assert migrated["schema_version"] == "qualibug.discovery-trace-ledger.v2"
+    assert migrated["schema_version"] == "qualibug.discovery-trace-ledger.v3"
     assert migrated["migration"] == {
         "source_schema": "qualibug.discovery-trace-ledger.v1",
         "explicit": True,
@@ -211,16 +217,16 @@ def test_v1_migration_cli_writes_new_immutable_artifact(tmp_path) -> None:
         ])
 
 
-def test_formal_finding_ids_must_equal_deliverable_attempt_ids() -> None:
-    result = _attempt_result(
-        terminal_status="DELIVERABLE",
-        reason_code="",
-        finding_id="FINDING-1",
-    )
-    result["formal_count_projection"]["formal_finding_ids"] = []
-
-    with pytest.raises(DiscoveryTraceError, match="formal_finding_ids_mismatch"):
-        _trace(result)
+def test_trace_cannot_start_from_legacy_deliverable_gate() -> None:
+    with pytest.raises(
+        ObligationAttemptLedgerError,
+        match="formal_gate_v2_required:obl-1",
+    ):
+        _attempt_result(
+            terminal_status="DELIVERABLE",
+            reason_code="",
+            finding_id="FINDING-1",
+        )
 
 
 def test_weakness_miner_clusters_attempt_stage_reasons_and_dimensions() -> None:

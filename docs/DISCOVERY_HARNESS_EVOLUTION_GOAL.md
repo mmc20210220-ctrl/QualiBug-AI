@@ -61,7 +61,9 @@ Completion and product health are derived only from
 Zero selected obligations and runs whose obligations are all blocked remain
 visibly `BLOCKED`; empty findings from those runs never mean that the target is
 defect-free. Trace and weakness diagnostics consume
-`qualibug.discovery-trace-ledger.v2`, keyed by obligation attempt identity.
+`qualibug.discovery-trace-ledger.v3`, keyed by obligation attempt identity.
+V1/V2 artifacts require the explicit offline migration tool; runtime must not
+silently reinterpret an older ledger as v3.
 An approved follow-up may reopen a terminal campaign only when the prior ledger
 proves zero executed target-request receipts and only `BLOCKED`/`DEFERRED`
 terminals. Any observed request or write forbids whole-run retry.
@@ -362,6 +364,14 @@ Absolute thresholds are encoded in
 - Evaluator-private manifest, runtime redaction, immutable fingerprints, strict
   formal-defect scoring, clean-target scoring, receipts, aggregate reports, and
   paired promotion evidence are implemented and tested.
+- Receipt/report/comparison artifacts are HMAC authenticated with explicit key
+  rotation. Comparison validation reloads all four replay/shadow reports,
+  revalidates their signatures and policy/mainline identities, and recomputes
+  paired GT-free evidence and the promotion decision.
+- Product scans run in an isolated subprocess with evaluator-secret environment
+  variables removed. Real-I/O claims require a separately signed
+  `qualibug.evaluator-execution-attestation.v1` assembled only from a trusted
+  external observation provider; runtime self-reports cannot satisfy this gate.
 
 ### Gate B — Trace and weakness mining
 
@@ -377,8 +387,27 @@ Absolute thresholds are encoded in
 **Status: IMPLEMENTED (engineering readiness); commercial runs blocked on private dataset.**
 
 - Each proposal is minimal, evidence-bound, versioned, and rejects edits to frozen surfaces.
-- Champion/challenger replay and shadow execute automatically on identical frozen targets via `DiscoveryPolicyEvaluationRunner` when a commercial-shape private manifest, governed fixture controller, and observed scan executor are supplied.
+- Champion/challenger replay and shadow execute automatically on identical frozen targets via `DiscoveryPolicyEvaluationRunner` when a commercial-shape private manifest, governed fixture controller, observed scan executor, and evaluator-owned trusted observation directory are supplied.
 - Reject, promote, lineage, rollback, and post-promotion monitoring receipts are persisted by the observed promote path; default orchestrated loop still emits `AWAITING_OBSERVED_REPLAY_SHADOW` when no private manifest is available.
+
+### Phase 3 — Contract Oracle and canonical defect truth
+
+**Status: IMPLEMENTED (engineering architecture); external quality remains NOT_MEASURED.**
+
+- Contract assertions and Oracle verdicts are tri-state; missing evidence and
+  harness failures cannot become product defects.
+- Every formal occurrence must pass Customer Delivery Gate v2 and bind to the
+  obligation attempt ledger, mainline contract and evidence bundle.
+- `canonical_defect_registry.py` is the only customer-visible identity authority.
+  Canonical defect count and delivery occurrence count are separate namespaces;
+  title/history/severity/confidence dedupe paths no longer affect current product
+  counts or readiness.
+- Command center, customer report, evaluator projection, campaign API and
+  persistence consume the same canonical scope and fail closed when registry or
+  evidence persistence is missing.
+- This status does not claim improved Recall/Precision. Promotion still requires
+  fresh externally signed replay/shadow receipts and trusted execution
+  attestations.
 
 ### Gate D — Capability breakthrough
 
@@ -427,7 +456,7 @@ Bug discovery.
 
 1. **Freeze an evaluator-private commercial-shape GT dataset** (held-in + ≥3 held-out industries + clean) outside the discovery runtime; without this, Gate D stays NOT_MEASURED and discovery-rate claims are blocked.
 2. **Close the governed write cleanup / multi-write receipt gap** that currently degrades pipeline health and rejects otherwise-real findings at the customer-delivery gate — highest leverage on effective deliverable recall and FP control.
-3. **Wire observed `DiscoveryPolicyEvaluationRunner` end-to-end** from harness proposals (fixture controller + scan executor + private manifest) so challenger policies get real replay/shadow receipts instead of `AWAITING_OBSERVED_REPLAY_SHADOW`.
+3. **Deploy/configure the evaluator-owned trusted observation gateway** and wire its atomic observation packs into `DiscoveryPolicyEvaluationRunner` (fixture controller + isolated scan executor + private manifest + trusted observation root). Without this independent I/O authority, runs correctly remain `NOT_MEASURED`.
 4. **Raise runtime path binding / precondition / evidence-completion conversion** using weakness-miner signatures (`RUNTIME_PATH_BINDING_MISSING`, `PRECONDITION_NOT_MET`, `EVIDENCE_GATE_INCOMPLETE`, `REPLAY_EVIDENCE_MISSING`) — direct impact on discovery rate and reproduction rate.
 5. **Instrument unit-cost and wall-clock into every evaluation envelope** so Gate D cost improvement and promotion cost bounds are measurable rather than omitted.
 

@@ -399,6 +399,7 @@ class EvolutionOrchestrator:
         output_root: str,
         fixture_controller: object,
         scan_executor: object,
+        trusted_observation_provider: object,
         evaluation_id: str | None = None,
     ) -> dict:
         """Execute the evaluator-owned four-pass contract, then apply its gate.
@@ -420,6 +421,7 @@ class EvolutionOrchestrator:
             output_root=output_root,
             fixture_controller=fixture_controller,
             scan_executor=scan_executor,
+            trusted_observation_provider=trusted_observation_provider,
         )
         comparison = runner.run(
             champion=champion,
@@ -447,8 +449,16 @@ class EvolutionOrchestrator:
                 "candidate_status": candidate.status,
             }
 
-        self.registry.promote(candidate_policy_id, decision["reason"])
-        promoted = self.registry.promote(candidate_policy_id, decision["reason"])
+        champion_record = self.registry.promote(
+            candidate_policy_id, decision["reason"]
+        )
+        if champion_record.status != "champion":
+            raise RuntimeError("candidate_to_champion_transition_failed")
+        promoted = self.registry.promote(
+            candidate_policy_id, decision["reason"]
+        )
+        if promoted.status != "active":
+            raise RuntimeError("champion_to_active_transition_failed")
         return {
             **comparison,
             "activation_performed": True,
@@ -490,6 +500,7 @@ def run_evolution_orchestrated(
     evaluation_manifest_path: str | Path | None = None,
     evaluation_output_root: str | Path | None = None,
     workspace_root: str | Path | None = None,
+    trusted_observation_root: str | Path | None = None,
 ) -> dict:
     """Run discovery loop + evolution cycle under unified orchestration.
 
@@ -590,6 +601,9 @@ def run_evolution_orchestrated(
             from .evaluation_fixture_controller import GovernedHttpResetFixtureController
             from .observed_product_scan_executor import ObservedProductScanExecutor
             from .scan_operational_metrics import collect_observed_scan_operational_metrics
+            from .trusted_execution_observation_provider import (
+                TrustedObservationDirectoryProvider,
+            )
 
             workspace = Path(
                 str(
@@ -605,6 +619,19 @@ def run_evolution_orchestrated(
                     or (workspace / "_evaluation_runs")
                 )
             ).resolve()
+            observation_root_value = (
+                trusted_observation_root
+                or os.environ.get("QUALIBUG_TRUSTED_OBSERVATION_ROOT")
+            )
+            if not observation_root_value:
+                raise RuntimeError(
+                    "QUALIBUG_TRUSTED_OBSERVATION_ROOT is required for "
+                    "measured observed policy evaluation"
+                )
+            trusted_provider = TrustedObservationDirectoryProvider(
+                observation_root=Path(str(observation_root_value)).resolve(),
+                product_workspace_root=workspace,
+            )
             controller = GovernedHttpResetFixtureController(workspace_root=workspace)
             executor = ObservedProductScanExecutor(
                 workspace_root=workspace,
@@ -617,6 +644,7 @@ def run_evolution_orchestrated(
                     output_root=str(output_root),
                     fixture_controller=controller,
                     scan_executor=executor,
+                    trusted_observation_provider=trusted_provider,
                 )
             except Exception as exc:
                 evolution_report.setdefault("candidates", []).append({
