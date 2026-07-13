@@ -17,7 +17,7 @@ from .assertion_dsl import (
     materialize_assertion,
     validate_assertion_receipt,
 )
-from .observer_contracts import validate_observer_receipt
+from .observer_contracts_base import validate_observer_receipt
 
 
 CONTRACT_EVIDENCE_RECEIPT_SCHEMA = "qualibug.contract-evidence-receipt.v1"

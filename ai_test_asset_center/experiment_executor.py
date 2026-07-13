@@ -29,7 +29,7 @@ from .customer_delivery_gate_v2 import (
     build_delivery_execution_receipt,
     build_reproduction_receipt,
 )
-from .observer_contracts import (
+from .observer_contracts_base import (
     observe_experiment_requirements,
     validate_observer_declarations,
 )

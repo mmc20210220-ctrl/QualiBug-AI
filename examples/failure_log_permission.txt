@@ -1,7 +1,0 @@
-FAILED tests/generated_api_test.py::test_admin_orders_forbidden_for_normal_user
-AssertionError: expected status_code 403, got 200
-Request: GET /api/admin/orders
-User: alice role=user
-Response: {"items": [{"id": "o-10001", "user_id": "u-alice", "total": 128.69}]}
-Recent diff: app/services/auth.py require_admin changed
-Suspected risk: broken access control / admin bypass

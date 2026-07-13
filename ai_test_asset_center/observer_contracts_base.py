@@ -1462,3 +1462,108 @@ def observe_experiment_requirements(
             )
         receipts.append(receipt)
     return receipts
+
+
+# ── Authorization override (merged from observer_contracts.py) ──────────
+
+_original_authorization_comparison = observe_authorization_comparison
+
+
+def _dict_obs(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _text_obs(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _status_obs(value: Any) -> int:
+    row = _dict_obs(value)
+    try:
+        return int(row.get("status_code") or row.get("status") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def observe_authorization_comparison(
+    *,
+    control: dict[str, Any],
+    treatment: dict[str, Any],
+    require_same_resource: bool,
+    business_effect: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    baseline = _original_authorization_comparison(
+        control=control,
+        treatment=treatment,
+        require_same_resource=require_same_resource,
+        business_effect=business_effect,
+    )
+    control_row = _dict_obs(control)
+    treatment_row = _dict_obs(treatment)
+    if _text_obs(control_row.get("method")).upper() == "GET":
+        return baseline
+
+    effect = _dict_obs(business_effect)
+    control_effect = effect.get("control_effect_count")
+    treatment_effect = effect.get("treatment_effect_count")
+    try:
+        proven_control = (
+            effect.get("business_effect_observed") is True
+            and control_effect is not None
+            and int(control_effect) > 0
+        )
+        proven_zero_treatment_effect = (
+            treatment_effect is not None
+            and int(treatment_effect) == 0
+        )
+    except (TypeError, ValueError):
+        return baseline
+    if not (
+        proven_control
+        and proven_zero_treatment_effect
+        and 200 <= _status_obs(treatment_row) < 300
+    ):
+        return baseline
+
+    control_path = _text_obs(control_row.get("path")).split("?", 1)[0]
+    treatment_path = _text_obs(treatment_row.get("path")).split("?", 1)[0]
+    same_path = bool(control_path and control_path == treatment_path)
+    evidence = dict(_dict_obs(baseline.get("evidence")))
+    evidence.update({
+        "control_effect_count": int(control_effect),
+        "treatment_effect_count": int(treatment_effect),
+        "viewer_request_accepted": True,
+        "viewer_business_effect_observed": False,
+    })
+    if require_same_resource and not same_path:
+        evidence.update({
+            "same_resource_proven": False,
+            "resource_match_basis": "requested_resource_path_mismatch",
+            "owner_can_access": True,
+            "viewer_can_access": None,
+            "leak_detected": None,
+        })
+        return _receipt(
+            observer_id="authorization_comparison",
+            status="INDETERMINATE",
+            reason_code="SAME_RESOURCE_NOT_PROVEN",
+            evidence=evidence,
+        )
+
+    evidence.update({
+        "same_resource_proven": same_path or not require_same_resource,
+        "resource_match_basis": (
+            "same_requested_resource_path_and_explicit_deny"
+            if same_path
+            else "explicit_deny_operation_scope"
+        ),
+        "owner_can_access": True,
+        "viewer_can_access": True,
+        "leak_detected": True,
+        "authorization_failure_mode": "restricted_write_request_accepted",
+    })
+    return _receipt(
+        observer_id="authorization_comparison",
+        status="OBSERVED",
+        evidence=evidence,
+    )

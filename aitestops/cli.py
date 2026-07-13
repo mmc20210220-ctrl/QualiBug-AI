@@ -13,18 +13,12 @@ from aitestops.failure_triage import FailureTriageEngine
 from aitestops.llm_client import LLMConfig
 from aitestops.enterprise_landing import EnterpriseLandingPackager
 from aitestops.productization import ProductReadyPackager
-from aitestops.release_verifier import verify_release
-from aitestops.self_dogfood_audit import run_self_dogfood_audit
 from aitestops.playwright_offline_bundle import (
     build_playwright_offline_bundle,
     install_playwright_offline_bundle,
     verify_playwright_offline_bundle,
 )
-from ai_test_asset_center.agent_discovery_loop import build_agent_discovery_loop
-from ai_test_asset_center.agent_experiment_runner import compile_agent_experiment_pack, run_agent_experiment_pack
-from ai_test_asset_center.agent_business_flow_orchestrator import compile_agent_business_flow_pack, run_agent_business_flow_pack
 from ai_test_asset_center.cognitive_memory_graph import CognitiveMemoryGraph, export_knowledge_vault
-from ai_test_asset_center.phase91_graph_evaluation import run_phase91_context_ab
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -370,82 +364,6 @@ def cmd_bug_engine_probe_config_template(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_verify_release(args: argparse.Namespace) -> int:
-    manifest = verify_release(
-        cwd=Path(args.cwd).resolve() if args.cwd else Path.cwd(),
-        output=Path(args.out).resolve() if args.out else None,
-        include_tests=not args.skip_full_tests,
-    )
-    print(json.dumps({
-        "overall_status": manifest.get("overall_status"),
-        "generated_at_utc": manifest.get("generated_at_utc"),
-        "output": str(Path(args.out).resolve() if args.out else Path.cwd() / "PHASE91_RELEASE_MANIFEST.json"),
-        "checks": [
-            {"name": item.get("name"), "passed": item.get("passed"), "duration_seconds": item.get("duration_seconds")}
-            for item in manifest.get("checks", [])
-        ],
-    }, ensure_ascii=False, indent=2))
-    return 0 if manifest.get("overall_status") == "passed" else 1
-
-
-def cmd_agent_loop(args: argparse.Namespace) -> int:
-    root = Path(args.root).resolve() if args.root else Path.cwd()
-    report = build_agent_discovery_loop(
-        args.project,
-        root,
-        {"max_next_actions": args.max_actions, "actor": "cli_agent_loop", "environment_id": args.environment},
-    )
-    print(json.dumps({
-        "project_id": report.get("project_id"),
-        "canonical_store": report.get("canonical_store"),
-        "summary": report.get("summary"),
-        "next_best_actions": report.get("next_best_actions"),
-        "governance": report.get("governance"),
-    }, ensure_ascii=False, indent=2))
-    return 0
-
-
-def cmd_agent_experiments(args: argparse.Namespace) -> int:
-    root = Path(args.root).resolve() if args.root else Path.cwd()
-    options = {
-        "max_experiments": args.max_experiments,
-        "execute": bool(args.execute),
-        "approved_sandbox_execution": bool(args.execute),
-        "approval_id": str(args.approval_id or ""),
-    }
-    result = run_agent_experiment_pack(args.project, root, options) if args.execute else compile_agent_experiment_pack(args.project, root, options)
-    print(json.dumps({
-        "project_id": result.get("project_id"),
-        "phase": result.get("phase"),
-        "summary": result.get("summary") or (result.get("execution") or {}).get("summary"),
-        "receipt_count": result.get("receipt_count"),
-        "evidence_capture_count": result.get("evidence_capture_count"),
-        "governance": result.get("governance"),
-    }, ensure_ascii=False, indent=2))
-    return 0
-
-
-def cmd_agent_flows(args: argparse.Namespace) -> int:
-    root = Path(args.root).resolve() if args.root else Path.cwd()
-    options = {
-        "max_flows": args.max_flows,
-        "execute": bool(args.execute),
-        "approved_sandbox_execution": bool(args.execute),
-        "approval_id": str(args.approval_id or ""),
-        "environment_id": args.environment,
-    }
-    result = run_agent_business_flow_pack(args.project, root, options) if args.execute else compile_agent_business_flow_pack(args.project, root, options)
-    print(json.dumps({
-        "project_id": result.get("project_id"),
-        "phase": result.get("phase"),
-        "summary": result.get("summary") or (result.get("execution") or {}),
-        "configured_flow_count": (result.get("summary") or {}).get("configured_flow_count"),
-        "receipt_count": result.get("receipt_count"),
-        "governance": result.get("governance"),
-    }, ensure_ascii=False, indent=2))
-    return 0
-
-
 def cmd_export_knowledge_vault(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve() if args.root else Path.cwd()
     result = export_knowledge_vault(
@@ -464,32 +382,6 @@ def cmd_graph_stats(args: argparse.Namespace) -> int:
     print(json.dumps(graph.stats(), ensure_ascii=False, indent=2))
     return 0
 
-
-
-def cmd_graph_context_ab(args: argparse.Namespace) -> int:
-    root = Path(args.root).resolve() if args.root else Path.cwd()
-    result = run_phase91_context_ab(
-        args.project,
-        root,
-        environment_id=args.environment,
-        output_path=Path(args.out).resolve() if args.out else None,
-    )
-    print(json.dumps({
-        "project_id": result.get("project_id"),
-        "environment_id": result.get("environment_id"),
-        "mode": result.get("mode"),
-        "output_path": result.get("output_path"),
-        "evaluation": result.get("evaluation"),
-    }, ensure_ascii=False, indent=2))
-    return 0
-
-def cmd_self_dogfood_audit(args: argparse.Namespace) -> int:
-    report = run_self_dogfood_audit(
-        Path(args.root).resolve() if args.root else None,
-        mock_llm=not args.live_llm,
-    )
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if report.get("ok") else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -620,12 +512,6 @@ def build_parser() -> argparse.ArgumentParser:
     self_evolve.add_argument("--out", default="", help="Optional JSON output path")
     self_evolve.set_defaults(func=cmd_self_evolve)
 
-    verify = subparsers.add_parser("verify-release", help="Run release checks and write the Phase90 release manifest")
-    verify.add_argument("--cwd", default="", help="Repository root. Defaults to the current working directory")
-    verify.add_argument("--out", default="", help="Manifest output path. Defaults to PHASE90_RELEASE_MANIFEST.json")
-    verify.add_argument("--skip-full-tests", action="store_true", help="Skip the full pytest suite for a faster local smoke verification")
-    verify.set_defaults(func=cmd_verify_release)
-
     vault = subparsers.add_parser("export-knowledge-vault", help="Export the Phase91 cognitive graph as a read-only, redacted Markdown vault")
     vault.add_argument("--project", required=True, help="Project ID")
     vault.add_argument("--environment", default="test", help="Environment ID")
@@ -638,42 +524,6 @@ def build_parser() -> argparse.ArgumentParser:
     graph_stats.add_argument("--environment", default="test", help="Environment ID")
     graph_stats.add_argument("--root", default="", help="Repository root. Defaults to current working directory")
     graph_stats.set_defaults(func=cmd_graph_stats)
-
-    graph_ab = subparsers.add_parser("graph-context-ab", help="Measure Phase91 baseline document context vs typed graph context; stays shadow without replay metrics")
-    graph_ab.add_argument("--project", required=True, help="Project ID")
-    graph_ab.add_argument("--environment", default="test", help="Environment ID")
-    graph_ab.add_argument("--root", default="", help="Repository root. Defaults to current working directory")
-    graph_ab.add_argument("--out", default="", help="Optional JSON report output path")
-    graph_ab.set_defaults(func=cmd_graph_context_ab)
-
-    dogfood = subparsers.add_parser("self-dogfood-audit", help="Run QualiBug against its own private product flows")
-    dogfood.add_argument("--root", default="", help="Optional isolated runtime root. Defaults to a temporary directory")
-    dogfood.add_argument("--live-llm", action="store_true", help="Use the configured live LLM provider instead of a mocked health response")
-    dogfood.set_defaults(func=cmd_self_dogfood_audit)
-
-    loop = subparsers.add_parser("agent-loop", help="Refresh the persistent business Bug discovery ledger and plan next experiments")
-    loop.add_argument("--project", required=True, help="Project ID with PRD/OpenAPI/API inputs")
-    loop.add_argument("--root", default="", help="Repository root. Defaults to the current working directory")
-    loop.add_argument("--max-actions", type=int, default=12, help="Maximum next-best actions to emit")
-    loop.add_argument("--environment", default="test", help="Environment ID for graph planning")
-    loop.set_defaults(func=cmd_agent_loop)
-
-    experiments = subparsers.add_parser("agent-experiments", help="Compile or explicitly execute approved Agent Loop experiment packs")
-    experiments.add_argument("--project", required=True, help="Project ID with a canonical Agent Loop ledger")
-    experiments.add_argument("--root", default="", help="Repository root. Defaults to the current working directory")
-    experiments.add_argument("--max-experiments", type=int, default=24, help="Maximum document-backed experiments to compile")
-    experiments.add_argument("--execute", action="store_true", help="Delegate compiled experiments to the existing disposable-sandbox executor")
-    experiments.add_argument("--approval-id", default="", help="Explicit disposable-sandbox approval ID. Required with --execute")
-    experiments.set_defaults(func=cmd_agent_experiments)
-
-    flows = subparsers.add_parser("agent-flows", help="Compile or explicitly execute approved multi-step Agent Loop business flows")
-    flows.add_argument("--project", required=True, help="Project ID with a canonical Agent Loop ledger")
-    flows.add_argument("--root", default="", help="Repository root. Defaults to the current working directory")
-    flows.add_argument("--max-flows", type=int, default=12, help="Maximum explicitly mapped business flows to compile")
-    flows.add_argument("--environment", default="test", help="Environment ID for graph context")
-    flows.add_argument("--execute", action="store_true", help="Execute only explicitly mapped flows through the disposable-sandbox gate")
-    flows.add_argument("--approval-id", default="", help="Explicit disposable-sandbox approval ID. Required with --execute")
-    flows.set_defaults(func=cmd_agent_flows)
 
     pw_build = subparsers.add_parser("playwright-offline-build", help="Build a Playwright offline bundle (wheelhouse + browser cache)")
     pw_build.add_argument("--out", required=True, help="Output directory for offline bundle")

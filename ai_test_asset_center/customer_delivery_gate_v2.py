@@ -17,7 +17,7 @@ from .contract_oracles import (
     validate_contract_oracle_receipt,
 )
 from .discovery_mainline_contract import validate_mainline_run_contract
-from .observer_contracts import validate_observer_receipt
+from .observer_contracts_base import validate_observer_receipt
 from .operational_receipts import validate_execution_operational_receipt
 
 

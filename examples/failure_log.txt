@@ -1,9 +1,0 @@
-FAILED test_login_success
-AssertionError: expected redirect_url to equal /home, got /login
-
-Evidence:
-- POST /api/login returned 200
-- response.success = true
-- browser url = /login
-- console error = Router navigation failed: dashboard route not found
-- latest git diff touched frontend/router.py and pages/login_page.py

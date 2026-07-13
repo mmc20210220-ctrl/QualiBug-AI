@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from .observer_contracts import validate_observer_receipt
+from .observer_contracts_base import validate_observer_receipt
 
 
 ASSERTION_RECEIPT_SCHEMA = "qualibug.assertion-receipt.v1"

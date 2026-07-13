@@ -22,7 +22,7 @@ from urllib import request as urllib_request
 from urllib.parse import urlparse
 
 from .enterprise_campaign import has_real_confirmation_receipt
-from .scan_counter import increment_scan_counter
+from .scan_diagnostics import increment_scan_counter
 from .enterprise_test_data_plan import build_campaign_test_data_plan
 from .test_data_receipt_bootstrap import bootstrap_test_data_receipts_for_campaign
 from .target_policy import build_target_policy_decision
