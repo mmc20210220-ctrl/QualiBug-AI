@@ -386,16 +386,21 @@ def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
         if before_entity and after_entity:
             comparable_fields = [
                 field
-                for field in write_body
+                for field in sorted(set(before_entity).intersection(after_entity))
                 if field in before_entity
                 and field in after_entity
                 and not _server_managed_field(field)
                 and not isinstance(before_entity.get(field), (dict, list))
                 and not isinstance(after_entity.get(field), (dict, list))
             ]
-            return any(
+            if any(
                 before_entity.get(field) != after_entity.get(field)
                 for field in comparable_fields
+            ):
+                return True
+            return (
+                _without_server_managed_fields(before_entity)
+                != _without_server_managed_fields(after_entity)
             )
         if identities and bool(before_entity) != bool(after_entity):
             return True

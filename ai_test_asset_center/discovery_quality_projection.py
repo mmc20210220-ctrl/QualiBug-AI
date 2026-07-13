@@ -11,6 +11,7 @@ from typing import Any
 
 from .canonical_defect_registry import (
     CanonicalDefectRegistryError,
+    build_defect_identity_consistency,
     canonical_representative_findings,
     validate_canonical_defect_registry,
     validate_defect_identity_consistency,
@@ -504,20 +505,36 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
         or _dict(result.get("v12")).get("defect_identity_consistency")
     )
     if contract is not None:
+        required_occurrence_scopes = {
+            "delivery_gate_ids",
+            "registry_occurrence_ids",
+            "formal_projection_occurrence_ids",
+        }
+        required_canonical_scopes = {
+            "canonical_registry_ids",
+            "formal_projection_ids",
+            "product_projection_ids",
+        }
+        if (
+            not identity_consistency
+            and not delivery_occurrences
+            and not canonical_registry
+            and int(counts.get("formal_customer_deliverable_count") or 0) == 0
+        ):
+            identity_consistency = build_defect_identity_consistency(
+                occurrence_scopes={
+                    scope: [] for scope in sorted(required_occurrence_scopes)
+                },
+                canonical_scopes={
+                    scope: [] for scope in sorted(required_canonical_scopes)
+                },
+            )
         try:
             result["defect_identity_consistency"] = (
                 validate_defect_identity_consistency(
                     identity_consistency,
-                    required_occurrence_scopes={
-                        "delivery_gate_ids",
-                        "registry_occurrence_ids",
-                        "formal_projection_occurrence_ids",
-                    },
-                    required_canonical_scopes={
-                        "canonical_registry_ids",
-                        "formal_projection_ids",
-                        "product_projection_ids",
-                    },
+                    required_occurrence_scopes=required_occurrence_scopes,
+                    required_canonical_scopes=required_canonical_scopes,
                 )
             )
         except CanonicalDefectRegistryError as exc:
