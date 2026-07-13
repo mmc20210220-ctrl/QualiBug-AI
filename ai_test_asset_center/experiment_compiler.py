@@ -1,26 +1,14 @@
-"""Runtime-principal-aware facade for experiment compilation.
-
-Permission, isolation, privacy, and visibility experiments are meaningful only
-when control and treatment resolve to different real principals. Distinct IR
-node IDs are insufficient: duplicated actor nodes may reference the same test
-account or the same credential secret. This facade blocks such false contrasts
-before they consume execution budget or produce misleading evidence.
-"""
+"""Scope source conflicts and preserve single-actor privacy field checks."""
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
-from . import experiment_compiler_base as _base
-from .experiment_compiler_base import *  # noqa: F401,F403
+from . import experiment_compiler_conflict_base as _base
+from .experiment_compiler_conflict_base import *  # noqa: F401,F403
 
 
-_original_compile_experiment = _base.compile_experiment_for_obligation
-_SENSITIVE_FAMILIES = frozenset({
-    "authorization",
-    "isolation",
-    "privacy",
-    "visibility",
-})
+_original_compile_experiment = _base._original_compile_experiment
 
 
 def __getattr__(name: str) -> Any:
@@ -39,100 +27,90 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _principal_material(actor: dict[str, Any]) -> dict[str, str]:
-    row = _dict(actor)
-    return {
-        "account": _text(
-            row.get("account_ref")
-            or row.get("account_id")
-            or row.get("principal_ref")
-        ).casefold(),
-        "secret": _text(
-            row.get("credential_secret_ref")
-            or row.get("secret_ref")
-        ),
-        "subject": _text(
-            row.get("runtime_subject_ref")
-            or row.get("subject_ref")
-            or row.get("principal_id")
-        ).casefold(),
-        "role": _text(row.get("role_key") or row.get("role")).casefold(),
+def _add_refs(target: set[str], value: Any) -> None:
+    if isinstance(value, (str, int)) and _text(value):
+        target.add(_text(value))
+    elif isinstance(value, list):
+        for item in value:
+            _add_refs(target, item)
+
+
+def _refs_from_mapping(value: dict[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    explicit_keys = {
+        "subject_ref", "subject_refs", "operation_ref", "operation_refs",
+        "operation_id", "operation_ids", "actor_ref", "actor_refs",
+        "invariant_ref", "invariant_refs", "rule_ref", "rule_refs",
+        "entity_ref", "entity_refs", "state_ref", "state_refs",
+        "from_ref", "to_ref", "node_ref", "node_refs",
+        "relation_ref", "relation_refs",
     }
+    for key, child in value.items():
+        normalized = _text(key).lower()
+        if normalized in {"source_ref", "source_refs", "secret_ref", "credential_secret_ref"}:
+            continue
+        if (
+            normalized in explicit_keys
+            or normalized.endswith("_ref")
+            or normalized.endswith("_refs")
+        ):
+            _add_refs(refs, child)
+        elif isinstance(child, dict):
+            refs.update(_refs_from_mapping(child))
+    return refs
 
 
-def _pair_refs(obligation: dict[str, Any]) -> tuple[str, str]:
-    obl = _dict(obligation)
-    prop = _dict(obl.get("property"))
-    required = [
-        _text(value)
-        for value in _list(obl.get("required_actors"))
-        if _text(value)
-    ]
-    control = _text(
-        prop.get("control_actor_ref")
-        or prop.get("owner_actor_ref")
-        or (required[0] if required else "")
-    )
-    treatment = _text(
-        prop.get("treatment_actor_ref")
-        or prop.get("viewer_actor_ref")
-        or (required[1] if len(required) > 1 else "")
-    )
-    return control, treatment
+def _obligation_scope_refs(obligation: dict[str, Any]) -> set[str]:
+    row = _dict(obligation)
+    refs = _refs_from_mapping(row)
+    _add_refs(refs, row.get("subject_refs"))
+    _add_refs(refs, row.get("required_operations"))
+    _add_refs(refs, row.get("required_actors"))
+    _add_refs(refs, row.get("relation_refs"))
+    return refs
 
 
-def _runtime_pair_problem(
-    obligation: dict[str, Any],
+def _conflict_is_relevant(
+    conflict: dict[str, Any],
+    *,
+    obligation_refs: set[str],
+) -> bool:
+    if _text(conflict.get("status")) != "conflicting":
+        return True
+    conflict_refs = _refs_from_mapping(_dict(conflict))
+    # An unscoped conflict is global and remains fail-closed. Only conflicts
+    # that explicitly identify other IR nodes are safe to remove here.
+    if not conflict_refs or not obligation_refs:
+        return True
+    return bool(conflict_refs.intersection(obligation_refs))
+
+
+def _scoped_behavior_ir(
     behavior_ir: dict[str, Any],
-) -> str:
-    family = _text(_dict(obligation).get("risk_family"))
-    if family not in _SENSITIVE_FAMILIES:
-        return ""
-    control_ref, treatment_ref = _pair_refs(obligation)
-    if not control_ref or not treatment_ref:
-        return "actor_pair_missing"
-    if control_ref == treatment_ref:
-        return "same_actor_ref"
+    obligation: dict[str, Any],
+) -> dict[str, Any]:
+    ir = deepcopy(_dict(behavior_ir))
+    obligation_refs = _obligation_scope_refs(obligation)
+    ir["conflicts"] = [
+        dict(conflict)
+        for conflict in _list(ir.get("conflicts"))
+        if isinstance(conflict, dict)
+        and _conflict_is_relevant(
+            conflict,
+            obligation_refs=obligation_refs,
+        )
+    ]
+    return ir
 
-    actors = {
-        _text(actor.get("id")): actor
-        for actor in _list(_dict(behavior_ir).get("actors"))
-        if isinstance(actor, dict) and _text(actor.get("id"))
-    }
-    control_actor = actors.get(control_ref)
-    treatment_actor = actors.get(treatment_ref)
-    if not isinstance(control_actor, dict) or not isinstance(
-        treatment_actor,
-        dict,
-    ):
-        # The stable compiler owns missing-node diagnostics.
-        return ""
 
-    control = _principal_material(control_actor)
-    treatment = _principal_material(treatment_actor)
-    if control["account"] and control["account"] == treatment["account"]:
-        return "shared_account_ref"
-    if control["secret"] and control["secret"] == treatment["secret"]:
-        return "shared_credential_secret_ref"
-    if control["subject"] and control["subject"] == treatment["subject"]:
-        return "shared_runtime_subject_ref"
-
-    public_roles = {"anonymous", "public"}
-    control_public = control["role"] in public_roles
-    treatment_public = treatment["role"] in public_roles
-    control_proven = bool(
-        control["account"] or control["secret"] or control["subject"]
+def _privacy_field_mode(obligation: dict[str, Any]) -> bool:
+    row = _dict(obligation)
+    prop = _dict(row.get("property"))
+    return bool(
+        _text(row.get("risk_family")) == "privacy"
+        and _text(prop.get("privacy_test_mode")) == "field_policy"
+        and _text(prop.get("privacy_policy")) in {"absent", "masked"}
     )
-    treatment_proven = bool(
-        treatment["account"] or treatment["secret"] or treatment["subject"]
-    )
-    if control_public and treatment_public:
-        return "shared_anonymous_runtime_context"
-    if not control_proven and not control_public:
-        return "control_principal_not_proven"
-    if not treatment_proven and not treatment_public:
-        return "treatment_principal_not_proven"
-    return ""
 
 
 def compile_experiment_for_obligation(
@@ -143,26 +121,30 @@ def compile_experiment_for_obligation(
     policy_version: str = "",
     available_adapters: set[str] | None = None,
 ) -> dict[str, Any]:
-    problem = _runtime_pair_problem(obligation, behavior_ir)
-    if problem:
-        obligation_id = (
-            _text(_dict(obligation).get("obligation_id"))
-            or "unknown_obligation"
-        )
-        return _base.blocked_experiment(
-            obligation_id,
-            "BLOCKED_MISSING_ACTOR",
-            f"runtime_actor_pair_not_distinct:{problem}",
-        )
+    if not _privacy_field_mode(obligation):
+        problem = _base._runtime_pair_problem(obligation, behavior_ir)
+        if problem:
+            obligation_id = (
+                _text(_dict(obligation).get("obligation_id"))
+                or "unknown_obligation"
+            )
+            return _base._base.blocked_experiment(
+                obligation_id,
+                "BLOCKED_MISSING_ACTOR",
+                f"runtime_actor_pair_not_distinct:{problem}",
+            )
+
     return _original_compile_experiment(
         obligation,
-        behavior_ir=behavior_ir,
+        behavior_ir=_scoped_behavior_ir(behavior_ir, obligation),
         environment_type=environment_type,
         policy_version=policy_version,
         available_adapters=available_adapters,
     )
 
 
-# The baseline batch compiler resolves this module global at runtime. Replace it
-# so both direct and batch compilation enforce the same principal-pair rule.
+# Batch compilation is implemented in the stable base module and resolves this
+# global at runtime. Patch both facade and base so direct and batch calls share
+# the same scoped-conflict and privacy-field semantics.
 _base.compile_experiment_for_obligation = compile_experiment_for_obligation
+_base._base.compile_experiment_for_obligation = compile_experiment_for_obligation
