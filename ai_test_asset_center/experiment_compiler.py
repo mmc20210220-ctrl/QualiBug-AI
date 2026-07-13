@@ -59,6 +59,10 @@ def _state_semantic_value(state: dict[str, Any]) -> str:
     return ""
 
 
+def _state_match_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _text(value).casefold())
+
+
 def _resolve_state_compile_context(
     *,
     behavior_ir: dict[str, Any],
@@ -128,9 +132,6 @@ def _resolve_state_compile_context(
         return prop, [], required_fixtures, "state_transition_actor_unresolved"
 
     prop.setdefault("actor_ref", resolved_actors[0])
-    # The governed before snapshot is the authoritative precondition proof. The
-    # previous synthetic fixture had no source-declared create operation and
-    # therefore blocked every state experiment before transport.
     effective_fixtures = [
         fixture
         for fixture in required_fixtures
@@ -337,6 +338,27 @@ def compile_experiment_for_obligation(
         actors=[actors[a] for a in required_actors if a in actors],
         behavior_ir=ir,
     )
+    if family == "state":
+        state_token = _state_match_token(prop.get("from_state"))
+        normalized_path = normalize_path_placeholders(
+            _text(primary_op.get("path") or primary_op.get("raw_path"))
+        )
+        for binding in binding_plan:
+            if not isinstance(binding, dict):
+                continue
+            target = _text(binding.get("target"))
+            if (
+                state_token
+                and _text(binding.get("status")) == "runtime_resolvable"
+                and (
+                    "{" + target + "}" in normalized_path
+                    or ":" + target in normalized_path
+                )
+            ):
+                target_path = _text(binding.get("target_path")) or f"/{{{target}}}"
+                binding["target_path"] = f"@state={state_token}@{target_path}"
+                binding["selection_semantics"] = "source_state_precondition"
+                binding["required_state"] = _text(prop.get("from_state"))
     unresolved = unresolved_placeholders(primary_op, binding_plan)
     if unresolved:
         return blocked_experiment(
