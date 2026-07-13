@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
+
+
+def _state_ir() -> dict:
+    return {
+        "operations": [
+            {
+                "id": "op-pay",
+                "method": "POST",
+                "path": "/orders/{id}/pay",
+                "read_write": "write",
+            },
+            {
+                "id": "op-list",
+                "method": "GET",
+                "path": "/orders",
+                "read_write": "read",
+            },
+            {
+                "id": "op-read",
+                "method": "GET",
+                "path": "/orders/{id}",
+                "read_write": "read",
+            },
+            {
+                "id": "op-cancel",
+                "method": "POST",
+                "path": "/orders/{id}/cancel",
+                "read_write": "write",
+            },
+        ],
+        "actors": [
+            {
+                "id": "actor-buyer",
+                "role": "buyer",
+                "account_ref": "buyer01",
+                "credential_secret_ref": "secret_ref:test_accounts:buyer01",
+                "runtime_bound": True,
+            }
+        ],
+        "states": [
+            {
+                "id": "state-pending",
+                "entity_ref": "order",
+                "name": "PENDING_PAYMENT",
+            },
+            {
+                "id": "state-paid",
+                "entity_ref": "order",
+                "name": "PAID",
+            },
+        ],
+        "relations": [
+            {
+                "id": "permit-pay",
+                "relation_type": "permits",
+                "from_ref": "actor-buyer",
+                "to_ref": "op-pay",
+                "operation_ref": "op-pay",
+                "actor_ref": "actor-buyer",
+                "status": "accepted",
+            }
+        ],
+        "conflicts": [],
+    }
+
+
+def _state_obligation() -> dict:
+    return {
+        "obligation_id": "obl-state-pay",
+        "risk_family": "state",
+        "property": {
+            "template": "state_transition",
+            "entity_ref": "order",
+            "from_state_ref": "state-pending",
+            "to_state_ref": "state-paid",
+            "operation_ref": "op-pay",
+        },
+        "required_operations": ["op-pay"],
+        "required_actors": [],
+        "required_fixtures": ["entity_in_state:state-pending"],
+        "required_observers": ["before_state", "after_state"],
+        "cleanup_requirement": {
+            "required": True,
+            "operation_ref": "op-cancel",
+            "mode": "reverse_order",
+        },
+        "source_refs": [{"source_id": "state-machine"}],
+    }
+
+
+def test_state_transition_obligation_becomes_executable_experiment() -> None:
+    experiment = compile_experiment_for_obligation(
+        _state_obligation(),
+        behavior_ir=_state_ir(),
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    assert experiment["control_plan"] == []
+    assert experiment["treatment_plan"][0]["actor_ref"] == "actor-buyer"
+    assert experiment["treatment_plan"][0]["protocol_step"] == "state_transition_write"
+
+    assertion = experiment["assertions"][0]
+    assert assertion["kind"] == "state_transition"
+    assert assertion["from_state"] == "PENDING_PAYMENT"
+    assert assertion["to_state"] == "PAID"
+
+    assert not [
+        row
+        for row in experiment["binding_plan"]
+        if str(row.get("fixture_id") or "").startswith("entity_in_state:")
+    ]
+    observer_ids = {row["observer_id"] for row in experiment["observers"]}
+    assert {"before_state", "after_state"} <= observer_ids
+
+
+def test_state_transition_fails_closed_without_permitted_runtime_actor() -> None:
+    behavior_ir = _state_ir()
+    behavior_ir["relations"] = []
+
+    experiment = compile_experiment_for_obligation(
+        _state_obligation(),
+        behavior_ir=behavior_ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_ACTOR"
+    assert (
+        experiment["compile_receipt"]["detail"]
+        == "state_transition_actor_unresolved"
+    )
